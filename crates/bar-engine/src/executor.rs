@@ -274,6 +274,18 @@ impl NodeExecutor for CpuExecutor {
                 let hm = painted_grayscale_to_heightmap(pixels, src_res, width, height);
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
+
+            NodeType::Sculpt => {
+                let mut hm = get_input_heightmap(inputs, "input")?;
+                let data_str = get_string(params, "data", "");
+                if !data_str.is_empty() {
+                    let src_res = get_uint(params, "resolution", 256).max(1);
+                    let scale = get_float(params, "scale", 0.5);
+                    let pixels = hex_decode_mask(data_str);
+                    apply_sculpt_delta(&mut hm, &pixels, src_res, scale);
+                }
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
             NodeType::PaintedTexture => {
                 let data_str = get_string(params, "data", "");
                 let pixels = hex_decode_mask(data_str);
@@ -1616,6 +1628,45 @@ fn hex_decode_mask(s: &str) -> Vec<u8> {
 /// Fixed for now; could be made a param like PaintedHeightmap.
 pub const PAINTED_TEXTURE_RES: u32 = 256;
 
+/// Apply a sculpt delta buffer onto a heightmap in place.
+/// `pixels` is a flat u8 array at `src_res × src_res`: 128 = no change,
+/// 0 = max subtract, 255 = max add. `scale` controls the maximum magnitude
+/// of the applied delta (e.g. 0.5 = max ±50% shift). If `pixels` is empty
+/// or wrong length the heightmap is left unchanged.
+fn apply_sculpt_delta(hm: &mut Heightmap, pixels: &[u8], src_res: u32, scale: f32) {
+    let out_w = hm.width();
+    let out_h = hm.height();
+    let src_w = src_res;
+    let src_h = src_res;
+    if pixels.len() != (src_w as usize) * (src_h as usize) {
+        return;
+    }
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
+            let sy = oy as f32 * (src_h as f32 - 1.0) / (out_h as f32 - 1.0).max(1.0);
+            let x0 = sx as u32;
+            let y0 = sy as u32;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let y1 = (y0 + 1).min(src_h - 1);
+            let fx = sx - sx.floor();
+            let fy = sy - sy.floor();
+            let v00 = pixels[(y0 as usize) * (src_w as usize) + x0 as usize] as f32;
+            let v10 = pixels[(y0 as usize) * (src_w as usize) + x1 as usize] as f32;
+            let v01 = pixels[(y1 as usize) * (src_w as usize) + x0 as usize] as f32;
+            let v11 = pixels[(y1 as usize) * (src_w as usize) + x1 as usize] as f32;
+            let v = v00 * (1.0 - fx) * (1.0 - fy)
+                + v10 * fx * (1.0 - fy)
+                + v01 * (1.0 - fx) * fy
+                + v11 * fx * fy;
+            // Map [0,255] → [-1,1], multiply by scale, add to input
+            let delta = (v - 128.0) / 128.0 * scale;
+            let cur = hm.get(ox, oy).unwrap_or(0.0);
+            let _ = hm.set(ox, oy, (cur + delta).clamp(0.0, 1.0));
+        }
+    }
+}
+
 /// Bilinearly scale a painted greyscale image at `src_res × src_res`
 /// up/down to the output dims and normalise `[0,255] → [0.0, 1.0]`.
 /// `src_res` comes from the node's `resolution` param.
@@ -1713,6 +1764,7 @@ fn painted_rgb_to_color_buffer(
     }
     buf
 }
+#[cfg(test)]
 mod tests {
     use super::*;
     use bar_graph::{GraphEngine, Node, NodeId, PortId};

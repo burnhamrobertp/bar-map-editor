@@ -832,9 +832,13 @@ pub struct PaintSession {
     /// by `pack_sculpt_record` and merged at export time.
     pub sculpt: SculptState,
     /// Brush radius (heightmap pixels) for `PaintedHeightmap` /
-    /// `PaintedTexture` in-node paint canvases. The 2D-inspector
+    /// `PaintedTexture` / `Sculpt` in-node paint canvases. The 2D-inspector
     /// brush uses `brush.radius_px` instead.
     pub paint_brush_radius: f32,
+    /// Strength for the Sculpt node's delta brush (0.0-1.0).
+    /// Controls how far a single stroke moves the delta from neutral (128).
+    /// Not used by PaintedHeightmap or PaintedTexture.
+    pub sculpt_brush_strength: f32,
     /// Last heightmap fed in by `bar-app` after a preview eval —
     /// the backdrop image for the 2D inspector and the source the
     /// 3D viewport ray-casts against.
@@ -872,6 +876,7 @@ impl Default for PaintSession {
             brush_stroking: false,
             sculpt: SculptState::default(),
             paint_brush_radius: 4.0,
+            sculpt_brush_strength: 0.5,
             heightmap: None,
             heightmap_rev: 0,
             texture: None,
@@ -5765,7 +5770,8 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::SimpleTransform
         | NodeType::Normalize
         | NodeType::BiasGain
-        | NodeType::Displacement => tokens::NODE_CAT_FILTER,
+        | NodeType::Displacement
+        | NodeType::Sculpt => tokens::NODE_CAT_FILTER,
 
         NodeType::Blend
         | NodeType::Add

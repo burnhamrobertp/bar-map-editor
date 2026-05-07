@@ -49,6 +49,13 @@ pub enum NodeType {
     GrassMap,
     SpecularMap,
 
+    /// A 2D sculpt layer. Takes a heightmap input, applies a sequence of
+    /// recorded brush dabs (stored as JSON in `params["dabs"]`), and
+    /// outputs the modified heightmap. Works for any greyscale layer
+    /// (terrain height, metalmap, typemap) — wire it wherever you need
+    /// hand-authored edits mid-pipeline.
+    Sculpt,
+
     // Mask Operations
     MaskThreshold,
     MaskInvert,
@@ -315,6 +322,11 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("slope", "Slope Map", PortKind::Heightmap),
             ],
             vec![Port::new("output", "Specular", PortKind::Heightmap)],
+        ),
+
+        NodeType::Sculpt => (
+            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
         // Mask: generates a mask output
