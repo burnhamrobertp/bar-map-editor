@@ -279,6 +279,7 @@ fn cmd_run(
             &recipe,
             output_dir,
             bundler_filter,
+            None,
         )
         .context("Bundler execution failed")?;
 
@@ -605,21 +606,31 @@ fn cmd_preview(
         wgpu::TextureFormat::Rgba8UnormSrgb,
     );
     renderer.resize(&gpu.device, out_w, out_h);
+    renderer.update_heightmap(
+        &gpu.device,
+        &gpu.queue,
+        &heightmap,
+        height_scale,
+        x_extent,
+        z_extent,
+        water_y,
+        [0.2, 0.45, 0.75],
+        mesh_lod,
+    );
+    if let Some(ref tex) = texture {
+        renderer.update_albedo(&gpu.device, &gpu.queue, tex);
+    }
     let frame = bar_render::PreviewFrame {
-        revision: 1,
-        heightmap: &heightmap,
-        texture: texture.as_ref(),
         height_scale,
         x_extent,
         z_extent,
         water_y,
         water_color: [0.2, 0.45, 0.75],
-        max_grid_size: mesh_lod,
-        // CLI always uses the high-pass (full) shader — the low-pass is for
+        // CLI always uses the high-pass (full) shader -- the low-pass is for
         // the GUI's progressive refinement, not relevant headlessly.
         quality_high: true,
         time: 0.0,
-        // CLI doesn't read MapSettings.lighting yet — fall back to engine
+        // CLI doesn't read MapSettings.lighting yet -- fall back to engine
         // defaults so the renderer still produces a sensible image.
         smf_lighting: bar_render::SmfLighting::default(),
     };
@@ -772,12 +783,12 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
             let _ = (width, height);
             Ok(Project {
                 recipe,
+                sculpt: Default::default(),
                 layout: EditorLayout {
                     node_positions: Map::new(),
                     node_sizes: Map::new(),
                     canvas_offset: (0.0, 0.0),
                     map_info_file: None,
-                    sculpt_overlay: None,
                     groups: Vec::new(),
                     open_tabs: Vec::new(),
                     active_tab: 0,

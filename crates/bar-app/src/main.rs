@@ -53,34 +53,25 @@ struct PreviewResult {
 /// across frames.
 #[derive(Clone)]
 struct OwnedFrame {
-    revision: u64,
-    heightmap: bar_data::Heightmap,
-    texture: Option<bar_data::ColorBuffer>,
     height_scale: f32,
     x_extent: f32,
     z_extent: f32,
     water_y: f32,
     water_color: [f32; 3],
-    max_grid_size: u32,
     quality_high: bool,
     smf_lighting: bar_render::SmfLighting,
 }
 
 impl OwnedFrame {
-    /// Borrow as a `PreviewFrame` for the renderer. `time` comes
-    /// from the per-frame animation tick, not from the OwnedFrame,
-    /// so animation can run without re-evaluating the graph.
-    fn as_frame(&self, time: f32) -> bar_render::PreviewFrame<'_> {
+    /// Build a `PreviewFrame` for the renderer. `time` comes from the
+    /// per-frame animation tick so animation can run without re-evaluating.
+    fn as_frame(&self, time: f32) -> bar_render::PreviewFrame {
         bar_render::PreviewFrame {
-            revision: self.revision,
-            heightmap: &self.heightmap,
-            texture: self.texture.as_ref(),
             height_scale: self.height_scale,
             x_extent: self.x_extent,
             z_extent: self.z_extent,
             water_y: self.water_y,
             water_color: self.water_color,
-            max_grid_size: self.max_grid_size,
             quality_high: self.quality_high,
             time,
             smf_lighting: self.smf_lighting,
@@ -466,6 +457,7 @@ impl eframe::App for AppWrapper {
                                     &recipe,
                                     &output_dir,
                                     filter,
+                                    None,
                                 ) {
                                     Ok(results) if !results.is_empty() => {
                                         format!(
@@ -612,13 +604,10 @@ impl eframe::App for AppWrapper {
             }
 
             if result.session_id == session.session_id && result.cache_key == current_key {
-                // Mesh LOD: low-res passes are clamped to a small mesh so they
-                // read as visibly chunky and the user can see the refinement
-                // when the high-res pass arrives. High-res uses a much larger
-                // cap (up to 2048) so source detail isn't decimated away —
-                // sub-pixel shimmer is acceptable in exchange for visible
-                // ridge-line detail on real BAR-scale heightmaps.
-                let mesh_lod = if result.is_low_res {
+                // grid_n: low-res passes use a coarse mesh so the user can
+                // see the refinement when the high-res pass arrives. High-res
+                // uses up to the full heightmap resolution (capped at 2048).
+                let grid_n = if result.is_low_res {
                     96
                 } else {
                     let hm_size = result
@@ -626,62 +615,53 @@ impl eframe::App for AppWrapper {
                         .as_ref()
                         .map(|h| h.width().max(h.height()))
                         .unwrap_or(1024);
-                    // Use the full source heightmap up to a hard cap of 2048
-                    // (mesh tessellation gets slow above that; we'd benefit
-                    // more from GPU tessellation than CPU vertex generation).
                     hm_size.min(2048)
                 };
 
-                // Build the frame to present. Either the eval gave us a
-                // heightmap (Some(frame)) or it didn't (None — empty
-                // viewport). There's no half-state.
-                let new_frame = if let Some(heightmap) = result.heightmap {
+                if let Some(heightmap) = result.heightmap {
                     if !result.is_low_res {
                         self.app.set_inspector_heightmap(heightmap.clone());
-                        // Refresh the live colour-buffer cache from
-                        // the eval result so the colour brush has a
-                        // base layer to overlay onto. Same shape as
-                        // the heightmap mirror — the eval is the
-                        // authoritative source; brush dabs mutate
-                        // the cache in-place between evals for
-                        // per-stroke feedback.
                         if let Some(ref tex) = result.texture {
                             self.app.set_inspector_color_buffer(tex.clone());
                         }
                     }
                     session.last_water_y = result.water_y;
                     session.last_water_color = result.water_color;
-                    Some(OwnedFrame {
-                        // Distinct revision per (cache key, quality
-                        // pass) so the renderer re-uploads when the
-                        // high-res result lands but not on every
-                        // camera tick. Wrapping is fine — the
-                        // renderer compares for equality, not order.
-                        revision: result.cache_key.wrapping_mul(2)
-                            .wrapping_add(result.is_low_res as u64),
-                        heightmap,
-                        texture: result.texture,
+                    session.current_frame = Some(OwnedFrame {
                         height_scale: result.height_scale,
                         x_extent: result.x_extent,
                         z_extent: result.z_extent,
                         water_y: result.water_y,
                         water_color: result.water_color,
-                        max_grid_size: mesh_lod,
                         quality_high: !result.is_low_res,
                         smf_lighting: result.smf_lighting,
-                    })
+                    });
+                    if let Some(ref gpu) = self.gpu_context {
+                        if let Some(ref mut renderer) = session.terrain_renderer {
+                            renderer.update_heightmap(
+                                &gpu.device,
+                                &gpu.queue,
+                                &heightmap,
+                                result.height_scale,
+                                result.x_extent,
+                                result.z_extent,
+                                result.water_y,
+                                result.water_color,
+                                grid_n,
+                            );
+                            if let Some(ref tex) = result.texture {
+                                renderer.update_albedo(&gpu.device, &gpu.queue, tex);
+                            } else {
+                                renderer.clear_albedo(&gpu.device, &gpu.queue);
+                            }
+                        }
+                    }
                 } else if !result.is_low_res {
-                    // High-pass eval succeeded but the active preview
-                    // target had nothing wired into it. Replace the
-                    // frame with None so the viewport is empty.
-                    None
-                } else {
-                    // Low-pass with no heightmap — keep whatever the
-                    // viewport was showing; the high-pass result will
-                    // arrive shortly and replace the frame.
-                    session.current_frame.clone()
-                };
-                session.current_frame = new_frame;
+                    // High-pass eval with nothing wired to the preview target.
+                    session.current_frame = None;
+                }
+                // Low-pass with no heightmap: keep the current frame so the
+                // viewport isn't blanked while waiting for the high-pass.
 
                 if let Some(ref gpu) = self.gpu_context {
                     if let Some(ref mut renderer) = session.terrain_renderer {
@@ -952,6 +932,7 @@ impl AppWrapper {
                         &recipe,
                         &temp_dir,
                         None,
+                        None,
                     ) {
                         Ok(results) => {
                             // Pick the first SD7 produced. Bundlers can
@@ -1095,65 +1076,66 @@ impl AppWrapper {
         let target = app.active_brush_target();
         match target {
             bar_gui::BrushTarget::Heightmap => {
-                // Heightmap stroke: the inspector heightmap was
-                // mutated in-place. Push it into the current frame
-                // so the renderer re-uploads the mesh.
+                // Heightmap stroke: the inspector heightmap was mutated in-place.
+                // Upload only the dirty rectangle around the brush footprint so
+                // the GPU sees the change without rebuilding the mesh.
                 if let (Some(ref gpu), Some(updated)) =
                     (gpu_context, app.inspector_heightmap_clone())
                 {
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        if let Some(frame) = session.current_frame.as_mut() {
-                            frame.heightmap = updated;
-                            let dim = frame
-                                .heightmap
-                                .width()
-                                .max(frame.heightmap.height())
-                                .min(2048);
-                            frame.max_grid_size = dim;
-                            frame.revision = frame.revision.wrapping_add(2);
-                            let elapsed = session.started_at.elapsed().as_secs_f32();
-                            let pf = frame.as_frame(elapsed);
-                            renderer.render(
-                                &gpu.device,
-                                &gpu.queue,
-                                &session.camera,
-                                Some(&pf),
-                            );
+                        let br = app.brush_radius_px().ceil() as i32 + 1;
+                        let hm_w = updated.width() as i32;
+                        let hm_h = updated.height() as i32;
+                        let x0 = ((p.hm_x as i32) - br).max(0) as u32;
+                        let y0 = ((p.hm_y as i32) - br).max(0) as u32;
+                        let x1 = ((p.hm_x as i32) + br + 1).min(hm_w) as u32;
+                        let y1 = ((p.hm_y as i32) + br + 1).min(hm_h) as u32;
+                        let rw = x1 - x0;
+                        let rh = y1 - y0;
+                        if rw > 0 && rh > 0 {
+                            let hm_ref = &updated;
+                            let data: Vec<f32> = (y0..y1)
+                                .flat_map(|y| (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0)))
+                                .collect();
+                            renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
                         }
+                        let elapsed = session.started_at.elapsed().as_secs_f32();
+                        let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        renderer.render(
+                            &gpu.device,
+                            &gpu.queue,
+                            &session.camera,
+                            frame_borrow.as_ref(),
+                        );
                     }
                 }
             }
             bar_gui::BrushTarget::Color => {
-                // Colour stroke: the inspector colour-buffer cache was
-                // stamped with the dab. Push the cache into the current
-                // frame's texture so the user sees the stroke before
-                // the background eval re-evaluates.
+                // Colour stroke: inspector colour-buffer was stamped with the dab.
+                // Re-upload the full albedo texture (colour buffer dimensions may
+                // differ from heightmap, so a region upload would need a coordinate
+                // remap — full upload is simpler and fast enough at these sizes).
                 if let (Some(ref gpu), Some(updated)) =
                     (gpu_context, app.inspector_color_buffer_clone())
                 {
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        if let Some(frame) = session.current_frame.as_mut() {
-                            frame.texture = Some(updated);
-                            frame.revision = frame.revision.wrapping_add(2);
-                            let elapsed = session.started_at.elapsed().as_secs_f32();
-                            let pf = frame.as_frame(elapsed);
-                            renderer.render(
-                                &gpu.device,
-                                &gpu.queue,
-                                &session.camera,
-                                Some(&pf),
-                            );
-                        }
+                        renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
+                        let elapsed = session.started_at.elapsed().as_secs_f32();
+                        let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        renderer.render(
+                            &gpu.device,
+                            &gpu.queue,
+                            &session.camera,
+                            frame_borrow.as_ref(),
+                        );
                     }
                 }
             }
             bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
-                // Metal / type strokes: synthesise a tinted preview
-                // colour buffer from the inspector cache and feed it
-                // through `frame.texture` so the user sees the stamp
-                // immediately. The synthesised buffer is purely
-                // visualisation — the authoritative metalmap /
-                // typemap value flows through the graph at export.
+                // Metal / type strokes: synthesise a tinted preview colour buffer
+                // from the inspector cache and upload it as the albedo so the user
+                // sees the stamp immediately. Purely visualisation -- the
+                // authoritative metalmap / typemap value flows through the graph.
                 let cache = match target {
                     bar_gui::BrushTarget::Metalmap => app.inspector_metalmap_clone(),
                     bar_gui::BrushTarget::Typemap => app.inspector_typemap_clone(),
@@ -1162,18 +1144,15 @@ impl AppWrapper {
                 if let (Some(ref gpu), Some(hm)) = (gpu_context, cache) {
                     let visual = Self::visualise_layer(&hm, target);
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        if let Some(frame) = session.current_frame.as_mut() {
-                            frame.texture = Some(visual);
-                            frame.revision = frame.revision.wrapping_add(2);
-                            let elapsed = session.started_at.elapsed().as_secs_f32();
-                            let pf = frame.as_frame(elapsed);
-                            renderer.render(
-                                &gpu.device,
-                                &gpu.queue,
-                                &session.camera,
-                                Some(&pf),
-                            );
-                        }
+                        renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
+                        let elapsed = session.started_at.elapsed().as_secs_f32();
+                        let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        renderer.render(
+                            &gpu.device,
+                            &gpu.queue,
+                            &session.camera,
+                            frame_borrow.as_ref(),
+                        );
                     }
                 }
             }

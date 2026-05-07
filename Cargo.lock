@@ -551,7 +551,6 @@ dependencies = [
  "pollster",
  "rayon",
  "serde",
- "serde_json",
  "sevenz-rust",
  "toml 0.8.23",
  "tracing",
