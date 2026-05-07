@@ -132,9 +132,12 @@ pub struct TerrainRenderer {
     reflection_bind_group: wgpu::BindGroup,
     reflection_bind_group_dummy: wgpu::BindGroup,
     // ── Group 3: water normal map ───────────────────────────────────────────
+    #[allow(dead_code)]
     water_normal_bind_group_layout: wgpu::BindGroupLayout,
     water_normal_bind_group: wgpu::BindGroup,
+    #[allow(dead_code)]
     water_normal_texture: wgpu::Texture,
+    #[allow(dead_code)]
     water_normal_sampler: wgpu::Sampler,
     // ── Group 4: heightmap ──────────────────────────────────────────────────
     heightmap_bind_group_layout: wgpu::BindGroupLayout,
@@ -767,14 +770,14 @@ impl TerrainRenderer {
         if old_size == (hm_w, hm_h) {
             // Same dimensions: write in place.
             queue.write_texture(
-                wgpu::ImageCopyTexture {
+                wgpu::TexelCopyTextureInfo {
                     texture: &self.heightmap_texture,
                     mip_level: 0,
                     origin: wgpu::Origin3d::ZERO,
                     aspect: wgpu::TextureAspect::All,
                 },
                 bytemuck::cast_slice(&data),
-                wgpu::ImageDataLayout {
+                wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(hm_w * 4),
                     rows_per_image: Some(hm_h),
@@ -827,14 +830,14 @@ impl TerrainRenderer {
             return;
         }
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.heightmap_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             bytemuck::cast_slice(data),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
@@ -885,14 +888,14 @@ impl TerrainRenderer {
             return;
         }
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.albedo_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             data,
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
@@ -962,14 +965,14 @@ impl TerrainRenderer {
             return;
         }
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.metalmap_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             bytemuck::cast_slice(data),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
@@ -1015,14 +1018,14 @@ impl TerrainRenderer {
             return;
         }
         queue.write_texture(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture: &self.typemap_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
             bytemuck::cast_slice(data),
-            wgpu::ImageDataLayout {
+            wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(w * 4),
                 rows_per_image: Some(h),
@@ -1433,15 +1436,15 @@ impl TerrainRenderer {
             label: Some("terrain_readback_encoder"),
         });
         encoder.copy_texture_to_buffer(
-            wgpu::ImageCopyTexture {
+            wgpu::TexelCopyTextureInfo {
                 texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            wgpu::ImageCopyBuffer {
+            wgpu::TexelCopyBufferInfo {
                 buffer: &staging,
-                layout: wgpu::ImageDataLayout {
+                layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(padded_bpr),
                     rows_per_image: Some(h),

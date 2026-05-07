@@ -6,19 +6,17 @@
 //! the full breadth of BarEditorApp's state — &mut self
 //! grants what's needed without a wall of accessors.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Instant;
 
 use eframe::egui;
 use bar_graph::{
-    GraphEngine, Node, NodeId, NodeType, ParamValue, PortId, PortKind,
+    NodeId, NodeType, ParamValue, PortId,
 };
 
 use crate::app::*;
 use crate::panels::tokens;
-use crate::state::{
-    GroupRuntime, MacroParamRuntime, NodeVisual, SubgraphPortRuntime,
-};
+use crate::state::GroupRuntime;
 use crate::t;
 
 /// Geometry and colour constants for the standard (non-IO) node body.

@@ -277,8 +277,6 @@ fn main() -> Result<()> {
 struct PendingExportDir {
     /// Receiver carrying the user's folder choice (None if cancelled).
     rx: mpsc::Receiver<Option<std::path::PathBuf>>,
-    /// Specific Bundler the user clicked, or None for "run all bundlers".
-    run_bundler_node: Option<bar_graph::NodeId>,
     /// Cached label of the targeted bundler at request time, used to
     /// filter `execute_bundlers`. Captured up front so a node rename
     /// or deletion mid-flow doesn't change which bundle gets exported.
@@ -420,7 +418,6 @@ impl eframe::App for AppWrapper {
             });
             self.pending_export_dir = Some(PendingExportDir {
                 rx,
-                run_bundler_node,
                 run_filter_label,
             });
             // Reflect "an export is in progress" the moment the

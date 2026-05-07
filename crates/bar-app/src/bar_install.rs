@@ -23,8 +23,6 @@ use std::path::{Path, PathBuf};
 pub struct BarInstall {
     /// The Electron lobby launcher (`Beyond-All-Reason.exe`).
     pub lobby_exe: PathBuf,
-    /// The newest installed engine binary (`spring.exe`).
-    pub engine_exe: PathBuf,
     /// Directory where SD7 archives must be placed to appear in BAR's
     /// map list.
     pub maps_dir: PathBuf,
@@ -52,14 +50,15 @@ impl BarInstall {
         }
 
         let engine_root = root.join("data").join("engine");
-        let engine_exe = newest_engine(&engine_root)?;
+        // Validate an engine binary exists before declaring this a usable install.
+        newest_engine(&engine_root)?;
 
         let maps_dir = root.join("data").join("maps");
         if !maps_dir.exists() {
             return None;
         }
 
-        Some(Self { lobby_exe, engine_exe, maps_dir })
+        Some(Self { lobby_exe, maps_dir })
     }
 }
 
@@ -118,8 +117,6 @@ pub enum LaunchOutcome {
     /// User must navigate to "Skirmish" and pick the map; we surface a
     /// status message instructing this.
     LobbyOpened {
-        /// Where we placed the SD7 inside BAR.
-        installed_to: PathBuf,
         /// The basename (stem) the map will appear under in the lobby's
         /// map picker.
         map_stem: String,
@@ -131,7 +128,6 @@ pub enum LaunchOutcome {
 /// the GUI surfaces in a status bar.
 #[derive(Debug)]
 pub enum LaunchError {
-    NotInstalled,
     CopyFailed(String),
     SpawnFailed(String),
     Sd7Unreadable(String),
@@ -140,7 +136,6 @@ pub enum LaunchError {
 impl std::fmt::Display for LaunchError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NotInstalled => write!(f, "BAR install was not found on this system"),
             Self::CopyFailed(s) => write!(f, "failed to copy SD7 to BAR maps dir: {s}"),
             Self::SpawnFailed(s) => write!(f, "failed to spawn BAR lobby: {s}"),
             Self::Sd7Unreadable(s) => write!(f, "the SD7 is missing or unreadable: {s}"),
@@ -181,10 +176,7 @@ impl BarInstall {
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        Ok(LaunchOutcome::LobbyOpened {
-            installed_to: dest,
-            map_stem,
-        })
+        Ok(LaunchOutcome::LobbyOpened { map_stem })
     }
 }
 

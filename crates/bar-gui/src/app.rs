@@ -15,7 +15,7 @@ use crate::panels::tokens;
 pub(crate) use crate::panels::icons::{
     draw_io_icon, paint_bar_icon, paint_busy_dot, paint_export_icon,
     paint_inspector_icon, paint_map_info_icon, paint_mapinfo_form_icon,
-    paint_startbox_icon, paint_validate_icon,
+    paint_startbox_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.
@@ -93,124 +93,6 @@ pub(crate) fn parse_subgraph_binding(
     Some((id, port_name.to_string()))
 }
 
-/// Editor for a SubGraph's port list. Returns `true` if any change
-/// was made. Each entry has a name (stable id), a display label, a
-/// kind chosen from the graph-wiring set, and a binding to an inner
-/// node port of matching kind.
-///
-/// `is_input` toggles between "list inner inputs" (for external input
-/// ports) and "list inner outputs" (for external output ports).
-/// `members` is the candidate pool of inner nodes filtered by group.
-fn draw_subgraph_port_list(
-    ui: &mut egui::Ui,
-    ports: &mut Vec<crate::state::SubgraphPortRuntime>,
-    default_name_prefix: &str,
-    is_input: bool,
-    members: &[(NodeId, String, Vec<(String, String)>)],
-) -> bool {
-    let mut dirty = false;
-    let kinds = ["Heightmap", "Mask", "Color", "Scalar", "File", "FileList"];
-    let mut to_remove: Option<usize> = None;
-    for (i, port) in ports.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut port.name)
-                        .hint_text("name")
-                        .desired_width(70.0),
-                )
-                .changed()
-            {
-                dirty = true;
-            }
-            if ui
-                .add(
-                    egui::TextEdit::singleline(&mut port.label)
-                        .hint_text("label")
-                        .desired_width(80.0),
-                )
-                .changed()
-            {
-                dirty = true;
-            }
-            egui::ComboBox::from_id_salt(("port_kind", i, default_name_prefix))
-                .selected_text(&port.kind)
-                .width(75.0)
-                .show_ui(ui, |ui| {
-                    for k in &kinds {
-                        if ui
-                            .selectable_label(port.kind == *k, *k)
-                            .clicked()
-                        {
-                            port.kind = (*k).to_string();
-                            // Changing the kind invalidates any
-                            // existing binding (kinds wouldn't match).
-                            port.binding = None;
-                            dirty = true;
-                        }
-                    }
-                });
-            if ui.small_button("✕").clicked() {
-                to_remove = Some(i);
-            }
-        });
-        // Binding dropdown — list inner-node ports of matching kind.
-        ui.horizontal(|ui| {
-            ui.add_space(8.0);
-            ui.weak("→");
-            let current_label = port
-                .binding
-                .as_ref()
-                .map(|(nid, pn)| {
-                    members
-                        .iter()
-                        .find(|(id, _, _)| id == nid)
-                        .map(|(_, label, _)| format!("{label}.{pn}"))
-                        .unwrap_or_else(|| format!("#{}.{}", nid.0, pn))
-                })
-                .unwrap_or_else(|| "(unbound)".to_string());
-            egui::ComboBox::from_id_salt(("port_binding", i, default_name_prefix))
-                .selected_text(current_label)
-                .width(220.0)
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(port.binding.is_none(), "(unbound)").clicked() {
-                        port.binding = None;
-                        dirty = true;
-                    }
-                    for (nid, node_label, ports_for_node) in members {
-                        for (pname, pkind) in ports_for_node {
-                            if !port.kind.eq_ignore_ascii_case(pkind) {
-                                continue;
-                            }
-                            let label = format!("{node_label}.{pname}");
-                            let selected = port.binding.as_ref()
-                                == Some(&(*nid, pname.clone()));
-                            if ui.selectable_label(selected, label).clicked() {
-                                port.binding = Some((*nid, pname.clone()));
-                                dirty = true;
-                            }
-                        }
-                    }
-                });
-            ui.weak(if is_input { "(inner input)" } else { "(inner output)" });
-        });
-    }
-    if let Some(i) = to_remove {
-        ports.remove(i);
-        dirty = true;
-    }
-    if ui.button("+ Add port").clicked() {
-        let n = ports.len() + 1;
-        ports.push(crate::state::SubgraphPortRuntime {
-            name: format!("{default_name_prefix}{n}"),
-            label: format!("{} {n}", default_name_prefix),
-            kind: "Heightmap".to_string(),
-            binding: None,
-        });
-        dirty = true;
-    }
-    dirty
-}
 
 /// One-shot context-menu action carried out after the menu closes,
 /// since the menu closure can't borrow `self` mutably while iterating
@@ -256,7 +138,7 @@ pub(crate) enum MapInfoTab {
 /// to compare. The editor recomputes this every frame; whenever it
 /// differs from the cached value, validation re-runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ValidationFingerprint {
+pub(crate) struct ValidationFingerprint {
     graph_revision: u64,
     map_width: u32,
     map_height: u32,
@@ -476,7 +358,7 @@ pub(crate) struct PassthroughEdit {
 /// future "open this file" action. Lives outside the side panels so it can
 /// be resized and scrolled freely.
 #[derive(Debug, Clone)]
-struct FileEditor {
+pub(crate) struct FileEditor {
     /// Absolute path on disk; what we read from and write back to.
     abs_path: String,
     /// Bundle-relative path (forward slashes) for display.
@@ -631,7 +513,7 @@ impl Default for BrushState {
 /// Once the dialog resolves, the chosen action is performed (after Save when
 /// the user picks Save, or directly when they pick Discard).
 #[derive(Clone, Debug)]
-enum PendingAction {
+pub(crate) enum PendingAction {
     /// The OS or the user asked to close the window.
     Close,
     /// The user clicked New Project (Ctrl+N or menu).
@@ -647,7 +529,7 @@ enum PendingAction {
 
 /// Generic yes/no/cancel modal state.
 #[derive(Clone, Debug)]
-struct ConfirmDialog {
+pub(crate) struct ConfirmDialog {
     title: String,
     message: String,
     /// Action label for the affirmative button (e.g. "Delete", "Discard").
@@ -986,13 +868,13 @@ pub struct DialogState {
     /// close so `bar-app` can let the window actually close.
     pub allow_close: bool,
     /// Generic confirm-dialog state (delete confirmation, etc.).
-    pub confirm_dialog: Option<ConfirmDialog>,
+    pub(crate) confirm_dialog: Option<ConfirmDialog>,
     /// Pending action that's blocked on the unsaved-changes confirm
     /// dialog. `Some` means a modal is currently open.
-    pub pending_action: Option<PendingAction>,
+    pub(crate) pending_action: Option<PendingAction>,
     /// In-app floating text editor (Edit Map Info / future "open
     /// file" triggers). `None` when no editor is open.
-    pub file_editor: Option<FileEditor>,
+    pub(crate) file_editor: Option<FileEditor>,
     /// Transient toast message shown over the canvas
     /// (e.g. "Autosaved 2s ago"). `(message, until_instant)`.
     pub toast: Option<(String, Instant)>,
@@ -1392,15 +1274,6 @@ impl BarEditorApp {
     }
     pub(crate) fn set_dialog_show_mapinfo_editor(&mut self, open: bool) {
         self.dialog.show_mapinfo_editor = open;
-    }
-    pub(crate) fn dialog_show_map_info_picker(&self) -> bool {
-        self.dialog.show_map_info_picker
-    }
-    pub(crate) fn set_dialog_show_map_info_picker(&mut self, open: bool) {
-        self.dialog.show_map_info_picker = open;
-    }
-    pub(crate) fn dialog_file_editor_mut(&mut self) -> &mut Option<FileEditor> {
-        &mut self.dialog.file_editor
     }
 
     /// Mutable access to the recipe-identity meta block — the

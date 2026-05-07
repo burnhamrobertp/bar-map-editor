@@ -12,24 +12,6 @@ use eframe::egui;
 
 use crate::panels::tokens;
 
-/// Checkmark icon for the Validate toolbar button.
-pub(crate) fn paint_validate_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
-    let stroke = egui::Stroke::new(2.5, color);
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    painter.line_segment(
-        [egui::pos2(cx - 8.0, cy + 2.0), egui::pos2(cx - 2.0, cy + 7.0)],
-        stroke,
-    );
-    painter.line_segment(
-        [egui::pos2(cx - 2.0, cy + 7.0), egui::pos2(cx + 9.0, cy - 6.0)],
-        stroke,
-    );
-}
 
 /// "BAR" wordmark for the Test-in-BAR toolbar button.
 pub(crate) fn paint_bar_icon(
