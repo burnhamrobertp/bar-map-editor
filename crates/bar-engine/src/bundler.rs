@@ -470,7 +470,7 @@ fn lerp_heightmap_overlay(base: &mut bar_data::Heightmap, overlay: &bar_data::He
     let h = base.height().min(overlay.height());
     for y in 0..h {
         for x in 0..w {
-            if let (Some(b), Some(v)) = (base.get(x, y), overlay.get(x, y)) {
+            if let (Some(_b), Some(v)) = (base.get(x, y), overlay.get(x, y)) {
                 // Treat the overlay value as both paint value and alpha
                 // (non-zero = fully painted in this simple implementation).
                 if v > 0.0 {
