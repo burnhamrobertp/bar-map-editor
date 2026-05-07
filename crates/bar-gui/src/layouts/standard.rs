@@ -1,15 +1,9 @@
-//! Standard layout — the only layout today, mirroring what the
-//! editor has always shown: top toolbar, left palette, centre
-//! canvas (with the contextual panels overlaid), bottom status
-//! bar, plus floating windows for the inspector / map info /
-//! validation details / file editor / settings / about.
+//! Standard layout — node graph editor with left palette, central
+//! canvas, plus all floating windows (inspector, map info, etc.).
 //!
-//! When the panel split lands, this module's `draw` will become
-//! ~30 lines of "ask each panel to render itself" calls. Until
-//! then the body still lives in `BarEditorApp::update_panels`
-//! (the legacy path), and this module just delegates to it. The
-//! delegation point is here from day one so future layouts have
-//! a stable place to plug in without churning `app.rs`.
+//! The shell (menu bar, status bar, action bar, modals) is drawn by
+//! `dispatch::draw_active` before this function is called, so this
+//! module only owns the layout-specific panels.
 
 use eframe::egui;
 
@@ -18,12 +12,8 @@ use crate::app::BarEditorApp;
 pub fn draw(
     app: &mut BarEditorApp,
     ctx: &egui::Context,
-    frame: &mut eframe::Frame,
+    _frame: &mut eframe::Frame,
 ) {
-    // Currently delegates to `BarEditorApp::update_panels`, which
-    // owns the existing top-bar / palette / canvas / status-bar
-    // composition until the panel split moves them out one by one.
-    // Each panel migration replaces one section of that method
-    // with a `panels::foo::draw(app, ui)` call here.
-    app.update_panels(ctx, frame);
+    app.draw_node_palette_panel(ctx);
+    app.draw_standard_central_panel(ctx);
 }

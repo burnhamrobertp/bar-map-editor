@@ -25,10 +25,6 @@ pub const NODE_CAT_TEXTURE:        Color32 = Color32::from_rgb(140, 80, 160);
 pub const NODE_CAT_MASK:           Color32 = Color32::from_rgb(120, 120, 60);
 pub const NODE_CAT_BUNDLER:        Color32 = Color32::from_rgb(200, 130, 50);
 pub const NODE_CAT_SOURCE:         Color32 = Color32::from_rgb(50, 160, 160);
-pub const NODE_CAT_SCULPT:         Color32 = Color32::from_rgb(180, 90, 200);
-pub const NODE_CAT_TEXTURE_SCULPT: Color32 = Color32::from_rgb(200, 130, 70);
-pub const NODE_CAT_METAL_SCULPT:   Color32 = Color32::from_rgb(180, 80, 60);
-pub const NODE_CAT_TYPE_SCULPT:    Color32 = Color32::from_rgb(120, 100, 60);
 pub const NODE_CAT_PREVIEW:        Color32 = Color32::from_rgb(150, 150, 200);
 pub const NODE_CAT_IO:             Color32 = Color32::from_rgb(40, 110, 130);
 

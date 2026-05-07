@@ -39,10 +39,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Sharpen", NodeType::Sharpen),
         ("Clamp", NodeType::Clamp),
         ("Invert", NodeType::Invert),
-        ("Sculpt", NodeType::Sculpt),
-        ("Texture Sculpt", NodeType::TextureSculpt),
-        ("Metal Sculpt", NodeType::MetalSculpt),
-        ("Type Sculpt", NodeType::TypeSculpt),
         ("Preview", NodeType::Preview),
     ];
 

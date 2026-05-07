@@ -319,8 +319,6 @@ impl BarEditorApp {
                     self.draw_painted_heightmap_properties(ui, node_id, &node_params);
                 } else if node_type == NodeType::PaintedTexture {
                     self.draw_painted_texture_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::Sculpt {
-                    self.draw_sculpt_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.
@@ -963,52 +961,6 @@ impl BarEditorApp {
             }
             self.is_dirty = true;
         }
-    }
-
-    /// Properties UI for a Sculpt node: count of recorded dabs and a
-    /// way to clear them. Live-edited dabs come from the inspector / 3D
-    /// viewport sculpt input — there's no per-dab UI to expose.
-    pub(crate) fn draw_sculpt_properties(
-        &mut self,
-        ui: &mut egui::Ui,
-        node_id: NodeId,
-        params: &HashMap<String, ParamValue>,
-    ) {
-        let dabs_str = match params.get("dabs") {
-            Some(ParamValue::String(s)) => s.as_str(),
-            _ => "[]",
-        };
-        let count = serde_json::from_str::<Vec<serde_json::Value>>(dabs_str)
-            .map(|v| v.len())
-            .unwrap_or(0);
-        ui.horizontal(|ui| {
-            ui.label("Recorded dabs:");
-            ui.label(egui::RichText::new(count.to_string()).strong());
-        });
-        ui.add_space(4.0);
-        ui.weak(
-            "Each brush dab in the inspector or 3D viewport is appended \
-             here. The dabs are replayed on top of the upstream heightmap \
-             when the graph evaluates, so changing upstream parameters \
-             keeps your sculpting work intact.",
-        );
-        ui.add_space(8.0);
-        let can_clear = count > 0;
-        ui.add_enabled_ui(can_clear, |ui| {
-            if ui.button("Clear all dabs").clicked() {
-                if let Some(node) = self.graph.get_node_mut(node_id) {
-                    node.params
-                        .insert("dabs".to_string(), ParamValue::String("[]".to_string()));
-                    node.mark_dirty();
-                    self.is_dirty = true;
-                    // Drop the in-memory cached overlay so the next eval
-                    // refreshes the inspector with the upstream output.
-                    self.paint.heightmap = None;
-                    self.paint.texture = None;
-                    self.paint.sculpted = false;
-                }
-            }
-        });
     }
 
     /// Interactive paint canvas for a `PaintedHeightmap` node.

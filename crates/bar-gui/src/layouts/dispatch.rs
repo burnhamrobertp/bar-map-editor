@@ -11,15 +11,18 @@ use eframe::egui;
 use crate::app::{BarEditorApp, Layout};
 
 /// Render the panels that compose the user's currently active
-/// layout. Called from `BarEditorApp::update` after the per-frame
-/// pre-work (validation refresh, file dialog poll, …) and before
-/// the post-work (autosave, repaint scheduling).
+/// layout. Calls pre-frame work and the persistent shell chrome
+/// (menu bar, status bar, action bar, floating windows) before
+/// routing to the layout-specific panels.
 pub fn draw_active(
     app: &mut BarEditorApp,
     ctx: &egui::Context,
     frame: &mut eframe::Frame,
 ) {
+    app.pre_frame_work(ctx, frame);
+    app.draw_shell(ctx, frame);
     match app.active_layout() {
         Layout::Standard => super::standard::draw(app, ctx, frame),
+        Layout::Sculpt3D => super::sculpt3d::draw(app, ctx, frame),
     }
 }

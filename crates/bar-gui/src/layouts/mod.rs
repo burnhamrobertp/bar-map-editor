@@ -30,4 +30,5 @@
 //! across every layout that wants one.
 
 pub mod dispatch;
+pub mod sculpt3d;
 pub mod standard;

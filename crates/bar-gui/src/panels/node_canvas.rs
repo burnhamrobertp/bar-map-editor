@@ -1022,14 +1022,12 @@ impl BarEditorApp {
 
         // Pick the tab's tinted base colour. SubGraph tabs use their
         // group's palette colour so two SubGraphs with different
-        // colours look visibly different in the tab strip; Sculpt
-        // tabs use the Sculpt node-type colour. Main and any tab
-        // whose target is missing fall back to neutral.
+        // colours look visibly different in the tab strip. Main and
+        // any tab whose target is missing fall back to neutral.
         let tab_tint = |view: &CanvasView, groups: &HashMap<u64, GroupRuntime>| -> Option<egui::Color32> {
             match view {
                 CanvasView::Main => None,
                 CanvasView::SubGraph(gid) => groups.get(gid).map(|g| group_color(g.color_idx)),
-                CanvasView::Sculpt(_) => Some(node_type_color(&NodeType::Sculpt)),
             }
         };
 
@@ -1058,17 +1056,6 @@ impl BarEditorApp {
                         }
                     })
                     .unwrap_or_else(|| format!("SubGraph {gid}")),
-                CanvasView::Sculpt(nid) => self
-                    .graph
-                    .get_node(*nid)
-                    .map(|n| {
-                        if n.label.is_empty() {
-                            format!("Sculpt #{}", nid.0)
-                        } else {
-                            format!("Sculpt: {}", n.label)
-                        }
-                    })
-                    .unwrap_or_else(|| format!("Sculpt #{}", nid.0)),
             };
             let is_active = i == self.active_tab;
             let closable = i != 0;
@@ -1275,127 +1262,6 @@ impl BarEditorApp {
         }
     }
 
-    /// Render a Sculpt tab: brush controls along the top, a 2D
-    /// heightmap canvas filling the rest. Brush dabs route through
-    /// `apply_brush_at_heightmap` so the 3D preview window updates
-    /// live. The user keeps the Main tab open alongside this so
-    /// switching between "edit the sculpt" and "see the whole graph"
-    /// is one click.
-    pub(crate) fn draw_sculpt_tab(&mut self, ui: &mut egui::Ui, _node_id: NodeId) {
-        if self.paint.heightmap.is_none() {
-            ui.weak("No heightmap available yet — run the graph (or load a project) first.");
-            return;
-        }
-        // Brush controls — same widgets the inspector window uses.
-        ui.horizontal(|ui| {
-            ui.label("Tool:");
-            for tool in [
-                BrushTool::Raise,
-                BrushTool::Lower,
-                BrushTool::Smooth,
-                BrushTool::Flatten,
-            ] {
-                ui.selectable_value(&mut self.paint.brush.tool, tool, tool.label());
-            }
-        });
-        ui.horizontal(|ui| {
-            ui.label("Radius");
-            ui.add(
-                egui::Slider::new(&mut self.paint.brush.radius_px, 2.0..=128.0)
-                    .clamping(egui::SliderClamping::Always),
-            );
-            ui.label("Strength");
-            ui.add(
-                egui::Slider::new(&mut self.paint.brush.strength, 0.001..=0.1)
-                    .clamping(egui::SliderClamping::Always)
-                    .logarithmic(true),
-            );
-            ui.label("Falloff");
-            ui.add(
-                egui::Slider::new(&mut self.paint.brush.falloff, 0.5..=4.0)
-                    .clamping(egui::SliderClamping::Always),
-            );
-        });
-        ui.separator();
-
-        // Refresh the cached egui texture if the heightmap has
-        // advanced.
-        let ctx = ui.ctx().clone();
-        if self.paint.heightmap_rev != self.paint.texture_rev {
-            if let Some(ref hm) = self.paint.heightmap {
-                let img = heightmap_to_color_image(hm, self.map_min_height, self.map_max_height);
-                self.paint.texture = Some(ctx.load_texture(
-                    "sculpt_tab_heightmap",
-                    img,
-                    egui::TextureOptions::LINEAR,
-                ));
-                self.paint.texture_rev = self.paint.heightmap_rev;
-            }
-        }
-
-        // Square heightmap canvas filling whatever space remains.
-        let avail = ui.available_size();
-        let side = avail.x.min(avail.y).max(64.0);
-        let (rect, resp) = ui.allocate_exact_size(
-            egui::vec2(side, side),
-            egui::Sense::click_and_drag(),
-        );
-        let painter = ui.painter_at(rect);
-        if let Some(ref tex) = self.paint.texture {
-            let img = egui::Image::from_texture(egui::load::SizedTexture::new(
-                tex.id(),
-                rect.size(),
-            ));
-            img.paint_at(ui, rect);
-        } else {
-            painter.rect_filled(rect, 4.0, tokens::CANVAS_BG);
-        }
-
-        // Brush ring under the cursor, matching the 2D inspector's
-        // visual.
-        let pointer = ctx.pointer_latest_pos();
-        if let Some(p) = pointer {
-            if rect.contains(p) {
-                let map_w = self
-                    .paint.heightmap
-                    .as_ref()
-                    .map(|h| h.width())
-                    .unwrap_or(1) as f32;
-                let scale = rect.width() / map_w.max(1.0);
-                let r_screen = (self.paint.brush.radius_px * scale).max(2.0);
-                let stroking = ctx
-                    .input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-                let stroke_color = if stroking {
-                    egui::Color32::from_rgb(255, 220, 120)
-                } else {
-                    egui::Color32::from_rgb(255, 255, 255)
-                };
-                painter.circle_stroke(p, r_screen, egui::Stroke::new(1.5, stroke_color));
-            }
-        }
-
-        // Apply brush dabs while primary is down inside the canvas.
-        let primary_down = ctx
-            .input(|i| i.pointer.button_down(egui::PointerButton::Primary));
-        let inside = pointer.map(|p| rect.contains(p)).unwrap_or(false);
-        if primary_down && inside {
-            let p = pointer.unwrap();
-            let stroke_starting = !self.paint.brush_stroking;
-            if let Some(hm) = self.paint.heightmap.as_ref() {
-                let u = ((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
-                let v = ((p.y - rect.top()) / rect.height()).clamp(0.0, 1.0);
-                let hx = u * hm.width() as f32;
-                let hy = v * hm.height() as f32;
-                self.apply_brush_at_heightmap(hx, hy, stroke_starting);
-            }
-        } else if self.paint.brush_stroking && !primary_down {
-            self.end_brush_stroke();
-        }
-        // Suppress unused warning (interactions handled via global
-        // pointer state, not the response itself).
-        let _ = resp;
-    }
-
     /// Switch the active tab and remember the previously-active one
     /// for Ctrl+Tab back-and-forth. Use this everywhere the active
     /// tab changes — direct assignment to `active_tab` skips the
@@ -1452,7 +1318,6 @@ impl BarEditorApp {
             let keep = match tab {
                 CanvasView::Main => true,
                 CanvasView::SubGraph(gid) => valid_groups.contains(gid),
-                CanvasView::Sculpt(nid) => self.graph.get_node(*nid).is_some(),
             };
             if keep {
                 new_tabs.push(tab.clone());
@@ -1558,14 +1423,6 @@ impl BarEditorApp {
             }
         }
 
-        // Sculpt tabs render an entirely different surface — heightmap
-        // canvas + brush controls — instead of the node graph. Branch
-        // here so the rest of this function only handles graph-like
-        // tabs (Main + SubGraph).
-        if let CanvasView::Sculpt(node_id) = self.current_view() {
-            self.draw_sculpt_tab(ui, node_id);
-            return;
-        }
 
         let available = ui.available_size();
         let (canvas_rect, response) =
@@ -2015,9 +1872,6 @@ impl BarEditorApp {
         // frame (members of a collapsed subgraph, or anything outside
         // the current SubGraph tab's scope).
         let hidden_nodes = self.hidden_nodes_this_frame();
-        // Set when a sculpt node was double-clicked this frame, so
-        // we can open its tab after the immutable-borrow loop ends.
-        let mut pending_open_sculpt_tab: Option<NodeId> = None;
         // Contextual properties panel: arm when a node was clicked,
         // clear when a drag started or a tab was opened. Applied
         // after the per-node loop so the pending state is consistent
@@ -2569,15 +2423,6 @@ impl BarEditorApp {
                 pending_props_clear = true;
             }
 
-            // Double-click a Sculpt node to open / focus its sculpt
-            // tab. This is the only path to a Sculpt tab — clicking a
-            // sculpt node once just selects it like any other node.
-            if node_response.double_clicked() && node_type == NodeType::Sculpt {
-                pending_open_sculpt_tab = Some(*node_id);
-                // Don't pop a props panel if we just opened a tab.
-                pending_props_clear = true;
-            }
-
             // Right-click context menu — group operations + delete.
             // Building the menu here keeps the per-node-id context tight.
             let this_id = *node_id;
@@ -2985,9 +2830,6 @@ impl BarEditorApp {
         if let Some(gid) = subgraph_double_click.first().copied() {
             self.open_or_activate_tab(CanvasView::SubGraph(gid));
             self.clear_selection();
-        }
-        if let Some(nid) = pending_open_sculpt_tab {
-            self.open_or_activate_tab(CanvasView::Sculpt(nid));
         }
         // Apply the pending-props state changes from the node loop.
         // Clear takes precedence over arm so a drag-start on the

@@ -325,9 +325,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         .map(|hm| format!("{}x{} px", hm.width(), hm.height()))
                         .unwrap_or_else(|| "(no preview)".to_string());
                     ui.weak(format!("Heightmap: {h_label}"));
-                    if app.paint().sculpted {
+                    if app.paint().sculpt.dirty {
                         ui.label(
-                            egui::RichText::new("- sculpted (locked)")
+                            egui::RichText::new("- sculpted")
                                 .color(egui::Color32::from_rgb(255, 200, 80)),
                         );
                     }
@@ -336,7 +336,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         p.heightmap = None;
                         p.texture = None;
                         p.texture_rev = p.heightmap_rev;
-                        p.sculpted = false;
+                        p.sculpt = Default::default();
                     }
                     let can_save = app.paint().heightmap.is_some();
                     ui.add_enabled_ui(can_save, |ui| {
@@ -407,7 +407,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 apply_brush_dab(hm, hx, hy, &p.brush);
             }
             p.heightmap_rev = p.heightmap_rev.wrapping_add(1);
-            p.sculpted = true;
+            p.sculpt.dirty = true;
         }
         app.mark_dirty();
     }

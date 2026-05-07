@@ -228,11 +228,6 @@ pub enum CanvasView {
     /// previous "confined edit mode" lifted into a tab so the user
     /// can keep the Main tab open alongside.
     SubGraph(u64),
-    /// Heightmap sculpting view for one Sculpt node. Brush controls
-    /// + a 2D heightmap canvas. The dabs route through the existing
-    /// `apply_brush_at_heightmap` so what's edited here also shows
-    /// up live in the 3D preview window.
-    Sculpt(NodeId),
 }
 
 /// Active filter tab in the validation details window.
@@ -584,8 +579,6 @@ impl BrushTarget {
         }
     }
     pub(crate) fn is_available(self) -> bool {
-        // All four targets ship after Stage W (TextureSculpt) and
-        // the MetalSculpt / TypeSculpt overlays in this stage.
         true
     }
 }
@@ -775,6 +768,40 @@ impl ExportStatus {
     }
 }
 
+/// In-memory sculpt data — the live accumulator for brush strokes
+/// across all four layers. Written by brush operations; read by
+/// `pack_sculpt_record` at save time and by the renderer for live
+/// preview.
+pub struct SculptState {
+    /// Signed height delta. Zero where unmodified. Composite shown in
+    /// the inspector is `heightmap + height_delta`.
+    pub height_delta: Option<bar_data::Heightmap>,
+    /// Metal-density overlay [0..1]. Painted where alpha > 0.
+    pub metal_overlay: Option<bar_data::Heightmap>,
+    pub metal_alpha: Option<bar_data::Heightmap>,
+    /// Type-id overlay. Same shape as metal.
+    pub type_overlay: Option<bar_data::Heightmap>,
+    pub type_alpha: Option<bar_data::Heightmap>,
+    /// RGBA texture overlay. rgb = colour, alpha = coverage.
+    pub texture_overlay: Option<bar_data::ColorBuffer>,
+    /// True when any layer has been modified since the last save.
+    pub dirty: bool,
+}
+
+impl Default for SculptState {
+    fn default() -> Self {
+        Self {
+            height_delta: None,
+            metal_overlay: None,
+            metal_alpha: None,
+            type_overlay: None,
+            type_alpha: None,
+            texture_overlay: None,
+            dirty: false,
+        }
+    }
+}
+
 /// Live brush, sculpt-lock, and per-layer paint caches used by the
 /// 2D inspector and the 3D viewport for per-stroke feedback. The
 /// caches mirror whatever the most recent graph eval produced;
@@ -800,16 +827,10 @@ pub struct PaintSession {
     /// True while a sculpt stroke is in progress (mouse held
     /// down). Used to capture the Flatten target at stroke start.
     pub brush_stroking: bool,
-    /// Set once the user makes any sculpt edit; locks the
-    /// inspector heightmap against being overwritten the next
-    /// time the graph re-evaluates. Cleared by "Reset to graph
-    /// output" or starting a new project.
-    pub sculpted: bool,
-    /// Project-relative `bar://` URL set by `pack_sculpt_overlay`
-    /// when it writes the overlay PNG. Picked up by
-    /// `build_project` and stored in the saved project. None
-    /// outside of the save call.
-    pub pending_sculpt_overlay_url: Option<String>,
+    /// Project-level in-memory sculpt data. Written by brush
+    /// operations across all four layers; saved to sidecar files
+    /// by `pack_sculpt_record` and merged at export time.
+    pub sculpt: SculptState,
     /// Brush radius (heightmap pixels) for `PaintedHeightmap` /
     /// `PaintedTexture` in-node paint canvases. The 2D-inspector
     /// brush uses `brush.radius_px` instead.
@@ -825,21 +846,22 @@ pub struct PaintSession {
     pub texture: Option<egui::TextureHandle>,
     pub texture_rev: u64,
     /// Live colour-buffer cache populated from the most recent
-    /// eval. Brush dabs (target = Color) mutate this in place AND
-    /// append to the `TextureSculpt`'s `dabs` so the next eval is
-    /// authoritative; the live mutation gives per-stroke feedback
-    /// without waiting for a re-evaluation.
+    /// eval. Color brush dabs mutate this for instant per-stroke
+    /// feedback; the sculpt.texture_overlay holds the persistent
+    /// record for save/export.
     pub color_buffer: Option<bar_data::ColorBuffer>,
-    /// Live metalmap cache — same shape as `color_buffer` but for
-    /// metal-density paint. The 3D viewport surfaces this as a
-    /// tinted overlay while the brush target is Metalmap.
+    /// Live metalmap cache — same shape as color_buffer but for
+    /// metal-density paint.
     pub metalmap: Option<bar_data::Heightmap>,
-    /// Live typemap cache. Visualised as a per-type-id palette
-    /// overlay when the brush target is Typemap.
+    /// Live typemap cache.
     pub typemap: Option<bar_data::Heightmap>,
     /// Retained egui texture handles for `PaintedHeightmap`
     /// canvases, keyed by NodeId.
     pub mask_textures: HashMap<NodeId, egui::TextureHandle>,
+    /// Populated by `pack_sculpt_record` before `build_project` is
+    /// called. Taken with `.take()` in `build_project` so the record
+    /// lands on the serialised `Project::sculpt`.
+    pub pending_sculpt_record: Option<bar_project::SculptRecord>,
 }
 
 impl Default for PaintSession {
@@ -848,8 +870,7 @@ impl Default for PaintSession {
             inspector_mode: InspectorMode::Spawns,
             brush: BrushState::default(),
             brush_stroking: false,
-            sculpted: false,
-            pending_sculpt_overlay_url: None,
+            sculpt: SculptState::default(),
             paint_brush_radius: 4.0,
             heightmap: None,
             heightmap_rev: 0,
@@ -859,6 +880,7 @@ impl Default for PaintSession {
             metalmap: None,
             typemap: None,
             mask_textures: HashMap::new(),
+            pending_sculpt_record: None,
         }
     }
 }
@@ -866,14 +888,11 @@ impl Default for PaintSession {
 impl PaintSession {
     /// Drop the live caches so the next graph eval repopulates
     /// them from scratch. Called on project switch / new project /
-    /// graph reset. Brush state and the sculpt lock are *also*
-    /// reset because they belong to the project the user just
-    /// left.
+    /// graph reset.
     pub fn invalidate_on_graph_reset(&mut self) {
         self.brush = BrushState::default();
         self.brush_stroking = false;
-        self.sculpted = false;
-        self.pending_sculpt_overlay_url = None;
+        self.sculpt = SculptState::default();
         self.heightmap = None;
         self.heightmap_rev = self.heightmap_rev.wrapping_add(1);
         self.texture = None;
@@ -904,6 +923,11 @@ pub enum Layout {
     /// settings / about.
     #[default]
     Standard,
+    /// Full-width 3D viewport with brush controls on the right.
+    /// Writes brush strokes to `SculptState` directly; the
+    /// export pipeline merges them onto graph output at bundle
+    /// time.
+    Sculpt3D,
 }
 
 /// Identity fields the bundler reads when generating `mapinfo.lua`
@@ -912,7 +936,7 @@ pub enum Layout {
 /// rather than five loose fields on `BarEditorApp` makes the
 /// "this is a single source of truth that the recipe is built
 /// from" relationship explicit, and shrinks `apply_project` /
-/// `build_project` / `reset_session_state` accordingly.
+/// `build_project` / `reset_project` accordingly.
 #[derive(Default, Clone, Debug)]
 pub struct RecipeMeta {
     /// Optional shortname (`mapinfo.shortname`). When `None` the
@@ -1523,16 +1547,44 @@ impl BarEditorApp {
         }
     }
 
-    /// Drop session-only ("transient") state that should never carry
-    /// over a project switch: undo history, brush state, live paint
-    /// caches, validation panel state, modal/dialog flags, transient
-    /// status messages, palette drag, run/export request flags, and
-    /// canvas viewport offset. Project-data state (graph, groups,
-    /// node visuals, project_path, recipe metadata, etc.) is cleared
-    /// or replaced by the *caller* — `do_new_project` /
-    /// `apply_project` / `start_with_macro` — because they each
-    /// populate it differently.
-    fn reset_session_state(&mut self) {
+    /// Wipe every project-scoped field, leaving the app in a
+    /// well-defined "no project loaded" state. This is the ONLY
+    /// place where project state is cleared en masse. Every
+    /// project-switching path (new, open .barproj, open .sd7,
+    /// load macro preset, close) calls this first, then installs
+    /// new state on top of the blank slate.
+    fn reset_project(&mut self) {
+        // Graph engine — counter resets to 1 so the next project
+        // gets clean NodeIds with no risk of colliding with stale
+        // group member_ids from the previous project.
+        self.graph = GraphEngine::new();
+        self.node_visuals.clear();
+
+        // Group / subgraph state — must be cleared together with the
+        // graph so stale member_ids can never match new NodeIds.
+        self.groups.clear();
+        self.node_to_group.clear();
+        self.next_group_id = 1;
+
+        // Project identity and output configuration.
+        self.project_path = None;
+        self.loaded_name = None;
+        self.is_dirty = false;
+        self.map_info_file = None;
+        self.map_settings = bar_project::MapSettings::default();
+        self.map_width = 256;
+        self.map_height = 256;
+        self.map_min_height = 0.0;
+        self.map_max_height = 800.0;
+        self.recipe_meta = RecipeMeta::default();
+
+        // Inspector / preview.
+        self.preview_node = None;
+        self.preview_open = false;
+
+        // Signal renderers to flush stale GPU resources.
+        self.graph_reset = true;
+
         // Undo history — never cross a project boundary, otherwise
         // Ctrl+Z would resurrect nodes from a different project.
         self.history.clear();
@@ -1606,21 +1658,7 @@ impl BarEditorApp {
     }
 
     fn do_new_project(&mut self) {
-        self.reset_session_state();
-        self.graph = GraphEngine::new();
-        self.node_visuals.clear();
-        self.groups.clear();
-        self.node_to_group.clear();
-        self.next_group_id = 1;
-        self.project_path = None;
-        self.loaded_name = None;
-        self.is_dirty = false;
-        self.preview_node = None;
-        self.preview_open = false;
-        self.map_info_file = None;
-        self.map_settings.start_positions.clear();
-        self.map_settings = bar_project::MapSettings::default();
-        self.graph_reset = true;
+        self.reset_project();
 
         // Drop the two terminal nodes every project ends with: a
         // Bundler for export and a Preview for the 3D viewport.
@@ -2275,11 +2313,11 @@ impl BarEditorApp {
     /// clone and bumps a revision counter; the texture re-upload happens
     /// lazily inside the inspector's draw path.
     ///
-    /// If the user has sculpted the inspector heightmap since the last
-    /// reset, we keep their edits and ignore the incoming heightmap.
-    /// The "Reset to graph output" button clears the lock.
+    /// If the user has sculpted since the last reset, we keep their
+    /// edits and ignore the incoming heightmap. Cleared by starting a
+    /// new project.
     pub fn set_inspector_heightmap(&mut self, hm: bar_data::Heightmap) {
-        if self.paint.sculpted {
+        if self.paint.sculpt.dirty {
             return;
         }
         self.paint.heightmap = Some(hm);
@@ -2287,12 +2325,10 @@ impl BarEditorApp {
     }
 
     /// True when the inspector is in Sculpt mode AND the inspector
-    /// window is open OR a sculpt has already been started. The 3D
-    /// viewport uses this to decide whether primary-button drag should
-    /// orbit the camera or apply the brush.
+    /// window is open OR a sculpt has already been started.
     pub fn is_sculpt_input_active(&self) -> bool {
         self.paint.inspector_mode == InspectorMode::Sculpt
-            && (self.dialog.show_inspector || self.paint.sculpted)
+            && (self.dialog.show_inspector || self.paint.sculpt.dirty)
     }
 
     /// Which data layer the brush currently writes to. The 3D viewport
@@ -2316,19 +2352,13 @@ impl BarEditorApp {
     }
 
     /// Apply the current brush at heightmap pixel coordinates. Call
-    /// this once per dab — the caller is responsible for whatever
-    /// frame-rate clamping it wants. Setting `stroke_starting = true`
-    /// captures the Flatten target at the start of a stroke.
-    /// Returns true iff the heightmap actually changed.
+    /// this once per dab. Setting `stroke_starting = true` captures
+    /// the Flatten target at stroke start. Returns true iff the
+    /// heightmap actually changed.
     ///
-    /// Two effects happen on each dab:
-    /// 1. The inspector heightmap is mutated in-place for instant
-    ///    visual feedback (the lock keeps a graph eval from undoing
-    ///    this between strokes).
-    /// 2. The dab is appended to a Sculpt node's `dabs` param so the
-    ///    edit becomes part of the graph and survives upstream
-    ///    parameter changes — adjusting noise frequency upstream
-    ///    re-evaluates with the same brush strokes still applied.
+    /// Two effects per dab:
+    /// 1. `sculpt.height_delta` is updated for persistent save/export.
+    /// 2. The inspector heightmap is mutated in-place for instant feedback.
     pub fn apply_brush_at_heightmap(
         &mut self,
         hx: f32,
@@ -2339,143 +2369,31 @@ impl BarEditorApp {
             Some(hm) => (hm.width() as f32, hm.height() as f32),
             None => return false,
         };
+        let dim_w = hm_w as u32;
+        let dim_h = hm_h as u32;
         if stroke_starting && self.paint.brush.tool == BrushTool::Flatten {
             let hm = self.paint.heightmap.as_ref().unwrap();
             let ix = (hx.round() as i32).clamp(0, hm.width() as i32 - 1) as u32;
             let iy = (hy.round() as i32).clamp(0, hm.height() as i32 - 1) as u32;
             self.paint.brush.flatten_target = hm.get(ix, iy);
         }
-        // Record this dab onto a Sculpt node in the graph BEFORE the
-        // in-memory mutation, so even a graph eval that lands mid-
-        // stroke produces the same output.
-        self.record_sculpt_dab(hm_w, hm_h, hx, hy);
-        // Mutate the cached heightmap directly for instant feedback.
+        // Write to the persistent sculpt height delta.
+        if self.paint.sculpt.height_delta.is_none() {
+            self.paint.sculpt.height_delta =
+                bar_data::Heightmap::new(dim_w, dim_h).ok();
+        }
+        if let Some(ref mut delta) = self.paint.sculpt.height_delta {
+            apply_brush_dab(delta, hx, hy, &self.paint.brush);
+        }
+        // Mutate the inspector heightmap for instant visual feedback.
         if let Some(hm) = self.paint.heightmap.as_mut() {
             apply_brush_dab(hm, hx, hy, &self.paint.brush);
             self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
         }
-        self.paint.sculpted = true;
+        self.paint.sculpt.dirty = true;
         self.paint.brush_stroking = true;
         self.is_dirty = true;
         true
-    }
-
-    /// Find or create a Sculpt node sitting between the primary
-    /// Bundler's heightmap source and the Bundler itself, then append
-    /// the current dab to its serialised dab list. Returns silently if
-    /// no Bundler exists yet (the user hasn't built a graph) or if the
-    /// Bundler has no heightmap input wired up.
-    fn record_sculpt_dab(&mut self, hm_w: f32, hm_h: f32, hx: f32, hy: f32) {
-        let Some(sculpt_id) = self.ensure_sculpt_node_for_bundler() else {
-            return;
-        };
-        let Some(node) = self.graph.get_node_mut(sculpt_id) else {
-            return;
-        };
-        // Read current dabs.
-        let dabs_str = match node.params.get("dabs") {
-            Some(ParamValue::String(s)) => s.clone(),
-            _ => "[]".to_string(),
-        };
-        let mut arr: Vec<serde_json::Value> =
-            serde_json::from_str(&dabs_str).unwrap_or_default();
-        // Normalise to [0, 1] over the heightmap dim so the same
-        // recording works for any output resolution.
-        let map_dim = hm_w.max(hm_h);
-        let tool_id = match self.paint.brush.tool {
-            BrushTool::Raise => 0,
-            BrushTool::Lower => 1,
-            BrushTool::Smooth => 2,
-            BrushTool::Flatten => 3,
-        };
-        let entry = serde_json::json!({
-            "t": tool_id,
-            "u": hx / hm_w,
-            "v": hy / hm_h,
-            "ru": self.paint.brush.radius_px / map_dim,
-            "s": self.paint.brush.strength,
-            "f": self.paint.brush.falloff,
-            "ft": self.paint.brush.flatten_target,
-        });
-        arr.push(entry);
-        let new_dabs = serde_json::to_string(&arr).unwrap_or(dabs_str);
-        node.params.insert("dabs".to_string(), ParamValue::String(new_dabs));
-        node.mark_dirty();
-    }
-
-    /// Returns the NodeId of the Sculpt node that sits on the path to
-    /// the primary Bundler's heightmap input. If none exists, inserts
-    /// one between the existing heightmap source and the Bundler and
-    /// returns its id. None if the graph has no Bundler or no
-    /// heightmap source feeding it.
-    pub(crate) fn ensure_sculpt_node_for_bundler(&mut self) -> Option<NodeId> {
-        // Pick the first Bundler we find (matches the active preview
-        // node when one is set; otherwise the only Bundler is the
-        // right answer).
-        let bundler_id = self
-            .preview_node
-            .filter(|id| {
-                self.graph
-                    .get_node(*id)
-                    .map(|n| n.node_type == NodeType::Bundler)
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                self.graph
-                    .nodes()
-                    .iter()
-                    .find(|(_, n)| n.node_type == NodeType::Bundler)
-                    .map(|(id, _)| *id)
-            })?;
-        // Find the connection feeding that bundler's heightmap input.
-        let feed_from = self
-            .graph
-            .connections()
-            .iter()
-            .find(|c| c.to.node_id == bundler_id && c.to.port_name == "heightmap")
-            .map(|c| c.from.clone())?;
-        // If the feed source is already a Sculpt node, reuse it.
-        if let Some(node) = self.graph.get_node(feed_from.node_id) {
-            if node.node_type == NodeType::Sculpt {
-                return Some(feed_from.node_id);
-            }
-        }
-        // Otherwise insert a fresh Sculpt node and rewire.
-        let sculpt_node = Node::new(NodeId(0), NodeType::Sculpt, "Sculpt");
-        let sculpt_id = self.graph.add_node(sculpt_node);
-        // Place it visually next to the bundler.
-        if let Some(bundler_visual) = self.node_visuals.get(&bundler_id).cloned() {
-            self.node_visuals.insert(
-                sculpt_id,
-                NodeVisual {
-                    position: egui::pos2(
-                        bundler_visual.position.x - 200.0,
-                        bundler_visual.position.y,
-                    ),
-                    size: egui::vec2(150.0, 80.0),
-                },
-            );
-        }
-        // connect() with cardinality=One auto-removes the previous
-        // target connection, so the existing feed → bundler is dropped.
-        let _ = self.graph.connect(
-            feed_from,
-            PortId {
-                node_id: sculpt_id,
-                port_name: "input".to_string(),
-            },
-        );
-        let _ = self.graph.connect(
-            PortId {
-                node_id: sculpt_id,
-                port_name: "output".to_string(),
-            },
-            PortId {
-                node_id: bundler_id,
-                port_name: "heightmap".to_string(),
-            },
-        );
-        Some(sculpt_id)
     }
 
     /// Mark the end of a 3D-viewport sculpt stroke. Pairs with
@@ -2500,321 +2418,99 @@ impl BarEditorApp {
     /// texture exists yet (the user needs to wire one in first).
     pub fn apply_color_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
         let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
-            Some(hm) => (hm.width() as f32, hm.height() as f32),
+            Some(hm) => (hm.width(), hm.height()),
             None => return false,
         };
-        let map_dim = hm_w.max(hm_h).max(1.0);
-        let u = (hx / hm_w.max(1.0)).clamp(0.0, 1.0);
-        let v = (hy / hm_h.max(1.0)).clamp(0.0, 1.0);
-        // Brush radius lives in heightmap pixels; the dab is stored
-        // in normalised units so it survives a resolution change.
+        let map_dim = (hm_w.max(hm_h) as f32).max(1.0);
+        let u = (hx / hm_w as f32).clamp(0.0, 1.0);
+        let v = (hy / hm_h as f32).clamp(0.0, 1.0);
         let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
-        let Some(node_id) = self.ensure_texture_sculpt_for_bundler() else {
-            return false;
-        };
-        // Append the dab to the TextureSculpt's `dabs` param.
-        let Some(node) = self.graph.get_node_mut(node_id) else {
-            return false;
-        };
-        let existing = match node.params.get("dabs") {
-            Some(ParamValue::String(s)) => s.clone(),
-            _ => "[]".to_string(),
-        };
-        let mut arr: Vec<serde_json::Value> =
-            serde_json::from_str(&existing).unwrap_or_default();
         let [r, g, b] = self.paint.brush.color_rgb;
-        let entry = serde_json::json!({
-            "u": u,
-            "v": v,
-            "ru": ru,
-            "r": r,
-            "g": g,
-            "b": b,
-        });
-        arr.push(entry);
-        let new_json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
-        node.params.insert("dabs".to_string(), ParamValue::String(new_json));
-        node.mark_dirty();
-        // Stamp the dab into the live colour cache so the 3D
-        // viewport sees the stroke immediately, before the
-        // background eval re-runs. The eval will eventually
-        // overwrite this cache with the authoritative composite,
-        // but until then the live mutation gives per-stroke
-        // feedback.
+        // Write to the persistent sculpt texture overlay.
+        if self.paint.sculpt.texture_overlay.is_none() {
+            self.paint.sculpt.texture_overlay =
+                bar_data::ColorBuffer::new(hm_w, hm_h).ok();
+        }
+        if let Some(ref mut cb) = self.paint.sculpt.texture_overlay {
+            stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
+        }
+        // Mirror into the live cache for instant viewport feedback.
         if let Some(ref mut cb) = self.paint.color_buffer {
             stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
         }
+        self.paint.sculpt.dirty = true;
         self.is_dirty = true;
         true
     }
 
-    /// Paint one metalmap dab. Stamps `brush.paint_value` (metal
-    /// density 0..1) into the brush footprint via a `MetalSculpt`
-    /// overlay node wired to `Bundler.metalmap`. If no metalmap
-    /// pipeline exists, the ensure path inserts a `Constant(0.0)
-    /// → MetalSculpt → Bundler.metalmap` chain so painting works
-    /// from a clean canvas.
+    /// Paint one metalmap dab into the sculpt metal overlay.
     pub fn apply_metal_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
-        self.apply_value_brush_at_heightmap(hx, hy, BrushTarget::Metalmap)
-    }
-
-    /// Paint one typemap dab. Same shape as metal — stamps
-    /// `brush.paint_value` into the brush footprint via a
-    /// `TypeSculpt` overlay node wired to `Bundler.typemap`.
-    pub fn apply_type_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
-        self.apply_value_brush_at_heightmap(hx, hy, BrushTarget::Typemap)
-    }
-
-    /// Shared dispatch for value-stamp brushes (metal / type). Records
-    /// a `{u, v, ru, value}` dab onto the appropriate overlay node.
-    fn apply_value_brush_at_heightmap(
-        &mut self,
-        hx: f32,
-        hy: f32,
-        target: BrushTarget,
-    ) -> bool {
         let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
-            Some(hm) => (hm.width() as f32, hm.height() as f32),
+            Some(hm) => (hm.width(), hm.height()),
             None => return false,
         };
-        let map_dim = hm_w.max(hm_h).max(1.0);
-        let u = (hx / hm_w.max(1.0)).clamp(0.0, 1.0);
-        let v = (hy / hm_h.max(1.0)).clamp(0.0, 1.0);
+        let map_dim = (hm_w.max(hm_h) as f32).max(1.0);
+        let u = (hx / hm_w as f32).clamp(0.0, 1.0);
+        let v = (hy / hm_h as f32).clamp(0.0, 1.0);
         let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
-        let node_id = match target {
-            BrushTarget::Metalmap => match self.ensure_metal_sculpt_for_bundler() {
-                Some(id) => id,
-                None => return false,
-            },
-            BrushTarget::Typemap => match self.ensure_type_sculpt_for_bundler() {
-                Some(id) => id,
-                None => return false,
-            },
-            _ => return false,
-        };
         let value = self.paint.brush.paint_value.clamp(0.0, 1.0);
-        let Some(node) = self.graph.get_node_mut(node_id) else {
-            return false;
-        };
-        let existing = match node.params.get("dabs") {
-            Some(ParamValue::String(s)) => s.clone(),
-            _ => "[]".to_string(),
-        };
-        let mut arr: Vec<serde_json::Value> =
-            serde_json::from_str(&existing).unwrap_or_default();
-        arr.push(serde_json::json!({
-            "u": u,
-            "v": v,
-            "ru": ru,
-            "value": value,
-        }));
-        let new_json = serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string());
-        node.params.insert("dabs".to_string(), ParamValue::String(new_json));
-        node.mark_dirty();
-        // Stamp into the matching live cache for instant feedback.
-        // Auto-create a zero-filled cache of the same dim as the
-        // inspector heightmap on first paint, so the user doesn't
-        // need to wait for an eval to populate the layer.
-        let (hm_w, hm_h) = (hm_w as u32, hm_h as u32);
-        match target {
-            BrushTarget::Metalmap => {
-                if self.paint.metalmap.is_none() {
-                    self.paint.metalmap =
-                        bar_data::Heightmap::new(hm_w, hm_h).ok();
-                }
-                if let Some(ref mut hm) = self.paint.metalmap {
-                    stamp_value_dab_in_heightmap(hm, u, v, ru, value);
-                }
-            }
-            BrushTarget::Typemap => {
-                if self.paint.typemap.is_none() {
-                    self.paint.typemap =
-                        bar_data::Heightmap::new(hm_w, hm_h).ok();
-                }
-                if let Some(ref mut hm) = self.paint.typemap {
-                    stamp_value_dab_in_heightmap(hm, u, v, ru, value);
-                }
-            }
-            _ => {}
+        if self.paint.sculpt.metal_overlay.is_none() {
+            self.paint.sculpt.metal_overlay = bar_data::Heightmap::new(hm_w, hm_h).ok();
         }
+        if self.paint.sculpt.metal_alpha.is_none() {
+            self.paint.sculpt.metal_alpha = bar_data::Heightmap::new(hm_w, hm_h).ok();
+        }
+        if let Some(ref mut hm) = self.paint.sculpt.metal_overlay {
+            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
+        }
+        if let Some(ref mut hm) = self.paint.sculpt.metal_alpha {
+            stamp_value_dab_in_heightmap(hm, u, v, ru, 1.0);
+        }
+        // Mirror into the live metalmap cache for instant feedback.
+        if self.paint.metalmap.is_none() {
+            self.paint.metalmap = bar_data::Heightmap::new(hm_w, hm_h).ok();
+        }
+        if let Some(ref mut hm) = self.paint.metalmap {
+            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
+        }
+        self.paint.sculpt.dirty = true;
         self.is_dirty = true;
         true
     }
 
-    /// Ensure the active Bundler has a `MetalSculpt` overlay feeding
-    /// its `metalmap` input. If no upstream metalmap pipeline exists,
-    /// insert a `Constant(0.0) → MetalSculpt → Bundler.metalmap`
-    /// chain so the brush has a blank canvas to paint on.
-    fn ensure_metal_sculpt_for_bundler(&mut self) -> Option<NodeId> {
-        self.ensure_value_sculpt_for_bundler(
-            "metalmap",
-            NodeType::MetalSculpt,
-            "Metal Sculpt",
-        )
-    }
-
-    /// Ensure a `TypeSculpt` overlay feeding `Bundler.typemap`. Same
-    /// shape as the metal variant.
-    fn ensure_type_sculpt_for_bundler(&mut self) -> Option<NodeId> {
-        self.ensure_value_sculpt_for_bundler(
-            "typemap",
-            NodeType::TypeSculpt,
-            "Type Sculpt",
-        )
-    }
-
-    /// Shared insertion path for the value-stamp overlay nodes. Picks
-    /// the active Bundler, finds (or creates) the upstream chain
-    /// feeding `bundler_port`, and either reuses an existing overlay
-    /// of `overlay_type` or inserts one between source and Bundler.
-    fn ensure_value_sculpt_for_bundler(
-        &mut self,
-        bundler_port: &str,
-        overlay_type: NodeType,
-        label: &str,
-    ) -> Option<NodeId> {
-        let bundler_id = self
-            .preview_node
-            .filter(|id| {
-                self.graph
-                    .get_node(*id)
-                    .map(|n| n.node_type == NodeType::Bundler)
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                self.graph
-                    .nodes()
-                    .iter()
-                    .find(|(_, n)| n.node_type == NodeType::Bundler)
-                    .map(|(id, _)| *id)
-            })?;
-
-        // Existing feed into this bundler port?
-        let feed_from = self
-            .graph
-            .connections()
-            .iter()
-            .find(|c| c.to.node_id == bundler_id && c.to.port_name == bundler_port)
-            .map(|c| c.from.clone());
-
-        if let Some(ref ff) = feed_from {
-            if let Some(node) = self.graph.get_node(ff.node_id) {
-                if node.node_type == overlay_type {
-                    return Some(ff.node_id);
-                }
-            }
-        }
-
-        // Determine the source feeding the new overlay's input. If
-        // there's an existing producer, splice the overlay between it
-        // and the Bundler. Otherwise drop a Constant(0.0) so the
-        // overlay has a blank canvas.
-        let source_port = match feed_from {
-            Some(ff) => ff,
-            None => {
-                let mut c = Node::new(NodeId(0), NodeType::Constant, format!("{label} Base"));
-                c.params
-                    .insert("value".to_string(), ParamValue::Float(0.0));
-                let id = self.graph.add_node(c);
-                if let Some(bv) = self.node_visuals.get(&bundler_id).cloned() {
-                    self.node_visuals.insert(
-                        id,
-                        NodeVisual {
-                            position: egui::pos2(
-                                bv.position.x - 400.0,
-                                bv.position.y + 220.0,
-                            ),
-                            size: egui::vec2(120.0, 60.0),
-                        },
-                    );
-                }
-                PortId { node_id: id, port_name: "output".to_string() }
-            }
+    /// Paint one typemap dab into the sculpt type overlay.
+    pub fn apply_type_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
+        let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
+            Some(hm) => (hm.width(), hm.height()),
+            None => return false,
         };
-
-        let overlay = Node::new(NodeId(0), overlay_type, label);
-        let overlay_id = self.graph.add_node(overlay);
-        if let Some(bv) = self.node_visuals.get(&bundler_id).cloned() {
-            self.node_visuals.insert(
-                overlay_id,
-                NodeVisual {
-                    position: egui::pos2(bv.position.x - 200.0, bv.position.y + 220.0),
-                    size: egui::vec2(150.0, 80.0),
-                },
-            );
+        let map_dim = (hm_w.max(hm_h) as f32).max(1.0);
+        let u = (hx / hm_w as f32).clamp(0.0, 1.0);
+        let v = (hy / hm_h as f32).clamp(0.0, 1.0);
+        let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
+        let value = self.paint.brush.paint_value.clamp(0.0, 1.0);
+        if self.paint.sculpt.type_overlay.is_none() {
+            self.paint.sculpt.type_overlay = bar_data::Heightmap::new(hm_w, hm_h).ok();
         }
-        let _ = self.graph.connect(
-            source_port,
-            PortId { node_id: overlay_id, port_name: "input".to_string() },
-        );
-        let _ = self.graph.connect(
-            PortId { node_id: overlay_id, port_name: "output".to_string() },
-            PortId { node_id: bundler_id, port_name: bundler_port.to_string() },
-        );
-        Some(overlay_id)
-    }
-
-    /// Find or insert a `TextureSculpt` node between the active
-    /// Bundler's `texture` source and the Bundler. Mirrors the
-    /// heightmap-side `ensure_sculpt_node_for_bundler`. Returns the
-    /// id of the TextureSculpt, or `None` when there's no upstream
-    /// texture to overlay on (the user hasn't wired anything to
-    /// `Bundler.texture` yet).
-    fn ensure_texture_sculpt_for_bundler(&mut self) -> Option<NodeId> {
-        let bundler_id = self
-            .preview_node
-            .filter(|id| {
-                self.graph
-                    .get_node(*id)
-                    .map(|n| n.node_type == NodeType::Bundler)
-                    .unwrap_or(false)
-            })
-            .or_else(|| {
-                self.graph
-                    .nodes()
-                    .iter()
-                    .find(|(_, n)| n.node_type == NodeType::Bundler)
-                    .map(|(id, _)| *id)
-            })?;
-        // Find the connection feeding Bundler.texture.
-        let feed_from = self
-            .graph
-            .connections()
-            .iter()
-            .find(|c| c.to.node_id == bundler_id && c.to.port_name == "texture")
-            .map(|c| c.from.clone())?;
-        // If the feed source is already a TextureSculpt, reuse it —
-        // dabs append to the same node so the stroke composes.
-        if let Some(node) = self.graph.get_node(feed_from.node_id) {
-            if node.node_type == NodeType::TextureSculpt {
-                return Some(feed_from.node_id);
-            }
+        if self.paint.sculpt.type_alpha.is_none() {
+            self.paint.sculpt.type_alpha = bar_data::Heightmap::new(hm_w, hm_h).ok();
         }
-        // Otherwise insert a fresh TextureSculpt and rewire so the
-        // existing source feeds it instead of the Bundler directly.
-        let sculpt_node = Node::new(NodeId(0), NodeType::TextureSculpt, "Texture Sculpt");
-        let sculpt_id = self.graph.add_node(sculpt_node);
-        if let Some(bv) = self.node_visuals.get(&bundler_id).cloned() {
-            self.node_visuals.insert(
-                sculpt_id,
-                NodeVisual {
-                    position: egui::pos2(bv.position.x - 200.0, bv.position.y + 100.0),
-                    size: egui::vec2(150.0, 80.0),
-                },
-            );
+        if let Some(ref mut hm) = self.paint.sculpt.type_overlay {
+            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
         }
-        // connect() with cardinality=One auto-removes the previous
-        // target connection, so the existing feed → bundler.texture
-        // edge is dropped when we wire feed → sculpt.input.
-        let _ = self.graph.connect(
-            feed_from,
-            PortId { node_id: sculpt_id, port_name: "input".to_string() },
-        );
-        let _ = self.graph.connect(
-            PortId { node_id: sculpt_id, port_name: "output".to_string() },
-            PortId { node_id: bundler_id, port_name: "texture".to_string() },
-        );
-        Some(sculpt_id)
+        if let Some(ref mut hm) = self.paint.sculpt.type_alpha {
+            stamp_value_dab_in_heightmap(hm, u, v, ru, 1.0);
+        }
+        // Mirror into the live typemap cache for instant feedback.
+        if self.paint.typemap.is_none() {
+            self.paint.typemap = bar_data::Heightmap::new(hm_w, hm_h).ok();
+        }
+        if let Some(ref mut hm) = self.paint.typemap {
+            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
+        }
+        self.paint.sculpt.dirty = true;
+        self.is_dirty = true;
+        true
     }
 
     /// Returns a fresh clone of the current inspector heightmap so the
@@ -3031,12 +2727,12 @@ impl BarEditorApp {
 
         Project {
             recipe,
+            sculpt: self.paint.pending_sculpt_record.take().unwrap_or_default(),
             layout: EditorLayout {
                 node_positions: layout_positions,
                 node_sizes: layout_sizes,
                 canvas_offset: (self.canvas_offset.x, self.canvas_offset.y),
                 map_info_file: self.map_info_file.clone(),
-                sculpt_overlay: self.paint.pending_sculpt_overlay_url.take(),
                 groups: self
                     .groups
                     .iter()
@@ -3107,12 +2803,6 @@ impl BarEditorApp {
                         CanvasView::SubGraph(gid) => {
                             Some(bar_project::PersistedCanvasView::SubGraph {
                                 group_id: *gid,
-                            })
-                        }
-                        CanvasView::Sculpt(nid) => {
-                            let key = key_map.get(nid)?;
-                            Some(bar_project::PersistedCanvasView::Sculpt {
-                                node_key: key.clone(),
                             })
                         }
                     })
@@ -3212,40 +2902,104 @@ impl BarEditorApp {
             }
         }
 
-        // Sculpt overlay: when the inspector holds user-sculpted heightmap
-        // data, write it to a sidecar PNG so the next load can restore it.
-        // Without this, sculpts evaporate on close.
-        self.pack_sculpt_overlay(&assets_dir)?;
+        // Sculpt: write any dirty layers to sidecar PNGs and populate
+        // `pending_sculpt_record` so `build_project` can embed the paths.
+        self.pack_sculpt_record(&assets_dir, &project_dir)?;
         Ok(())
     }
 
-    /// Write the current sculpted heightmap (if any) to
-    /// `<assets>/sculpt-overlay.png` and stash a project-relative URL
-    /// pointer in `pending_sculpt_overlay_url` so `build_project` picks
-    /// it up. No-op when there's nothing sculpted.
-    fn pack_sculpt_overlay(
+    /// Write the in-memory sculpt layers that are marked dirty to sidecar
+    /// PNG files in `assets_dir`, then stash a `SculptRecord` carrying
+    /// project-relative `bar://` URLs in `pending_sculpt_record`. No-op
+    /// when no sculpt data exists.
+    fn pack_sculpt_record(
         &mut self,
         assets_dir: &std::path::Path,
+        project_dir: &std::path::Path,
     ) -> Result<(), String> {
-        if !self.paint.sculpted {
+        if !self.paint.sculpt.dirty {
             return Ok(());
         }
-        let Some(hm) = self.paint.heightmap.as_ref() else {
-            return Ok(());
-        };
-        std::fs::create_dir_all(assets_dir)
-            .map_err(|e| format!("create assets dir: {e}"))?;
-        let path = assets_dir.join("sculpt-overlay.png");
-        save_heightmap_as_png16(hm, &path)?;
-        // The bundle path is just the file name; project-relative URL
-        // is constructed from the .assets dir name.
         let assets_name = assets_dir
             .file_name()
             .and_then(|s| s.to_str())
-            .unwrap_or("assets");
-        self.paint.pending_sculpt_overlay_url =
-            Some(format!("{PROJECT_RELATIVE_PREFIX}{assets_name}/sculpt-overlay.png"));
+            .unwrap_or("assets")
+            .to_string();
+        let bar_url = |name: &str| -> String {
+            format!("{PROJECT_RELATIVE_PREFIX}{assets_name}/{name}")
+        };
+        std::fs::create_dir_all(assets_dir)
+            .map_err(|e| format!("create assets dir: {e}"))?;
+
+        let mut record = bar_project::SculptRecord::default();
+
+        if let Some(ref hm) = self.paint.sculpt.height_delta {
+            let p = assets_dir.join("sculpt-height.png");
+            save_heightmap_as_png16_biased(hm, &p)?;
+            record.height = Some(bar_url("sculpt-height.png"));
+        }
+        if let Some(ref hm) = self.paint.sculpt.metal_overlay {
+            let p = assets_dir.join("sculpt-metal.png");
+            save_heightmap_as_png16(hm, &p)?;
+            record.metal = Some(bar_url("sculpt-metal.png"));
+        }
+        if let Some(ref hm) = self.paint.sculpt.type_overlay {
+            let p = assets_dir.join("sculpt-type.png");
+            save_heightmap_as_png16(hm, &p)?;
+            record.type_map = Some(bar_url("sculpt-type.png"));
+        }
+        if let Some(ref cb) = self.paint.sculpt.texture_overlay {
+            let p = assets_dir.join("sculpt-texture.png");
+            save_color_buffer_as_png(cb, &p)?;
+            record.texture = Some(bar_url("sculpt-texture.png"));
+        }
+
+        self.paint.pending_sculpt_record = Some(record);
+        let _ = project_dir;
         Ok(())
+    }
+
+    /// Restore sculpt layers from a loaded `SculptRecord`. Resolves
+    /// `bar://` URLs against `project_dir` and populates `paint.sculpt`.
+    /// Missing or unreadable sidecar files are skipped with a warning.
+    fn unpack_sculpt_record(
+        &mut self,
+        record: &bar_project::SculptRecord,
+        project_dir: &std::path::Path,
+    ) {
+        let resolve = |url: &str| -> String { resolve_project_path(url, project_dir) };
+
+        if let Some(ref url) = record.height {
+            match load_heightmap_from_png16_biased(std::path::Path::new(&resolve(url))) {
+                Ok(hm) => self.paint.sculpt.height_delta = Some(hm),
+                Err(e) => tracing::warn!("sculpt height sidecar unreadable: {e}"),
+            }
+        }
+        if let Some(ref url) = record.metal {
+            match load_heightmap_from_png16(std::path::Path::new(&resolve(url))) {
+                Ok(hm) => self.paint.sculpt.metal_overlay = Some(hm),
+                Err(e) => tracing::warn!("sculpt metal sidecar unreadable: {e}"),
+            }
+        }
+        if let Some(ref url) = record.type_map {
+            match load_heightmap_from_png16(std::path::Path::new(&resolve(url))) {
+                Ok(hm) => self.paint.sculpt.type_overlay = Some(hm),
+                Err(e) => tracing::warn!("sculpt type sidecar unreadable: {e}"),
+            }
+        }
+        if let Some(ref url) = record.texture {
+            match load_color_buffer_from_png(std::path::Path::new(&resolve(url))) {
+                Ok(cb) => self.paint.sculpt.texture_overlay = Some(cb),
+                Err(e) => tracing::warn!("sculpt texture sidecar unreadable: {e}"),
+            }
+        }
+        if self.paint.sculpt.height_delta.is_some()
+            || self.paint.sculpt.metal_overlay.is_some()
+            || self.paint.sculpt.type_overlay.is_some()
+            || self.paint.sculpt.texture_overlay.is_some()
+        {
+            self.paint.sculpt.dirty = false;
+        }
     }
 
     /// Auto-save the current project to a sidecar file (`<project>.autosave`)
@@ -3367,17 +3121,13 @@ impl BarEditorApp {
             }
         };
 
-        // Drop transient session state from the previous project
-        // (undo history, brush, live caches, modal flags, …) before
-        // installing the new one. Project-data fields are overwritten
-        // explicitly below.
-        self.reset_session_state();
+        // Wipe all project state before installing the new one.
+        self.reset_project();
 
-        // Replace all per-project state atomically.
+        // Install the new project's graph (overrides reset_project's GraphEngine::new()).
         self.graph = graph;
-        self.node_visuals.clear();
-        self.preview_node = None;
-        self.preview_open = false;
+
+        // Install per-project layout, overriding reset_project's zero-offset default.
         self.canvas_offset = egui::vec2(
             project.layout.canvas_offset.0,
             project.layout.canvas_offset.1,
@@ -3401,29 +3151,9 @@ impl BarEditorApp {
             self.resolve_relative_paths(project_dir);
         }
 
-        // Restore sculpt overlay if the project carries one. We engage
-        // the inspector lock immediately so the next graph eval doesn't
-        // overwrite the loaded sculpt. (`reset_session_state` already
-        // cleared `inspector_heightmap` / `_sculpted`; this block only
-        // *adds* state when the project carries an overlay.)
-        if let (Some(url), Some(project_dir)) = (
-            project.layout.sculpt_overlay.as_deref(),
-            path.as_ref().and_then(|p| p.parent()),
-        ) {
-            let abs = resolve_project_path(url, project_dir);
-            match load_heightmap_from_png16(std::path::Path::new(&abs)) {
-                Ok(hm) => {
-                    self.paint.heightmap = Some(hm);
-                    self.paint.heightmap_rev =
-                        self.paint.heightmap_rev.wrapping_add(1);
-                    self.paint.sculpted = true;
-                }
-                Err(e) => {
-                    self.dialog.status_message = Some(format!(
-                        "Sculpt overlay missing or unreadable ({e}); ignoring."
-                    ));
-                }
-            }
+        // Restore sculpt layers from the project's SculptRecord.
+        if let Some(project_dir) = path.as_ref().and_then(|p| p.parent()) {
+            self.unpack_sculpt_record(&project.sculpt, project_dir);
         }
 
         // Restore node positions and sizes. Build a key→id map for the
@@ -3444,11 +3174,7 @@ impl BarEditorApp {
         // Restore groups: convert recipe-key references back to NodeIds
         // and rebuild the reverse index. Drop members whose keys no
         // longer resolve (rare; happens if a save was hand-edited).
-        // (`reset_session_state` already cleared selections, tabs, and
-        // pending dialogs; only the project-data structures need
-        // wiping here.)
-        self.groups.clear();
-        self.node_to_group.clear();
+        // (reset_project already cleared groups/node_to_group above.)
         let mut max_group_id: u64 = 0;
         for g in &project.layout.groups {
             let member_ids: std::collections::HashSet<NodeId> = g
@@ -3641,14 +3367,6 @@ impl BarEditorApp {
                         }
                     }
                 }
-                bar_project::PersistedCanvasView::Sculpt { node_key } => {
-                    if let Some(&nid) = key_to_id.get(node_key) {
-                        let v = CanvasView::Sculpt(nid);
-                        if !restored_tabs.contains(&v) {
-                            restored_tabs.push(v);
-                        }
-                    }
-                }
             }
         }
         self.tabs = restored_tabs;
@@ -3658,7 +3376,6 @@ impl BarEditorApp {
         self.project_path = path;
         self.loaded_name = Some(name);
         self.dialog.status_message = Some(status);
-        self.history.clear();
         self.is_dirty = false;
         self.graph_reset = true;
     }
@@ -3669,14 +3386,7 @@ impl BarEditorApp {
     /// The actual extraction runs in a background thread managed by `bar-app`,
     /// which calls `finish_open_map` when complete.
     fn open_map_as_project(&mut self, path: std::path::PathBuf) {
-        // Reset graph state immediately so the canvas is blank while loading
-        self.graph = GraphEngine::new();
-        self.node_visuals.clear();
-        self.selected_node = None;
-        self.project_path = None;
-        self.canvas_offset = egui::Vec2::ZERO;
-        self.history.clear();
-        self.passthrough_edit = None;
+        self.reset_project();
 
         let map_name = path
             .file_name()
@@ -3697,185 +3407,23 @@ impl BarEditorApp {
 
     /// Build the node graph after a successful .sd7 extraction.
     pub fn finish_open_map(&mut self, scan: bar_project::WorkDirScan) {
-
-        // Layout constants
-        let source_x = 80.0_f32;
-        let bundler_x = 700.0_f32;
-
-        // --- SMF Import node ---
-        let smf_id = if let Some(ref smf_abs) = scan.smf_abs {
-            let mut node = Node::new(NodeId(0), NodeType::SmfImport, "SMF Import");
-            node.params.insert("path".to_string(), ParamValue::String(smf_abs.to_string_lossy().to_string()));
-            node.params.insert("load_metalmap".to_string(), ParamValue::Bool(true));
-            node.params.insert("load_typemap".to_string(), ParamValue::Bool(true));
-            node.mark_dirty();
-            let id = self.graph.add_node(node);
-            self.node_visuals.insert(id, NodeVisual {
-                position: egui::pos2(source_x, 130.0),
-                size: egui::vec2(165.0, 100.0),
-            });
-            Some(id)
-        } else {
-            None
-        };
-
-        // --- SMT Import node ---
-        let smt_id = if let Some(ref smt_abs) = scan.smt_abs {
-            let mut node = Node::new(NodeId(0), NodeType::SmtImport, "SMT Import");
-            node.params.insert("path".to_string(), ParamValue::String(smt_abs.to_string_lossy().to_string()));
-            if let Some(ref smf_abs) = scan.smf_abs {
-                node.params.insert("smf_path".to_string(), ParamValue::String(smf_abs.to_string_lossy().to_string()));
-            }
-            if let Some((tx, ty)) = scan.tile_grid {
-                node.params.insert("tiles_x".to_string(), ParamValue::UInt(tx));
-                node.params.insert("tiles_y".to_string(), ParamValue::UInt(ty));
-            }
-            // Node::new already applies defaults (currently 4096); leaving
-            // tiles + path overrides above. No need to set max_preview_size
-            // explicitly — keeping the default ensures kolmog-scale maps
-            // upload at full native resolution rather than being decimated.
-            node.mark_dirty();
-            let id = self.graph.add_node(node);
-            self.node_visuals.insert(id, NodeVisual {
-                position: egui::pos2(source_x, 360.0),
-                size: egui::vec2(165.0, 100.0),
-            });
-            Some(id)
-        } else {
-            None
-        };
-
-        // --- PassThrough node ---
-        // Build the full passthrough file list. We include the original SMF
-        // and SMT alongside any other files so that an unedited round-trip
-        // preserves them byte-for-byte: the codec writes its own copies, then
-        // the file-ref copy step in execute_single_bundler overwrites them
-        // with the originals. This is the cleanest v0.1 way to keep texture
-        // tiles intact, since the SmtImport node downsamples for preview and
-        // the codec would otherwise re-encode that downsampled buffer into
-        // a full-resolution SMT, losing all detail.
-        let mut passthrough_entries: Vec<(std::path::PathBuf, std::path::PathBuf)> =
-            scan.passthrough_files.clone();
-        if let (Some(abs), Some(rel)) = (scan.smf_abs.as_ref(), scan.smf_rel.as_ref()) {
-            passthrough_entries.push((abs.clone(), rel.clone()));
-        }
-        if let (Some(abs), Some(rel)) = (scan.smt_abs.as_ref(), scan.smt_rel.as_ref()) {
-            passthrough_entries.push((abs.clone(), rel.clone()));
-        }
-
-        // Auto-detect a likely map-info file (BAR/Spring uses mapinfo.lua at
-        // the archive root). If we find one, pre-populate the toolbar's Edit
-        // Map Info target so the user doesn't have to pick on first click.
-        if self.map_info_file.is_none() {
-            self.map_info_file = passthrough_entries
-                .iter()
-                .map(|(_, rel)| rel.to_string_lossy().replace('\\', "/"))
-                .find(|p| p.eq_ignore_ascii_case("mapinfo.lua"));
-        }
-
-        let pass_id = if !passthrough_entries.is_empty() {
-            let file_list: String = passthrough_entries
-                .iter()
-                .map(|(abs, rel)| {
-                    // Bundle paths must use forward slashes (validate_bundle_path
-                    // rejects backslashes); the abs source path stays in native
-                    // form so the OS can read it.
-                    let bundle = rel.to_string_lossy().replace('\\', "/");
-                    format!("{}|{}", abs.to_string_lossy(), bundle)
-                })
-                .collect::<Vec<_>>()
-                .join("\n");
-            let mut node = Node::new(NodeId(0), NodeType::PassThrough, "Pass-Through");
-            node.params.insert("files".to_string(), ParamValue::String(file_list));
-            node.mark_dirty();
-            let id = self.graph.add_node(node);
-            self.node_visuals.insert(id, NodeVisual {
-                position: egui::pos2(source_x, 570.0),
-                size: egui::vec2(165.0, 80.0),
-            });
-            Some(id)
-        } else {
-            None
-        };
-
-        // --- NormalMap processor (only when SMF is present) ---
-        let nm_proc_x = (source_x + 165.0 + bundler_x) / 2.0;
-        let nm_node_id = if smf_id.is_some() {
-            let mut nm_node = Node::new(NodeId(0), NodeType::NormalMap, "Normal Map");
-            // Node::new already populates default_params for every type;
-            // mark dirty so the graph re-evaluates.
-            nm_node.mark_dirty();
-            let nm_id = self.graph.add_node(nm_node);
-            self.node_visuals.insert(nm_id, NodeVisual {
-                position: egui::pos2(nm_proc_x, 478.0),
-                size: egui::vec2(140.0, 60.0),
-            });
-            Some(nm_id)
-        } else {
-            None
-        };
-
-        // --- Bundler node ---
-        // Node::new pre-populates target/output_path/archive_format defaults;
-        // we override map_name to match the imported map.
-        let mut bundler = Node::new(NodeId(0), NodeType::Bundler, "BAR .sd7");
-        bundler.params.insert("map_name".to_string(), ParamValue::String(scan.map_name.clone()));
-        let bundler_id = self.graph.add_node(bundler);
-        self.node_visuals.insert(bundler_id, NodeVisual {
-            position: egui::pos2(bundler_x, 270.0),
-            size: egui::vec2(165.0, 210.0),
-        });
-
-        // --- Wire connections ---
-        let connect = |graph: &mut GraphEngine, from_id: NodeId, from_port: &str, to_id: NodeId, to_port: &str| {
-            match graph.connect(
-                PortId { node_id: from_id, port_name: from_port.to_string() },
-                PortId { node_id: to_id, port_name: to_port.to_string() },
-            ) {
-                Ok(()) => {
-                    tracing::debug!(from = ?from_id.0, from_port, to = ?to_id.0, to_port, "finish_open_map: connected");
-                }
-                Err(e) => {
-                    tracing::warn!(from = ?from_id.0, from_port, to = ?to_id.0, to_port, error = ?e, "finish_open_map: connect failed");
-                }
-            }
-        };
-
-        if let Some(smf) = smf_id {
-            connect(&mut self.graph, smf, "heightmap", bundler_id, "heightmap");
-            connect(&mut self.graph, smf, "metalmap", bundler_id, "metalmap");
-            connect(&mut self.graph, smf, "typemap", bundler_id, "typemap");
-
-            if let Some(nm) = nm_node_id {
-                connect(&mut self.graph, smf, "heightmap", nm, "input");
-                connect(&mut self.graph, nm, "output", bundler_id, "normalmap");
-            }
-        }
-        if let Some(smt) = smt_id {
-            connect(&mut self.graph, smt, "texture", bundler_id, "texture");
-        }
-        if let Some(pass) = pass_id {
-            connect(&mut self.graph, pass, "files", bundler_id, "files");
-        }
-
-        self.selected_node = smf_id.or(smt_id).or(pass_id);
-        self.dialog.status_message = Some(format!("Opened: {}", scan.map_name));
-        self.loaded_name = Some(scan.map_name.clone());
-        if let Some((w, h)) = scan.map_dims {
-            self.map_width = w;
-            self.map_height = h;
-        }
-        if let Some((min_h, max_h)) = scan.height_range {
-            self.map_min_height = min_h;
-            self.map_max_height = max_h;
-        }
-        self.history.clear();
+        let name = scan.map_name.clone();
+        let status = format!("Opened: {}", name);
+        let project = bar_project::scan_to_project(&scan);
+        self.apply_project(project, None, name, status);
+        // Imported project hasn't been saved yet.
         self.is_dirty = true;
-        // Auto-open the 3D preview for the Bundler node.
-        self.preview_node = Some(bundler_id);
-        self.preview_open = true;
-        // Signal AppWrapper to flush stale GPU preview resources.
-        self.graph_reset = true;
+        // Auto-open the 3D preview at the Preview node.
+        if let Some(id) = self
+            .graph
+            .nodes()
+            .values()
+            .find(|n| n.node_type == NodeType::Preview)
+            .map(|n| n.id)
+        {
+            self.preview_node = Some(id);
+            self.preview_open = true;
+        }
     }
 
     /// Pick a default label for a new entity of the given base type
@@ -3915,26 +3463,7 @@ impl BarEditorApp {
     /// surfaces produce identical starting state because they share
     /// this method.
     pub(crate) fn start_with_macro(&mut self, macro_name: &str) {
-        // Atomic project switch: clear graph + project metadata +
-        // transient session state. After this call, the editor is
-        // in the same state as `do_new_project` minus the default
-        // Bundler/Preview (we drop our own further down).
-        self.reset_session_state();
-        self.graph = GraphEngine::new();
-        self.node_visuals.clear();
-        self.groups.clear();
-        self.node_to_group.clear();
-        self.next_group_id = 1;
-        self.project_path = None;
-        self.loaded_name = None;
-        self.map_info_file = None;
-        self.map_settings = bar_project::MapSettings::default();
-        self.map_width = 256;
-        self.map_height = 256;
-        self.map_min_height = 0.0;
-        self.map_max_height = 800.0;
-        self.recipe_meta = RecipeMeta::default();
-        self.graph_reset = true;
+        self.reset_project();
 
         // Right-edge placement for the terminal nodes; drop the
         // macro to the left of them so wires read left-to-right.
@@ -4351,6 +3880,13 @@ impl BarEditorApp {
         self.active_layout = layout;
         self.settings.active_layout = layout;
         self.settings.save();
+        // Close windows that are only meaningful in the layout we just left.
+        // Map info editor is the exception -- it spans all layouts.
+        self.dialog.show_inspector = false;
+        self.dialog.file_editor = None;
+        self.dialog.show_validation_panel = false;
+        self.active_props = None;
+        self.dialog.pending_props_open = None;
     }
 
     /// Body of the `eframe::App::update` lifecycle, owning the
@@ -4358,7 +3894,7 @@ impl BarEditorApp {
     /// the panel composition, and the post-frame work (autosave,
     /// repaint scheduling). Called by every `Layout` variant; will
     /// shrink as panel logic migrates into `crate::panels`.
-    pub(crate) fn update_panels(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    pub(crate) fn pre_frame_work(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // OS / window close request — route through the unsaved-changes
         // workflow so accidental clicks on the close button don't lose work.
         // `bar-app` is responsible for blocking the actual viewport close until
@@ -4559,7 +4095,9 @@ impl BarEditorApp {
                 }
             }
         }
+    }
 
+    pub(crate) fn draw_shell(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Top menu bar — desktop-app styling. The panel itself has no
         // inner margin so the first entry sits flush with the left
         // edge of the window. Inside the bar we zero out horizontal
@@ -4773,6 +4311,29 @@ impl BarEditorApp {
                         ui.close_menu();
                     }
                 });
+                ui.menu_button("View", |ui| {
+                    ui.set_min_width(220.0);
+                    if ui
+                        .add(egui::SelectableLabel::new(
+                            self.active_layout == Layout::Standard,
+                            "Node Graph",
+                        ))
+                        .clicked()
+                    {
+                        self.set_active_layout(Layout::Standard);
+                        ui.close_menu();
+                    }
+                    if ui
+                        .add(egui::SelectableLabel::new(
+                            self.active_layout == Layout::Sculpt3D,
+                            "3D Sculpt",
+                        ))
+                        .clicked()
+                    {
+                        self.set_active_layout(Layout::Sculpt3D);
+                        ui.close_menu();
+                    }
+                });
                 ui.menu_button(t!("editor.menu.help"), |ui| {
                     ui.set_min_width(280.0);
                     if ui.button(t!("editor.app.about")).clicked() {
@@ -4783,11 +4344,6 @@ impl BarEditorApp {
             });
         });
 
-        // Bottom panel: status bar — declared before side panels so it spans the full width.
-        // Node/connection counts moved to the left sidebar's Validation
-        // panel (where they're folded into error/warning counts) and
-        // we don't echo them here. The status bar focuses on what's
-        // actionable: map size, status messages, and selection.
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // Clickable map size opens the unified Map Settings modal
@@ -4811,38 +4367,6 @@ impl BarEditorApp {
                 }
             });
         });
-
-        // Left panel: node palette — only meaningful inside a
-        // project. On the welcome screen the panel is hidden so the
-        // welcome cards have the full window width.
-        if self.has_project() {
-            egui::SidePanel::left("node_palette")
-                .default_width(200.0)
-                .show(ctx, |ui| {
-                    // Validation summary anchors to the bottom of the
-                    // sidebar; the node palette fills everything above it.
-                    // Override the default panel frame so the summary's
-                    // left/right padding lines up with the palette items
-                    // above (default frame adds 8px asymmetric margins).
-                    let frame = {
-                        let mut f = egui::Frame::side_top_panel(ui.style());
-                        f.inner_margin = egui::Margin {
-                            left: 4,
-                            right: 4,
-                            top: 6,
-                            bottom: 6,
-                        };
-                        f
-                    };
-                    egui::TopBottomPanel::bottom("validation_summary")
-                        .resizable(false)
-                        .frame(frame)
-                        .show_inside(ui, |ui| {
-                            self.draw_validation_summary(ui);
-                        });
-                    self.draw_node_palette(ui);
-                });
-        }
 
         // Properties no longer live in a permanent right-side panel —
         // they pop up next to the selected node / group in a floating
@@ -5195,213 +4719,204 @@ impl BarEditorApp {
 
         crate::panels::validation::draw_details(self, ctx);
 
-        // Central panel: toolbar row + node graph editor
-        egui::CentralPanel::default().show(ctx, |ui| {
-            // Toolbar row — sits flush with the top of the canvas area, to the right of the
-            // left panel and to the left of the right panel.
-            // Only meaningful inside a project; on the welcome screen
-            // the row collapses entirely.
-            let in_project = self.has_project();
-            if !in_project {
-                self.draw_node_graph(ui);
-                return;
-            }
-            ui.horizontal(|ui| {
-                let btn_size = egui::vec2(44.0, 36.0);
-                let busy = self.export_status == ExportStatus::All;
-                let any_running = self.export_status.is_running();
-                let sense = if any_running {
-                    egui::Sense::hover()
-                } else {
-                    egui::Sense::click()
-                };
-                let (rect, response) = ui.allocate_exact_size(btn_size, sense);
+        // Action bar -- only shown inside a project.
+        if self.has_project() {
+            egui::TopBottomPanel::top("action_bar").show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    let btn_size = egui::vec2(44.0, 36.0);
+                    let busy = self.export_status == ExportStatus::All;
+                    let any_running = self.export_status.is_running();
+                    let sense = if any_running {
+                        egui::Sense::hover()
+                    } else {
+                        egui::Sense::click()
+                    };
+                    let (rect, response) = ui.allocate_exact_size(btn_size, sense);
 
-                if ui.is_rect_visible(rect) {
-                    let bg = if busy {
-                        tokens::BTN_EXPORT_BUSY
+                    if ui.is_rect_visible(rect) {
+                        let bg = if busy {
+                            tokens::BTN_EXPORT_BUSY
+                        } else if any_running {
+                            tokens::BTN_EXPORT_BLOCKED
+                        } else if response.is_pointer_button_down_on() {
+                            tokens::BTN_EXPORT_PRESS
+                        } else if response.hovered() {
+                            tokens::BTN_EXPORT_HOVER
+                        } else {
+                            tokens::BTN_EXPORT_NORMAL
+                        };
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 5.0, bg);
+                        paint_export_icon(&painter, rect, egui::Color32::WHITE);
+                        if busy {
+                            // Tiny corner spinner so the busy state reads clearly.
+                            paint_busy_dot(&painter, rect, ui.input(|i| i.time));
+                        }
+                    }
+
+                    let tooltip = if busy {
+                        "Exporting…"
                     } else if any_running {
-                        tokens::BTN_EXPORT_BLOCKED
-                    } else if response.is_pointer_button_down_on() {
-                        tokens::BTN_EXPORT_PRESS
-                    } else if response.hovered() {
-                        tokens::BTN_EXPORT_HOVER
+                        "Another export is running"
                     } else {
-                        tokens::BTN_EXPORT_NORMAL
+                        "Export all Bundler nodes"
                     };
-                    let painter = ui.painter_at(rect);
-                    painter.rect_filled(rect, 5.0, bg);
-                    paint_export_icon(&painter, rect, egui::Color32::WHITE);
-                    if busy {
-                        // Tiny corner spinner so the busy state reads clearly.
-                        paint_busy_dot(&painter, rect, ui.input(|i| i.time));
+                    let response = response.on_hover_text(tooltip);
+                    if !any_running && response.clicked() {
+                        if self.validate_before_export("Bundle all") {
+                            self.run_requested = true;
+                        }
                     }
-                }
 
-                let tooltip = if busy {
-                    "Exporting…"
-                } else if any_running {
-                    "Another export is running"
-                } else {
-                    "Export all Bundler nodes"
-                };
-                let response = response.on_hover_text(tooltip);
-                if !any_running && response.clicked() {
-                    if self.validate_before_export("Bundle all") {
-                        self.run_requested = true;
+                    // Edit Map Info button — opens the project's designated map
+                    // info file in the OS default editor. Prompts for the file
+                    // on first use.
+                    ui.add_space(4.0);
+                    let (info_rect, info_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(info_rect) {
+                        let bg = if info_resp.is_pointer_button_down_on() {
+                            tokens::BTN_MAPINFO_PRESS
+                        } else if info_resp.hovered() {
+                            tokens::BTN_MAPINFO_HOVER
+                        } else {
+                            tokens::BTN_MAPINFO_NORMAL
+                        };
+                        let painter = ui.painter_at(info_rect);
+                        painter.rect_filled(info_rect, 5.0, bg);
+                        paint_map_info_icon(&painter, info_rect, egui::Color32::WHITE);
                     }
-                }
-
-                // Edit Map Info button — opens the project's designated map
-                // info file in the OS default editor. Prompts for the file
-                // on first use.
-                ui.add_space(4.0);
-                let (info_rect, info_resp) =
-                    ui.allocate_exact_size(btn_size, egui::Sense::click());
-                if ui.is_rect_visible(info_rect) {
-                    let bg = if info_resp.is_pointer_button_down_on() {
-                        tokens::BTN_MAPINFO_PRESS
-                    } else if info_resp.hovered() {
-                        tokens::BTN_MAPINFO_HOVER
-                    } else {
-                        tokens::BTN_MAPINFO_NORMAL
-                    };
-                    let painter = ui.painter_at(info_rect);
-                    painter.rect_filled(info_rect, 5.0, bg);
-                    paint_map_info_icon(&painter, info_rect, egui::Color32::WHITE);
-                }
-                let info_resp = info_resp.on_hover_text(
-                    "Edit Map Info — open the project's map info file (e.g. mapinfo.lua)",
-                );
-                if info_resp.clicked() {
-                    self.handle_edit_map_info_clicked();
-                }
-
-                // Test in BAR — export the current project, copy the .sd7
-                // into BAR's maps directory, open the lobby. The user
-                // navigates to skirmish from there. Greyed out while an
-                // export is already running so we don't double-fire.
-                ui.add_space(4.0);
-                let (bar_rect, bar_resp) =
-                    ui.allocate_exact_size(btn_size, egui::Sense::click());
-                if ui.is_rect_visible(bar_rect) {
-                    let bg = if any_running {
-                        tokens::BTN_BAR_BLOCKED
-                    } else if bar_resp.is_pointer_button_down_on() {
-                        tokens::BTN_BAR_PRESS
-                    } else if bar_resp.hovered() {
-                        tokens::BTN_BAR_HOVER
-                    } else {
-                        tokens::BTN_BAR_NORMAL
-                    };
-                    let painter = ui.painter_at(bar_rect);
-                    painter.rect_filled(bar_rect, 5.0, bg);
-                    paint_bar_icon(&painter, bar_rect, egui::Color32::WHITE);
-                }
-                let bar_resp = bar_resp.on_hover_text(
-                    "Test in BAR — export this project and open it in the BAR lobby",
-                );
-                if !any_running && bar_resp.clicked() {
-                    // Run validation first; refuse to launch if there
-                    // are blocking errors so the user can't ship a
-                    // broken map to BAR. Warnings are advisory and let
-                    // the launch proceed.
-                    self.run_validation();
-                    if bar_project::has_errors(&self.validation_findings) {
-                        self.dialog.show_validation_panel = true;
-                        self.dialog.status_message = Some(
-                            "Test in BAR: fix validation errors first.".to_string(),
-                        );
-                    } else {
-                        self.test_in_bar_requested = true;
+                    let info_resp = info_resp.on_hover_text(
+                        "Edit Map Info — open the project's map info file (e.g. mapinfo.lua)",
+                    );
+                    if info_resp.clicked() {
+                        self.handle_edit_map_info_clicked();
                     }
-                }
 
-                // The toolbar Validate button used to live here. It's
-                // been removed in favour of the live Validation panel
-                // in the left sidebar (counts auto-refresh as you
-                // edit) and an automatic validation gate on the
-                // bundle / bundle-all buttons. The "Show details"
-                // button in the sidebar opens the same findings
-                // window the toolbar button used to open.
+                    // Test in BAR — export the current project, copy the .sd7
+                    // into BAR's maps directory, open the lobby. The user
+                    // navigates to skirmish from there. Greyed out while an
+                    // export is already running so we don't double-fire.
+                    ui.add_space(4.0);
+                    let (bar_rect, bar_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(bar_rect) {
+                        let bg = if any_running {
+                            tokens::BTN_BAR_BLOCKED
+                        } else if bar_resp.is_pointer_button_down_on() {
+                            tokens::BTN_BAR_PRESS
+                        } else if bar_resp.hovered() {
+                            tokens::BTN_BAR_HOVER
+                        } else {
+                            tokens::BTN_BAR_NORMAL
+                        };
+                        let painter = ui.painter_at(bar_rect);
+                        painter.rect_filled(bar_rect, 5.0, bg);
+                        paint_bar_icon(&painter, bar_rect, egui::Color32::WHITE);
+                    }
+                    let bar_resp = bar_resp.on_hover_text(
+                        "Test in BAR — export this project and open it in the BAR lobby",
+                    );
+                    if !any_running && bar_resp.clicked() {
+                        // Run validation first; refuse to launch if there
+                        // are blocking errors so the user can't ship a
+                        // broken map to BAR. Warnings are advisory and let
+                        // the launch proceed.
+                        self.run_validation();
+                        if bar_project::has_errors(&self.validation_findings) {
+                            self.dialog.show_validation_panel = true;
+                            self.dialog.status_message = Some(
+                                "Test in BAR: fix validation errors first.".to_string(),
+                            );
+                        } else {
+                            self.test_in_bar_requested = true;
+                        }
+                    }
 
-                // 2D Inspector — top-down heightmap view with draggable
-                // start-position markers.
-                ui.add_space(4.0);
-                let (insp_rect, insp_resp) =
-                    ui.allocate_exact_size(btn_size, egui::Sense::click());
-                if ui.is_rect_visible(insp_rect) {
-                    let bg = if insp_resp.is_pointer_button_down_on() {
-                        tokens::BTN_INSPECTOR_PRESS
-                    } else if insp_resp.hovered() {
-                        tokens::BTN_INSPECTOR_HOVER
-                    } else {
-                        tokens::BTN_INSPECTOR_NORMAL
-                    };
-                    let painter = ui.painter_at(insp_rect);
-                    painter.rect_filled(insp_rect, 5.0, bg);
-                    paint_inspector_icon(&painter, insp_rect, egui::Color32::WHITE);
-                }
-                let insp_resp = insp_resp.on_hover_text(
-                    "2D Inspector — top-down map view, place start positions",
-                );
-                if insp_resp.clicked() {
-                    self.dialog.show_inspector = !self.dialog.show_inspector;
-                }
+                    // The toolbar Validate button used to live here. It's
+                    // been removed in favour of the live Validation panel
+                    // in the left sidebar (counts auto-refresh as you
+                    // edit) and an automatic validation gate on the
+                    // bundle / bundle-all buttons. The "Show details"
+                    // button in the sidebar opens the same findings
+                    // window the toolbar button used to open.
 
-                // Structured Map Info editor — form for atmosphere /
-                // lighting / water / physics / heights. The Edit Map
-                // Info button (pencil icon, opens raw lua) stays for
-                // power users; this is the friendly path.
-                ui.add_space(4.0);
-                let (mi_rect, mi_resp) =
-                    ui.allocate_exact_size(btn_size, egui::Sense::click());
-                if ui.is_rect_visible(mi_rect) {
-                    let bg = if mi_resp.is_pointer_button_down_on() {
-                        tokens::BTN_MAPSET_PRESS
-                    } else if mi_resp.hovered() {
-                        tokens::BTN_MAPSET_HOVER
-                    } else {
-                        tokens::BTN_MAPSET_NORMAL
-                    };
-                    let painter = ui.painter_at(mi_rect);
-                    painter.rect_filled(mi_rect, 5.0, bg);
-                    paint_mapinfo_form_icon(&painter, mi_rect, egui::Color32::WHITE);
-                }
-                let mi_resp = mi_resp.on_hover_text(t!("editor.toolbar.map_settings"));
-                if mi_resp.clicked() {
-                    self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
-                }
+                    // 2D Inspector — top-down heightmap view with draggable
+                    // start-position markers.
+                    ui.add_space(4.0);
+                    let (insp_rect, insp_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(insp_rect) {
+                        let bg = if insp_resp.is_pointer_button_down_on() {
+                            tokens::BTN_INSPECTOR_PRESS
+                        } else if insp_resp.hovered() {
+                            tokens::BTN_INSPECTOR_HOVER
+                        } else {
+                            tokens::BTN_INSPECTOR_NORMAL
+                        };
+                        let painter = ui.painter_at(insp_rect);
+                        painter.rect_filled(insp_rect, 5.0, bg);
+                        paint_inspector_icon(&painter, insp_rect, egui::Color32::WHITE);
+                    }
+                    let insp_resp = insp_resp.on_hover_text(
+                        "2D Inspector — top-down map view, place start positions",
+                    );
+                    if insp_resp.clicked() {
+                        self.dialog.show_inspector = !self.dialog.show_inspector;
+                    }
 
-                // Startboxes — opens the 2D inspector at Spawns mode so
-                // the user can drag spawn markers. Lives in its own
-                // button (rather than a tab inside Map Settings) because
-                // box-authoring is a spatial task that wants the full
-                // inspector canvas, not a side-panel form.
-                ui.add_space(4.0);
-                let (sb_rect, sb_resp) =
-                    ui.allocate_exact_size(btn_size, egui::Sense::click());
-                if ui.is_rect_visible(sb_rect) {
-                    let bg = if sb_resp.is_pointer_button_down_on() {
-                        tokens::BTN_SPAWNS_PRESS
-                    } else if sb_resp.hovered() {
-                        tokens::BTN_SPAWNS_HOVER
-                    } else {
-                        tokens::BTN_SPAWNS_NORMAL
-                    };
-                    let painter = ui.painter_at(sb_rect);
-                    painter.rect_filled(sb_rect, 5.0, bg);
-                    paint_startbox_icon(&painter, sb_rect, egui::Color32::WHITE);
-                }
-                let sb_resp = sb_resp.on_hover_text(t!("editor.toolbar.startboxes"));
-                if sb_resp.clicked() {
-                    self.dialog.show_inspector = true;
-                    self.paint.inspector_mode = InspectorMode::Spawns;
-                }
+                    // Structured Map Info editor — form for atmosphere /
+                    // lighting / water / physics / heights. The Edit Map
+                    // Info button (pencil icon, opens raw lua) stays for
+                    // power users; this is the friendly path.
+                    ui.add_space(4.0);
+                    let (mi_rect, mi_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(mi_rect) {
+                        let bg = if mi_resp.is_pointer_button_down_on() {
+                            tokens::BTN_MAPSET_PRESS
+                        } else if mi_resp.hovered() {
+                            tokens::BTN_MAPSET_HOVER
+                        } else {
+                            tokens::BTN_MAPSET_NORMAL
+                        };
+                        let painter = ui.painter_at(mi_rect);
+                        painter.rect_filled(mi_rect, 5.0, bg);
+                        paint_mapinfo_form_icon(&painter, mi_rect, egui::Color32::WHITE);
+                    }
+                    let mi_resp = mi_resp.on_hover_text(t!("editor.toolbar.map_settings"));
+                    if mi_resp.clicked() {
+                        self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
+                    }
+
+                    // Startboxes — opens the 2D inspector at Spawns mode so
+                    // the user can drag spawn markers. Lives in its own
+                    // button (rather than a tab inside Map Settings) because
+                    // box-authoring is a spatial task that wants the full
+                    // inspector canvas, not a side-panel form.
+                    ui.add_space(4.0);
+                    let (sb_rect, sb_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(sb_rect) {
+                        let bg = if sb_resp.is_pointer_button_down_on() {
+                            tokens::BTN_SPAWNS_PRESS
+                        } else if sb_resp.hovered() {
+                            tokens::BTN_SPAWNS_HOVER
+                        } else {
+                            tokens::BTN_SPAWNS_NORMAL
+                        };
+                        let painter = ui.painter_at(sb_rect);
+                        painter.rect_filled(sb_rect, 5.0, bg);
+                        paint_startbox_icon(&painter, sb_rect, egui::Color32::WHITE);
+                    }
+                    let sb_resp = sb_resp.on_hover_text(t!("editor.toolbar.startboxes"));
+                    if sb_resp.clicked() {
+                        self.dialog.show_inspector = true;
+                        self.paint.inspector_mode = InspectorMode::Spawns;
+                    }
+                });
             });
-            ui.separator();
-            self.draw_node_graph(ui);
-        });
+        }
 
         // ── Toast notification (e.g. "Autosaved …") ─────────────────────────
         if let Some((msg, _)) = self.dialog.toast.clone() {
@@ -5436,6 +4951,43 @@ impl BarEditorApp {
             // Toast expires on its own; request a repaint so the timer ticks.
             ctx.request_repaint_after(std::time::Duration::from_millis(120));
         }
+    }
+
+    pub(crate) fn draw_node_palette_panel(&mut self, ctx: &egui::Context) {
+        if self.has_project() {
+            egui::SidePanel::left("node_palette")
+                .default_width(200.0)
+                .show(ctx, |ui| {
+                    // Validation summary anchors to the bottom of the
+                    // sidebar; the node palette fills everything above it.
+                    // Override the default panel frame so the summary's
+                    // left/right padding lines up with the palette items
+                    // above (default frame adds 8px asymmetric margins).
+                    let frame = {
+                        let mut f = egui::Frame::side_top_panel(ui.style());
+                        f.inner_margin = egui::Margin {
+                            left: 4,
+                            right: 4,
+                            top: 6,
+                            bottom: 6,
+                        };
+                        f
+                    };
+                    egui::TopBottomPanel::bottom("validation_summary")
+                        .resizable(false)
+                        .frame(frame)
+                        .show_inside(ui, |ui| {
+                            self.draw_validation_summary(ui);
+                        });
+                    self.draw_node_palette(ui);
+                });
+        }
+    }
+
+    pub(crate) fn draw_standard_central_panel(&mut self, ctx: &egui::Context) {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.draw_node_graph(ui);
+        });
 
         // ── Palette drag: ghost preview + drop/cancel ────────────────────────────────
         // This runs AFTER all panels so the ghost paints on top of everything and
@@ -5621,6 +5173,7 @@ impl BarEditorApp {
             }
         }
     }
+
 }
 
 /// Minimum distance from a point to a polyline (segment-by-segment).
@@ -5983,6 +5536,76 @@ pub(crate) fn save_heightmap_as_png16(
         .map_err(|e| format!("PNG save failed: {e}"))
 }
 
+/// Write a signed height-delta as a biased 16-bit grayscale PNG.
+/// delta=0 maps to pixel value 32768; range [-1,+1] maps to [0, 65535].
+fn save_heightmap_as_png16_biased(
+    hm: &bar_data::Heightmap,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let w = hm.width();
+    let h = hm.height();
+    let mut bytes: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize) * 2);
+    for &v in hm.data() {
+        let pixel = ((v.clamp(-1.0, 1.0) + 1.0) * 0.5 * 65535.0) as u16;
+        bytes.extend_from_slice(&pixel.to_le_bytes());
+    }
+    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::L16)
+        .map_err(|e| format!("PNG save failed: {e}"))
+}
+
+/// Load a biased 16-bit grayscale PNG back to a signed height-delta.
+fn load_heightmap_from_png16_biased(
+    path: &std::path::Path,
+) -> Result<bar_data::Heightmap, String> {
+    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let gray = img.to_luma16();
+    let (w, h) = gray.dimensions();
+    let data: Vec<f32> = gray
+        .pixels()
+        .map(|p| (p.0[0] as f32 / 65535.0) * 2.0 - 1.0)
+        .collect();
+    bar_data::Heightmap::frbar_data(w, h, data).map_err(|e| e.to_string())
+}
+
+/// Write a `ColorBuffer` as an RGBA PNG.
+fn save_color_buffer_as_png(
+    cb: &bar_data::ColorBuffer,
+    path: &std::path::Path,
+) -> Result<(), String> {
+    let w = cb.width();
+    let h = cb.height();
+    let mut bytes: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize) * 4);
+    for chunk in cb.data().chunks_exact(4) {
+        bytes.push((chunk[0].clamp(0.0, 1.0) * 255.0) as u8);
+        bytes.push((chunk[1].clamp(0.0, 1.0) * 255.0) as u8);
+        bytes.push((chunk[2].clamp(0.0, 1.0) * 255.0) as u8);
+        bytes.push((chunk[3].clamp(0.0, 1.0) * 255.0) as u8);
+    }
+    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::Rgba8)
+        .map_err(|e| format!("PNG save failed: {e}"))
+}
+
+/// Load a `ColorBuffer` from an RGBA PNG.
+fn load_color_buffer_from_png(
+    path: &std::path::Path,
+) -> Result<bar_data::ColorBuffer, String> {
+    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    let data: Vec<f32> = rgba
+        .pixels()
+        .flat_map(|p| {
+            [
+                p.0[0] as f32 / 255.0,
+                p.0[1] as f32 / 255.0,
+                p.0[2] as f32 / 255.0,
+                p.0[3] as f32 / 255.0,
+            ]
+        })
+        .collect();
+    bar_data::ColorBuffer::frbar_data(w, h, data).map_err(|e| e.to_string())
+}
+
 pub(crate) fn heightmap_to_color_image(
     hm: &bar_data::Heightmap,
     min_h: f32,
@@ -6175,10 +5798,6 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::SmtImport
         | NodeType::PassThrough => tokens::NODE_CAT_SOURCE,
 
-        NodeType::Sculpt => tokens::NODE_CAT_SCULPT,
-        NodeType::TextureSculpt => tokens::NODE_CAT_TEXTURE_SCULPT,
-        NodeType::MetalSculpt => tokens::NODE_CAT_METAL_SCULPT,
-        NodeType::TypeSculpt => tokens::NODE_CAT_TYPE_SCULPT,
         NodeType::Preview => tokens::NODE_CAT_PREVIEW,
         // Distinct dark teal — boundary markers, not generators/filters/combiners.
         NodeType::SubgraphInput | NodeType::SubgraphOutput => tokens::NODE_CAT_IO,
@@ -6910,9 +6529,9 @@ mod session_reset_tests {
     }
 
     #[test]
-    fn reset_session_state_clears_transient_fields() {
+    fn reset_project_clears_all_fields() {
         let mut app = dirtied_app();
-        app.reset_session_state();
+        app.reset_project();
         assert!(!app.history.can_undo(), "history must be cleared");
         assert!(matches!(app.paint.brush.tool, BrushTool::Raise),
             "brush tool defaults to Raise");

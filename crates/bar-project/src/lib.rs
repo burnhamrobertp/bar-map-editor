@@ -18,11 +18,11 @@ pub mod validation;
 
 pub use project::{
     EditorLayout, MacroParamSpec, NodeGroup, NodeSize, PersistedCanvasView, Position, Project,
-    SubgraphPort,
+    SculptRecord, SubgraphPort,
 };
 pub use recipe::{
     AtmosphereSettings, DetailTexture, LightingSettings, MapSettings, OutputConfig, Recipe,
     RecipeConnection, RecipeNode, WaterSettings, RECIPE_SCHEMA_VERSION,
 };
-pub use scan::WorkDirScan;
+pub use scan::{scan_to_project, WorkDirScan};
 pub use validation::{has_errors, validate_project, Finding, Severity};
