@@ -377,11 +377,10 @@ impl TerrainRenderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("terrain_pipeline_layout"),
             bind_group_layouts: &[
-                &camera_bind_group_layout,
-                &texture_bind_group_layout,
-                &reflection_bind_group_layout,
-                &water_normal_bind_group_layout,
-                &heightmap_bind_group_layout,
+                &camera_bind_group_layout,      // group 0: camera uniform
+                &texture_bind_group_layout,     // group 1: albedo/metalmap/typemap
+                &reflection_bind_group_layout,  // group 2: reflection texture
+                &heightmap_bind_group_layout,   // group 3: heightmap displacement
             ],
             push_constant_ranges: &[],
         });
