@@ -81,7 +81,7 @@ fn bench_full_export(c: &mut Criterion) {
             };
             b.iter(|| {
                 let outputs = evaluate_graph(&graph, &executor, size, size).unwrap();
-                let _ = execute_bundlers(&graph, &outputs, &recipe, &tmp, None);
+                let _ = execute_bundlers(&graph, &outputs, &recipe, &tmp, None, None);
             });
         });
     }

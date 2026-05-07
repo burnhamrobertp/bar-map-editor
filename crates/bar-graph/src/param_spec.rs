@@ -224,7 +224,6 @@ mod tests {
         NodeType::Clamp,
         NodeType::Terrace,
         NodeType::Invert,
-        NodeType::Sculpt,
         NodeType::Blend,
         NodeType::Add,
         NodeType::Subtract,
@@ -256,8 +255,5 @@ mod tests {
         NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
-        NodeType::TextureSculpt,
-        NodeType::MetalSculpt,
-        NodeType::TypeSculpt,
     ];
 }

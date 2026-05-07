@@ -136,12 +136,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // kolmog-class maps (1280-px native textures).
             ("max_preview_size", ParamValue::UInt(4096)),
         ],
-        NodeType::Sculpt => vec![
-            // Empty dab list — JSON array of `SculptDab` records. Brush
-            // strokes append entries here. Stored as a string so we can
-            // round-trip through the existing ParamValue::String path.
-            ("dabs", ParamValue::String("[]".to_string())),
-        ],
         NodeType::PaintedHeightmap => vec![
             // Hex-encoded greyscale pixel grid (each pixel is one u8).
             // Empty until the user paints. The buffer is sized to
@@ -190,21 +184,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
         NodeType::SubgraphOutput => vec![
             ("name", ParamValue::String(String::new())),
             ("kind", ParamValue::String("Heightmap".to_string())),
-        ],
-        NodeType::TextureSculpt => vec![
-            // JSON list of `ColorDab` records appended by the
-            // colour-brush input path. Stored as a String so it
-            // round-trips through ParamValue without a dedicated
-            // schema variant; same shape as `Sculpt.dabs`.
-            ("dabs", ParamValue::String("[]".to_string())),
-        ],
-        NodeType::MetalSculpt | NodeType::TypeSculpt => vec![
-            // JSON list of value-stamp dabs. Each entry carries
-            // `{u, v, ru, value}` where `value` is the metal
-            // density (Metal) or quantised type id (Type) at the
-            // moment the dab was recorded. Replay stamps the
-            // value into every pixel inside the brush footprint.
-            ("dabs", ParamValue::String("[]".to_string())),
         ],
         // PassThrough manages its files via a custom UI.
         // Other node types intentionally have no default params.

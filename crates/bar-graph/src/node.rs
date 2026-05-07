@@ -99,13 +99,6 @@ pub enum NodeType {
     /// Holds all extra files from an extracted .sd7 that should pass through to the bundler
     /// without processing (lua configs, sounds, textures, etc.).
     PassThrough,
-    /// Records brush dabs the user has applied via the editor's sculpt
-    /// tools and replays them onto its input heightmap at eval time.
-    /// Storing dabs as a node param (rather than mutating the
-    /// inspector's heightmap directly) means the dabs compose with
-    /// upstream changes — adjusting a noise frequency upstream
-    /// re-evaluates with the same brush strokes still applied.
-    Sculpt,
     /// Mid-pipeline tap point. Pure passthrough — its heightmap output
     /// equals its heightmap input. Exists to give the user an explicit
     /// "show me what the map looks like here" anchor that can be
@@ -129,25 +122,6 @@ pub enum NodeType {
     /// value from inner producers on its `value` input and exposes
     /// it on the collapsed block's external output port.
     SubgraphOutput,
-    /// Colour-overlay sibling of `Sculpt`. Takes a Color input
-    /// (typically a procedural pipeline like AutoTexture), records
-    /// brush dabs as a `dabs` JSON-string param, and replays them
-    /// on top of the input each evaluation. Output is the input
-    /// composited with the painted strokes — upstream texture
-    /// changes flow through and the strokes overlay them, matching
-    /// the heightmap's Sculpt model.
-    TextureSculpt,
-    /// Metalmap-overlay sibling of `Sculpt`. Heightmap-typed in / out
-    /// (the metalmap is a single-channel buffer in our pipeline; the
-    /// Bundler converts to u8 at export). Each dab stamps a metal
-    /// density value into the brush footprint. Composes with any
-    /// upstream metal hint — the painted dabs overlay the procedural
-    /// generator's output.
-    MetalSculpt,
-    /// Typemap-overlay sibling. Same shape as MetalSculpt; each dab
-    /// stamps a terrain-type id (encoded as a normalised f32) into
-    /// the brush footprint.
-    TypeSculpt,
 }
 
 impl NodeType {
@@ -257,8 +231,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         | NodeType::Sharpen
         | NodeType::Clamp
         | NodeType::Terrace
-        | NodeType::Invert
-        | NodeType::Sculpt => (
+        | NodeType::Invert => (
             vec![Port::new("input", "Input", PortKind::Heightmap)],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
@@ -500,20 +473,5 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("value", "Value", PortKind::Heightmap)],
         ),
 
-        // TextureSculpt: same shape as Sculpt but for the Color
-        // pipeline. One Color input, one Color output, plus a
-        // `dabs` param (JSON-encoded list of colour dabs).
-        NodeType::TextureSculpt => (
-            vec![Port::new("input", "Input", PortKind::Color)],
-            vec![Port::new("output", "Output", PortKind::Color)],
-        ),
-        // MetalSculpt / TypeSculpt: heightmap-typed overlays for
-        // the metalmap and typemap pipelines respectively. Same
-        // shape as Sculpt — input + output + dabs param. The dab
-        // payloads carry the layer-specific value (density / id).
-        NodeType::MetalSculpt | NodeType::TypeSculpt => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
     }
 }
