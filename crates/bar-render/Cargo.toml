@@ -1,0 +1,17 @@
+[package]
+name = "bar-render"
+description = "3D terrain viewport rendering with wgpu"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bar-data = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+glam = { workspace = true }
+tracing = { workspace = true }
+
+
+[dev-dependencies]
+naga = { version = "24", features = ["wgsl-in"] }

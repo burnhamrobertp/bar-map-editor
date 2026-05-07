@@ -1,0 +1,14 @@
+//! # bar-render
+//!
+//! 3D terrain viewport rendering with wgpu.
+//! Handles terrain mesh generation, camera controls, and display modes.
+
+pub mod camera;
+pub mod picking;
+pub mod renderer;
+pub mod terrain;
+
+pub use camera::Camera;
+pub use picking::{pick_terrain, PickResult};
+pub use renderer::{PreviewFrame, SmfLighting, TerrainRenderer};
+pub use terrain::{generate_terrain_mesh, generate_terrain_mesh_lod, TerrainVertex};

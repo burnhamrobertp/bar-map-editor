@@ -1,0 +1,99 @@
+[workspace]
+members = [
+    "crates/bar-data",
+    "crates/bar-compute",
+    "crates/bar-graph",
+    "crates/bar-project",
+    "crates/bar-engine",
+    "crates/bar-render",
+    "crates/bar-gui",
+    "crates/bar-app",
+    "crates/bar-cli",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/burnhamrobertp/bar-map-editor"
+
+[workspace.dependencies]
+# GPU & Rendering
+wgpu = "24"
+bytemuck = { version = "1", features = ["derive"] }
+
+# GUI
+egui = "0.31"
+eframe = { version = "0.31", default-features = false, features = ["wgpu", "default_fonts"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Parallelism
+rayon = "1"
+
+# Noise (CPU fallback)
+noise = "0.9"
+
+# Image I/O
+image = "0.25"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# File dialogs
+rfd = "0.15"
+
+# Platform directories
+directories = "6"
+
+# Math
+glam = "0.29"
+
+# Benchmarking
+criterion = { version = "0.5", features = ["html_reports"] }
+
+# Configuration
+toml = "0.8"
+
+# Archiving
+zip = "2"
+walkdir = "2"
+sevenz-rust = "0.6"
+
+# Cross-platform path handling
+path-slash = "0.2"
+
+# Embed the `language/` directory tree at compile time so the
+# bar-editor binary ships with all translations and doesn't depend
+# on the locales being on disk at runtime. We use `include_dir` and
+# our own thin `t!()` macro instead of `rust-i18n` so the files can
+# follow the `bar-localizations` layout
+# (`language/<locale>/<namespace>.json`) verbatim — `rust-i18n`'s
+# default loader assumes the file stem IS the locale name, which
+# breaks that convention.
+include_dir = "0.7"
+
+# Internal crates
+bar-data = { path = "crates/bar-data" }
+bar-compute = { path = "crates/bar-compute" }
+bar-graph = { path = "crates/bar-graph" }
+bar-project = { path = "crates/bar-project" }
+bar-engine = { path = "crates/bar-engine" }
+bar-render = { path = "crates/bar-render" }
+bar-gui = { path = "crates/bar-gui" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = "symbols"

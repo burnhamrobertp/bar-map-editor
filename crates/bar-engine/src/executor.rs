@@ -1,0 +1,2381 @@
+//! Bridges the graph engine to the compute layer.
+//! Implements `NodeExecutor` to dispatch graph node operations to CPU compute.
+
+use std::collections::HashMap;
+
+use bar_compute::{
+    generate_noise_cpu, hydraulic_erosion, thermal_erosion, HydraulicErosionParams, NoiseParams,
+    NoiseType, ThermalErosionParams,
+};
+use bar_data::{smt::TILE_SIZE, ColorBuffer, Heightmap, SmfMap};
+use bar_graph::{EvalError, NodeExecutor, NodeType, ParamValue, PortValue};
+
+/// Executor that runs node operations using CPU compute.
+/// GPU execution can be added later without changing the graph layer.
+pub struct CpuExecutor;
+
+impl NodeExecutor for CpuExecutor {
+    fn execute(
+        &self,
+        node_type: &NodeType,
+        params: &HashMap<String, ParamValue>,
+        inputs: &HashMap<String, PortValue>,
+        width: u32,
+        height: u32,
+    ) -> Result<HashMap<String, PortValue>, EvalError> {
+        let mut outputs = HashMap::new();
+
+        match node_type {
+            // --- Generators ---
+            NodeType::PerlinNoise => {
+                let hm = generate_noise(NoiseType::Perlin, params, width, height)?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::SimplexNoise => {
+                let hm = generate_noise(NoiseType::Simplex, params, width, height)?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::WorleyNoise => {
+                let hm = generate_noise(NoiseType::Worley, params, width, height)?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::RidgedNoise => {
+                let hm = generate_noise(NoiseType::Ridged, params, width, height)?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Constant => {
+                let value = get_float(params, "value", 0.5);
+                let data = vec![value; (width as usize) * (height as usize)];
+                let hm = Heightmap::frbar_data(width, height, data)
+                    .map_err(|e| EvalError::Compute(e.to_string()))?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Filters ---
+            NodeType::Blur => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let radius = get_float(params, "radius", 1.0);
+                let hm = apply_blur(&input, radius);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Clamp => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let min_val = get_float(params, "min", 0.0);
+                let max_val = get_float(params, "max", 1.0);
+                let hm = apply_clamp(&input, min_val, max_val);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Invert => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let hm = apply_invert(&input);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Terrace | NodeType::Sharpen => {
+                let input = get_input_heightmap(inputs, "input")?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(input));
+            }
+            NodeType::Curve => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let hm = apply_curve(&input, params);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Sculpt => {
+                let mut hm = get_input_heightmap(inputs, "input")?;
+                let dabs_json = match params.get("dabs") {
+                    Some(bar_graph::ParamValue::String(s)) => s.as_str(),
+                    _ => "[]",
+                };
+                apply_sculpt_dabs(&mut hm, dabs_json);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::TextureSculpt => {
+                // Mirror of Sculpt for the colour pipeline. Read the
+                // upstream colour buffer, replay every recorded dab
+                // on top, return the result. Skipped (no output
+                // emitted) if the input port isn't connected — the
+                // brush only makes sense as an overlay on top of an
+                // existing texture pipeline (AutoTexture, painted,
+                // imported, etc.).
+                let Some(PortValue::Color(input_cb)) = inputs.get("input") else {
+                    return Ok(outputs);
+                };
+                let mut cb = input_cb.clone();
+                let dabs_json = match params.get("dabs") {
+                    Some(bar_graph::ParamValue::String(s)) => s.as_str(),
+                    _ => "[]",
+                };
+                apply_color_dabs(&mut cb, dabs_json);
+                outputs.insert("output".to_string(), PortValue::Color(cb));
+            }
+            NodeType::MetalSculpt | NodeType::TypeSculpt => {
+                // Same overlay shape as `Sculpt` / `TextureSculpt`,
+                // but the dab payload is a value to stamp rather
+                // than an offset to add. Each dab carries `{u, v,
+                // ru, value}`; replay sets every pixel inside the
+                // brush footprint to `value`.
+                let mut hm = get_input_heightmap(inputs, "input")?;
+                let dabs_json = match params.get("dabs") {
+                    Some(bar_graph::ParamValue::String(s)) => s.as_str(),
+                    _ => "[]",
+                };
+                apply_value_stamp_dabs(&mut hm, dabs_json);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Preview => {
+                // Preview is a real node: its executor receives
+                // upstream values via its declared input ports
+                // exactly like any other node. We pass them
+                // through into the runtime output map under the
+                // same names so the 3D viewport can read them via
+                // the standard `outputs[node_id][port_name]`
+                // accessor — no special "find Preview nodes
+                // globally and inspect their incoming wires"
+                // pathway. The node has no declared output ports
+                // (nothing downstream consumes it), but its
+                // runtime output map is what the viewport reads
+                // from, the same way the viewport for any node
+                // would.
+                if let Some(v) = inputs.get("heightmap") {
+                    outputs.insert("heightmap".to_string(), v.clone());
+                }
+                if let Some(v) = inputs.get("texture") {
+                    outputs.insert("texture".to_string(), v.clone());
+                }
+                if let Some(v) = inputs.get("normal_map") {
+                    outputs.insert("normal_map".to_string(), v.clone());
+                }
+                if let Some(v) = inputs.get("specular_map") {
+                    outputs.insert("specular_map".to_string(), v.clone());
+                }
+            }
+
+            NodeType::SubgraphInput | NodeType::SubgraphOutput => {
+                // Both subgraph IO nodes are pure passthrough — the
+                // value crossing the boundary on the input side
+                // becomes the value the inner / outer graph reads
+                // on the output side. Identical math; the only
+                // difference is which "side" of the subgraph
+                // boundary each one is rendered on.
+                if let Some(v) = inputs.get("value") {
+                    outputs.insert("value".to_string(), v.clone());
+                }
+            }
+
+            // --- Erosion ---
+            NodeType::HydraulicErosion => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let params_e = HydraulicErosionParams {
+                    num_droplets: get_uint(params, "iterations", 50_000),
+                    inertia: get_float(params, "inertia", 0.05),
+                    capacity_factor: get_float(params, "capacity_factor", 4.0),
+                    min_capacity: get_float(params, "min_capacity", 0.01),
+                    deposition_rate: get_float(params, "deposition_rate", 0.3),
+                    erosion_rate: get_float(params, "erosion_rate", 0.3),
+                    evaporation_rate: get_float(params, "evaporation_rate", 0.01),
+                    gravity: get_float(params, "gravity", 4.0),
+                    max_lifetime: get_uint(params, "max_lifetime", 30),
+                    erosion_radius: get_uint(params, "erosion_radius", 3),
+                    seed: get_uint(params, "seed", 0),
+                };
+                let hm = hydraulic_erosion(&input, &params_e)
+                    .map_err(|e| EvalError::Compute(e.to_string()))?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::ThermalErosion => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let params_e = ThermalErosionParams {
+                    iterations: get_uint(params, "iterations", 50),
+                    talus_angle: get_float(params, "talus_angle", 0.004),
+                    erosion_rate: get_float(params, "erosion_rate", 0.5),
+                };
+                let hm = thermal_erosion(&input, &params_e)
+                    .map_err(|e| EvalError::Compute(e.to_string()))?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Combiners ---
+            NodeType::Blend => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let factor = get_float(params, "factor", 0.5);
+                let hm = blend_heightmaps(&a, &b, factor);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Add => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let hm = combine_heightmaps(&a, &b, |va, vb| (va + vb).min(1.0));
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Subtract => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let hm = combine_heightmaps(&a, &b, |va, vb| (va - vb).max(0.0));
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Multiply => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let hm = combine_heightmaps(&a, &b, |va, vb| va * vb);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Max => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let hm = combine_heightmaps(&a, &b, |va, vb| va.max(vb));
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Min => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let hm = combine_heightmaps(&a, &b, |va, vb| va.min(vb));
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Texture/Splat ---
+            NodeType::SlopeMap => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let hm = compute_slope_map(&input);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::HeightSelect => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let low = get_float(params, "low", 0.3);
+                let high = get_float(params, "high", 0.7);
+                let falloff = get_float(params, "falloff", 0.1);
+                let hm = compute_height_select(&input, low, high, falloff);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::SplatMap => {
+                let slope = inputs.get("slope").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let band0 = inputs.get("band0").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let band1 = inputs.get("band1").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let band2 = inputs.get("band2").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let hm = compose_splat_map(slope.as_ref(), band0.as_ref(), band1.as_ref(), band2.as_ref(), width, height);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::AutoTexture => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let slope = inputs.get("slope").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let color = generate_auto_texture(&input, slope.as_ref(), params);
+                outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+
+            // --- Map Layer Generators ---
+            NodeType::NormalMap => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let strength = get_float(params, "strength", 1.0);
+                let color = generate_normal_map(&input, strength);
+                outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+            NodeType::GrassMap => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let slope = inputs.get("slope").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let hm = generate_grass_map(&input, slope.as_ref(), params);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::SpecularMap => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let slope = inputs.get("slope").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let hm = generate_specular_map(&input, slope.as_ref(), params);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Mask ---
+            NodeType::Mask => {
+                let input = get_input_heightmap(inputs, "input")?;
+                outputs.insert("mask".to_string(), PortValue::Mask(input));
+            }
+
+            NodeType::PaintedHeightmap => {
+                let data_str = get_string(params, "data", "");
+                let src_res = get_uint(params, "resolution", 256).max(1);
+                let pixels = hex_decode_mask(data_str);
+                let hm = painted_grayscale_to_heightmap(pixels, src_res, width, height);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::PaintedTexture => {
+                let data_str = get_string(params, "data", "");
+                let pixels = hex_decode_mask(data_str);
+                let tex = painted_rgb_to_color_buffer(
+                    pixels,
+                    PAINTED_TEXTURE_RES,
+                    width,
+                    height,
+                );
+                outputs.insert("output".to_string(), PortValue::Color(tex));
+            }
+
+            // --- Mask Operations ---
+            NodeType::MaskThreshold => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let threshold = get_float(params, "threshold", 0.5);
+                let smoothness = get_float(params, "smoothness", 0.0);
+                let hm = apply_mask_threshold(&input, threshold, smoothness);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::MaskInvert => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let hm = apply_invert(&input);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::MaskBlur => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let radius = get_float(params, "radius", 2.0);
+                let hm = apply_blur(&input, radius);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::MaskApply => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let mask = get_input_heightmap(inputs, "mask")?;
+                let bg = inputs.get("background").and_then(|v| match v {
+                    PortValue::Heightmap(h) => Some(h.clone()),
+                    _ => None,
+                });
+                let hm = apply_mask(&input, &mask, bg.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Additional Generators ---
+            NodeType::FileInput => {
+                let path = get_string(params, "path", "");
+                let hm = load_file_input(path, width, height)?;
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Voronoi => {
+                let hm = generate_voronoi(params, width, height);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Gradient => {
+                let hm = generate_gradient(params, width, height);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Additional Filters ---
+            NodeType::SimpleTransform => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let scale = get_float(params, "scale", 1.0);
+                let offset = get_float(params, "offset", 0.0);
+                let invert = get_bool(params, "invert", false);
+                let hm = apply_simple_transform(&input, scale, offset, invert);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Normalize => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let hm = apply_normalize(&input);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::BiasGain => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let bias = get_float(params, "bias", 0.5);
+                let gain = get_float(params, "gain", 0.5);
+                let hm = apply_bias_gain(&input, bias, gain);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Displacement => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let displacement = get_input_heightmap(inputs, "displacement")?;
+                let strength = get_float(params, "strength", 0.1);
+                let hm = apply_displacement(&input, &displacement, strength);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Additional Combiners ---
+            NodeType::Chooser => {
+                let a = get_input_heightmap(inputs, "a")?;
+                let b = get_input_heightmap(inputs, "b")?;
+                let mask = get_input_heightmap(inputs, "mask")?;
+                let hm = apply_chooser(&a, &b, &mask);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            // --- Bundler/Packaging ---
+            NodeType::FileReference => {
+                // Produce a File port value from node params
+                let path = match params.get("path") {
+                    Some(ParamValue::String(s)) => s.clone(),
+                    _ => String::new(),
+                };
+                let bundle_path = match params.get("bundle_path") {
+                    Some(ParamValue::String(s)) => s.clone(),
+                    _ => path.clone(),
+                };
+                outputs.insert(
+                    "file".to_string(),
+                    PortValue::File(bar_graph::FileRef { path, bundle_path }),
+                );
+            }
+
+            NodeType::Bundler => {
+                // Terminal node — inputs are collected after graph evaluation by execute_bundlers().
+            }
+
+            NodeType::SmfImport => {
+                let path = get_string(params, "path", "");
+                if path.is_empty() {
+                    return Ok(outputs);
+                }
+
+                let file = std::fs::File::open(&path)
+                    .map_err(|e| EvalError::Compute(format!("SmfImport: cannot open '{}': {}", path, e)))?;
+                let smf = SmfMap::read(&mut std::io::BufReader::new(file))
+                    .map_err(|e| EvalError::Compute(format!("SmfImport: parse error: {}", e)))?;
+
+                outputs.insert("heightmap".to_string(), PortValue::Heightmap(smf.heightmap));
+
+                if get_bool(params, "load_metalmap", true) {
+                    let (mm_w, mm_h) = smf.header.metalmap_size();
+                    let mm_data: Vec<f32> = smf.metalmap.iter().map(|&v| v as f32 / 255.0).collect();
+                    if let Ok(mm_hm) = Heightmap::frbar_data(mm_w, mm_h, mm_data) {
+                        outputs.insert("metalmap".to_string(), PortValue::Heightmap(mm_hm));
+                    }
+                }
+
+                if get_bool(params, "load_typemap", true) {
+                    let (tm_w, tm_h) = smf.header.metalmap_size();
+                    let tm_data: Vec<f32> = smf.typemap.iter().map(|&v| v as f32 / 255.0).collect();
+                    if let Ok(tm_hm) = Heightmap::frbar_data(tm_w, tm_h, tm_data) {
+                        outputs.insert("typemap".to_string(), PortValue::Heightmap(tm_hm));
+                    }
+                }
+            }
+
+            NodeType::SmtImport => {
+                let path = get_string(params, "path", "");
+                if path.is_empty() {
+                    return Ok(outputs);
+                }
+                let max_preview = get_uint(params, "max_preview_size", 4096);
+
+                // Determine tile grid: prefer reading from the paired .smf file.
+                let smf_path = get_string(params, "smf_path", "");
+                let (tiles_x, tiles_y, tile_indices) = if !smf_path.is_empty() {
+                    if let Ok(f) = std::fs::File::open(&smf_path) {
+                        if let Ok(smf) = SmfMap::read(&mut std::io::BufReader::new(f)) {
+                            let (tx, ty) = smf.header.tile_grid_size();
+                            (tx, ty, smf.tile_indices)
+                        } else {
+                            let tx = get_uint(params, "tiles_x", 0);
+                            let ty = get_uint(params, "tiles_y", 0);
+                            let seq: Vec<i32> = (0..(tx * ty) as i32).collect();
+                            (tx, ty, seq)
+                        }
+                    } else {
+                        let tx = get_uint(params, "tiles_x", 0);
+                        let ty = get_uint(params, "tiles_y", 0);
+                        let seq: Vec<i32> = (0..(tx * ty) as i32).collect();
+                        (tx, ty, seq)
+                    }
+                } else {
+                    let tx = get_uint(params, "tiles_x", 0);
+                    let ty = get_uint(params, "tiles_y", 0);
+                    let seq: Vec<i32> = (0..(tx * ty) as i32).collect();
+                    (tx, ty, seq)
+                };
+
+                if tiles_x == 0 || tiles_y == 0 {
+                    return Ok(outputs);
+                }
+
+                let file = std::fs::File::open(&path)
+                    .map_err(|e| EvalError::Compute(format!("SmtImport: cannot open '{}': {}", path, e)))?;
+                let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file))
+                    .map_err(|e| EvalError::Compute(format!("SmtImport: parse error: {}", e)))?;
+
+                let src_w = tiles_x * TILE_SIZE;
+                let src_h = tiles_y * TILE_SIZE;
+                let out_w = max_preview.min(src_w).max(1);
+                let out_h = max_preview.min(src_h).max(1);
+
+                let rgba = assemble_texture_preview(&tiles, &tile_indices, tiles_x, tiles_y, out_w, out_h);
+                let color_buf = ColorBuffer::from_rgba8(out_w, out_h, &rgba)
+                    .map_err(|e| EvalError::Compute(e.to_string()))?;
+                outputs.insert("texture".to_string(), PortValue::Color(color_buf));
+            }
+
+            NodeType::PassThrough => {
+                let files_str = get_string(params, "files", "");
+                let file_list: Vec<bar_graph::FileRef> = files_str
+                    .lines()
+                    .filter_map(|line| {
+                        let mut parts = line.splitn(2, '|');
+                        let path = parts.next()?.trim().to_string();
+                        // Bundle paths must use forward slashes; self-heal any
+                        // legacy backslashed entries from older saved projects
+                        // so the bundler validator doesn't reject them.
+                        let bundle_path = parts.next()?.trim().replace('\\', "/");
+                        if path.is_empty() { None }
+                        else { Some(bar_graph::FileRef { path, bundle_path }) }
+                    })
+                    .collect();
+                outputs.insert("files".to_string(), PortValue::FileList(file_list));
+            }
+
+        }
+
+        Ok(outputs)
+    }
+}
+
+fn generate_noise(
+    noise_type: NoiseType,
+    params: &HashMap<String, ParamValue>,
+    width: u32,
+    height: u32,
+) -> Result<Heightmap, EvalError> {
+    let noise_params = NoiseParams {
+        width,
+        height,
+        noise_type,
+        octaves: get_uint(params, "octaves", 6),
+        lacunarity: get_float(params, "lacunarity", 2.0),
+        persistence: get_float(params, "persistence", 0.5),
+        frequency: get_float(params, "frequency", 4.0),
+        seed: get_uint(params, "seed", 0),
+        offset_x: get_float(params, "offset_x", 0.0),
+        offset_y: get_float(params, "offset_y", 0.0),
+    };
+
+    generate_noise_cpu(&noise_params).map_err(|e| EvalError::Compute(e.to_string()))
+}
+
+/// Assemble a downsampled RGBA8 texture from decoded SMT tiles.
+///
+/// Uses nearest-neighbor sampling directly against the tile grid — no full-resolution
+/// intermediate buffer is ever allocated. Each output pixel maps to one source texel.
+fn assemble_texture_preview(
+    tiles: &[Vec<u8>],
+    tile_indices: &[i32],
+    tiles_x: u32,
+    tiles_y: u32,
+    out_w: u32,
+    out_h: u32,
+) -> Vec<u8> {
+    let src_w = tiles_x * TILE_SIZE;
+    let src_h = tiles_y * TILE_SIZE;
+    let tile_sz = TILE_SIZE as usize;
+    let mut out = vec![0u8; (out_w * out_h * 4) as usize];
+
+    for dy in 0..out_h {
+        for dx in 0..out_w {
+            // Map output pixel to nearest source texel
+            let sx = (dx as u64 * src_w as u64 / out_w as u64) as u32;
+            let sy = (dy as u64 * src_h as u64 / out_h as u64) as u32;
+
+            let tile_x = (sx / TILE_SIZE).min(tiles_x.saturating_sub(1));
+            let tile_y = (sy / TILE_SIZE).min(tiles_y.saturating_sub(1));
+            let px = (sx % TILE_SIZE) as usize;
+            let py = (sy % TILE_SIZE) as usize;
+
+            let flat = (tile_y * tiles_x + tile_x) as usize;
+            if let Some(&idx_raw) = tile_indices.get(flat) {
+                if idx_raw >= 0 {
+                    if let Some(tile) = tiles.get(idx_raw as usize) {
+                        let src = (py * tile_sz + px) * 4;
+                        let dst = (dy * out_w + dx) as usize * 4;
+                        out[dst..dst + 4].copy_from_slice(&tile[src..src + 4]);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+fn get_input_heightmap(
+    inputs: &HashMap<String, PortValue>,
+    name: &str,
+) -> Result<Heightmap, EvalError> {
+    match inputs.get(name) {
+        Some(PortValue::Heightmap(hm)) => Ok(hm.clone()),
+        Some(PortValue::Mask(hm)) => Ok(hm.clone()),
+        _ => Err(EvalError::MissingInput {
+            node: bar_graph::NodeId(0),
+            port: name.to_string(),
+        }),
+    }
+}
+
+fn get_float(params: &HashMap<String, ParamValue>, key: &str, default: f32) -> f32 {
+    match params.get(key) {
+        Some(ParamValue::Float(v)) => *v,
+        _ => default,
+    }
+}
+
+fn get_uint(params: &HashMap<String, ParamValue>, key: &str, default: u32) -> u32 {
+    match params.get(key) {
+        Some(ParamValue::UInt(v)) => *v,
+        _ => default,
+    }
+}
+
+fn blend_heightmaps(a: &Heightmap, b: &Heightmap, factor: f32) -> Heightmap {
+    let w = a.width().min(b.width());
+    let h = a.height().min(b.height());
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let va = a.get(x, y).unwrap_or(0.0);
+            let vb = b.get(x, y).unwrap_or(0.0);
+            data[(y as usize) * (w as usize) + (x as usize)] = va * (1.0 - factor) + vb * factor;
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+fn combine_heightmaps(a: &Heightmap, b: &Heightmap, op: impl Fn(f32, f32) -> f32) -> Heightmap {
+    let w = a.width().min(b.width());
+    let h = a.height().min(b.height());
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let va = a.get(x, y).unwrap_or(0.0);
+            let vb = b.get(x, y).unwrap_or(0.0);
+            data[(y as usize) * (w as usize) + (x as usize)] = op(va, vb);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Replay sculpt brush dabs onto an input heightmap. Dab list is a
+/// JSON array; each entry has tool / position / radius / strength /
+/// falloff in normalised coordinates so the same recording works for
+/// any heightmap dimension.
+///
+/// JSON shape (matches what the editor writes):
+/// ```json
+/// [
+///   {"t":0,"u":0.5,"v":0.5,"ru":0.05,"s":0.02,"f":2.0,"ft":null},
+///   ...
+/// ]
+/// ```
+/// `t` is the tool ID: 0=Raise, 1=Lower, 2=Smooth, 3=Flatten.
+/// `ft` is the optional Flatten target (normalised heightmap value).
+/// Replay value-stamp dabs onto a `Heightmap`. Each entry's shape:
+///
+/// ```json
+/// { "u": 0.5, "v": 0.5, "ru": 0.05, "value": 1.0 }
+/// ```
+///
+/// Used by `MetalSculpt` (value = metal density [0, 1]) and
+/// `TypeSculpt` (value = quantised type id [0, 1]). Pixels inside
+/// the circular footprint are overwritten with `value` — full
+/// coverage stamp, no falloff blending. Identical wrapping math to
+/// `apply_color_dabs`.
+fn apply_value_stamp_dabs(hm: &mut Heightmap, dabs_json: &str) {
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(dabs_json);
+    let Ok(serde_json::Value::Array(arr)) = parsed else {
+        return;
+    };
+    let w = hm.width() as f32;
+    let h = hm.height() as f32;
+    let map_dim = w.max(h);
+    for entry in arr {
+        let Some(obj) = entry.as_object() else { continue };
+        let u = obj.get("u").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let v_ = obj.get("v").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let ru = obj.get("ru").and_then(|v| v.as_f64()).unwrap_or(0.05) as f32;
+        let value = obj
+            .get("value")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0) as f32;
+        let cx = (u * w).round() as i32;
+        let cy = (v_ * h).round() as i32;
+        let radius_px = (ru * map_dim).max(1.0);
+        let r_i = radius_px.ceil() as i32;
+        let r2 = (radius_px * radius_px) as f32;
+        let x0 = (cx - r_i).max(0);
+        let y0 = (cy - r_i).max(0);
+        let x1 = (cx + r_i).min(hm.width() as i32 - 1);
+        let y1 = (cy + r_i).min(hm.height() as i32 - 1);
+        if x1 < x0 || y1 < y0 {
+            continue;
+        }
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let dx = (x - cx) as f32;
+                let dy = (y - cy) as f32;
+                if dx * dx + dy * dy > r2 {
+                    continue;
+                }
+                let _ = hm.set(x as u32, y as u32, value);
+            }
+        }
+    }
+}
+
+/// Replay colour dabs onto a `ColorBuffer`. Each entry's shape:
+///
+/// ```json
+/// { "u": 0.5, "v": 0.5, "ru": 0.05, "r": 139, "g": 115, "b": 85 }
+/// ```
+///
+/// `(u, v)` is normalised position over the buffer; `ru` is normalised
+/// radius (relative to the buffer's longer side); `r/g/b` is the
+/// brush colour at the moment the dab was recorded. Pixels inside the
+/// circular footprint are stamped at full coverage — same shape as the
+/// in-properties paint canvas. No falloff blending in this pass; the
+/// brush.falloff knob is reserved for a future hook.
+fn apply_color_dabs(cb: &mut bar_data::ColorBuffer, dabs_json: &str) {
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(dabs_json);
+    let Ok(serde_json::Value::Array(arr)) = parsed else {
+        return;
+    };
+    let w = cb.width() as f32;
+    let h = cb.height() as f32;
+    let map_dim = w.max(h);
+    for entry in arr {
+        let Some(obj) = entry.as_object() else { continue };
+        let u = obj.get("u").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let v_ = obj.get("v").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let ru = obj.get("ru").and_then(|v| v.as_f64()).unwrap_or(0.05) as f32;
+        let r = obj.get("r").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let g = obj.get("g").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let b = obj.get("b").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let cx = (u * w).round() as i32;
+        let cy = (v_ * h).round() as i32;
+        let radius_px = (ru * map_dim).max(1.0);
+        let r_i = radius_px.ceil() as i32;
+        let r2 = (radius_px * radius_px) as f32;
+        let x0 = (cx - r_i).max(0);
+        let y0 = (cy - r_i).max(0);
+        let x1 = (cx + r_i).min(cb.width() as i32 - 1);
+        let y1 = (cy + r_i).min(cb.height() as i32 - 1);
+        if x1 < x0 || y1 < y0 {
+            continue;
+        }
+        let rgba = [
+            r as f32 / 255.0,
+            g as f32 / 255.0,
+            b as f32 / 255.0,
+            1.0,
+        ];
+        for y in y0..=y1 {
+            for x in x0..=x1 {
+                let dx = (x - cx) as f32;
+                let dy = (y - cy) as f32;
+                if dx * dx + dy * dy > r2 {
+                    continue;
+                }
+                cb.set(x as u32, y as u32, rgba);
+            }
+        }
+    }
+}
+
+fn apply_sculpt_dabs(hm: &mut Heightmap, dabs_json: &str) {
+    let parsed: Result<serde_json::Value, _> = serde_json::from_str(dabs_json);
+    let Ok(serde_json::Value::Array(arr)) = parsed else {
+        return;
+    };
+    let w = hm.width() as f32;
+    let h = hm.height() as f32;
+    let map_dim = w.max(h);
+    for entry in arr {
+        let Some(obj) = entry.as_object() else { continue };
+        let tool = obj.get("t").and_then(|v| v.as_u64()).unwrap_or(0) as u8;
+        let u = obj.get("u").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let v_ = obj.get("v").and_then(|v| v.as_f64()).unwrap_or(0.5) as f32;
+        let ru = obj.get("ru").and_then(|v| v.as_f64()).unwrap_or(0.05) as f32;
+        let strength = obj.get("s").and_then(|v| v.as_f64()).unwrap_or(0.02) as f32;
+        let falloff = obj.get("f").and_then(|v| v.as_f64()).unwrap_or(2.0) as f32;
+        let flatten_target = obj
+            .get("ft")
+            .and_then(|v| v.as_f64())
+            .map(|x| x as f32);
+
+        let cx = u * w;
+        let cy = v_ * h;
+        let radius_px = (ru * map_dim).max(1.0);
+        sculpt_dab(hm, cx, cy, radius_px, strength, falloff, tool, flatten_target);
+    }
+}
+
+/// Single dab application. Mirrors the brush math in bar-gui's
+/// `apply_brush_dab` but lives here so the executor doesn't need to
+/// depend on bar-gui. Kept consistent so live-preview and replay
+/// produce the same surface.
+fn sculpt_dab(
+    hm: &mut Heightmap,
+    cx: f32,
+    cy: f32,
+    radius: f32,
+    strength: f32,
+    falloff: f32,
+    tool: u8,
+    flatten_target: Option<f32>,
+) {
+    let w = hm.width() as i32;
+    let h = hm.height() as i32;
+    let r_i = radius.ceil() as i32;
+    let cx_i = cx.round() as i32;
+    let cy_i = cy.round() as i32;
+    let x0 = (cx_i - r_i).max(0);
+    let y0 = (cy_i - r_i).max(0);
+    let x1 = (cx_i + r_i).min(w - 1);
+    let y1 = (cy_i + r_i).min(h - 1);
+    if x1 < x0 || y1 < y0 {
+        return;
+    }
+
+    let snap_w = (x1 - x0 + 1) as usize;
+    let snapshot: Option<Vec<f32>> = if tool == 2 {
+        let mut v = Vec::with_capacity(((x1 - x0 + 1) * (y1 - y0 + 1)) as usize);
+        for sy in y0..=y1 {
+            for sx in x0..=x1 {
+                v.push(hm.get(sx as u32, sy as u32).unwrap_or(0.0));
+            }
+        }
+        Some(v)
+    } else {
+        None
+    };
+
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let dx = x as f32 - cx;
+            let dy = y as f32 - cy;
+            let d = (dx * dx + dy * dy).sqrt();
+            if d > radius {
+                continue;
+            }
+            let t = (1.0 - d / radius).clamp(0.0, 1.0);
+            let weight = t.powf(falloff);
+            let cur = hm.get(x as u32, y as u32).unwrap_or(0.0);
+            let new_val = match tool {
+                0 => cur + strength * weight, // Raise
+                1 => cur - strength * weight, // Lower
+                2 => {
+                    // Smooth — 3×3 mean from snapshot.
+                    let snap = snapshot.as_ref().unwrap();
+                    let mut sum = 0.0_f32;
+                    let mut n = 0_f32;
+                    for oy in -1..=1 {
+                        for ox in -1..=1 {
+                            let nx = x + ox;
+                            let ny = y + oy;
+                            if nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1 {
+                                let lx = (nx - x0) as usize;
+                                let ly = (ny - y0) as usize;
+                                sum += snap[ly * snap_w + lx];
+                                n += 1.0;
+                            }
+                        }
+                    }
+                    let avg = if n > 0.0 { sum / n } else { cur };
+                    let mix = (strength * weight * 8.0).clamp(0.0, 1.0);
+                    cur + (avg - cur) * mix
+                }
+                _ => {
+                    // Flatten (3) and any future tool: lerp toward target.
+                    let target = flatten_target.unwrap_or(cur);
+                    let mix = (strength * weight * 4.0).clamp(0.0, 1.0);
+                    cur + (target - cur) * mix
+                }
+            };
+            let _ = hm.set(x as u32, y as u32, new_val.clamp(0.0, 1.0));
+        }
+    }
+}
+
+/// Gaussian blur approximation using separable box blur (3 passes).
+fn apply_blur(input: &Heightmap, radius: f32) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let r = (radius.round() as usize).clamp(1, 64);
+
+    let mut src: Vec<f32> = input.data().to_vec();
+    let mut dst: Vec<f32> = vec![0.0; w * h];
+
+    // 3-pass box blur approximates Gaussian
+    for _ in 0..3 {
+        // Horizontal pass
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0.0;
+                let mut count = 0.0;
+                let x_start = x.saturating_sub(r);
+                let x_end = (x + r + 1).min(w);
+                for xx in x_start..x_end {
+                    sum += src[y * w + xx];
+                    count += 1.0;
+                }
+                dst[y * w + x] = sum / count;
+            }
+        }
+        std::mem::swap(&mut src, &mut dst);
+
+        // Vertical pass
+        for y in 0..h {
+            for x in 0..w {
+                let mut sum = 0.0;
+                let mut count = 0.0;
+                let y_start = y.saturating_sub(r);
+                let y_end = (y + r + 1).min(h);
+                for yy in y_start..y_end {
+                    sum += src[yy * w + x];
+                    count += 1.0;
+                }
+                dst[y * w + x] = sum / count;
+            }
+        }
+        std::mem::swap(&mut src, &mut dst);
+    }
+
+    Heightmap::frbar_data(w as u32, h as u32, src).unwrap()
+}
+
+fn apply_clamp(input: &Heightmap, min_val: f32, max_val: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .map(|&v| v.clamp(min_val, max_val))
+        .collect();
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+fn apply_invert(input: &Heightmap) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let data: Vec<f32> = input.data().iter().map(|&v| 1.0 - v).collect();
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Threshold a heightmap into a binary (or smooth) mask.
+/// With smoothness=0: hard binary. With smoothness>0: smooth sigmoid-like transition.
+fn apply_mask_threshold(input: &Heightmap, threshold: f32, smoothness: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .map(|&v| {
+            if smoothness <= 0.001 {
+                if v >= threshold { 1.0 } else { 0.0 }
+            } else {
+                // Smooth transition using hermite interpolation
+                let t = ((v - threshold) / smoothness + 0.5).clamp(0.0, 1.0);
+                t * t * (3.0 - 2.0 * t)
+            }
+        })
+        .collect();
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Apply a mask to blend between input and background.
+/// output = input * mask + background * (1 - mask)
+fn apply_mask(input: &Heightmap, mask: &Heightmap, background: Option<&Heightmap>) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let val = input.get(x, y).unwrap_or(0.0);
+            let m = mask.get(x, y).unwrap_or(1.0);
+            let bg = background.and_then(|b| b.get(x, y)).unwrap_or(0.0);
+            data[(y as usize) * (w as usize) + (x as usize)] = val * m + bg * (1.0 - m);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Compute slope map: each pixel is the maximum gradient magnitude at that point.
+/// Output range [0, 1] where 0 = flat, 1 = very steep.
+fn compute_slope_map(input: &Heightmap) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let c = input.get(x, y).unwrap_or(0.0);
+            let r = input.get((x + 1).min(w - 1), y).unwrap_or(c);
+            let l = input.get(x.saturating_sub(1), y).unwrap_or(c);
+            let d = input.get(x, (y + 1).min(h - 1)).unwrap_or(c);
+            let u = input.get(x, y.saturating_sub(1)).unwrap_or(c);
+
+            let dx = (r - l) * 0.5;
+            let dy = (d - u) * 0.5;
+            // Scale to reasonable range (slopes are typically small values)
+            let slope = (dx * dx + dy * dy).sqrt() * 4.0;
+            data[(y as usize) * (w as usize) + (x as usize)] = slope.clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Height band selection with smooth falloff.
+/// Returns 1.0 for heights in [low, high], fading to 0.0 within `falloff` distance.
+fn compute_height_select(input: &Heightmap, low: f32, high: f32, falloff: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .map(|&v| {
+            if v >= low && v <= high {
+                1.0
+            } else if v < low {
+                let dist = low - v;
+                if falloff > 0.0 {
+                    (1.0 - dist / falloff).max(0.0)
+                } else {
+                    0.0
+                }
+            } else {
+                let dist = v - high;
+                if falloff > 0.0 {
+                    (1.0 - dist / falloff).max(0.0)
+                } else {
+                    0.0
+                }
+            }
+        })
+        .collect();
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Compose up to 4 weight channels into a single normalized splat map.
+/// The output encodes the dominant channel index (0–3) as a value in [0, 1].
+/// For use with Spring/Recoil typemap (8-bit indices) this would be quantized.
+fn compose_splat_map(
+    slope: Option<&Heightmap>,
+    band0: Option<&Heightmap>,
+    band1: Option<&Heightmap>,
+    band2: Option<&Heightmap>,
+    width: u32,
+    height: u32,
+) -> Heightmap {
+    let size = (width as usize) * (height as usize);
+    let mut data = vec![0.0f32; size];
+
+    let zero = vec![0.0f32; size];
+    let slope_data = slope.map(|h| h.data()).unwrap_or(&zero);
+    let b0_data = band0.map(|h| h.data()).unwrap_or(&zero);
+    let b1_data = band1.map(|h| h.data()).unwrap_or(&zero);
+    let b2_data = band2.map(|h| h.data()).unwrap_or(&zero);
+
+    for (i, pixel) in data.iter_mut().enumerate() {
+        let channels = [
+            *b0_data.get(i).unwrap_or(&0.0),
+            *b1_data.get(i).unwrap_or(&0.0),
+            *b2_data.get(i).unwrap_or(&0.0),
+            *slope_data.get(i).unwrap_or(&0.0),
+        ];
+
+        // Find dominant channel
+        let max_idx = channels
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+
+        // Spring typemap: terrain type index (0-255)
+        // Encode as type index normalized to [0,1]
+        *pixel = max_idx as f32 / 255.0;
+    }
+
+    Heightmap::frbar_data(width, height, data).unwrap()
+}
+
+/// Biome gradient: list of `(rgb, height)` stops sorted by height.
+/// Heights are normalised to `[0, 1]`. Each biome owns both its
+/// palette AND its thresholds — a "snow" stop in mountainous sits
+/// at 0.85, in temperate at 0.95, and is absent entirely in tropical.
+type BiomeGradient = &'static [([f32; 3], f32)];
+
+const BIOME_TEMPERATE: BiomeGradient = &[
+    ([0.05, 0.10, 0.30], 0.00), // deep water
+    ([0.10, 0.25, 0.50], 0.15), // shallow water
+    ([0.76, 0.70, 0.50], 0.20), // sand/beach
+    ([0.30, 0.55, 0.15], 0.30), // lowland grass
+    ([0.20, 0.45, 0.10], 0.50), // forest
+    ([0.40, 0.35, 0.25], 0.65), // dirt
+    ([0.45, 0.42, 0.38], 0.75), // rock
+    ([0.55, 0.52, 0.48], 0.85), // light rock
+    ([0.90, 0.92, 0.95], 0.95), // snow
+    ([1.00, 1.00, 1.00], 1.00), // peak snow
+];
+
+const BIOME_GRASSLAND: BiomeGradient = &[
+    ([0.20, 0.30, 0.20], 0.00), // muddy water
+    ([0.30, 0.45, 0.25], 0.10), // marsh
+    ([0.78, 0.72, 0.50], 0.15), // sand
+    ([0.45, 0.65, 0.20], 0.25), // bright grass
+    ([0.55, 0.60, 0.25], 0.55), // dry grass
+    ([0.55, 0.45, 0.30], 0.80), // dirt
+    ([0.70, 0.60, 0.45], 1.00), // tan rock — no snow
+];
+
+const BIOME_MOUNTAINOUS: BiomeGradient = &[
+    ([0.04, 0.08, 0.20], 0.00), // dark water
+    ([0.10, 0.30, 0.45], 0.10), // alpine lake
+    ([0.45, 0.42, 0.40], 0.15), // scree
+    ([0.35, 0.45, 0.20], 0.25), // sparse grass
+    ([0.20, 0.35, 0.10], 0.40), // forest
+    ([0.40, 0.32, 0.25], 0.50), // dirt
+    ([0.45, 0.42, 0.38], 0.60), // rock
+    ([0.60, 0.58, 0.55], 0.75), // light rock
+    ([0.92, 0.94, 0.96], 0.85), // snow line — early
+    ([1.00, 1.00, 1.00], 1.00), // peak snow
+];
+
+const BIOME_TROPICAL: BiomeGradient = &[
+    ([0.05, 0.40, 0.55], 0.00), // deep tropical water
+    ([0.30, 0.70, 0.75], 0.15), // shallow turquoise
+    ([0.95, 0.92, 0.80], 0.20), // white sand
+    ([0.20, 0.55, 0.15], 0.30), // jungle
+    ([0.10, 0.40, 0.10], 0.55), // dense jungle
+    ([0.55, 0.30, 0.20], 0.75), // red dirt
+    ([0.70, 0.45, 0.30], 1.00), // red rock — no snow
+];
+
+const BIOME_DESERT: BiomeGradient = &[
+    ([0.78, 0.72, 0.55], 0.00), // dry lakebed (no water)
+    ([0.85, 0.75, 0.55], 0.20), // tan sand
+    ([0.90, 0.78, 0.50], 0.40), // golden sand
+    ([0.70, 0.45, 0.30], 0.60), // red dirt
+    ([0.60, 0.35, 0.25], 0.75), // red rock
+    ([0.45, 0.25, 0.20], 0.90), // dark red rock
+    ([0.85, 0.75, 0.60], 1.00), // pale rock crown
+];
+
+const BIOME_TUNDRA: BiomeGradient = &[
+    ([0.10, 0.15, 0.25], 0.00), // dark cold water
+    ([0.30, 0.30, 0.30], 0.15), // frozen mud
+    ([0.40, 0.45, 0.30], 0.25), // sparse moss
+    ([0.45, 0.50, 0.40], 0.40), // grey-green tundra
+    ([0.60, 0.62, 0.65], 0.55), // frost rock
+    ([0.85, 0.88, 0.92], 0.70), // snow takes over early
+    ([0.95, 0.97, 1.00], 1.00), // ice
+];
+
+const BIOME_LUNAR: BiomeGradient = &[
+    ([0.10, 0.10, 0.10], 0.00), // crater shadow
+    ([0.30, 0.30, 0.30], 0.30), // regolith
+    ([0.55, 0.55, 0.55], 0.60), // light regolith
+    ([0.75, 0.75, 0.75], 0.85), // highland
+    ([0.90, 0.90, 0.90], 1.00), // peak
+];
+
+/// Resolve a biome name (from the AutoTexture `biome` param) to its
+/// gradient table. Falls back to temperate for unknown values.
+fn biome_gradient(name: &str) -> BiomeGradient {
+    match name {
+        "grassland" => BIOME_GRASSLAND,
+        "mountainous" => BIOME_MOUNTAINOUS,
+        "tropical" => BIOME_TROPICAL,
+        "desert" => BIOME_DESERT,
+        "tundra" => BIOME_TUNDRA,
+        "lunar" => BIOME_LUNAR,
+        _ => BIOME_TEMPERATE,
+    }
+}
+
+/// Generate a diffuse texture from a heightmap using elevation-banded
+/// gradient mapping + slope-driven rock blending. Drives `AutoTexture`.
+fn generate_auto_texture(
+    heightmap: &Heightmap,
+    slope: Option<&Heightmap>,
+    params: &HashMap<String, ParamValue>,
+) -> ColorBuffer {
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let mut color = ColorBuffer::new(w, h).unwrap();
+
+    let slope_power = get_float(params, "slope_power", 0.7).max(0.01);
+    let slope_blend_scale = get_float(params, "slope_blend", 1.0).clamp(0.0, 1.0);
+    let ao_strength = get_float(params, "ao_strength", 1.0).clamp(0.0, 1.0);
+    let rock_hex = get_string(params, "rock_color", "736B61");
+    let rock_rgb = parse_hex_color_srgb(&rock_hex).unwrap_or([0.45, 0.42, 0.38]);
+    let biome = get_string(params, "biome", "temperate");
+    let gradient = biome_gradient(biome);
+
+    for y in 0..h {
+        for x in 0..w {
+            let height_val = heightmap.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+            let slope_val = slope
+                .and_then(|s| s.get(x, y))
+                .unwrap_or(0.0)
+                .clamp(0.0, 1.0);
+
+            let base_color = sample_gradient(gradient, height_val);
+
+            let slope_blend = slope_val.powf(slope_power) * slope_blend_scale;
+            let r = base_color[0] * (1.0 - slope_blend) + rock_rgb[0] * slope_blend;
+            let g = base_color[1] * (1.0 - slope_blend) + rock_rgb[1] * slope_blend;
+            let b = base_color[2] * (1.0 - slope_blend) + rock_rgb[2] * slope_blend;
+
+            // Lerp AO toward 1.0 by (1 - ao_strength) so the param
+            // smoothly fades the darkening rather than gating it.
+            let ao_raw = compute_local_ao(heightmap, x, y);
+            let ao = 1.0 - (1.0 - ao_raw) * ao_strength;
+
+            color.set(x, y, [r * ao, g * ao, b * ao, 1.0]);
+        }
+    }
+
+    color
+}
+
+/// Parse a 6-digit `RRGGBB` hex string into an `[r, g, b]` array of
+/// `f32` values in [0.0, 1.0]. Returns `None` if the string isn't six
+/// valid hex digits.
+fn parse_hex_color_srgb(s: &str) -> Option<[f32; 3]> {
+    let bytes = s.as_bytes();
+    if bytes.len() != 6 {
+        return None;
+    }
+    let mut out = [0f32; 3];
+    for i in 0..3 {
+        let hi = (bytes[i * 2] as char).to_digit(16)?;
+        let lo = (bytes[i * 2 + 1] as char).to_digit(16)?;
+        out[i] = ((hi << 4 | lo) as f32) / 255.0;
+    }
+    Some(out)
+}
+
+fn sample_gradient(stops: &[([f32; 3], f32)], t: f32) -> [f32; 3] {
+    if t <= stops[0].1 {
+        return stops[0].0;
+    }
+    for i in 1..stops.len() {
+        if t <= stops[i].1 {
+            let frac = (t - stops[i - 1].1) / (stops[i].1 - stops[i - 1].1);
+            let a = stops[i - 1].0;
+            let b = stops[i].0;
+            return [
+                a[0] + (b[0] - a[0]) * frac,
+                a[1] + (b[1] - a[1]) * frac,
+                a[2] + (b[2] - a[2]) * frac,
+            ];
+        }
+    }
+    stops.last().unwrap().0
+}
+
+/// Simple ambient occlusion: compare center height to neighbors.
+fn compute_local_ao(heightmap: &Heightmap, x: u32, y: u32) -> f32 {
+    let c = heightmap.get(x, y).unwrap_or(0.5);
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let mut sum = 0.0f32;
+    let mut count = 0.0f32;
+
+    for dy in -2i32..=2 {
+        for dx in -2i32..=2 {
+            if dx == 0 && dy == 0 {
+                continue;
+            }
+            let nx = (x as i32 + dx).clamp(0, w as i32 - 1) as u32;
+            let ny = (y as i32 + dy).clamp(0, h as i32 - 1) as u32;
+            let nh = heightmap.get(nx, ny).unwrap_or(c);
+            // If neighbor is higher, this point is "occluded"
+            sum += (c - nh).max(0.0);
+            count += 1.0;
+        }
+    }
+
+    // Map occlusion to brightness [0.7, 1.0]
+    let occlusion = (sum / count * 5.0).clamp(0.0, 1.0);
+    1.0 - occlusion * 0.3
+}
+
+/// Generate a tangent-space normal map from a heightmap.
+/// `strength` controls the intensity of the normals (higher = more pronounced bumps).
+fn generate_normal_map(heightmap: &Heightmap, strength: f32) -> ColorBuffer {
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let mut color = ColorBuffer::new(w, h).unwrap();
+
+    // Scale factor accounts for the pixel spacing vs height range
+    let scale = strength * 2.0;
+
+    for y in 0..h {
+        for x in 0..w {
+            // Sample neighboring heights using Sobel-like kernel
+            let x0 = if x > 0 { x - 1 } else { 0 };
+            let x1 = if x < w - 1 { x + 1 } else { w - 1 };
+            let y0 = if y > 0 { y - 1 } else { 0 };
+            let y1 = if y < h - 1 { y + 1 } else { h - 1 };
+
+            let tl = heightmap.get(x0, y0).unwrap_or(0.0);
+            let t = heightmap.get(x, y0).unwrap_or(0.0);
+            let tr = heightmap.get(x1, y0).unwrap_or(0.0);
+            let l = heightmap.get(x0, y).unwrap_or(0.0);
+            let r = heightmap.get(x1, y).unwrap_or(0.0);
+            let bl = heightmap.get(x0, y1).unwrap_or(0.0);
+            let b = heightmap.get(x, y1).unwrap_or(0.0);
+            let br = heightmap.get(x1, y1).unwrap_or(0.0);
+
+            // Sobel filter for dx and dy
+            let dx = (tr + 2.0 * r + br) - (tl + 2.0 * l + bl);
+            let dy = (bl + 2.0 * b + br) - (tl + 2.0 * t + tr);
+
+            // Construct normal vector (tangent space: Z is up)
+            let nx = -dx * scale;
+            let ny = -dy * scale;
+            let nz = 1.0f32;
+
+            // Normalize
+            let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            let nx = nx / len;
+            let ny = ny / len;
+            let nz = nz / len;
+
+            // Encode to [0,1] range for storage as RGB
+            let r = nx * 0.5 + 0.5;
+            let g = ny * 0.5 + 0.5;
+            let b = nz * 0.5 + 0.5;
+
+            color.set(x, y, [r, g, b, 1.0]);
+        }
+    }
+
+    color
+}
+
+/// Generate a grass density map based on height and slope constraints.
+/// Parameters:
+/// - `min_height`: minimum height for grass (default 0.15)
+/// - `max_height`: maximum height for grass (default 0.7)
+/// - `max_slope`: maximum slope for grass growth (default 0.4)
+/// - `density`: overall density multiplier (default 1.0)
+fn generate_grass_map(
+    heightmap: &Heightmap,
+    slope: Option<&Heightmap>,
+    params: &HashMap<String, ParamValue>,
+) -> Heightmap {
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let size = (w as usize) * (h as usize);
+    let mut data = vec![0.0f32; size];
+
+    let min_height = get_float(params, "min_height", 0.15);
+    let max_height = get_float(params, "max_height", 0.7);
+    let max_slope = get_float(params, "max_slope", 0.4);
+    let density = get_float(params, "density", 1.0);
+    let falloff = get_float(params, "falloff", 0.05);
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y as usize) * (w as usize) + (x as usize);
+            let height_val = heightmap.get(x, y).unwrap_or(0.0);
+            let slope_val = slope.and_then(|s| s.get(x, y)).unwrap_or(0.0);
+
+            // Height band with smooth falloff
+            let height_factor = smooth_band(height_val, min_height, max_height, falloff);
+
+            // Slope attenuation: grass doesn't grow on steep slopes
+            let slope_factor = if slope_val < max_slope {
+                1.0
+            } else {
+                let over = (slope_val - max_slope) / falloff.max(0.01);
+                (1.0 - over).max(0.0)
+            };
+
+            data[idx] = (height_factor * slope_factor * density).clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Generate a specular intensity map from height and slope.
+/// Parameters:
+/// - `rock_specular`: specularity for steep rocky areas (default 0.6)
+/// - `flat_specular`: specularity for flat ground (default 0.2)
+/// - `water_specular`: specularity for low areas (water/wet, default 0.9)
+/// - `water_height`: height threshold below which ground is considered wet (default 0.2)
+fn generate_specular_map(
+    heightmap: &Heightmap,
+    slope: Option<&Heightmap>,
+    params: &HashMap<String, ParamValue>,
+) -> Heightmap {
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let size = (w as usize) * (h as usize);
+    let mut data = vec![0.0f32; size];
+
+    let rock_specular = get_float(params, "rock_specular", 0.6);
+    let flat_specular = get_float(params, "flat_specular", 0.2);
+    let water_specular = get_float(params, "water_specular", 0.9);
+    let water_height = get_float(params, "water_height", 0.2);
+    let snow_specular = get_float(params, "snow_specular", 0.7);
+    let snow_height = get_float(params, "snow_height", 0.85);
+
+    for y in 0..h {
+        for x in 0..w {
+            let idx = (y as usize) * (w as usize) + (x as usize);
+            let height_val = heightmap.get(x, y).unwrap_or(0.0);
+            let slope_val = slope.and_then(|s| s.get(x, y)).unwrap_or(0.0);
+
+            // Base specular from slope: steep = shiny rock, flat = dull ground
+            let base = flat_specular + (rock_specular - flat_specular) * slope_val;
+
+            // Override for water/wet areas
+            let spec = if height_val < water_height {
+                let wet_factor = 1.0 - (height_val / water_height);
+                base + (water_specular - base) * wet_factor
+            } else if height_val > snow_height {
+                let snow_factor = (height_val - snow_height) / (1.0 - snow_height);
+                base + (snow_specular - base) * snow_factor
+            } else {
+                base
+            };
+
+            data[idx] = spec.clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Smooth band function: returns 1.0 inside [low,high], smoothly falls to 0 outside.
+fn smooth_band(value: f32, low: f32, high: f32, falloff: f32) -> f32 {
+    if value < low - falloff || value > high + falloff {
+        return 0.0;
+    }
+    if value >= low && value <= high {
+        return 1.0;
+    }
+    if value < low {
+        (value - (low - falloff)) / falloff
+    } else {
+        ((high + falloff) - value) / falloff
+    }
+}
+
+// ============================================================
+// New node implementations
+// ============================================================
+
+fn get_string<'a>(params: &'a HashMap<String, ParamValue>, key: &str, default: &'a str) -> &'a str {
+    match params.get(key) {
+        Some(ParamValue::String(s)) => s.as_str(),
+        _ => default,
+    }
+}
+
+fn get_bool(params: &HashMap<String, ParamValue>, key: &str, default: bool) -> bool {
+    match params.get(key) {
+        Some(ParamValue::Bool(v)) => *v,
+        _ => default,
+    }
+}
+
+/// Load an image file as a heightmap. Supports PNG/TIFF 8/16-bit grayscale + RGB.
+fn load_file_input(path: &str, width: u32, height: u32) -> Result<Heightmap, EvalError> {
+    if path.is_empty() {
+        // No file specified — return flat heightmap at 0.5
+        let data = vec![0.5f32; (width as usize) * (height as usize)];
+        return Heightmap::frbar_data(width, height, data)
+            .map_err(|e| EvalError::Compute(e.to_string()));
+    }
+
+    let img = image::open(path).map_err(|e| {
+        EvalError::Compute(format!("Failed to load image '{}': {}", path, e))
+    })?;
+
+    let gray = img.to_luma16();
+    let (iw, ih) = gray.dimensions();
+
+    // If dimensions match, use directly; otherwise resample
+    let data: Vec<f32> = if iw == width && ih == height {
+        gray.pixels().map(|p| p.0[0] as f32 / 65535.0).collect()
+    } else {
+        // Bilinear resample to target dimensions
+        let mut resampled = Vec::with_capacity((width as usize) * (height as usize));
+        for y in 0..height {
+            for x in 0..width {
+                let sx = x as f32 * (iw as f32 - 1.0) / (width as f32 - 1.0).max(1.0);
+                let sy = y as f32 * (ih as f32 - 1.0) / (height as f32 - 1.0).max(1.0);
+                let x0 = (sx as u32).min(iw - 1);
+                let y0 = (sy as u32).min(ih - 1);
+                let x1 = (x0 + 1).min(iw - 1);
+                let y1 = (y0 + 1).min(ih - 1);
+                let fx = sx - sx.floor();
+                let fy = sy - sy.floor();
+                let v00 = gray.get_pixel(x0, y0).0[0] as f32;
+                let v10 = gray.get_pixel(x1, y0).0[0] as f32;
+                let v01 = gray.get_pixel(x0, y1).0[0] as f32;
+                let v11 = gray.get_pixel(x1, y1).0[0] as f32;
+                let v = v00 * (1.0 - fx) * (1.0 - fy)
+                    + v10 * fx * (1.0 - fy)
+                    + v01 * (1.0 - fx) * fy
+                    + v11 * fx * fy;
+                resampled.push(v / 65535.0);
+            }
+        }
+        resampled
+    };
+
+    Heightmap::frbar_data(width, height, data).map_err(|e| EvalError::Compute(e.to_string()))
+}
+
+/// Generate Voronoi (plateau/cell) terrain.
+/// Params: frequency, seed, mode ("f1", "f2", "f2_f1", "cell")
+fn generate_voronoi(params: &HashMap<String, ParamValue>, width: u32, height: u32) -> Heightmap {
+    let frequency = get_float(params, "frequency", 8.0);
+    let seed = get_uint(params, "seed", 0);
+    let mode = get_string(params, "mode", "f1");
+
+    // Simple Voronoi via random cell points
+    let num_cells = (frequency * frequency) as usize;
+    let mut rng_state: u64 = seed as u64 ^ 0xDEAD_BEEF;
+
+    let mut cell_points: Vec<(f32, f32, f32)> = Vec::with_capacity(num_cells);
+    for _ in 0..num_cells {
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let cx = ((rng_state >> 32) as f32) / (u32::MAX as f32);
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let cy = ((rng_state >> 32) as f32) / (u32::MAX as f32);
+        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let cval = ((rng_state >> 32) as f32) / (u32::MAX as f32);
+        cell_points.push((cx, cy, cval));
+    }
+
+    let mut data = vec![0.0f32; (width as usize) * (height as usize)];
+    for y in 0..height {
+        for x in 0..width {
+            let px = x as f32 / width as f32;
+            let py = y as f32 / height as f32;
+
+            let mut d1 = f32::MAX;
+            let mut d2 = f32::MAX;
+            let mut closest_val = 0.0f32;
+
+            for &(cx, cy, cval) in &cell_points {
+                let dx = px - cx;
+                let dy = py - cy;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < d1 {
+                    d2 = d1;
+                    d1 = dist;
+                    closest_val = cval;
+                } else if dist < d2 {
+                    d2 = dist;
+                }
+            }
+
+            let v = match mode {
+                "f2" => (d2 * frequency).min(1.0),
+                "f2_f1" => ((d2 - d1) * frequency).min(1.0),
+                "cell" => closest_val,
+                _ => (d1 * frequency).min(1.0), // "f1"
+            };
+
+            data[(y as usize) * (width as usize) + (x as usize)] = v.clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(width, height, data).unwrap()
+}
+
+/// Generate a gradient (ramp).
+/// Params: direction ("linear_x", "linear_y", "radial", "angular"), invert
+fn generate_gradient(params: &HashMap<String, ParamValue>, width: u32, height: u32) -> Heightmap {
+    let direction = get_string(params, "direction", "linear_y");
+    let invert = get_bool(params, "invert", false);
+    let center_x = get_float(params, "center_x", 0.5);
+    let center_y = get_float(params, "center_y", 0.5);
+
+    let mut data = vec![0.0f32; (width as usize) * (height as usize)];
+
+    for y in 0..height {
+        for x in 0..width {
+            let nx = x as f32 / (width as f32 - 1.0).max(1.0);
+            let ny = y as f32 / (height as f32 - 1.0).max(1.0);
+
+            // Piecewise-linear remap that honours the center param
+            // for linear modes: `center` is where the ramp's midpoint
+            // (v=0.5) sits. center=0.5 reproduces the simple v=axis
+            // gradient; smaller values push the ramp toward the start
+            // of the axis, larger values toward the end.
+            let remap = |t: f32, center: f32| -> f32 {
+                let c = center.clamp(0.001, 0.999);
+                if t <= c {
+                    0.5 * t / c
+                } else {
+                    0.5 + 0.5 * (t - c) / (1.0 - c)
+                }
+            };
+            let v = match direction {
+                "linear_x" => remap(nx, center_x),
+                "radial" => {
+                    let dx = nx - center_x;
+                    let dy = ny - center_y;
+                    let dist = (dx * dx + dy * dy).sqrt() * std::f32::consts::SQRT_2;
+                    1.0 - dist.min(1.0)
+                }
+                "angular" => {
+                    let dx = nx - center_x;
+                    let dy = ny - center_y;
+                    (dy.atan2(dx) / std::f32::consts::TAU + 0.5).fract()
+                }
+                _ => remap(ny, center_y), // "linear_y" (default)
+            };
+
+            let v = if invert { 1.0 - v } else { v };
+            data[(y as usize) * (width as usize) + (x as usize)] = v.clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(width, height, data).unwrap()
+}
+
+/// Apply curve/remap: piecewise-linear transfer function defined by control points.
+/// Params: points (encoded as pairs in "p0_x", "p0_y", "p1_x", "p1_y", ... or "num_points")
+/// Default: S-curve (smoothstep)
+fn apply_curve(input: &Heightmap, params: &HashMap<String, ParamValue>) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+
+    // Build control points from params (default: smoothstep-like S-curve)
+    let num_points = get_uint(params, "num_points", 0) as usize;
+    let points: Vec<(f32, f32)> = if num_points >= 2 {
+        (0..num_points)
+            .map(|i| {
+                let px = get_float(params, &format!("p{}_x", i), i as f32 / (num_points - 1) as f32);
+                let py = get_float(params, &format!("p{}_y", i), px);
+                (px, py)
+            })
+            .collect()
+    } else {
+        // Default: smoothstep S-curve
+        vec![(0.0, 0.0), (0.25, 0.1), (0.5, 0.5), (0.75, 0.9), (1.0, 1.0)]
+    };
+
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+    for y in 0..h {
+        for x in 0..w {
+            let v = input.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+            data[(y as usize) * (w as usize) + (x as usize)] = eval_piecewise_linear(&points, v);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Evaluate a piecewise-linear curve at a given x value.
+fn eval_piecewise_linear(points: &[(f32, f32)], x: f32) -> f32 {
+    if points.is_empty() {
+        return x;
+    }
+    if x <= points[0].0 {
+        return points[0].1;
+    }
+    if x >= points[points.len() - 1].0 {
+        return points[points.len() - 1].1;
+    }
+    for i in 1..points.len() {
+        if x <= points[i].0 {
+            let (x0, y0) = points[i - 1];
+            let (x1, y1) = points[i];
+            let t = if (x1 - x0).abs() < 1e-8 {
+                0.0
+            } else {
+                (x - x0) / (x1 - x0)
+            };
+            return y0 + t * (y1 - y0);
+        }
+    }
+    points[points.len() - 1].1
+}
+
+/// Simple linear transform: output = input * scale + offset, optionally inverted.
+fn apply_simple_transform(input: &Heightmap, scale: f32, offset: f32, invert: bool) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let mut v = input.get(x, y).unwrap_or(0.0);
+            if invert {
+                v = 1.0 - v;
+            }
+            v = v * scale + offset;
+            data[(y as usize) * (w as usize) + (x as usize)] = v.clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Normalize: remap all values to fill the 0..1 range.
+fn apply_normalize(input: &Heightmap) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let data_in = input.data();
+
+    let mut min_val = f32::MAX;
+    let mut max_val = f32::MIN;
+    for &v in data_in {
+        if v < min_val {
+            min_val = v;
+        }
+        if v > max_val {
+            max_val = v;
+        }
+    }
+
+    let range = max_val - min_val;
+    let data: Vec<f32> = if range.abs() < 1e-8 {
+        vec![0.5; data_in.len()]
+    } else {
+        data_in.iter().map(|&v| (v - min_val) / range).collect()
+    };
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Christophe Schlick's bias and gain functions.
+/// bias(t, b) = t^(log(b) / log(0.5))
+/// gain(t, g) = bias(2t, 1-g)/2 for t < 0.5, else 1 - bias(2-2t, 1-g)/2
+fn apply_bias_gain(input: &Heightmap, bias: f32, gain: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    let bias_exp = if bias.abs() < 1e-6 {
+        0.0
+    } else {
+        (bias.clamp(0.001, 0.999)).ln() / (0.5f32).ln()
+    };
+
+    for y in 0..h {
+        for x in 0..w {
+            let t = input.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+
+            // Apply bias
+            let biased = t.powf(bias_exp);
+
+            // Apply gain
+            let gained = if biased < 0.5 {
+                let bt = (2.0 * biased).powf((1.0 - gain).clamp(0.001, 0.999).ln() / (0.5f32).ln());
+                bt / 2.0
+            } else {
+                let bt = (2.0 - 2.0 * biased).powf((1.0 - gain).clamp(0.001, 0.999).ln() / (0.5f32).ln());
+                1.0 - bt / 2.0
+            };
+
+            data[(y as usize) * (w as usize) + (x as usize)] = gained.clamp(0.0, 1.0);
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Displace/warp terrain using another heightmap as the displacement field.
+/// Displaces in X direction proportional to displacement map gradient.
+fn apply_displacement(input: &Heightmap, displacement: &Heightmap, strength: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let dw = displacement.width();
+    let dh = displacement.height();
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    // Strength is in pixels
+    let pixel_strength = strength * w as f32;
+
+    for y in 0..h {
+        for x in 0..w {
+            // Sample displacement map (rescale if dimensions differ)
+            let dx_coord = (x as f32 * dw as f32 / w as f32) as u32;
+            let dy_coord = (y as f32 * dh as f32 / h as f32) as u32;
+            let dx_coord = dx_coord.min(dw - 1);
+            let dy_coord = dy_coord.min(dh - 1);
+
+            // Compute displacement gradient (central differences)
+            let dx_left = if dx_coord > 0 { dx_coord - 1 } else { 0 };
+            let dx_right = (dx_coord + 1).min(dw - 1);
+            let dy_top = if dy_coord > 0 { dy_coord - 1 } else { 0 };
+            let dy_bot = (dy_coord + 1).min(dh - 1);
+
+            let grad_x = displacement.get(dx_right, dy_coord).unwrap_or(0.0)
+                - displacement.get(dx_left, dy_coord).unwrap_or(0.0);
+            let grad_y = displacement.get(dx_coord, dy_bot).unwrap_or(0.0)
+                - displacement.get(dx_coord, dy_top).unwrap_or(0.0);
+
+            // Displaced source coordinates
+            let sx = (x as f32 + grad_x * pixel_strength).clamp(0.0, (w - 1) as f32);
+            let sy = (y as f32 + grad_y * pixel_strength).clamp(0.0, (h - 1) as f32);
+
+            // Bilinear interpolation from source
+            let x0 = sx as u32;
+            let y0 = sy as u32;
+            let x1 = (x0 + 1).min(w - 1);
+            let y1 = (y0 + 1).min(h - 1);
+            let fx = sx - sx.floor();
+            let fy = sy - sy.floor();
+
+            let v00 = input.get(x0, y0).unwrap_or(0.0);
+            let v10 = input.get(x1, y0).unwrap_or(0.0);
+            let v01 = input.get(x0, y1).unwrap_or(0.0);
+            let v11 = input.get(x1, y1).unwrap_or(0.0);
+            let v = v00 * (1.0 - fx) * (1.0 - fy)
+                + v10 * fx * (1.0 - fy)
+                + v01 * (1.0 - fx) * fy
+                + v11 * fx * fy;
+
+            data[(y as usize) * (w as usize) + (x as usize)] = v;
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Chooser: select between A and B based on a mask (0=A, 1=B, interpolated in between).
+fn apply_chooser(a: &Heightmap, b: &Heightmap, mask: &Heightmap) -> Heightmap {
+    let w = a.width().min(b.width()).min(mask.width());
+    let h = a.height().min(b.height()).min(mask.height());
+    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
+
+    for y in 0..h {
+        for x in 0..w {
+            let va = a.get(x, y).unwrap_or(0.0);
+            let vb = b.get(x, y).unwrap_or(0.0);
+            let m = mask.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+            data[(y as usize) * (w as usize) + (x as usize)] = va * (1.0 - m) + vb * m;
+        }
+    }
+
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Decode a hex-encoded painted mask string into pixel bytes.
+/// Non-hex characters are skipped. Returns empty Vec on empty/invalid input.
+fn hex_decode_mask(s: &str) -> Vec<u8> {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len() / 2);
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        let hi = (bytes[i] as char).to_digit(16);
+        let lo = (bytes[i + 1] as char).to_digit(16);
+        if let (Some(h), Some(l)) = (hi, lo) {
+            out.push((h << 4 | l) as u8);
+        }
+        i += 2;
+    }
+    out
+}
+
+/// Source resolution for the `PaintedTexture` node's brush canvas.
+/// Fixed for now; could be made a param like PaintedHeightmap.
+pub const PAINTED_TEXTURE_RES: u32 = 256;
+
+/// Bilinearly scale a painted greyscale image at `src_res × src_res`
+/// up/down to the output dims and normalise `[0,255] → [0.0, 1.0]`.
+/// `src_res` comes from the node's `resolution` param.
+fn painted_grayscale_to_heightmap(
+    pixels: Vec<u8>,
+    src_res: u32,
+    out_w: u32,
+    out_h: u32,
+) -> Heightmap {
+    let src_w = src_res;
+    let src_h = src_res;
+
+    // Fill with zeros if no painted data
+    let pixels = if pixels.len() == (src_w as usize) * (src_h as usize) {
+        pixels
+    } else {
+        vec![0u8; (src_w as usize) * (src_h as usize)]
+    };
+
+    let mut data = vec![0.0f32; (out_w as usize) * (out_h as usize)];
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
+            let sy = oy as f32 * (src_h as f32 - 1.0) / (out_h as f32 - 1.0).max(1.0);
+            let x0 = sx as u32;
+            let y0 = sy as u32;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let y1 = (y0 + 1).min(src_h - 1);
+            let fx = sx - sx.floor();
+            let fy = sy - sy.floor();
+
+            let v00 = pixels[(y0 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
+            let v10 = pixels[(y0 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+            let v01 = pixels[(y1 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
+            let v11 = pixels[(y1 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+            let v = v00 * (1.0 - fx) * (1.0 - fy)
+                + v10 * fx * (1.0 - fy)
+                + v01 * (1.0 - fx) * fy
+                + v11 * fx * fy;
+            data[(oy as usize) * (out_w as usize) + ox as usize] = v;
+        }
+    }
+    Heightmap::frbar_data(out_w, out_h, data).unwrap()
+}
+
+/// Bilinearly scale a painted RGB image (3 bytes per pixel at
+/// `src_res × src_res`) up/down to the output dims, returning a
+/// `ColorBuffer` (RGBA with alpha = 1.0).
+fn painted_rgb_to_color_buffer(
+    pixels: Vec<u8>,
+    src_res: u32,
+    out_w: u32,
+    out_h: u32,
+) -> ColorBuffer {
+    let src_w = src_res as usize;
+    let src_h = src_res as usize;
+    let expected = src_w * src_h * 3;
+
+    // Fall back to opaque mid-grey if no painted data — same shape
+    // as PaintedHeightmap's "no data → zeros" fallback.
+    let pixels = if pixels.len() == expected {
+        pixels
+    } else {
+        vec![128u8; expected]
+    };
+
+    let mut buf = ColorBuffer::new(out_w, out_h).unwrap();
+    let sample = |x: usize, y: usize, c: usize| -> f32 {
+        pixels[(y * src_w + x) * 3 + c] as f32 / 255.0
+    };
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
+            let sy = oy as f32 * (src_h as f32 - 1.0) / (out_h as f32 - 1.0).max(1.0);
+            let x0 = sx as usize;
+            let y0 = sy as usize;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let y1 = (y0 + 1).min(src_h - 1);
+            let fx = sx - sx.floor();
+            let fy = sy - sy.floor();
+
+            let mut rgb = [0.0_f32; 3];
+            for c in 0..3 {
+                let v00 = sample(x0, y0, c);
+                let v10 = sample(x1, y0, c);
+                let v01 = sample(x0, y1, c);
+                let v11 = sample(x1, y1, c);
+                rgb[c] = v00 * (1.0 - fx) * (1.0 - fy)
+                    + v10 * fx * (1.0 - fy)
+                    + v01 * (1.0 - fx) * fy
+                    + v11 * fx * fy;
+            }
+            buf.set(ox, oy, [rgb[0], rgb[1], rgb[2], 1.0]);
+        }
+    }
+    buf
+}
+mod tests {
+    use super::*;
+    use bar_graph::{GraphEngine, Node, NodeId, PortId};
+
+    #[test]
+    fn preview_node_passes_inputs_through_as_outputs() {
+        // Preview is a real node: its executor takes upstream
+        // values via its declared input ports and re-emits them as
+        // runtime outputs under the same names. That's what lets
+        // the 3D viewport read its data via the standard
+        // `outputs[node_id][port_name]` accessor — same shape any
+        // consumer uses for any other node, no special-case
+        // "global ingest" path.
+        let executor = CpuExecutor;
+        let mut hm = Heightmap::new(8, 8).unwrap();
+        for y in 0..8 {
+            for x in 0..8 {
+                hm.set(x, y, ((x * 7 + y) as f32) / 100.0).unwrap();
+            }
+        }
+        let inputs = HashMap::from([(
+            "heightmap".to_string(),
+            PortValue::Heightmap(hm.clone()),
+        )]);
+        let result = executor
+            .execute(&NodeType::Preview, &HashMap::new(), &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result
+            .get("heightmap")
+            .expect("Preview should re-emit `heightmap` from its input")
+        else {
+            panic!("expected Heightmap port value");
+        };
+        for y in 0..8 {
+            for x in 0..8 {
+                assert!((out.get(x, y).unwrap() - hm.get(x, y).unwrap()).abs() < 1e-6);
+            }
+        }
+    }
+
+    #[test]
+    fn preview_node_emits_no_unrequested_ports() {
+        // With no inputs supplied, the runtime output map is empty.
+        // (Preview only re-emits what it received.)
+        let executor = CpuExecutor;
+        let result = executor
+            .execute(
+                &NodeType::Preview,
+                &HashMap::new(),
+                &HashMap::new(),
+                8,
+                8,
+            )
+            .unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn sculpt_node_passes_input_through_with_empty_dabs() {
+        let executor = CpuExecutor;
+        let mut hm = Heightmap::new(8, 8).unwrap();
+        for y in 0..8 {
+            for x in 0..8 {
+                hm.set(x, y, ((x + y) as f32) / 14.0).unwrap();
+            }
+        }
+        let inputs = HashMap::from([
+            ("input".to_string(), PortValue::Heightmap(hm.clone())),
+        ]);
+        let params = HashMap::from([(
+            "dabs".to_string(),
+            ParamValue::String("[]".to_string()),
+        )]);
+        let result = executor
+            .execute(&NodeType::Sculpt, &params, &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("Expected heightmap output");
+        };
+        for y in 0..8 {
+            for x in 0..8 {
+                assert!(
+                    (out.get(x, y).unwrap() - hm.get(x, y).unwrap()).abs() < 1e-6,
+                    "empty dabs should pass through unchanged at ({x},{y})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sculpt_node_raises_centre_with_recorded_dab() {
+        let executor = CpuExecutor;
+        let mut hm = Heightmap::new(16, 16).unwrap();
+        for y in 0..16 {
+            for x in 0..16 {
+                hm.set(x, y, 0.5).unwrap();
+            }
+        }
+        // One Raise dab at the centre.
+        let dabs = serde_json::json!([{
+            "t": 0, "u": 0.5, "v": 0.5, "ru": 0.25, "s": 0.5, "f": 1.0, "ft": null
+        }]).to_string();
+        let inputs = HashMap::from([
+            ("input".to_string(), PortValue::Heightmap(hm)),
+        ]);
+        let params = HashMap::from([
+            ("dabs".to_string(), ParamValue::String(dabs)),
+        ]);
+        let result = executor
+            .execute(&NodeType::Sculpt, &params, &inputs, 16, 16)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!();
+        };
+        let centre = out.get(8, 8).unwrap();
+        let edge = out.get(0, 0).unwrap();
+        assert!(centre > 0.5, "centre should be raised, got {centre}");
+        assert!((edge - 0.5).abs() < 1e-6, "far edge should be unchanged: {edge}");
+    }
+
+    #[test]
+    fn test_passthrough_normalises_backslash_bundle_paths() {
+        // Regression: the GUI's SD7 import path used to write file lists with
+        // native (Windows) separators, which the bundler validator rejects.
+        // The executor now normalises bundle paths to forward slashes.
+        let executor = CpuExecutor;
+        let params = HashMap::from([(
+            "files".to_string(),
+            ParamValue::String(
+                "C:\\src\\unittextures\\rock.dds|unittextures\\rock.dds\n\
+                 C:\\src\\maps\\info.lua|maps\\info.lua"
+                    .to_string(),
+            ),
+        )]);
+        let inputs = HashMap::new();
+        let result = executor
+            .execute(&NodeType::PassThrough, &params, &inputs, 1, 1)
+            .unwrap();
+        let PortValue::FileList(list) = result.get("files").unwrap() else {
+            panic!("Expected FileList output");
+        };
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].bundle_path, "unittextures/rock.dds");
+        assert_eq!(list[1].bundle_path, "maps/info.lua");
+    }
+
+    #[test]
+    fn test_cpu_executor_noise() {
+        let executor = CpuExecutor;
+        let params = HashMap::from([
+            ("frequency".to_string(), ParamValue::Float(4.0)),
+            ("octaves".to_string(), ParamValue::UInt(4)),
+            ("seed".to_string(), ParamValue::UInt(42)),
+        ]);
+        let inputs = HashMap::new();
+        let result = executor
+            .execute(&NodeType::PerlinNoise, &params, &inputs, 64, 64)
+            .unwrap();
+
+        let output = result.get("output").unwrap();
+        match output {
+            PortValue::Heightmap(hm) => {
+                assert_eq!(hm.width(), 64);
+                assert_eq!(hm.height(), 64);
+                assert!(hm.data().iter().any(|&v| v > 0.1));
+            }
+            _ => panic!("Expected heightmap output"),
+        }
+    }
+
+    #[test]
+    fn test_end_to_end_graph_evaluation() {
+        let executor = CpuExecutor;
+        let mut graph = GraphEngine::new();
+
+        let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
+        let bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let noise_id = graph.add_node(noise);
+        let bundler_id = graph.add_node(bundler);
+
+        if let Some(node) = graph.get_node_mut(noise_id) {
+            node.params
+                .insert("frequency".to_string(), ParamValue::Float(4.0));
+            node.params
+                .insert("octaves".to_string(), ParamValue::UInt(4));
+            node.params.insert("seed".to_string(), ParamValue::UInt(1));
+        }
+
+        graph
+            .connect(
+                PortId {
+                    node_id: noise_id,
+                    port_name: "output".to_string(),
+                },
+                PortId {
+                    node_id: bundler_id,
+                    port_name: "heightmap".to_string(),
+                },
+            )
+            .unwrap();
+
+        let results = bar_graph::evaluate_graph(&graph, &executor, 64, 64).unwrap();
+        let hm = bar_graph::get_heightmap_output(&graph, &results).unwrap();
+
+        assert_eq!(hm.width(), 64);
+        assert_eq!(hm.height(), 64);
+        let mean: f32 = hm.data().iter().sum::<f32>() / hm.data().len() as f32;
+        assert!(
+            mean > 0.1 && mean < 0.9,
+            "Expected varied noise, got mean={mean}"
+        );
+    }
+
+    #[test]
+    fn test_blend_combiner() {
+        let executor = CpuExecutor;
+        let a = Heightmap::frbar_data(4, 4, vec![0.0; 16]).unwrap();
+        let b = Heightmap::frbar_data(4, 4, vec![1.0; 16]).unwrap();
+
+        let inputs = HashMap::from([
+            ("a".to_string(), PortValue::Heightmap(a)),
+            ("b".to_string(), PortValue::Heightmap(b)),
+        ]);
+        let params = HashMap::from([("factor".to_string(), ParamValue::Float(0.5))]);
+
+        let result = executor
+            .execute(&NodeType::Blend, &params, &inputs, 4, 4)
+            .unwrap();
+        let output = result.get("output").unwrap();
+        match output {
+            PortValue::Heightmap(hm) => {
+                assert!((hm.get(0, 0).unwrap() - 0.5).abs() < 0.01);
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+
+    #[test]
+    fn test_voronoi_generator() {
+        let executor = CpuExecutor;
+        let params = HashMap::from([
+            ("frequency".to_string(), ParamValue::Float(4.0)),
+            ("seed".to_string(), ParamValue::UInt(42)),
+            ("mode".to_string(), ParamValue::String("f1".to_string())),
+        ]);
+        let result = executor
+            .execute(&NodeType::Voronoi, &params, &HashMap::new(), 64, 64)
+            .unwrap();
+        match result.get("output").unwrap() {
+            PortValue::Heightmap(hm) => {
+                assert_eq!(hm.width(), 64);
+                assert_eq!(hm.height(), 64);
+                // Should have variation
+                let min = hm.data().iter().cloned().fold(f32::INFINITY, f32::min);
+                let max = hm.data().iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                assert!(max - min > 0.1, "Voronoi should have variation");
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+
+    #[test]
+    fn test_gradient_generator() {
+        let executor = CpuExecutor;
+        let params = HashMap::from([
+            ("direction".to_string(), ParamValue::String("vertical".to_string())),
+        ]);
+        let result = executor
+            .execute(&NodeType::Gradient, &params, &HashMap::new(), 8, 8)
+            .unwrap();
+        match result.get("output").unwrap() {
+            PortValue::Heightmap(hm) => {
+                // Vertical gradient: top row ~0, bottom row ~1
+                assert!(hm.get(0, 0).unwrap() < 0.01);
+                assert!(hm.get(0, 7).unwrap() > 0.99);
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+
+    #[test]
+    fn test_normalize_filter() {
+        let executor = CpuExecutor;
+        // Input with values in [0.3, 0.7] — normalize should stretch to [0, 1]
+        let data: Vec<f32> = (0..64).map(|i| 0.3 + 0.4 * (i as f32 / 63.0)).collect();
+        let hm = Heightmap::frbar_data(8, 8, data).unwrap();
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+
+        let result = executor
+            .execute(&NodeType::Normalize, &HashMap::new(), &inputs, 8, 8)
+            .unwrap();
+        match result.get("output").unwrap() {
+            PortValue::Heightmap(hm) => {
+                let min = hm.data().iter().cloned().fold(f32::INFINITY, f32::min);
+                let max = hm.data().iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                assert!(min.abs() < 0.001, "Min should be ~0, got {min}");
+                assert!((max - 1.0).abs() < 0.001, "Max should be ~1, got {max}");
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+
+    #[test]
+    fn test_simple_transform() {
+        let executor = CpuExecutor;
+        let data = vec![0.5_f32; 16];
+        let hm = Heightmap::frbar_data(4, 4, data).unwrap();
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        // scale=2.0, offset=0.1 → 0.5*2.0 + 0.1 = 1.1 → clamped to 1.0
+        let params = HashMap::from([
+            ("scale".to_string(), ParamValue::Float(2.0)),
+            ("offset".to_string(), ParamValue::Float(0.1)),
+        ]);
+
+        let result = executor
+            .execute(&NodeType::SimpleTransform, &params, &inputs, 4, 4)
+            .unwrap();
+        match result.get("output").unwrap() {
+            PortValue::Heightmap(hm) => {
+                assert!((hm.get(0, 0).unwrap() - 1.0).abs() < 0.001);
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+
+    #[test]
+    fn test_bias_gain() {
+        let executor = CpuExecutor;
+        // Uniform ramp
+        let data: Vec<f32> = (0..16).map(|i| i as f32 / 15.0).collect();
+        let hm = Heightmap::frbar_data(4, 4, data).unwrap();
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        // Default bias=0.5, gain=0.5 should be roughly identity
+        let params = HashMap::from([
+            ("bias".to_string(), ParamValue::Float(0.5)),
+            ("gain".to_string(), ParamValue::Float(0.5)),
+        ]);
+
+        let result = executor
+            .execute(&NodeType::BiasGain, &params, &inputs, 4, 4)
+            .unwrap();
+        match result.get("output").unwrap() {
+            PortValue::Heightmap(hm) => {
+                // With bias=gain=0.5, output ≈ input
+                assert!((hm.get(0, 0).unwrap() - 0.0).abs() < 0.01);
+                assert!((hm.get(3, 3).unwrap() - 1.0).abs() < 0.01);
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+
+    #[test]
+    fn test_chooser() {
+        let executor = CpuExecutor;
+        let a = Heightmap::frbar_data(4, 4, vec![0.2; 16]).unwrap();
+        let b = Heightmap::frbar_data(4, 4, vec![0.8; 16]).unwrap();
+        // Mask: top half 0.0 (choose a), bottom half 1.0 (choose b)
+        let mut mask_data = vec![0.0_f32; 16];
+        for i in 8..16 {
+            mask_data[i] = 1.0;
+        }
+        let mask = Heightmap::frbar_data(4, 4, mask_data).unwrap();
+
+        let inputs = HashMap::from([
+            ("a".to_string(), PortValue::Heightmap(a)),
+            ("b".to_string(), PortValue::Heightmap(b)),
+            ("mask".to_string(), PortValue::Heightmap(mask)),
+        ]);
+
+        let result = executor
+            .execute(&NodeType::Chooser, &HashMap::new(), &inputs, 4, 4)
+            .unwrap();
+        match result.get("output").unwrap() {
+            PortValue::Heightmap(hm) => {
+                // Top half = a (0.2), bottom half = b (0.8)
+                assert!((hm.get(0, 0).unwrap() - 0.2).abs() < 0.01);
+                assert!((hm.get(0, 3).unwrap() - 0.8).abs() < 0.01);
+            }
+            _ => panic!("Expected heightmap"),
+        }
+    }
+}

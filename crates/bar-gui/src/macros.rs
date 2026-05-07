@@ -1,0 +1,477 @@
+//! Macro templates — pre-built SubGraph chunks that drop onto the
+//! canvas as a single labelled block.
+//!
+//! A macro is the "chip" model from the SubGraph design (group with
+//! external ports + inner-port bindings) prepackaged as a reusable
+//! unit. The hobbyist tier of bar-editor uses these to skip the
+//! "assemble noise + erosion + blur in the right order" learning
+//! curve: drop a `Mountain Range` macro, wire its `terrain` output
+//! to a Bundler, done.
+//!
+//! Macros are JSON files embedded at compile time. Each defines a
+//! list of inner nodes, the connections between them, and a
+//! SubGraph wrapper (label, colour, port bindings).
+
+use eframe::egui;
+use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId};
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
+
+use crate::state::{GroupRuntime, NodeVisual, SubgraphPortRuntime};
+
+/// On-disk shape of a macro. JSON-deserialised once per drop.
+#[derive(Debug, Deserialize)]
+pub struct MacroTemplate {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    pub nodes: Vec<MacroNode>,
+    #[serde(default)]
+    pub connections: Vec<MacroConnection>,
+    pub subgraph: MacroSubgraph,
+    /// High-level domain parameters this macro exposes on its
+    /// SubGraph block. Each one binds to a specific inner-node param;
+    /// editing the macro param writes through to the inner node
+    /// immediately. Empty when the macro has no abstracted params
+    /// (the user expands the SubGraph to tune inner nodes directly).
+    #[serde(default)]
+    pub macro_params: Vec<MacroParamTemplate>,
+}
+
+/// JSON shape for a macro parameter spec inside a `MacroTemplate`.
+/// Mirrors `bar_project::MacroParamSpec`.
+#[derive(Debug, Deserialize)]
+pub struct MacroParamTemplate {
+    pub name: String,
+    pub label: String,
+    pub kind: String,
+    pub binding: String,
+    #[serde(default)]
+    pub min: Option<f64>,
+    #[serde(default)]
+    pub max: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MacroNode {
+    pub key: String,
+    #[serde(rename = "type")]
+    pub node_type: NodeType,
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub params: HashMap<String, ParamValue>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MacroConnection {
+    /// `"node_key.port_name"` pair. Matches the `Recipe` connection
+    /// shape so the parser is the same.
+    pub from: String,
+    pub to: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MacroSubgraph {
+    #[serde(default)]
+    pub label: String,
+    #[serde(default)]
+    pub color_idx: u8,
+    #[serde(default = "default_collapsed")]
+    pub collapsed: bool,
+    #[serde(default)]
+    pub inputs: Vec<MacroPort>,
+    #[serde(default)]
+    pub outputs: Vec<MacroPort>,
+}
+
+fn default_collapsed() -> bool {
+    true
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MacroPort {
+    pub name: String,
+    pub label: String,
+    pub kind: String,
+    /// `"node_key:port_name"` reference into the macro's own inner
+    /// nodes. Resolved against `key_to_id` at instantiation time.
+    pub binding: Option<String>,
+}
+
+/// Output of `instantiate`: the new node IDs, connection list, and
+/// the assembled `GroupRuntime` for the SubGraph wrapper. Caller
+/// inserts them into its own state — the function itself stays pure
+/// so it's easy to test.
+pub struct Instantiation {
+    pub member_ids: HashSet<NodeId>,
+    pub group: GroupRuntime,
+    /// Visual positions for the newly-created inner nodes,
+    /// arranged left-to-right starting at `drop_pos`.
+    pub visuals: Vec<(NodeId, NodeVisual)>,
+}
+
+/// Drop the macro into the supplied graph at `drop_pos`. Adds inner
+/// nodes, wires their connections, and builds a `GroupRuntime` whose
+/// member set is the freshly-created node IDs. Doesn't touch the
+/// caller's group map / visual map — the caller folds the returned
+/// instantiation into its own state (so undo can capture the whole
+/// drop as one snapshot).
+pub fn instantiate(
+    template: &MacroTemplate,
+    graph: &mut GraphEngine,
+    drop_pos: egui::Pos2,
+) -> Result<Instantiation, String> {
+    let mut key_to_id: HashMap<String, NodeId> = HashMap::new();
+    let mut member_ids: HashSet<NodeId> = HashSet::new();
+    let mut visuals: Vec<(NodeId, NodeVisual)> = Vec::new();
+
+    // Inner nodes are laid out left-to-right at the drop position so
+    // the user can see what got created if they expand the SubGraph.
+    // One seed value per drop — used to overwrite any inner-node
+    // `seed` UInt parameter the template defines, so dragging two
+    // copies of the same macro produces two different terrains
+    // instead of identical ones.
+    let drop_seed = fresh_seed();
+    let step = egui::vec2(180.0, 0.0);
+    for (i, n) in template.nodes.iter().enumerate() {
+        let mut node = Node::new(NodeId(0), n.node_type.clone(), n.label.clone());
+        // Param overrides from the template fold over the type's
+        // defaults — anything the macro doesn't specify keeps the
+        // node's own default.
+        for (k, v) in &n.params {
+            node.params.insert(k.clone(), v.clone());
+        }
+        // Replace any UInt-kind `seed` parameter with a fresh
+        // per-drop value. Mixed in the param key's hash so multi-
+        // node macros (e.g. two noise generators feeding a Blend)
+        // don't end up with identical seeds across their inner
+        // generators.
+        for (k, v) in node.params.clone() {
+            if k == "seed" {
+                if let ParamValue::UInt(_) = v {
+                    let mixed = mix_seed(drop_seed, &k, i);
+                    node.params.insert(k, ParamValue::UInt(mixed));
+                }
+            }
+        }
+        let id = graph.add_node(node);
+        key_to_id.insert(n.key.clone(), id);
+        member_ids.insert(id);
+        let pos = egui::pos2(
+            drop_pos.x + step.x * i as f32,
+            drop_pos.y,
+        );
+        visuals.push((
+            id,
+            NodeVisual {
+                position: pos,
+                size: egui::vec2(150.0, 80.0),
+            },
+        ));
+    }
+
+    for c in &template.connections {
+        let (from_id, from_port) = parse_node_port(&c.from, &key_to_id, ".")?;
+        let (to_id, to_port) = parse_node_port(&c.to, &key_to_id, ".")?;
+        graph
+            .connect(
+                PortId { node_id: from_id, port_name: from_port },
+                PortId { node_id: to_id, port_name: to_port },
+            )
+            .map_err(|e| format!("connect failed: {e:?}"))?;
+    }
+
+    // Each declared external port becomes a real `SubgraphInput` /
+    // `SubgraphOutput` node placed inside the subgraph. The runtime
+    // `subgraph_inputs/outputs` list is left empty here — the
+    // editor's per-frame `recompute_all_subgraph_io` derives it
+    // from these IO nodes the next time the frame ticks. The
+    // declarative JSON shape (template.subgraph.inputs/outputs) is
+    // therefore *generative*: it produces nodes, not metadata.
+    //
+    // For each declared output, the IO node sits to the right of the
+    // last inner node (offset further per port). The IO node's
+    // `value` input is wired to whatever the binding points at so
+    // the value flows through it on evaluation. For inputs we wire
+    // the IO node's `value` output to the inner consumer.
+    let mut io_index = 0_usize;
+    for p in &template.subgraph.inputs {
+        // IO nodes ship with no `name` and no node-level label by
+        // default. The wrapper block's external port name and the
+        // visible label on the IO node are both derived from the
+        // port `kind` (with an auto-generated suffix when the
+        // subgraph carries multiple ports of the same kind, see
+        // `recompute_all_subgraph_io`). Macro authors used to
+        // hard-code `p.name` (e.g. "terrain", "slope_map") here
+        // but that surfaced as macro-set "names" in the IO node's
+        // properties panel, which the user found undesirable —
+        // IO nodes should be unnamed by default.
+        let mut node = Node::new(NodeId(0), NodeType::SubgraphInput, String::new());
+        node.params
+            .insert("kind".to_string(), ParamValue::String(p.kind.clone()));
+        node.sync_subgraph_io_kind();
+        let id = graph.add_node(node);
+        member_ids.insert(id);
+        // Lay out IO nodes in a column to the right of the inner pipeline.
+        let pos = egui::pos2(
+            drop_pos.x - 220.0,
+            drop_pos.y + io_index as f32 * 90.0,
+        );
+        visuals.push((
+            id,
+            NodeVisual { position: pos, size: egui::vec2(160.0, 47.0) },
+        ));
+        // Connect the IO node's value output to the inner node port
+        // declared in the template binding (if it parses).
+        if let Some(binding_str) = p.binding.as_deref() {
+            if let Ok((inner_id, inner_port)) =
+                parse_node_port(binding_str, &key_to_id, ":")
+            {
+                let _ = graph.connect(
+                    PortId { node_id: id, port_name: "value".to_string() },
+                    PortId { node_id: inner_id, port_name: inner_port },
+                );
+            }
+        }
+        io_index += 1;
+    }
+    let mut io_out_index = 0_usize;
+    for p in &template.subgraph.outputs {
+        // See the SubgraphInput block above for why `name` and the
+        // node-level label are deliberately left empty here.
+        let mut node = Node::new(NodeId(0), NodeType::SubgraphOutput, String::new());
+        node.params
+            .insert("kind".to_string(), ParamValue::String(p.kind.clone()));
+        node.sync_subgraph_io_kind();
+        let id = graph.add_node(node);
+        member_ids.insert(id);
+        let pos = egui::pos2(
+            drop_pos.x + step.x * (template.nodes.len() as f32 + 0.6),
+            drop_pos.y + io_out_index as f32 * 90.0,
+        );
+        visuals.push((
+            id,
+            NodeVisual { position: pos, size: egui::vec2(160.0, 47.0) },
+        ));
+        if let Some(binding_str) = p.binding.as_deref() {
+            if let Ok((inner_id, inner_port)) =
+                parse_node_port(binding_str, &key_to_id, ":")
+            {
+                let _ = graph.connect(
+                    PortId { node_id: inner_id, port_name: inner_port },
+                    PortId { node_id: id, port_name: "value".to_string() },
+                );
+            }
+        }
+        io_out_index += 1;
+    }
+    // Empty runtime ports — the per-frame derive will populate them
+    // based on the IO nodes we just created.
+    let inputs: Vec<SubgraphPortRuntime> = Vec::new();
+    let outputs: Vec<SubgraphPortRuntime> = Vec::new();
+
+    let label = if template.subgraph.label.is_empty() {
+        template.name.clone()
+    } else {
+        template.subgraph.label.clone()
+    };
+    let macro_params: Vec<crate::state::MacroParamRuntime> = template
+        .macro_params
+        .iter()
+        .filter_map(|p| {
+            let (id, param_name) = parse_node_port(&p.binding, &key_to_id, ":").ok()?;
+            Some(crate::state::MacroParamRuntime {
+                name: p.name.clone(),
+                label: p.label.clone(),
+                kind: p.kind.clone(),
+                binding: Some((id, param_name)),
+                min: p.min,
+                max: p.max,
+            })
+        })
+        .collect();
+    let group = GroupRuntime {
+        label,
+        member_ids: member_ids.clone(),
+        color_idx: template.subgraph.color_idx,
+        collapsed: template.subgraph.collapsed,
+        is_subgraph: true,
+        subgraph_inputs: inputs,
+        subgraph_outputs: outputs,
+        macro_params,
+    };
+
+    Ok(Instantiation {
+        member_ids,
+        group,
+        visuals,
+    })
+}
+
+/// Per-drop seed source. Combines wall-clock nanos with the process
+/// id so two macros dropped in the same frame still get distinct
+/// seeds. Not cryptographically anything; we just want variety.
+fn fresh_seed() -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
+        .unwrap_or(0);
+    nanos ^ (std::process::id() as u32).rotate_left(13)
+}
+
+/// Blend the drop-seed with a per-node-and-key tag so multiple inner
+/// `seed` params end up with distinct values rather than all the
+/// same one.
+fn mix_seed(drop_seed: u32, key: &str, node_idx: usize) -> u32 {
+    let mut h: u32 = drop_seed.wrapping_mul(2654435769);
+    for b in key.bytes() {
+        h = h.wrapping_add(b as u32).wrapping_mul(16777619);
+    }
+    h ^ (node_idx as u32).rotate_left(7)
+}
+
+fn parse_node_port(
+    s: &str,
+    key_to_id: &HashMap<String, NodeId>,
+    sep: &str,
+) -> Result<(NodeId, String), String> {
+    let mut parts = s.splitn(2, sep);
+    let key = parts.next().ok_or_else(|| format!("bad ref '{s}'"))?;
+    let port = parts.next().ok_or_else(|| format!("bad ref '{s}' (missing port)"))?;
+    let id = key_to_id
+        .get(key)
+        .copied()
+        .ok_or_else(|| format!("unknown node key '{key}' in macro"))?;
+    Ok((id, port.to_string()))
+}
+
+/// The library of macros bundled with the editor. Each entry is
+/// `(display name, embedded JSON)`. Add a new macro by dropping its
+/// JSON into `assets/macros/` and adding a row here.
+pub static BUILTIN_MACROS: &[(&str, &str)] = &[
+    (
+        "Mountain Range",
+        include_str!("../../../assets/macros/mountain-range.json"),
+    ),
+    (
+        "Mountain Range - Alpine",
+        include_str!("../../../assets/macros/mountain-range-alpine.json"),
+    ),
+    (
+        "Mountain Range - Foothills",
+        include_str!("../../../assets/macros/mountain-range-foothills.json"),
+    ),
+    (
+        "Mountain Range - Plateaus",
+        include_str!("../../../assets/macros/mountain-range-plateaus.json"),
+    ),
+    (
+        "Plains",
+        include_str!("../../../assets/macros/plains.json"),
+    ),
+    (
+        "Plains - Coastal",
+        include_str!("../../../assets/macros/plains-coastal.json"),
+    ),
+    (
+        "Plains - With Hills",
+        include_str!("../../../assets/macros/plains-with-hills.json"),
+    ),
+    (
+        "Plains - Marsh",
+        include_str!("../../../assets/macros/plains-marsh.json"),
+    ),
+    (
+        "Archipelago",
+        include_str!("../../../assets/macros/archipelago.json"),
+    ),
+    (
+        "Archipelago - Dense",
+        include_str!("../../../assets/macros/archipelago-dense.json"),
+    ),
+    (
+        "Archipelago - Sparse",
+        include_str!("../../../assets/macros/archipelago-sparse.json"),
+    ),
+    (
+        "Canyon",
+        include_str!("../../../assets/macros/canyon.json"),
+    ),
+    (
+        "Canyon - Mesa",
+        include_str!("../../../assets/macros/canyon-mesa.json"),
+    ),
+    (
+        "Canyon - Slot",
+        include_str!("../../../assets/macros/canyon-slot.json"),
+    ),
+    (
+        "Dunes",
+        include_str!("../../../assets/macros/dunes.json"),
+    ),
+    (
+        "Dunes - Rolling",
+        include_str!("../../../assets/macros/dunes-rolling.json"),
+    ),
+    (
+        "Dunes - Sharp",
+        include_str!("../../../assets/macros/dunes-sharp.json"),
+    ),
+];
+
+/// Parse one of the built-in macros by display name.
+pub fn parse(name: &str) -> Option<MacroTemplate> {
+    let (_, json) = BUILTIN_MACROS.iter().find(|(n, _)| *n == name)?;
+    serde_json::from_str(json).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mountain_range_parses() {
+        let t = parse("Mountain Range").expect("mountain range macro should parse");
+        assert!(!t.nodes.is_empty());
+        assert!(!t.subgraph.outputs.is_empty());
+    }
+
+    #[test]
+    fn instantiate_produces_consistent_group() {
+        let t = parse("Mountain Range").unwrap();
+        let mut g = GraphEngine::new();
+        let inst = instantiate(&t, &mut g, egui::pos2(0.0, 0.0)).unwrap();
+        let io_count = t.subgraph.inputs.len() + t.subgraph.outputs.len();
+        // Each inner node + IO node has a corresponding visual entry.
+        // IO nodes are created in addition to the template's inner
+        // nodes — one per declared external port.
+        assert_eq!(inst.visuals.len(), t.nodes.len() + io_count);
+        // All inner connections + IO-binding connections landed in
+        // the graph.
+        assert_eq!(g.connections().len(), t.connections.len() + io_count);
+        // The runtime ports list is empty post-instantiation; the
+        // editor's per-frame `recompute_all_subgraph_io` fills it
+        // from the `SubgraphInput` / `SubgraphOutput` member nodes.
+        assert!(inst.group.subgraph_inputs.is_empty());
+        assert!(inst.group.subgraph_outputs.is_empty());
+        // But the IO nodes themselves exist — verify by checking the
+        // group's member set has the expected count.
+        let io_members = inst
+            .group
+            .member_ids
+            .iter()
+            .filter(|id| {
+                g.get_node(**id).map_or(false, |n| {
+                    matches!(
+                        n.node_type,
+                        bar_graph::NodeType::SubgraphInput
+                            | bar_graph::NodeType::SubgraphOutput
+                    )
+                })
+            })
+            .count();
+        assert_eq!(io_members, io_count);
+    }
+}

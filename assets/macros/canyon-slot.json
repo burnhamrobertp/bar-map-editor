@@ -1,0 +1,156 @@
+{
+  "name": "Canyon - Slot",
+  "description": "Narrow deep cuts in a high plateau. High-frequency ridged noise produces tight slot canyons; minimal blur preserves their sharpness. Wire its `terrain` output to a Bundler.",
+  "nodes": [
+    {
+      "key": "ridges",
+      "type": "RidgedNoise",
+      "label": "Slot Ridges",
+      "params": {
+        "frequency": {
+          "Float": 4.5
+        },
+        "octaves": {
+          "UInt": 6
+        },
+        "lacunarity": {
+          "Float": 2.4
+        },
+        "seed": {
+          "UInt": 53
+        }
+      }
+    },
+    {
+      "key": "invert",
+      "type": "Invert",
+      "label": "Plateau ↔ Canyon",
+      "params": {}
+    },
+    {
+      "key": "lift",
+      "type": "BiasGain",
+      "label": "Lift Plateau",
+      "params": {
+        "bias": {
+          "Float": 0.7
+        },
+        "gain": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Light Soften",
+      "params": {
+        "radius": {
+          "Float": 0.3
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "desert"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "ridges.output",
+      "to": "invert.input"
+    },
+    {
+      "from": "invert.output",
+      "to": "lift.input"
+    },
+    {
+      "from": "lift.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Canyon - Slot",
+    "color_idx": 4,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "slot_density",
+      "label": "Slot density",
+      "kind": "Float",
+      "binding": "ridges:frequency",
+      "min": 2,
+      "max": 8
+    },
+    {
+      "name": "plateau_height",
+      "label": "Plateau height",
+      "kind": "Float",
+      "binding": "lift:bias",
+      "min": 0.5,
+      "max": 0.9
+    },
+    {
+      "name": "wall_steepness",
+      "label": "Wall steepness",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 1.5
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "ridges:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

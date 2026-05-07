@@ -1,0 +1,21 @@
+# Normalize line endings to LF in the repo; check out as-is on all platforms.
+* text=auto eol=lf
+
+# Binaries -- no line-ending translation, no diff.
+*.ico binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
+*.7z binary
+*.zip binary
+*.gz binary
+*.so binary
+*.dll binary
+*.dylib binary
+*.exe binary
+
+# Lock file -- treat as text but don't show diffs by default.
+Cargo.lock text -diff

@@ -1,0 +1,152 @@
+{
+  "name": "Mountain Range",
+  "description": "A ridged mountain pipeline: large-scale Perlin noise for ridges, thermal erosion to carve realistic talus slopes, and a light blur. Drop it, wire its terrain output to a Bundler.",
+  "nodes": [
+    {
+      "key": "ridges",
+      "type": "PerlinNoise",
+      "label": "Ridges",
+      "params": {
+        "frequency": {
+          "Float": 2
+        },
+        "octaves": {
+          "UInt": 5
+        },
+        "persistence": {
+          "Float": 0.6
+        },
+        "seed": {
+          "UInt": 11
+        }
+      }
+    },
+    {
+      "key": "erosion",
+      "type": "ThermalErosion",
+      "label": "Talus Erosion",
+      "params": {
+        "iterations": {
+          "UInt": 80
+        },
+        "talus_angle": {
+          "Float": 0.25
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften",
+      "params": {
+        "radius": {
+          "Float": 1
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "mountainous"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "ridges.output",
+      "to": "erosion.input"
+    },
+    {
+      "from": "erosion.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Mountain Range",
+    "color_idx": 2,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "ridge_density",
+      "label": "Ridge density",
+      "kind": "Float",
+      "binding": "ridges:frequency",
+      "min": 0.5,
+      "max": 6
+    },
+    {
+      "name": "ridge_sharpness",
+      "label": "Ridge sharpness",
+      "kind": "Float",
+      "binding": "ridges:persistence",
+      "min": 0.2,
+      "max": 0.85
+    },
+    {
+      "name": "erosion_passes",
+      "label": "Erosion passes",
+      "kind": "UInt",
+      "binding": "erosion:iterations",
+      "min": 0,
+      "max": 400
+    },
+    {
+      "name": "smoothing",
+      "label": "Smoothing",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 5
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "ridges:seed"
+    }
+  ]
+}

@@ -1,0 +1,119 @@
+{
+  "name": "Plains",
+  "description": "Gently rolling open terrain. Low-frequency Perlin with extra smoothing. Good base for cavalry-friendly maps.",
+  "nodes": [
+    {
+      "key": "rolling",
+      "type": "PerlinNoise",
+      "label": "Rolling",
+      "params": {
+        "frequency": {
+          "Float": 1.5
+        },
+        "octaves": {
+          "UInt": 3
+        },
+        "persistence": {
+          "Float": 0.45
+        },
+        "seed": {
+          "UInt": 7
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften",
+      "params": {
+        "radius": {
+          "Float": 2.5
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "temperate"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "rolling.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Plains",
+    "color_idx": 1,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "rolling_amount",
+      "label": "Rolling amount",
+      "kind": "Float",
+      "binding": "rolling:frequency",
+      "min": 0.5,
+      "max": 4
+    },
+    {
+      "name": "smoothing",
+      "label": "Smoothing",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 6
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "rolling:seed"
+    }
+  ]
+}

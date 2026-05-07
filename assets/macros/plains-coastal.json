@@ -1,0 +1,168 @@
+{
+  "name": "Plains - Coastal",
+  "description": "Open plains that fade to sea level along one edge — a shoreline. Perlin noise multiplied by a horizontal gradient produces gentle terrain that drops below water on one side. Wire its `terrain` output to a Bundler.",
+  "nodes": [
+    {
+      "key": "noise",
+      "type": "PerlinNoise",
+      "label": "Plains Noise",
+      "params": {
+        "character": {
+          "String": "rolling_hills"
+        },
+        "frequency": {
+          "Float": 2.5
+        },
+        "octaves": {
+          "UInt": 5
+        },
+        "lacunarity": {
+          "Float": 2
+        },
+        "persistence": {
+          "Float": 0.45
+        },
+        "seed": {
+          "UInt": 17
+        }
+      }
+    },
+    {
+      "key": "shore",
+      "type": "Gradient",
+      "label": "Shore Gradient",
+      "params": {
+        "direction": {
+          "String": "linear_x"
+        },
+        "invert": {
+          "Bool": false
+        },
+        "center_x": {
+          "Float": 0.5
+        },
+        "center_y": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "shaped",
+      "type": "Multiply",
+      "label": "Shape by Shore",
+      "params": {}
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften",
+      "params": {
+        "radius": {
+          "Float": 1.5
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "temperate"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "noise.output",
+      "to": "shaped.a"
+    },
+    {
+      "from": "shore.output",
+      "to": "shaped.b"
+    },
+    {
+      "from": "shaped.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Plains - Coastal",
+    "color_idx": 1,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "rolling_amount",
+      "label": "Rolling amount",
+      "kind": "Float",
+      "binding": "noise:frequency",
+      "min": 0.5,
+      "max": 4
+    },
+    {
+      "name": "shore_position",
+      "label": "Shore position",
+      "kind": "Float",
+      "binding": "shore:center_x",
+      "min": 0,
+      "max": 1
+    },
+    {
+      "name": "smoothing",
+      "label": "Smoothing",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 6
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "noise:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

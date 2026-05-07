@@ -1,0 +1,152 @@
+{
+  "name": "Archipelago - Sparse",
+  "description": "A few large islands far apart. Low-frequency noise keeps peaks broad; aggressive sinking submerges most of the map. Good for maps with strategic land masses and long sea-lane routes.",
+  "nodes": [
+    {
+      "key": "noise",
+      "type": "PerlinNoise",
+      "label": "Island Noise",
+      "params": {
+        "character": {
+          "String": "broad_waves"
+        },
+        "frequency": {
+          "Float": 1.5
+        },
+        "octaves": {
+          "UInt": 4
+        },
+        "lacunarity": {
+          "Float": 2
+        },
+        "persistence": {
+          "Float": 0.45
+        },
+        "seed": {
+          "UInt": 7
+        }
+      }
+    },
+    {
+      "key": "sink",
+      "type": "BiasGain",
+      "label": "Sink Below Sea",
+      "params": {
+        "bias": {
+          "Float": 0.18
+        },
+        "gain": {
+          "Float": 0.55
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften Coastlines",
+      "params": {
+        "radius": {
+          "Float": 2
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "tropical"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "noise.output",
+      "to": "sink.input"
+    },
+    {
+      "from": "sink.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Archipelago - Sparse",
+    "color_idx": 3,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "island_size",
+      "label": "Island size",
+      "kind": "Float",
+      "binding": "noise:frequency",
+      "min": 0.5,
+      "max": 3
+    },
+    {
+      "name": "sea_level",
+      "label": "Sea level",
+      "kind": "Float",
+      "binding": "sink:bias",
+      "min": 0.05,
+      "max": 0.4
+    },
+    {
+      "name": "coast_smoothness",
+      "label": "Coast smoothness",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 5
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "noise:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

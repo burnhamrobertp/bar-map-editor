@@ -1,0 +1,156 @@
+{
+  "name": "Canyon",
+  "description": "A high plateau cut by deep ravines. Inverted ridged-noise produces sharp valley spines through an otherwise high baseline. Wire its `terrain` output to a Bundler.",
+  "nodes": [
+    {
+      "key": "ridges",
+      "type": "RidgedNoise",
+      "label": "Canyon Ridges",
+      "params": {
+        "frequency": {
+          "Float": 2
+        },
+        "octaves": {
+          "UInt": 5
+        },
+        "lacunarity": {
+          "Float": 2.2
+        },
+        "seed": {
+          "UInt": 41
+        }
+      }
+    },
+    {
+      "key": "invert",
+      "type": "Invert",
+      "label": "Plateau ↔ Canyon",
+      "params": {}
+    },
+    {
+      "key": "lift",
+      "type": "BiasGain",
+      "label": "Lift Plateau",
+      "params": {
+        "bias": {
+          "Float": 0.65
+        },
+        "gain": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften Walls",
+      "params": {
+        "radius": {
+          "Float": 0.8
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "desert"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "ridges.output",
+      "to": "invert.input"
+    },
+    {
+      "from": "invert.output",
+      "to": "lift.input"
+    },
+    {
+      "from": "lift.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Canyon",
+    "color_idx": 4,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "canyon_density",
+      "label": "Canyon density",
+      "kind": "Float",
+      "binding": "ridges:frequency",
+      "min": 1,
+      "max": 5
+    },
+    {
+      "name": "plateau_height",
+      "label": "Plateau height",
+      "kind": "Float",
+      "binding": "lift:bias",
+      "min": 0.4,
+      "max": 0.9
+    },
+    {
+      "name": "wall_steepness",
+      "label": "Wall steepness",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 3
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "ridges:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

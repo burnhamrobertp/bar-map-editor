@@ -1,0 +1,18 @@
+[package]
+name = "bar-compute"
+description = "GPU compute shaders and CPU fallback implementations for terrain generation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bar-data = { workspace = true }
+wgpu = { workspace = true }
+bytemuck = { workspace = true }
+noise = { workspace = true }
+rayon = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+pollster = "0.4"

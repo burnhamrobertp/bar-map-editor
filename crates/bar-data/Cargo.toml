@@ -1,0 +1,16 @@
+[package]
+name = "bar-data"
+description = "Data types, heightmap buffers, and .sd7 format I/O for BAR - Map Editor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bytemuck = { workspace = true }
+image = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]

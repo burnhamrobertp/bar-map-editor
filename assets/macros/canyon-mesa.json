@@ -1,0 +1,173 @@
+{
+  "name": "Canyon - Mesa",
+  "description": "Wide flat mesas separated by canyons. Lower-frequency ridged noise + a clamp on the high end produces broader plateau tops with sharp drops between. Wire its `terrain` output to a Bundler.",
+  "nodes": [
+    {
+      "key": "ridges",
+      "type": "RidgedNoise",
+      "label": "Canyon Ridges",
+      "params": {
+        "frequency": {
+          "Float": 1.4
+        },
+        "octaves": {
+          "UInt": 4
+        },
+        "lacunarity": {
+          "Float": 2.2
+        },
+        "seed": {
+          "UInt": 29
+        }
+      }
+    },
+    {
+      "key": "invert",
+      "type": "Invert",
+      "label": "Plateau ↔ Canyon",
+      "params": {}
+    },
+    {
+      "key": "lift",
+      "type": "BiasGain",
+      "label": "Lift Plateau",
+      "params": {
+        "bias": {
+          "Float": 0.7
+        },
+        "gain": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "cap",
+      "type": "Clamp",
+      "label": "Mesa Cap",
+      "params": {
+        "min": {
+          "Float": 0.2
+        },
+        "max": {
+          "Float": 0.85
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften Walls",
+      "params": {
+        "radius": {
+          "Float": 1.2
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "desert"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "ridges.output",
+      "to": "invert.input"
+    },
+    {
+      "from": "invert.output",
+      "to": "lift.input"
+    },
+    {
+      "from": "lift.output",
+      "to": "cap.input"
+    },
+    {
+      "from": "cap.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Canyon - Mesa",
+    "color_idx": 4,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "mesa_size",
+      "label": "Mesa size",
+      "kind": "Float",
+      "binding": "ridges:frequency",
+      "min": 0.8,
+      "max": 3
+    },
+    {
+      "name": "mesa_height",
+      "label": "Mesa height",
+      "kind": "Float",
+      "binding": "cap:max",
+      "min": 0.4,
+      "max": 0.95
+    },
+    {
+      "name": "wall_steepness",
+      "label": "Wall steepness",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 3
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "ridges:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

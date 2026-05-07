@@ -1,0 +1,41 @@
+[package]
+name = "bar-engine"
+description = "BAR - Map Editor runtime: executor, evaluation, and export orchestration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+bar-data = { workspace = true }
+bar-compute = { workspace = true }
+bar-graph = { workspace = true }
+bar-project = { workspace = true }
+anyhow = { workspace = true }
+image = { workspace = true }
+rayon = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+toml = { workspace = true }
+tracing = { workspace = true }
+zip = { workspace = true }
+walkdir = { workspace = true }
+sevenz-rust = { workspace = true }
+path-slash = { workspace = true }
+directories = { workspace = true }
+
+[dev-dependencies]
+image = { workspace = true }
+criterion = { workspace = true }
+pollster = "0.4"
+
+[[bench]]
+name = "noise_benchmark"
+harness = false
+
+[[bench]]
+name = "erosion_benchmark"
+harness = false
+
+[[bench]]
+name = "export_benchmark"
+harness = false

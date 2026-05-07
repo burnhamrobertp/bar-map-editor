@@ -1,0 +1,178 @@
+{
+  "name": "Plains - With Hills",
+  "description": "Open plains punctuated by occasional rises. A broad-wave base is blended with a higher-frequency rolling-hill layer at low weight, producing mostly-flat ground with intermittent hills. Wire its `terrain` output to a Bundler.",
+  "nodes": [
+    {
+      "key": "base",
+      "type": "PerlinNoise",
+      "label": "Plains Base",
+      "params": {
+        "character": {
+          "String": "broad_waves"
+        },
+        "frequency": {
+          "Float": 1.2
+        },
+        "octaves": {
+          "UInt": 3
+        },
+        "lacunarity": {
+          "Float": 2
+        },
+        "persistence": {
+          "Float": 0.4
+        },
+        "seed": {
+          "UInt": 23
+        }
+      }
+    },
+    {
+      "key": "hills",
+      "type": "PerlinNoise",
+      "label": "Hill Layer",
+      "params": {
+        "character": {
+          "String": "rolling_hills"
+        },
+        "frequency": {
+          "Float": 4.5
+        },
+        "octaves": {
+          "UInt": 5
+        },
+        "lacunarity": {
+          "Float": 2
+        },
+        "persistence": {
+          "Float": 0.55
+        },
+        "seed": {
+          "UInt": 91
+        }
+      }
+    },
+    {
+      "key": "blend",
+      "type": "Blend",
+      "label": "Mix Hills In",
+      "params": {
+        "factor": {
+          "Float": 0.45
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften",
+      "params": {
+        "radius": {
+          "Float": 1.5
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "temperate"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "base.output",
+      "to": "blend.a"
+    },
+    {
+      "from": "hills.output",
+      "to": "blend.b"
+    },
+    {
+      "from": "blend.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Plains - With Hills",
+    "color_idx": 1,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "hill_density",
+      "label": "Hill density",
+      "kind": "Float",
+      "binding": "blend:factor",
+      "min": 0,
+      "max": 0.7
+    },
+    {
+      "name": "hill_size",
+      "label": "Hill size",
+      "kind": "Float",
+      "binding": "hills:frequency",
+      "min": 1.5,
+      "max": 6
+    },
+    {
+      "name": "smoothing",
+      "label": "Smoothing",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 6
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "base:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

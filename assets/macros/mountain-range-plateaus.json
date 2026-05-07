@@ -1,0 +1,177 @@
+{
+  "name": "Mountain Range - Plateaus",
+  "description": "Flat-topped peaks. Mountain noise is clamped at the high end, so anything above the threshold becomes a plateau at that height. Useful for mesa-style maps and chokepoints. Wire its `terrain` output to a Bundler.",
+  "nodes": [
+    {
+      "key": "ridges",
+      "type": "PerlinNoise",
+      "label": "Mountain Noise",
+      "params": {
+        "character": {
+          "String": "rugged"
+        },
+        "frequency": {
+          "Float": 3
+        },
+        "octaves": {
+          "UInt": 7
+        },
+        "lacunarity": {
+          "Float": 2.2
+        },
+        "persistence": {
+          "Float": 0.65
+        },
+        "seed": {
+          "UInt": 47
+        }
+      }
+    },
+    {
+      "key": "erosion",
+      "type": "ThermalErosion",
+      "label": "Talus Erosion",
+      "params": {
+        "iterations": {
+          "UInt": 60
+        },
+        "talus_angle": {
+          "Float": 0.3
+        }
+      }
+    },
+    {
+      "key": "plateau",
+      "type": "Clamp",
+      "label": "Plateau Cap",
+      "params": {
+        "min": {
+          "Float": 0
+        },
+        "max": {
+          "Float": 0.62
+        }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften Edges",
+      "params": {
+        "radius": {
+          "Float": 1
+        }
+      }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": {
+        "biome": {
+          "String": "mountainous"
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "ridges.output",
+      "to": "erosion.input"
+    },
+    {
+      "from": "erosion.output",
+      "to": "plateau.input"
+    },
+    {
+      "from": "plateau.output",
+      "to": "smooth.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "slope_map.input"
+    },
+    {
+      "from": "smooth.output",
+      "to": "auto_tex.input"
+    },
+    {
+      "from": "slope_map.output",
+      "to": "auto_tex.slope"
+    }
+  ],
+  "subgraph": {
+    "label": "Mountain Range - Plateaus",
+    "color_idx": 2,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "smooth:output"
+      },
+      {
+        "name": "texture",
+        "label": "Texture",
+        "kind": "Color",
+        "binding": "auto_tex:output"
+      },
+      {
+        "name": "slope",
+        "label": "Slope",
+        "kind": "Heightmap",
+        "binding": "slope_map:output"
+      }
+    ]
+  },
+  "macro_params": [
+    {
+      "name": "ridge_density",
+      "label": "Ridge density",
+      "kind": "Float",
+      "binding": "ridges:frequency",
+      "min": 1,
+      "max": 6
+    },
+    {
+      "name": "plateau_height",
+      "label": "Plateau height",
+      "kind": "Float",
+      "binding": "plateau:max",
+      "min": 0.3,
+      "max": 0.95
+    },
+    {
+      "name": "erosion_passes",
+      "label": "Erosion passes",
+      "kind": "UInt",
+      "binding": "erosion:iterations",
+      "min": 0,
+      "max": 200
+    },
+    {
+      "name": "smoothing",
+      "label": "Smoothing",
+      "kind": "Float",
+      "binding": "smooth:radius",
+      "min": 0,
+      "max": 4
+    },
+    {
+      "name": "seed",
+      "label": "Seed",
+      "kind": "UInt",
+      "binding": "ridges:seed",
+      "min": 0,
+      "max": 100000
+    }
+  ]
+}

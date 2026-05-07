@@ -1,0 +1,32 @@
+{
+  "name": "Character Test Ridged",
+  "description": "Single-RidgedNoise recipe for tuning RidgedNoise character preset defaults via `bar-cli preview-macro`. Developer toolchain only.",
+  "nodes": [
+    {
+      "key": "noise",
+      "type": "RidgedNoise",
+      "label": "Noise",
+      "params": {
+        "seed": { "UInt": 42 }
+      }
+    }
+  ],
+  "connections": [],
+  "subgraph": {
+    "label": "Character Test Ridged",
+    "color_idx": 0,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      {
+        "name": "terrain",
+        "label": "Terrain",
+        "kind": "Heightmap",
+        "binding": "noise:output"
+      }
+    ]
+  },
+  "macro_params": [
+    { "name": "character", "label": "Character", "kind": "String", "binding": "noise:character" }
+  ]
+}

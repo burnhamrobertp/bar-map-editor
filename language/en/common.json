@@ -1,0 +1,44 @@
+{
+  "common": {
+    "cancel": "Cancel",
+    "ok": "OK",
+    "save": "Save",
+    "open": "Open",
+    "close": "Close",
+    "delete": "Delete",
+    "apply": "Apply",
+    "discard": "Discard",
+    "remove": "Remove",
+    "add": "Add",
+    "edit": "Edit",
+
+    "yes": "Yes",
+    "no": "No",
+    "done": "Done",
+    "loading": "Loading…",
+    "saving": "Saving…",
+    "unsaved_changes": "Unsaved changes",
+    "confirm_discard": "Discard unsaved changes?",
+
+    "file": "File",
+    "folder": "Folder",
+    "name": "Name",
+    "description": "Description",
+    "type": "Type",
+    "size": "Size",
+
+    "shortname": "Shortname",
+    "author": "Author",
+    "version": "Version",
+    "width": "Width",
+    "depth": "Depth",
+    "height": "Height",
+
+    "errors": "Errors",
+    "warnings": "Warnings",
+    "info": "Info",
+
+    "seconds": "seconds",
+    "minutes": "minutes"
+  }
+}

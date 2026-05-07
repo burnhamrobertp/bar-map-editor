@@ -1,0 +1,29 @@
+[package]
+name = "bar-cli"
+description = "BAR - Map Editor CLI — headless graph evaluation and export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "bar-cli"
+path = "src/main.rs"
+
+[dependencies]
+bar-data = { workspace = true }
+bar-engine = { workspace = true }
+bar-graph = { workspace = true }
+bar-compute = { workspace = true }
+bar-render = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+pollster = "0.4"
+image = { workspace = true }
+wgpu = { workspace = true }
+glam = { workspace = true }
+
+[dev-dependencies]

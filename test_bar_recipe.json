@@ -1,0 +1,107 @@
+{
+  "version": 1,
+  "name": "OpenMachineTest",
+  "description": "Test terrain for BAR - ridged mountains with erosion and smooth valleys",
+  "nodes": [
+    {
+      "key": "mountains",
+      "type": "RidgedNoise",
+      "label": "Mountain Ridges",
+      "params": {
+        "frequency": {"Float": 2.5},
+        "octaves": {"UInt": 5},
+        "lacunarity": {"Float": 2.1},
+        "seed": {"UInt": 42}
+      }
+    },
+    {
+      "key": "hills",
+      "type": "PerlinNoise",
+      "label": "Rolling Hills",
+      "params": {
+        "frequency": {"Float": 4.0},
+        "octaves": {"UInt": 4},
+        "persistence": {"Float": 0.45},
+        "lacunarity": {"Float": 2.0},
+        "seed": {"UInt": 99}
+      }
+    },
+    {
+      "key": "base_blend",
+      "type": "Blend",
+      "label": "Mountain+Hill Blend",
+      "params": {
+        "factor": {"Float": 0.35}
+      }
+    },
+    {
+      "key": "erode",
+      "type": "HydraulicErosion",
+      "label": "Hydraulic Erosion",
+      "params": {
+        "iterations": {"UInt": 50000},
+        "deposition_rate": {"Float": 0.05},
+        "erosion_rate": {"Float": 0.3},
+        "evaporation": {"Float": 0.02}
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Light Smooth",
+      "params": {
+        "radius": {"Float": 1.0}
+      }
+    },
+    {
+      "key": "heightmap_out",
+      "type": "HeightmapOutput",
+      "label": "Heightmap Output",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {"from": "mountains.output", "to": "base_blend.a"},
+    {"from": "hills.output", "to": "base_blend.b"},
+    {"from": "base_blend.output", "to": "erode.input"},
+    {"from": "erode.output", "to": "smooth.input"},
+    {"from": "smooth.output", "to": "heightmap_out.input"}
+  ],
+  "output": {
+    "width": 257,
+    "height": 257,
+    "map_settings": {
+      "min_height": -50.0,
+      "max_height": 600.0,
+      "map_hardness": 100,
+      "gravity": 130.0,
+      "water_damage": 0.0,
+      "detail_textures": [],
+      "deformable": true,
+      "tidal_strength": 0.0,
+      "max_metal": 0.02,
+      "extractor_radius": 500.0,
+      "start_positions": [[512, 512], [1536, 1536]],
+      "atmosphere": {
+        "min_wind": 5.0,
+        "max_wind": 25.0,
+        "fog_start": 0.1,
+        "fog_end": 1.0,
+        "fog_color": [0.7, 0.7, 0.8]
+      },
+      "lighting": {
+        "sun_dir": [0.0, 1.0, 2.0],
+        "ground_ambient": [0.5, 0.5, 0.5],
+        "ground_diffuse": [0.5, 0.5, 0.5],
+        "ground_specular": [0.1, 0.1, 0.1],
+        "spec_exponent": 10.0
+      },
+      "water": {
+        "damage": 0.0,
+        "absorb": [0.0, 0.0, 0.0],
+        "base_color": [0.6, 0.6, 0.8],
+        "min_color": [0.0, 0.0, 0.0]
+      }
+    }
+  }
+}

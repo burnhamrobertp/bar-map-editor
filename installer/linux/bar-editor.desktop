@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=BAR - Map Editor
+Comment=Standalone map editor for Beyond All Reason
+Exec=bar-editor
+Icon=bar-editor
+Terminal=false
+Type=Application
+Categories=Graphics;3DGraphics;
+MimeType=application/x-barproj;
+Keywords=terrain;map;heightmap;sd7;spring;recoil;bar;
