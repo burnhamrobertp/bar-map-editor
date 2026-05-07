@@ -60,8 +60,8 @@ struct CameraUniform {
 /// Heightmap for GPU vertex displacement.
 /// Format: R32Float, dimensions match the source Heightmap. Sampled with
 /// linear filtering so bilinear-interpolated heights reach every vertex.
-@group(4) @binding(0) var heightmap_tex: texture_2d<f32>;
-@group(4) @binding(1) var heightmap_sam: sampler;
+@group(3) @binding(0) var heightmap_tex: texture_2d<f32>;
+@group(3) @binding(1) var heightmap_sam: sampler;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,

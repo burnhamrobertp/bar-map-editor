@@ -131,15 +131,17 @@ pub struct TerrainRenderer {
     reflection_sampler: wgpu::Sampler,
     reflection_bind_group: wgpu::BindGroup,
     reflection_bind_group_dummy: wgpu::BindGroup,
-    // ── Group 3: water normal map ───────────────────────────────────────────
+    // Water normal map resources -- held alive to prevent GPU resource drops;
+    // not yet bound to the pipeline (deferred until shore-wave shader work).
     #[allow(dead_code)]
     water_normal_bind_group_layout: wgpu::BindGroupLayout,
+    #[allow(dead_code)]
     water_normal_bind_group: wgpu::BindGroup,
     #[allow(dead_code)]
     water_normal_texture: wgpu::Texture,
     #[allow(dead_code)]
     water_normal_sampler: wgpu::Sampler,
-    // ── Group 4: heightmap ──────────────────────────────────────────────────
+    // ── Group 3: heightmap ──────────────────────────────────────────────────
     heightmap_bind_group_layout: wgpu::BindGroupLayout,
     heightmap_bind_group: wgpu::BindGroup,
     heightmap_texture: wgpu::Texture,
@@ -1300,8 +1302,7 @@ impl TerrainRenderer {
                     rp.set_bind_group(0, &self.camera_bind_group, &[]);
                     rp.set_bind_group(1, &self.texture_bind_group, &[]);
                     rp.set_bind_group(2, &self.reflection_bind_group_dummy, &[]);
-                    rp.set_bind_group(3, &self.water_normal_bind_group, &[]);
-                    rp.set_bind_group(4, &self.heightmap_bind_group, &[]);
+                    rp.set_bind_group(3, &self.heightmap_bind_group, &[]);
                     rp.set_vertex_buffer(0, vertex_buffer.slice(..));
                     rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     rp.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -1374,8 +1375,7 @@ impl TerrainRenderer {
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
             render_pass.set_bind_group(2, &self.reflection_bind_group, &[]);
-            render_pass.set_bind_group(3, &self.water_normal_bind_group, &[]);
-            render_pass.set_bind_group(4, &self.heightmap_bind_group, &[]);
+            render_pass.set_bind_group(3, &self.heightmap_bind_group, &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
