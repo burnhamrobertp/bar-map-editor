@@ -437,6 +437,7 @@ impl eframe::App for AppWrapper {
                 Ok(Some(output_dir)) => {
                     let graph = self.app.graph().clone();
                     let recipe = self.app.recipe_for_export();
+                    let sculpt_snapshot = self.app.sculpt_export_snapshot();
                     let (w, h) = self.app.map_dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
@@ -448,13 +449,15 @@ impl eframe::App for AppWrapper {
                         let msg = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                             Ok(outputs) => {
                                 let filter = run_filter_label.as_deref();
+                                let sculpt_ref =
+                                    sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
                                 match bar_engine::execute_bundlers(
                                     &graph,
                                     &outputs,
                                     &recipe,
                                     &output_dir,
                                     filter,
-                                    None,
+                                    sculpt_ref,
                                 ) {
                                     Ok(results) if !results.is_empty() => {
                                         format!(
@@ -848,11 +851,28 @@ impl eframe::App for AppWrapper {
             }
         }
 
+        // When the Sculpt3D layout is active the central panel is left
+        // unclaimed by bar-gui so we can fill it here with the 3D viewport.
+        // `session` is already in scope from the guard above.
+        if self.app.active_layout() == bar_gui::Layout::Sculpt3D {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                Self::draw_viewport_on(
+                    session,
+                    &self.gpu_context,
+                    &self.render_state,
+                    ui,
+                    ctx,
+                    &mut self.app,
+                );
+            });
+        }
+
         // Show 3D viewport window when a preview has been opened. Default
         // position docks the window to the right edge of the screen, just
         // left of the Properties side panel — that's a far more useful
         // initial location than the top-left corner.
-        if self.app.preview_open() {
+        // Not shown in Sculpt3D layout -- the embedded panel above takes over.
+        if self.app.preview_open() && self.app.active_layout() != bar_gui::Layout::Sculpt3D {
             let title = self.app.preview_node_label();
             let mut preview_open = true;
             // Properties panel is 250 px wide; allow ~24 px gutter.
@@ -913,6 +933,7 @@ impl AppWrapper {
 
         let graph = self.app.graph().clone();
         let recipe = self.app.recipe_for_export();
+        let sculpt_snapshot = self.app.sculpt_export_snapshot();
         let (w, h) = self.app.map_dimensions();
         let executor = Arc::clone(&self.executor);
         let (tx, rx) = mpsc::channel::<Result<std::path::PathBuf, String>>();
@@ -923,13 +944,15 @@ impl AppWrapper {
         std::thread::spawn(move || {
             let result = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                 Ok(outputs) => {
+                    let sculpt_ref =
+                        sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
                     match bar_engine::execute_bundlers(
                         &graph,
                         &outputs,
                         &recipe,
                         &temp_dir,
                         None,
-                        None,
+                        sculpt_ref,
                     ) {
                         Ok(results) => {
                             // Pick the first SD7 produced. Bundlers can

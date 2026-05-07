@@ -132,16 +132,8 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
             }
         });
 
-    // Central panel: placeholder until the 3D viewport is wired
-    // in here. Shows the 2D heightmap as a fallback so the layout
-    // is usable without a GPU surface.
-    egui::CentralPanel::default().show(ctx, |ui| {
-        ui.centered_and_justified(|ui| {
-            if app.paint.heightmap.is_some() {
-                ui.weak("3D viewport (coming soon) -- use the 2D Inspector window for now");
-            } else {
-                ui.weak("No heightmap loaded yet. Run the node graph first to generate terrain.");
-            }
-        });
-    });
+    // Central panel is intentionally left unclaimed here. bar-app's
+    // AppWrapper::update() claims it after self.app.update() returns and
+    // draws the 3D viewport there, which is the only place GPU resources
+    // (TerrainRenderer, render_state) are available.
 }

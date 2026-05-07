@@ -2203,10 +2203,13 @@ impl BarEditorApp {
     }
 
     /// True when the inspector is in Sculpt mode AND the inspector
-    /// window is open OR a sculpt has already been started.
+    /// window is open, a sculpt has already been started, or the
+    /// Sculpt3D layout is active (which is always a sculpting surface).
     pub fn is_sculpt_input_active(&self) -> bool {
         self.paint.inspector_mode == InspectorMode::Sculpt
-            && (self.dialog.show_inspector || self.paint.sculpt.dirty)
+            && (self.dialog.show_inspector
+                || self.paint.sculpt.dirty
+                || self.active_layout == Layout::Sculpt3D)
     }
 
     /// Which data layer the brush currently writes to. The 3D viewport
@@ -2835,6 +2838,21 @@ impl BarEditorApp {
         self.paint.pending_sculpt_record = Some(record);
         let _ = project_dir;
         Ok(())
+    }
+
+    /// Returns the most recently packed `SculptRecord` and its project
+    /// directory for use by export threads. Returns `None` when the project
+    /// has never been saved (no record exists) or has no path on disk.
+    pub fn sculpt_export_snapshot(
+        &self,
+    ) -> Option<(bar_project::SculptRecord, std::path::PathBuf)> {
+        let record = self.paint.pending_sculpt_record.as_ref()?.clone();
+        let dir = self
+            .project_path
+            .as_ref()?
+            .parent()?
+            .to_path_buf();
+        Some((record, dir))
     }
 
     /// Restore sculpt layers from a loaded `SculptRecord`. Resolves
