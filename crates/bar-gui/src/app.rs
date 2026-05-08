@@ -102,7 +102,7 @@ pub(crate) fn parse_subgraph_binding(
 
 /// One-shot context-menu action carried out after the menu closes,
 /// since the menu closure can't borrow `self` mutably while iterating
-/// `self.groups`.
+/// `self.visuals.groups`.
 /// One tab in the canvas-area tab bar. The user can keep multiple
 /// editing contexts open and switch between them — much faster than
 /// "exit confined mode, scroll to the relevant region, double-click
@@ -221,13 +221,13 @@ impl LayoutUnit {
     pub(crate) fn current_top_left(&self, app: &BarEditorApp) -> egui::Pos2 {
         match self {
             LayoutUnit::Node(id) => app
-                .node_visuals
+                .visuals.node_visuals
                 .get(id)
                 .map(|v| v.position)
                 .unwrap_or(egui::pos2(0.0, 0.0)),
             LayoutUnit::Subgraph { members } => members
                 .iter()
-                .filter_map(|m| app.node_visuals.get(m))
+                .filter_map(|m| app.visuals.node_visuals.get(m))
                 .map(|v| v.position)
                 .reduce(|a, b| egui::pos2(a.x.min(b.x), a.y.min(b.y)))
                 .unwrap_or(egui::pos2(0.0, 0.0)),
@@ -241,7 +241,7 @@ impl LayoutUnit {
     pub(crate) fn bounding_size(&self, app: &BarEditorApp) -> egui::Vec2 {
         match self {
             LayoutUnit::Node(id) => app
-                .node_visuals
+                .visuals.node_visuals
                 .get(id)
                 .map(|v| v.size)
                 .unwrap_or(egui::vec2(150.0, 80.0)),
@@ -249,7 +249,7 @@ impl LayoutUnit {
                 let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
                 let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
                 for m in members {
-                    if let Some(v) = app.node_visuals.get(m) {
+                    if let Some(v) = app.visuals.node_visuals.get(m) {
                         let p0 = v.position;
                         let p1 = egui::pos2(p0.x + v.size.x, p0.y + v.size.y);
                         min.x = min.x.min(p0.x);
@@ -273,13 +273,13 @@ impl LayoutUnit {
     pub(crate) fn translate(&self, app: &mut BarEditorApp, delta: egui::Vec2) {
         match self {
             LayoutUnit::Node(id) => {
-                if let Some(v) = app.node_visuals.get_mut(id) {
+                if let Some(v) = app.visuals.node_visuals.get_mut(id) {
                     v.position += delta;
                 }
             }
             LayoutUnit::Subgraph { members } => {
                 for m in members {
-                    if let Some(v) = app.node_visuals.get_mut(m) {
+                    if let Some(v) = app.visuals.node_visuals.get_mut(m) {
                         v.position += delta;
                     }
                 }
@@ -864,7 +864,10 @@ pub struct DialogState {
 /// Main application state for the BAR - Map Editor GUI.
 pub struct BarEditorApp {
     pub(crate) graph: GraphEngine,
-    pub(crate) node_visuals: HashMap<NodeId, NodeVisual>,
+    /// Visual presentation: node positions, groups, group/node
+    /// reverse index, monotonic group id allocator, and per-frame
+    /// hit-test rect caches. See `editor::VisualsState`.
+    pub(crate) visuals: crate::editor::VisualsState,
     /// Canvas selection: primary node, multi-selection, group,
     /// connection, and any group queued for deletion. See
     /// `editor::SelectionState`. (`selected_node` from the old layout
@@ -904,33 +907,12 @@ pub struct BarEditorApp {
     /// tab, and the input fingerprint that gates re-validation. See
     /// `editor::ValidationState`.
     pub(crate) validation: crate::editor::ValidationState,
-    /// Visual node groups keyed by stable group id. Purely
-    /// organisational — they don't affect graph evaluation.
-    pub(crate) groups: HashMap<u64, GroupRuntime>,
-    /// Reverse index: which group does this node belong to (if any)?
-    /// Maintained alongside `groups` so the render pass and hit-testing
-    /// don't need to scan every group every frame.
-    pub(crate) node_to_group: HashMap<NodeId, u64>,
-    /// Monotonic group id allocator. Never reuses a freed id within
-    /// one session so undo/redo can refer back to deleted groups
-    /// without confusion. Resets to the highest seen id + 1 at load.
-    pub(crate) next_group_id: u64,
+    // groups, node_to_group, next_group_id, group_header_rects,
+    // group_body_rects, and collapsed_subgraph_rects moved to
+    // `self.visuals` (see `editor::VisualsState`).
     // selected_nodes / selected_group / pending_group_delete /
     // selected_connection moved to `self.selection`
     // (see `editor::SelectionState`).
-    /// Cached on-screen rect of each group's title bar from the most
-    /// recent render. Used by hit-testing to detect title-bar clicks
-    /// for selection and drag.
-    pub(crate) group_header_rects: HashMap<u64, egui::Rect>,
-    /// Cached body rect (excluding title) per group for the same
-    /// reason — clicking the body selects the group too.
-    pub(crate) group_body_rects: HashMap<u64, egui::Rect>,
-    /// Cached rect of each *collapsed* SubGraph block from the most
-    /// recent render. Collapsed subgraphs aren't drawn through
-    /// `draw_groups`, so they have no header / body rects. The
-    /// contextual Properties popup uses this to know "the cursor is
-    /// over collapsed group N" and drive the hover gate against it.
-    pub(crate) collapsed_subgraph_rects: HashMap<u64, egui::Rect>,
     // marquee_start, tabs, active_tab, last_active_tab,
     // canvas_rect_last, and pending_auto_layout_all moved to
     // `self.canvas` (see `editor::CanvasState`).
@@ -957,7 +939,10 @@ impl Default for BarEditorApp {
     fn default() -> Self {
         Self {
             graph: GraphEngine::new(),
-            node_visuals: HashMap::new(),
+            visuals: crate::editor::VisualsState {
+                next_group_id: 1,
+                ..Default::default()
+            },
             selection: crate::editor::SelectionState::default(),
             canvas: crate::editor::CanvasState::default(),
             map: crate::editor::MapState {
@@ -973,12 +958,6 @@ impl Default for BarEditorApp {
             preview: crate::editor::PreviewState::default(),
             dialog: DialogState::default(),
             validation: crate::editor::ValidationState::default(),
-            groups: HashMap::new(),
-            node_to_group: HashMap::new(),
-            next_group_id: 1,
-            group_header_rects: HashMap::new(),
-            group_body_rects: HashMap::new(),
-            collapsed_subgraph_rects: HashMap::new(),
             props: crate::editor::PropsPanelState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
@@ -1369,13 +1348,13 @@ impl BarEditorApp {
         // gets clean NodeIds with no risk of colliding with stale
         // group member_ids from the previous project.
         self.graph = GraphEngine::new();
-        self.node_visuals.clear();
+        self.visuals.node_visuals.clear();
 
         // Group / subgraph state — must be cleared together with the
         // graph so stale member_ids can never match new NodeIds.
-        self.groups.clear();
-        self.node_to_group.clear();
-        self.next_group_id = 1;
+        self.visuals.groups.clear();
+        self.visuals.node_to_group.clear();
+        self.visuals.next_group_id = 1;
 
         // Project identity and output configuration.
         self.project.path = None;
@@ -1478,7 +1457,7 @@ impl BarEditorApp {
         let bundler_id = self
             .graph
             .add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             bundler_id,
             NodeVisual {
                 position: bundler_pos,
@@ -1488,7 +1467,7 @@ impl BarEditorApp {
         let preview_id = self
             .graph
             .add_node(Node::new(NodeId(0), NodeType::Preview, "3D Preview"));
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             preview_id,
             NodeVisual {
                 position: preview_pos,
@@ -1534,7 +1513,7 @@ impl BarEditorApp {
         let bundler_id = self
             .graph
             .add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             bundler_id,
             NodeVisual {
                 position: bundler_pos,
@@ -1544,7 +1523,7 @@ impl BarEditorApp {
         let preview_id = self
             .graph
             .add_node(Node::new(NodeId(0), NodeType::Preview, "3D Preview"));
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             preview_id,
             NodeVisual {
                 position: preview_pos,
@@ -1680,7 +1659,7 @@ impl BarEditorApp {
         // Snapshot member sets and node descriptors first so we can
         // iterate without holding a borrow on `self.graph`.
         let groups: Vec<(u64, Vec<NodeId>)> = self
-            .groups
+            .visuals.groups
             .iter()
             .filter(|(_, g)| g.is_subgraph)
             .map(|(gid, g)| (*gid, g.member_ids.iter().copied().collect()))
@@ -1826,7 +1805,7 @@ impl BarEditorApp {
                     outputs.push(port);
                 }
             }
-            if let Some(g) = self.groups.get_mut(&gid) {
+            if let Some(g) = self.visuals.groups.get_mut(&gid) {
                 g.subgraph_inputs = inputs;
                 g.subgraph_outputs = outputs;
             }
@@ -1961,12 +1940,12 @@ impl BarEditorApp {
     /// undo restores the SubGraph with all its inner nodes,
     /// connections, ports, bindings, and macro params intact.
     pub(crate) fn delete_subgraph_with_contents(&mut self, gid: u64) {
-        if !self.groups.contains_key(&gid) {
+        if !self.visuals.groups.contains_key(&gid) {
             return;
         }
         self.push_undo("Delete subgraph");
         let members: Vec<NodeId> = self
-            .groups
+            .visuals.groups
             .get(&gid)
             .map(|g| g.member_ids.iter().copied().collect())
             .unwrap_or_default();
@@ -1976,7 +1955,7 @@ impl BarEditorApp {
         }
         for nid in &members {
             let _ = self.graph.remove_node(*nid);
-            self.node_visuals.remove(nid);
+            self.visuals.node_visuals.remove(nid);
             self.remove_node_from_group(*nid);
             if self.preview.node == Some(*nid) {
                 self.preview.node = None;
@@ -2001,7 +1980,7 @@ impl BarEditorApp {
         self.push_undo("Delete node");
         for node_id in &to_delete {
             let _ = self.graph.remove_node(*node_id);
-            self.node_visuals.remove(node_id);
+            self.visuals.node_visuals.remove(node_id);
             self.remove_node_from_group(*node_id);
             if self.preview.node == Some(*node_id) {
                 self.preview.node = None;
@@ -2458,10 +2437,10 @@ impl BarEditorApp {
         Snapshot {
             state: EditorState {
                 graph: self.graph.clone(),
-                node_visuals: self.node_visuals.clone(),
-                groups: self.groups.clone(),
-                node_to_group: self.node_to_group.clone(),
-                next_group_id: self.next_group_id,
+                node_visuals: self.visuals.node_visuals.clone(),
+                groups: self.visuals.groups.clone(),
+                node_to_group: self.visuals.node_to_group.clone(),
+                next_group_id: self.visuals.next_group_id,
             },
             description: description.to_string(),
         }
@@ -2482,10 +2461,10 @@ impl BarEditorApp {
     /// pointing at deleted things.
     pub(crate) fn restore_snapshot(&mut self, snap: Snapshot) {
         self.graph = snap.state.graph;
-        self.node_visuals = snap.state.node_visuals;
-        self.groups = snap.state.groups;
-        self.node_to_group = snap.state.node_to_group;
-        self.next_group_id = snap.state.next_group_id;
+        self.visuals.node_visuals = snap.state.node_visuals;
+        self.visuals.groups = snap.state.groups;
+        self.visuals.node_to_group = snap.state.node_to_group;
+        self.visuals.next_group_id = snap.state.next_group_id;
         self.clear_selection();
         if let Some(pn) = self.preview.node {
             if self.graph.get_node(pn).is_none() {
@@ -2535,7 +2514,7 @@ impl BarEditorApp {
                 params: node.params.clone(),
             });
 
-            if let Some(visual) = self.node_visuals.get(id) {
+            if let Some(visual) = self.visuals.node_visuals.get(id) {
                 layout_positions.insert(
                     key.clone(),
                     Position {
@@ -2603,7 +2582,7 @@ impl BarEditorApp {
                 canvas_offset: (self.canvas.offset.x, self.canvas.offset.y),
                 map_info_file: self.project.map_info_file.clone(),
                 groups: self
-                    .groups
+                    .visuals.groups
                     .iter()
                     .map(|(id, g)| bar_project::NodeGroup {
                         id: *id,
@@ -3059,7 +3038,7 @@ impl BarEditorApp {
                 .get(&recipe_node.key)
                 .map(|s| egui::vec2(s.width, s.height))
                 .unwrap_or_else(|| egui::vec2(150.0, 80.0));
-            self.node_visuals.insert(
+            self.visuals.node_visuals.insert(
                 node_id,
                 NodeVisual {
                     position: pos,
@@ -3080,9 +3059,9 @@ impl BarEditorApp {
                 .filter_map(|k| key_to_id.get(k).copied())
                 .collect();
             for &nid in &member_ids {
-                self.node_to_group.insert(nid, g.id);
+                self.visuals.node_to_group.insert(nid, g.id);
             }
-            self.groups.insert(
+            self.visuals.groups.insert(
                 g.id,
                 GroupRuntime {
                     label: g.label.clone(),
@@ -3126,7 +3105,7 @@ impl BarEditorApp {
             );
             max_group_id = max_group_id.max(g.id);
         }
-        self.next_group_id = max_group_id + 1;
+        self.visuals.next_group_id = max_group_id + 1;
 
         // ── Migrate legacy subgraph ports → IO nodes ───────────────────
         // Projects saved before the IO-node refactor stored external
@@ -3142,7 +3121,7 @@ impl BarEditorApp {
             Vec<crate::state::SubgraphPortRuntime>,
             Vec<crate::state::SubgraphPortRuntime>,
         )> = Vec::new();
-        for (gid, g) in &self.groups {
+        for (gid, g) in &self.visuals.groups {
             if !g.is_subgraph {
                 continue;
             }
@@ -3168,13 +3147,13 @@ impl BarEditorApp {
             // position based on the existing members' centroid so
             // they don't land at the origin off-screen.
             let centroid = self
-                .groups
+                .visuals.groups
                 .get(&gid)
                 .map(|g| {
                     let pts: Vec<egui::Pos2> = g
                         .member_ids
                         .iter()
-                        .filter_map(|id| self.node_visuals.get(id))
+                        .filter_map(|id| self.visuals.node_visuals.get(id))
                         .map(|v| v.position)
                         .collect();
                     if pts.is_empty() {
@@ -3196,17 +3175,17 @@ impl BarEditorApp {
                     .insert("kind".to_string(), ParamValue::String(p.kind.clone()));
                 node.sync_subgraph_io_kind();
                 let id = self.graph.add_node(node);
-                self.node_visuals.insert(
+                self.visuals.node_visuals.insert(
                     id,
                     crate::state::NodeVisual {
                         position: centroid + egui::vec2(-220.0, i as f32 * 90.0),
                         size: egui::vec2(150.0, 80.0),
                     },
                 );
-                if let Some(g) = self.groups.get_mut(&gid) {
+                if let Some(g) = self.visuals.groups.get_mut(&gid) {
                     g.member_ids.insert(id);
                 }
-                self.node_to_group.insert(id, gid);
+                self.visuals.node_to_group.insert(id, gid);
                 if let Some((inner_id, inner_port)) = p.binding.clone() {
                     let _ = self.graph.connect(
                         bar_graph::PortId {
@@ -3228,17 +3207,17 @@ impl BarEditorApp {
                     .insert("kind".to_string(), ParamValue::String(p.kind.clone()));
                 node.sync_subgraph_io_kind();
                 let id = self.graph.add_node(node);
-                self.node_visuals.insert(
+                self.visuals.node_visuals.insert(
                     id,
                     crate::state::NodeVisual {
                         position: centroid + egui::vec2(220.0, i as f32 * 90.0),
                         size: egui::vec2(150.0, 80.0),
                     },
                 );
-                if let Some(g) = self.groups.get_mut(&gid) {
+                if let Some(g) = self.visuals.groups.get_mut(&gid) {
                     g.member_ids.insert(id);
                 }
-                self.node_to_group.insert(id, gid);
+                self.visuals.node_to_group.insert(id, gid);
                 if let Some((inner_id, inner_port)) = p.binding.clone() {
                     let _ = self.graph.connect(
                         bar_graph::PortId {
@@ -3253,7 +3232,7 @@ impl BarEditorApp {
                 }
             }
             // Clear legacy lists; recompute fills them from IO nodes.
-            if let Some(g) = self.groups.get_mut(&gid) {
+            if let Some(g) = self.visuals.groups.get_mut(&gid) {
                 g.subgraph_inputs.clear();
                 g.subgraph_outputs.clear();
             }
@@ -3269,7 +3248,7 @@ impl BarEditorApp {
             match view {
                 bar_project::PersistedCanvasView::Main => {}
                 bar_project::PersistedCanvasView::SubGraph { group_id } => {
-                    if self.groups.contains_key(group_id) {
+                    if self.visuals.groups.contains_key(group_id) {
                         let v = CanvasView::SubGraph(*group_id);
                         if !restored_tabs.contains(&v) {
                             restored_tabs.push(v);
@@ -3353,7 +3332,7 @@ impl BarEditorApp {
                 }
             }
         }
-        for group in self.groups.values() {
+        for group in self.visuals.groups.values() {
             if let Some(rest) = group.label.strip_prefix(&prefix) {
                 if let Ok(n) = rest.parse::<u32>() {
                     if n > max_n {
@@ -3392,7 +3371,7 @@ impl BarEditorApp {
         self.recompute_all_subgraph_io();
 
         // Find the group we just created — it'll be the highest gid.
-        let new_gid = match self.groups.keys().copied().max() {
+        let new_gid = match self.visuals.groups.keys().copied().max() {
             Some(g) => g,
             None => return,
         };
@@ -3402,7 +3381,7 @@ impl BarEditorApp {
         let mut bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
         bundler.label = "Bundler".to_string();
         let bundler_id = self.graph.add_node(bundler);
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             bundler_id,
             NodeVisual {
                 position: bundler_pos,
@@ -3416,7 +3395,7 @@ impl BarEditorApp {
         let mut preview = Node::new(NodeId(0), NodeType::Preview, "3D Preview");
         preview.label = "3D Preview".to_string();
         let preview_id = self.graph.add_node(preview);
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             preview_id,
             NodeVisual {
                 position: preview_pos,
@@ -3434,7 +3413,7 @@ impl BarEditorApp {
         // etc. Subsequent ports of the same kind are skipped —
         // there's only one Bundler.heightmap to fill.
         let outputs: Vec<(String, NodeId, String)> = self
-            .groups
+            .visuals.groups
             .get(&new_gid)
             .map(|g| {
                 g.subgraph_outputs
@@ -3506,7 +3485,7 @@ impl BarEditorApp {
             // NormalMap → Bundler.normalmap (+ Preview.normal_map).
             let nm = Node::new(NodeId(0), NodeType::NormalMap, "Normal Map");
             let nm_id = self.graph.add_node(nm);
-            self.node_visuals.insert(
+            self.visuals.node_visuals.insert(
                 nm_id,
                 NodeVisual {
                     position: egui::pos2(aux_x, aux_y),
@@ -3548,7 +3527,7 @@ impl BarEditorApp {
             // SpecularMap → Bundler.specular (+ Preview.specular_map).
             let sm = Node::new(NodeId(0), NodeType::SpecularMap, "Specular Map");
             let sm_id = self.graph.add_node(sm);
-            self.node_visuals.insert(
+            self.visuals.node_visuals.insert(
                 sm_id,
                 NodeVisual {
                     position: egui::pos2(aux_x, aux_y),
@@ -3600,7 +3579,7 @@ impl BarEditorApp {
             let mut k = Node::new(NodeId(0), NodeType::Constant, *label);
             k.params.insert("value".into(), ParamValue::Float(0.0));
             let k_id = self.graph.add_node(k);
-            self.node_visuals.insert(
+            self.visuals.node_visuals.insert(
                 k_id,
                 NodeVisual {
                     position: egui::pos2(aux_x, aux_y),
@@ -3664,14 +3643,13 @@ impl BarEditorApp {
         };
         inst.group.label = numbered_label;
         for (id, visual) in inst.visuals {
-            self.node_visuals.insert(id, visual);
+            self.visuals.node_visuals.insert(id, visual);
         }
-        let gid = self.next_group_id;
-        self.next_group_id += 1;
+        let gid = self.visuals.alloc_group_id();
         for nid in &inst.member_ids {
-            self.node_to_group.insert(*nid, gid);
+            self.visuals.node_to_group.insert(*nid, gid);
         }
-        self.groups.insert(gid, inst.group);
+        self.visuals.groups.insert(gid, inst.group);
         self.select_group(gid);
         // Same direct-open as `add_node_at` — drop a macro, see its
         // properties immediately so you can tweak the parameters
@@ -3700,7 +3678,7 @@ impl BarEditorApp {
             NodeType::SubgraphInput | NodeType::SubgraphOutput => IO_NODE_SIZE,
             _ => egui::vec2(150.0, 80.0),
         };
-        self.node_visuals.insert(
+        self.visuals.node_visuals.insert(
             id,
             NodeVisual {
                 position: pos,
@@ -3717,9 +3695,9 @@ impl BarEditorApp {
         // becomes invisible the moment it's dropped — properties
         // panel opens on a node the user can't see.
         if let Some(CanvasView::SubGraph(scope)) = self.canvas.tabs.get(self.canvas.active_tab).cloned() {
-            if let Some(group) = self.groups.get_mut(&scope) {
+            if let Some(group) = self.visuals.groups.get_mut(&scope) {
                 group.member_ids.insert(id);
-                self.node_to_group.insert(id, scope);
+                self.visuals.node_to_group.insert(id, scope);
             }
         }
         // Auto-open the 3D preview when a Bundler is created so the user
@@ -3984,7 +3962,7 @@ impl BarEditorApp {
                 self.selection.connection = None;
             } else if let Some(gid) = self.selection.group {
                 let is_subgraph = self
-                    .groups
+                    .visuals.groups
                     .get(&gid)
                     .map(|g| g.is_subgraph)
                     .unwrap_or(false);
@@ -4395,7 +4373,7 @@ impl BarEditorApp {
         // ── Modal: group delete (three-way: keep nodes / delete all / cancel) ─
         if let Some(gid) = self.selection.pending_group_delete {
             let label = self
-                .groups
+                .visuals.groups
                 .get(&gid)
                 .map(|g| {
                     if g.label.is_empty() {
@@ -4406,7 +4384,7 @@ impl BarEditorApp {
                 })
                 .unwrap_or_else(|| format!("Group {gid}"));
             let member_count = self
-                .groups
+                .visuals.groups
                 .get(&gid)
                 .map(|g| g.member_ids.len())
                 .unwrap_or(0);
@@ -4450,7 +4428,7 @@ impl BarEditorApp {
                         // stashing the snapshot here.
                         self.push_undo("Delete group with members");
                         let members: Vec<NodeId> = self
-                            .groups
+                            .visuals.groups
                             .get(&gid)
                             .map(|g| g.member_ids.iter().copied().collect())
                             .unwrap_or_default();
@@ -4466,7 +4444,7 @@ impl BarEditorApp {
                         let to_delete: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
                         for node_id in &to_delete {
                             let _ = self.graph.remove_node(*node_id);
-                            self.node_visuals.remove(node_id);
+                            self.visuals.node_visuals.remove(node_id);
                             self.remove_node_from_group(*node_id);
                             if self.preview.node == Some(*node_id) {
                                 self.preview.node = None;

@@ -92,8 +92,8 @@ impl BarEditorApp {
     pub(crate) fn draw_groups(&mut self, painter: &egui::Painter, offset: egui::Vec2) {
         // Reset cached header/body rects each frame; we repopulate as
         // we draw. Hit-testing in the click pass below uses these.
-        self.group_header_rects.clear();
-        self.group_body_rects.clear();
+        self.visuals.group_header_rects.clear();
+        self.visuals.group_body_rects.clear();
         // On a SubGraph tab we don't draw any group decoration —
         // the canvas is showing only that subgraph's contents, so a
         // backdrop rectangle would be misleading.
@@ -102,7 +102,7 @@ impl BarEditorApp {
         }
         let margin = 14.0_f32;
         let header_h = 20.0_f32;
-        for (gid, group) in &self.groups {
+        for (gid, group) in &self.visuals.groups {
             // Collapsed subgraphs draw as a compact block in a
             // separate pass after nodes (so they render on top, like
             // nodes themselves). Skip them in this backdrop pass.
@@ -113,7 +113,7 @@ impl BarEditorApp {
             let mut min: Option<egui::Pos2> = None;
             let mut max: Option<egui::Pos2> = None;
             for nid in &group.member_ids {
-                let Some(visual) = self.node_visuals.get(nid) else {
+                let Some(visual) = self.visuals.node_visuals.get(nid) else {
                     continue;
                 };
                 let p0 = egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y);
@@ -186,8 +186,8 @@ impl BarEditorApp {
             // Body rect = full minus header, for click hit-testing.
             let body_rect =
                 egui::Rect::from_min_max(egui::pos2(rect.left(), header_rect.bottom()), rect.max);
-            self.group_header_rects.insert(*gid, header_rect);
-            self.group_body_rects.insert(*gid, body_rect);
+            self.visuals.group_header_rects.insert(*gid, header_rect);
+            self.visuals.group_body_rects.insert(*gid, body_rect);
         }
     }
 
@@ -364,7 +364,7 @@ impl BarEditorApp {
         //    instead — leaving the subgraph's contents unchanged and
         //    silently shuffling everything outside.
         if let Some(CanvasView::SubGraph(gid)) = self.canvas.tabs.get(self.canvas.active_tab) {
-            if let Some(group) = self.groups.get(gid) {
+            if let Some(group) = self.visuals.groups.get(gid) {
                 // If a subset is explicitly selected inside the subgraph,
                 // honour that selection. Otherwise lay out every member.
                 let candidates: std::collections::HashSet<NodeId> =
@@ -387,7 +387,7 @@ impl BarEditorApp {
 
         // 1. Subgraph alone is selected → just that group.
         if let Some(gid) = self.selection.group {
-            if let Some(group) = self.groups.get(&gid) {
+            if let Some(group) = self.visuals.groups.get(&gid) {
                 if group.is_subgraph {
                     return vec![LayoutUnit::Subgraph {
                         members: group.member_ids.iter().copied().collect(),
@@ -405,8 +405,8 @@ impl BarEditorApp {
             let mut emitted_groups: std::collections::HashSet<u64> =
                 std::collections::HashSet::new();
             for &nid in &self.selection.nodes {
-                if let Some(gid) = self.node_to_group.get(&nid).copied() {
-                    if let Some(group) = self.groups.get(&gid) {
+                if let Some(gid) = self.visuals.node_to_group.get(&nid).copied() {
+                    if let Some(group) = self.visuals.groups.get(&gid) {
                         if group.is_subgraph && group.collapsed {
                             if emitted_groups.insert(gid) {
                                 units.push(LayoutUnit::Subgraph {
@@ -427,7 +427,7 @@ impl BarEditorApp {
         // a standalone node.
         let mut units: Vec<LayoutUnit> = Vec::new();
         let mut handled: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
-        for (gid, group) in &self.groups {
+        for (gid, group) in &self.visuals.groups {
             if group.is_subgraph && group.collapsed {
                 let members: Vec<NodeId> = group.member_ids.iter().copied().collect();
                 for m in &members {
@@ -513,7 +513,7 @@ impl BarEditorApp {
         offset: egui::Vec2,
     ) -> Option<egui::Pos2> {
         let node = self.graph.get_node(node_id)?;
-        let visual = self.node_visuals.get(&node_id)?;
+        let visual = self.visuals.node_visuals.get(&node_id)?;
         let port_index = node.outputs.iter().position(|p| p.name == port_name)?;
         let node_rect = egui::Rect::from_min_size(
             egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
@@ -591,12 +591,12 @@ impl BarEditorApp {
         let mut sorted: Vec<NodeId> = ids.to_vec();
         sorted.sort_by(|a, b| {
             let ax = self
-                .node_visuals
+                .visuals.node_visuals
                 .get(a)
                 .map(|v| v.position.x)
                 .unwrap_or(0.0);
             let bx = self
-                .node_visuals
+                .visuals.node_visuals
                 .get(b)
                 .map(|v| v.position.x)
                 .unwrap_or(0.0);
@@ -606,7 +606,7 @@ impl BarEditorApp {
         let mut connections_made = 0usize;
 
         for target_id in sorted {
-            let Some(target_visual) = self.node_visuals.get(&target_id).cloned() else {
+            let Some(target_visual) = self.visuals.node_visuals.get(&target_id).cloned() else {
                 continue;
             };
             let Some(target_node) = self.graph.get_node(target_id).cloned() else {
@@ -648,7 +648,7 @@ impl BarEditorApp {
                     if *other_id == target_id {
                         continue;
                     }
-                    let Some(other_visual) = self.node_visuals.get(other_id) else {
+                    let Some(other_visual) = self.visuals.node_visuals.get(other_id) else {
                         continue;
                     };
                     let other_right = other_visual.position.x + other_visual.size.x;
@@ -705,10 +705,9 @@ impl BarEditorApp {
     /// user action; bulk operations (e.g. "create group from
     /// selection") push once at the call site.
     pub(crate) fn create_group(&mut self, label: impl Into<String>) -> u64 {
-        let id = self.next_group_id;
-        self.next_group_id += 1;
+        let id = self.visuals.alloc_group_id();
         let color_idx = (id as u8) % (GROUP_PALETTE.len() as u8);
-        self.groups.insert(
+        self.visuals.groups.insert(
             id,
             GroupRuntime {
                 label: label.into(),
@@ -732,17 +731,17 @@ impl BarEditorApp {
     /// helper itself doesn't push so callers that perform bulk moves
     /// ("group selection of N nodes") only push once.
     pub(crate) fn add_node_to_group(&mut self, node_id: NodeId, group_id: u64) {
-        if let Some(prev) = self.node_to_group.get(&node_id).copied() {
+        if let Some(prev) = self.visuals.node_to_group.get(&node_id).copied() {
             if prev == group_id {
                 return;
             }
-            if let Some(g) = self.groups.get_mut(&prev) {
+            if let Some(g) = self.visuals.groups.get_mut(&prev) {
                 g.member_ids.remove(&node_id);
             }
         }
-        if let Some(g) = self.groups.get_mut(&group_id) {
+        if let Some(g) = self.visuals.groups.get_mut(&group_id) {
             g.member_ids.insert(node_id);
-            self.node_to_group.insert(node_id, group_id);
+            self.visuals.node_to_group.insert(node_id, group_id);
             self.project.is_dirty = true;
         }
     }
@@ -752,16 +751,16 @@ impl BarEditorApp {
     /// piling up. Same caller-pushes-undo contract as
     /// `add_node_to_group`.
     pub(crate) fn remove_node_from_group(&mut self, node_id: NodeId) {
-        let Some(group_id) = self.node_to_group.remove(&node_id) else {
+        let Some(group_id) = self.visuals.node_to_group.remove(&node_id) else {
             return;
         };
         let mut delete = false;
-        if let Some(g) = self.groups.get_mut(&group_id) {
+        if let Some(g) = self.visuals.groups.get_mut(&group_id) {
             g.member_ids.remove(&node_id);
             delete = g.member_ids.is_empty();
         }
         if delete {
-            self.groups.remove(&group_id);
+            self.visuals.groups.remove(&group_id);
         }
         self.project.is_dirty = true;
     }
@@ -769,11 +768,11 @@ impl BarEditorApp {
     /// Dissolve a group entirely (members keep their positions, just
     /// lose group membership). Caller-pushes-undo as above.
     pub(crate) fn dissolve_group(&mut self, group_id: u64) {
-        let Some(g) = self.groups.remove(&group_id) else {
+        let Some(g) = self.visuals.groups.remove(&group_id) else {
             return;
         };
         for nid in &g.member_ids {
-            self.node_to_group.remove(nid);
+            self.visuals.node_to_group.remove(nid);
         }
         self.project.is_dirty = true;
     }
@@ -797,7 +796,7 @@ impl BarEditorApp {
         let block_w = 180.0_f32;
         let header_h = 22.0_f32;
         let row_h = 18.0_f32;
-        for (gid, group) in &self.groups {
+        for (gid, group) in &self.visuals.groups {
             if !(group.is_subgraph && group.collapsed) {
                 continue;
             }
@@ -805,7 +804,7 @@ impl BarEditorApp {
             let mut cy = 0.0_f32;
             let mut n = 0_f32;
             for nid in &group.member_ids {
-                if let Some(v) = self.node_visuals.get(nid) {
+                if let Some(v) = self.visuals.node_visuals.get(nid) {
                     cx += v.position.x + v.size.x * 0.5 + offset.x;
                     cy += v.position.y + v.size.y * 0.5 + offset.y;
                     n += 1.0;
@@ -857,7 +856,7 @@ impl BarEditorApp {
         // Reset the cached collapsed-block rects every frame; we
         // refill below as each block is drawn so the props-popup
         // hit-test sees current positions.
-        self.collapsed_subgraph_rects.clear();
+        self.visuals.collapsed_subgraph_rects.clear();
         let mut rects = HashMap::new();
         // Bound inner port → external handle position. Used by the
         // wire-render pass below to reroute connections from hidden
@@ -872,7 +871,7 @@ impl BarEditorApp {
         let block_w = 180.0_f32;
         let header_h = 22.0_f32;
         let row_h = 18.0_f32;
-        for (gid, group) in &self.groups {
+        for (gid, group) in &self.visuals.groups {
             if !(group.is_subgraph && group.collapsed) {
                 continue;
             }
@@ -881,7 +880,7 @@ impl BarEditorApp {
             let mut cy = 0.0_f32;
             let mut n = 0_f32;
             for nid in &group.member_ids {
-                if let Some(v) = self.node_visuals.get(nid) {
+                if let Some(v) = self.visuals.node_visuals.get(nid) {
                     cx += v.position.x + v.size.x * 0.5 + offset.x;
                     cy += v.position.y + v.size.y * 0.5 + offset.y;
                     n += 1.0;
@@ -1016,7 +1015,7 @@ impl BarEditorApp {
                 }
             }
             rects.insert(*gid, rect);
-            self.collapsed_subgraph_rects.insert(*gid, rect);
+            self.visuals.collapsed_subgraph_rects.insert(*gid, rect);
         }
         (rects, handle_positions, conn_start, conn_end)
     }
@@ -1078,7 +1077,7 @@ impl BarEditorApp {
             let label = match view {
                 CanvasView::Main => "Main".to_string(),
                 CanvasView::SubGraph(gid) => self
-                    .groups
+                    .visuals.groups
                     .get(gid)
                     .map(|g| {
                         if g.label.is_empty() {
@@ -1124,7 +1123,7 @@ impl BarEditorApp {
             // identity at a glance; Main keeps the neutral palette.
             // Active variants are brighter than inactive so the
             // currently-selected tab pops without losing its tint.
-            let bg = match tab_tint(view, &self.groups) {
+            let bg = match tab_tint(view, &self.visuals.groups) {
                 Some(tint) => {
                     if is_active {
                         // Mix toward active_bg so the active tab still
@@ -1348,7 +1347,7 @@ impl BarEditorApp {
     /// graph or groups change so the tab bar can never display a
     /// reference to a deleted thing. The Main tab is preserved.
     pub(crate) fn prune_dangling_tabs(&mut self) {
-        let valid_groups: std::collections::HashSet<u64> = self.groups.keys().copied().collect();
+        let valid_groups: std::collections::HashSet<u64> = self.visuals.groups.keys().copied().collect();
         let mut new_tabs: Vec<CanvasView> = Vec::with_capacity(self.canvas.tabs.len());
         let prev_active = self.canvas.tabs.get(self.canvas.active_tab).cloned();
         for tab in &self.canvas.tabs {
@@ -1388,18 +1387,18 @@ impl BarEditorApp {
             // Subgraph tab: hide every node that isn't a member of
             // the active scope.
             let visible: std::collections::HashSet<NodeId> = self
-                .groups
+                .visuals.groups
                 .get(&scope)
                 .map(|g| g.member_ids.iter().copied().collect())
                 .unwrap_or_default();
-            for id in self.node_visuals.keys() {
+            for id in self.visuals.node_visuals.keys() {
                 if !visible.contains(id) {
                     hidden.insert(*id);
                 }
             }
         } else {
             // Whole-graph view: hide members of collapsed subgraphs.
-            for g in self.groups.values() {
+            for g in self.visuals.groups.values() {
                 if g.is_subgraph && g.collapsed {
                     for id in &g.member_ids {
                         hidden.insert(*id);
@@ -1512,8 +1511,8 @@ impl BarEditorApp {
         // header / body — handled separately below).
         let pointer = ui.ctx().pointer_latest_pos();
         let clicked_in_group = pointer.is_some_and(|p| {
-            self.group_header_rects.values().any(|r| r.contains(p))
-                || self.group_body_rects.values().any(|r| r.contains(p))
+            self.visuals.group_header_rects.values().any(|r| r.contains(p))
+                || self.visuals.group_body_rects.values().any(|r| r.contains(p))
         });
         if response.clicked() && self.palette_drag.is_none() && !clicked_in_group {
             self.clear_selection();
@@ -1553,16 +1552,16 @@ impl BarEditorApp {
                 // Subgraph membership set: nodes inside a is_subgraph group.
                 // Used to prevent marquee from crossing the main/subgraph boundary.
                 let subgraph_members: std::collections::HashSet<NodeId> = self
-                    .groups
+                    .visuals.groups
                     .values()
                     .filter(|g| g.is_subgraph)
                     .flat_map(|g| g.member_ids.iter().copied())
                     .collect();
-                for (id, visual) in &self.node_visuals {
+                for (id, visual) in &self.visuals.node_visuals {
                     let in_scope = match self.current_view() {
                         CanvasView::Main => !subgraph_members.contains(id),
                         CanvasView::SubGraph(gid) => self
-                            .groups
+                            .visuals.groups
                             .get(&gid)
                             .is_some_and(|g| g.member_ids.contains(id)),
                     };
@@ -1590,19 +1589,19 @@ impl BarEditorApp {
                 let mut group_hits: Vec<u64> = Vec::new();
                 // Collapsed subgraphs: cached rect IS the whole
                 // visible footprint.
-                for (gid, rect) in &self.collapsed_subgraph_rects {
+                for (gid, rect) in &self.visuals.collapsed_subgraph_rects {
                     if marquee.intersects(*rect) {
                         group_hits.push(*gid);
                     }
                 }
                 // Expanded groups: union of header + body rects from
                 // the previous draw_groups frame.
-                for gid in self.groups.keys() {
-                    if self.collapsed_subgraph_rects.contains_key(gid) {
+                for gid in self.visuals.groups.keys() {
+                    if self.visuals.collapsed_subgraph_rects.contains_key(gid) {
                         continue;
                     }
-                    let header = self.group_header_rects.get(gid).copied();
-                    let body = self.group_body_rects.get(gid).copied();
+                    let header = self.visuals.group_header_rects.get(gid).copied();
+                    let body = self.visuals.group_body_rects.get(gid).copied();
                     let group_rect = match (header, body) {
                         (Some(h), Some(b)) => Some(h.union(b)),
                         (Some(h), None) => Some(h),
@@ -1632,7 +1631,7 @@ impl BarEditorApp {
                     _ => None,
                 };
                 for gid in &group_hits {
-                    if let Some(group) = self.groups.get(gid) {
+                    if let Some(group) = self.visuals.groups.get(gid) {
                         for id in &group.member_ids {
                             self.selection.nodes.insert(*id);
                             hits.push(*id);
@@ -1659,11 +1658,11 @@ impl BarEditorApp {
         // child node) also selects the group; dragging the header
         // moves every member.
         let group_hits: Vec<(u64, egui::Rect, egui::Rect)> = self
-            .groups
+            .visuals.groups
             .keys()
             .filter_map(|gid| {
-                let h = *self.group_header_rects.get(gid)?;
-                let b = *self.group_body_rects.get(gid)?;
+                let h = *self.visuals.group_header_rects.get(gid)?;
+                let b = *self.visuals.group_body_rects.get(gid)?;
                 Some((*gid, h, b))
             })
             .collect();
@@ -1706,10 +1705,10 @@ impl BarEditorApp {
             };
             if let Some(r) = drag_resp {
                 let delta = r.drag_delta();
-                if let Some(g) = self.groups.get(&gid) {
+                if let Some(g) = self.visuals.groups.get(&gid) {
                     let ids: Vec<NodeId> = g.member_ids.iter().copied().collect();
                     for id in ids {
-                        if let Some(v) = self.node_visuals.get_mut(&id) {
+                        if let Some(v) = self.visuals.node_visuals.get_mut(&id) {
                             v.position += delta;
                         }
                     }
@@ -1717,7 +1716,7 @@ impl BarEditorApp {
             }
             // Group-level context menu — delete with confirm.
             let is_sub = self
-                .groups
+                .visuals.groups
                 .get(&gid)
                 .map(|g| g.is_subgraph)
                 .unwrap_or(false);
@@ -1791,7 +1790,7 @@ impl BarEditorApp {
                     .get(&(conn.from.node_id, conn.from.port_name.clone()))
                     .copied()
             } else {
-                self.node_visuals
+                self.visuals.node_visuals
                     .get(&conn.from.node_id)
                     .and_then(|visual| {
                         let node = self.graph.get_node(conn.from.node_id)?;
@@ -1821,7 +1820,7 @@ impl BarEditorApp {
                     PortPlacement::Left,
                 )
             } else {
-                let result = self.node_visuals.get(&conn.to.node_id).and_then(|visual| {
+                let result = self.visuals.node_visuals.get(&conn.to.node_id).and_then(|visual| {
                     let node = self.graph.get_node(conn.to.node_id)?;
                     let port = node.inputs.iter().find(|p| p.name == conn.to.port_name)?;
                     let placement = PortPlacement::for_input(port.kind);
@@ -1970,7 +1969,7 @@ impl BarEditorApp {
         }
 
         // Draw nodes
-        let node_ids: Vec<NodeId> = self.node_visuals.keys().copied().collect();
+        let node_ids: Vec<NodeId> = self.visuals.node_visuals.keys().copied().collect();
         // (id, additive). additive=true means "Ctrl+click — toggle in
         // the multi-selection set"; false means "plain click — replace".
         let mut new_selection: Option<(NodeId, bool)> = None;
@@ -2048,11 +2047,11 @@ impl BarEditorApp {
             else {
                 continue;
             };
-            let visual_data = self.node_visuals.get(node_id).map(|v| (v.position, v.size));
+            let visual_data = self.visuals.node_visuals.get(node_id).map(|v| (v.position, v.size));
             let Some((node_pos_raw, node_size)) = visual_data else {
                 continue;
             };
-            // All borrows on self.graph and self.node_visuals released here.
+            // All borrows on self.graph and self.visuals.node_visuals released here.
 
             let node_pos = node_pos_raw + offset;
             let node_rect =
@@ -2591,9 +2590,9 @@ impl BarEditorApp {
             // Right-click context menu — group operations + delete.
             // Building the menu here keeps the per-node-id context tight.
             let this_id = *node_id;
-            let in_group = self.node_to_group.get(&this_id).copied();
+            let in_group = self.visuals.node_to_group.get(&this_id).copied();
             let other_groups: Vec<(u64, String)> = self
-                .groups
+                .visuals.groups
                 .iter()
                 .filter_map(|(gid, g)| {
                     if Some(*gid) == in_group {
@@ -2799,7 +2798,7 @@ impl BarEditorApp {
                 if handle_resp.dragged() {
                     any_resize = true;
                     let delta = handle_resp.drag_delta();
-                    if let Some(v) = self.node_visuals.get_mut(node_id) {
+                    if let Some(v) = self.visuals.node_visuals.get_mut(node_id) {
                         if cx == 1 {
                             v.size.x = (v.size.x + delta.x).max(node_min_w);
                         } else {
@@ -2829,11 +2828,11 @@ impl BarEditorApp {
                 if self.selection.nodes.contains(node_id) && self.selection.nodes.len() > 1 {
                     let to_move: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
                     for id in to_move {
-                        if let Some(visual) = self.node_visuals.get_mut(&id) {
+                        if let Some(visual) = self.visuals.node_visuals.get_mut(&id) {
                             visual.position += delta;
                         }
                     }
-                } else if let Some(visual) = self.node_visuals.get_mut(node_id) {
+                } else if let Some(visual) = self.visuals.node_visuals.get_mut(node_id) {
                     visual.position += delta;
                 }
             }
@@ -2889,10 +2888,10 @@ impl BarEditorApp {
             // expanded group's title bar.
             if resp.dragged() {
                 let delta = resp.drag_delta();
-                if let Some(g) = self.groups.get(&gid) {
+                if let Some(g) = self.visuals.groups.get(&gid) {
                     let ids: Vec<NodeId> = g.member_ids.iter().copied().collect();
                     for id in ids {
-                        if let Some(v) = self.node_visuals.get_mut(&id) {
+                        if let Some(v) = self.visuals.node_visuals.get_mut(&id) {
                             v.position += delta;
                         }
                     }
@@ -2906,7 +2905,7 @@ impl BarEditorApp {
                 }
                 if ui.button("Expand").clicked() {
                     self.push_undo("Expand subgraph");
-                    if let Some(g) = self.groups.get_mut(&gid) {
+                    if let Some(g) = self.visuals.groups.get_mut(&gid) {
                         g.collapsed = false;
                     }
                     ui.close_menu();
@@ -2922,10 +2921,10 @@ impl BarEditorApp {
         // enters confined-edit mode (parallel affordance to double-
         // clicking the collapsed block).
         let subgraph_double_click: Vec<u64> = self
-            .group_header_rects
+            .visuals.group_header_rects
             .iter()
             .filter_map(|(gid, rect)| {
-                let g = self.groups.get(gid)?;
+                let g = self.visuals.groups.get(gid)?;
                 if g.is_subgraph
                     && pointer.is_some_and(|p| rect.contains(p))
                     && ui.ctx().input(|i| {
@@ -2988,15 +2987,15 @@ impl BarEditorApp {
             let mut group_membership_changed = false;
             // Compute candidate landing without mutating yet.
             let group_rects: Vec<(u64, egui::Rect)> = self
-                .group_header_rects
+                .visuals.group_header_rects
                 .iter()
                 .filter_map(|(gid, h)| {
-                    let b = self.group_body_rects.get(gid)?;
+                    let b = self.visuals.group_body_rects.get(gid)?;
                     Some((*gid, h.union(*b)))
                 })
                 .collect();
             for nid in &drag_drop_into_group {
-                let Some(visual) = self.node_visuals.get(nid) else {
+                let Some(visual) = self.visuals.node_visuals.get(nid) else {
                     continue;
                 };
                 let centre = egui::pos2(
@@ -3007,7 +3006,7 @@ impl BarEditorApp {
                     .iter()
                     .find(|(_, r)| r.contains(centre))
                     .map(|(gid, _)| *gid);
-                let prev = self.node_to_group.get(nid).copied();
+                let prev = self.visuals.node_to_group.get(nid).copied();
                 match (prev, landed_in) {
                     (Some(p), Some(n)) if p != n => group_membership_changed = true,
                     (None, Some(_)) | (Some(_), None) => group_membership_changed = true,
@@ -3022,15 +3021,15 @@ impl BarEditorApp {
             // Build (group_id, full_rect) snapshot. We use the cached
             // header + body rects to reconstruct the union.
             let group_rects: Vec<(u64, egui::Rect)> = self
-                .group_header_rects
+                .visuals.group_header_rects
                 .iter()
                 .filter_map(|(gid, h)| {
-                    let b = self.group_body_rects.get(gid)?;
+                    let b = self.visuals.group_body_rects.get(gid)?;
                     Some((*gid, h.union(*b)))
                 })
                 .collect();
             for nid in drag_drop_into_group {
-                let Some(visual) = self.node_visuals.get(&nid) else {
+                let Some(visual) = self.visuals.node_visuals.get(&nid) else {
                     continue;
                 };
                 let centre = egui::pos2(
@@ -3041,7 +3040,7 @@ impl BarEditorApp {
                     .iter()
                     .find(|(_, r)| r.contains(centre))
                     .map(|(gid, _)| *gid);
-                match (self.node_to_group.get(&nid).copied(), landed_in) {
+                match (self.visuals.node_to_group.get(&nid).copied(), landed_in) {
                     (Some(prev), Some(new)) if prev != new => {
                         self.add_node_to_group(nid, new);
                     }

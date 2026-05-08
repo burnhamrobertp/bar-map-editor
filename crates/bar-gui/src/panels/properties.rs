@@ -129,7 +129,7 @@ impl BarEditorApp {
         // hide their member nodes, so check them BEFORE walking
         // node_visuals — otherwise a hidden inner node at a
         // coincident position could intercept the hit.
-        for (gid, rect) in &self.collapsed_subgraph_rects {
+        for (gid, rect) in &self.visuals.collapsed_subgraph_rects {
             if rect.contains(p) {
                 return Some(PropsTarget::Group(*gid));
             }
@@ -139,7 +139,7 @@ impl BarEditorApp {
         // would erroneously match it as a Node target and reset the
         // hover gate that was armed for the SubGraph.
         let hidden = self.hidden_nodes_this_frame();
-        for (id, visual) in &self.node_visuals {
+        for (id, visual) in &self.visuals.node_visuals {
             if hidden.contains(id) {
                 continue;
             }
@@ -156,12 +156,12 @@ impl BarEditorApp {
         }
         // Plain groups (non-collapsed): header and body cached from
         // the previous draw_groups frame.
-        for (gid, hr) in &self.group_header_rects {
+        for (gid, hr) in &self.visuals.group_header_rects {
             if hr.contains(p) {
                 return Some(PropsTarget::Group(*gid));
             }
         }
-        for (gid, br) in &self.group_body_rects {
+        for (gid, br) in &self.visuals.group_body_rects {
             if br.contains(p) {
                 return Some(PropsTarget::Group(*gid));
             }
@@ -176,7 +176,7 @@ impl BarEditorApp {
     pub(crate) fn props_target_screen_rect(&self, target: &PropsTarget) -> Option<egui::Rect> {
         match target {
             PropsTarget::Node(id) => {
-                let v = self.node_visuals.get(id)?;
+                let v = self.visuals.node_visuals.get(id)?;
                 Some(egui::Rect::from_min_size(
                     egui::pos2(
                         v.position.x + self.canvas.offset.x,
@@ -188,11 +188,11 @@ impl BarEditorApp {
             PropsTarget::Group(gid) => {
                 // Collapsed subgraph block rect first — when a group
                 // is collapsed, its header / body rects don't exist.
-                if let Some(r) = self.collapsed_subgraph_rects.get(gid) {
+                if let Some(r) = self.visuals.collapsed_subgraph_rects.get(gid) {
                     return Some(*r);
                 }
-                let h = self.group_header_rects.get(gid)?;
-                let b = self.group_body_rects.get(gid)?;
+                let h = self.visuals.group_header_rects.get(gid)?;
+                let b = self.visuals.group_body_rects.get(gid)?;
                 Some(h.union(*b))
             }
         }
@@ -674,7 +674,7 @@ impl BarEditorApp {
     pub(crate) fn draw_group_properties(&mut self, ui: &mut egui::Ui, gid: u64) {
         // Snapshot the current state into locals so the UI body
         // doesn't have to thread mutable borrows.
-        let snapshot = match self.groups.get(&gid) {
+        let snapshot = match self.visuals.groups.get(&gid) {
             Some(g) => g.clone(),
             None => {
                 self.selection.group = None;
@@ -863,7 +863,7 @@ impl BarEditorApp {
 
         if dirty {
             self.push_undo("Edit group properties");
-            if let Some(g) = self.groups.get_mut(&gid) {
+            if let Some(g) = self.visuals.groups.get_mut(&gid) {
                 g.label = label_buf;
                 g.color_idx = color_idx;
                 g.is_subgraph = is_subgraph;
