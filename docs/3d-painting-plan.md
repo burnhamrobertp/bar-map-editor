@@ -120,9 +120,9 @@ not yet implemented (pending Phase F).
 
 - **Brush ring on 3D mesh**: shipped. `CameraUniform.brush_cursor` vec4, amber
   annulus in `terrain.wgsl`.
-- **Live colour/metal/type caches**: shipped. `inspector_metalmap`,
-  `inspector_typemap` in `BarEditorApp`; synthesised tint while those targets
-  are active.
+- **Live colour/metal/type caches**: shipped. `metalmap` / `typemap`
+  on `BarEditorApp::paint` (the `PaintSession` sub-state); synthesised
+  tint while those targets are active.
 - **Embedded viewport**: not shipped. The 3D renderer is a floating `egui::Window`
   launched from the standard layout. The Sculpt3D layout's central panel is a
   placeholder.
