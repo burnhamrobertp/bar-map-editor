@@ -242,7 +242,6 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
                     t!("editor.validation.tab_info", n = infos),
                     blue,
                 );
-                drop(tab);
                 app.set_validation_filter(active_filter);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui

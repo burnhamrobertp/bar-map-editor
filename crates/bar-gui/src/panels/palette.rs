@@ -126,20 +126,24 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     // of graph wired up for a typical map archetype. Drop one,
     // wire its output to a Bundler, you're done.
     ui.collapsing("Macros", |ui| {
-        for (name, _json) in crate::macros::BUILTIN_MACROS {
-            let resp = ui.add(
-                egui::Label::new(*name)
-                    .sense(egui::Sense::click_and_drag())
-                    .selectable(false),
-            );
-            if resp.drag_started() && drag_start.is_none() {
-                drag_start = Some(PaletteDrag {
-                    kind: PaletteKind::Macro {
-                        name: (*name).to_string(),
-                    },
-                    label: (*name).to_string(),
-                });
-            }
+        for group in crate::macros::BUILTIN_MACRO_GROUPS {
+            ui.collapsing(group.name, |ui| {
+                for entry in group.entries {
+                    let resp = ui.add(
+                        egui::Label::new(entry.display_name)
+                            .sense(egui::Sense::click_and_drag())
+                            .selectable(false),
+                    );
+                    if resp.drag_started() && drag_start.is_none() {
+                        drag_start = Some(PaletteDrag {
+                            kind: PaletteKind::Macro {
+                                name: entry.full_name.to_string(),
+                            },
+                            label: format!("{} - {}", group.name, entry.display_name),
+                        });
+                    }
+                }
+            });
         }
     });
 

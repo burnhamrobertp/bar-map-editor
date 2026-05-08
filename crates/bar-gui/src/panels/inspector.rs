@@ -417,7 +417,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     // closure so the rfd modal doesn't interleave with the egui
     // borrow on `app`.
     if clicked_save_png {
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = app
+            .make_dialog()
             .set_title("Save sculpted heightmap")
             .add_filter("16-bit grayscale PNG", &["png"])
             .set_file_name("sculpted-heightmap.png")

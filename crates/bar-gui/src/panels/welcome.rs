@@ -12,7 +12,7 @@ use crate::app::BarEditorApp;
 use crate::t;
 
 /// Curated starter macros surfaced on the welcome screen — one per
-/// category. Each entry is `(localization-stem, BUILTIN_MACROS name)`.
+/// category. Each entry is `(localization-stem, BUILTIN_MACRO_GROUPS full_name)`.
 /// Clicking a card drops the macro into a fresh project. Display
 /// strings are looked up at render time via
 /// `t!("editor.templates.<stem>.{name,description}")` so they

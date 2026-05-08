@@ -198,8 +198,7 @@ pub fn instantiate(
     // `value` input is wired to whatever the binding points at so
     // the value flows through it on evaluation. For inputs we wire
     // the IO node's `value` output to the inner consumer.
-    let mut io_index = 0_usize;
-    for p in &template.subgraph.inputs {
+    for (io_index, p) in template.subgraph.inputs.iter().enumerate() {
         // IO nodes ship with no `name` and no node-level label by
         // default. The wrapper block's external port name and the
         // visible label on the IO node are both derived from the
@@ -213,6 +212,10 @@ pub fn instantiate(
         let mut node = Node::new(NodeId(0), NodeType::SubgraphInput, String::new());
         node.params
             .insert("kind".to_string(), ParamValue::String(p.kind.clone()));
+        if !p.label.is_empty() {
+            node.params
+                .insert("name".to_string(), ParamValue::String(p.label.clone()));
+        }
         node.sync_subgraph_io_kind();
         let id = graph.add_node(node);
         member_ids.insert(id);
@@ -241,15 +244,17 @@ pub fn instantiate(
                 );
             }
         }
-        io_index += 1;
     }
-    let mut io_out_index = 0_usize;
-    for p in &template.subgraph.outputs {
+    for (io_out_index, p) in template.subgraph.outputs.iter().enumerate() {
         // See the SubgraphInput block above for why `name` and the
         // node-level label are deliberately left empty here.
         let mut node = Node::new(NodeId(0), NodeType::SubgraphOutput, String::new());
         node.params
             .insert("kind".to_string(), ParamValue::String(p.kind.clone()));
+        if !p.label.is_empty() {
+            node.params
+                .insert("name".to_string(), ParamValue::String(p.label.clone()));
+        }
         node.sync_subgraph_io_kind();
         let id = graph.add_node(node);
         member_ids.insert(id);
@@ -278,7 +283,6 @@ pub fn instantiate(
                 );
             }
         }
-        io_out_index += 1;
     }
     // Empty runtime ports — the per-frame derive will populate them
     // based on the IO nodes we just created.
@@ -332,7 +336,7 @@ fn fresh_seed() -> u32 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.subsec_nanos() ^ d.as_secs() as u32)
         .unwrap_or(0);
-    nanos ^ (std::process::id() as u32).rotate_left(13)
+    nanos ^ std::process::id().rotate_left(13)
 }
 
 /// Blend the drop-seed with a per-node-and-key tag so multiple inner
@@ -363,75 +367,145 @@ fn parse_node_port(
     Ok((id, port.to_string()))
 }
 
-/// The library of macros bundled with the editor. Each entry is
-/// `(display name, embedded JSON)`. Add a new macro by dropping its
-/// JSON into `assets/macros/` and adding a row here.
-pub static BUILTIN_MACROS: &[(&str, &str)] = &[
-    (
-        "Mountain Range",
-        include_str!("../../../assets/macros/mountain-range.json"),
-    ),
-    (
-        "Mountain Range - Alpine",
-        include_str!("../../../assets/macros/mountain-range-alpine.json"),
-    ),
-    (
-        "Mountain Range - Foothills",
-        include_str!("../../../assets/macros/mountain-range-foothills.json"),
-    ),
-    (
-        "Mountain Range - Plateaus",
-        include_str!("../../../assets/macros/mountain-range-plateaus.json"),
-    ),
-    ("Plains", include_str!("../../../assets/macros/plains.json")),
-    (
-        "Plains - Coastal",
-        include_str!("../../../assets/macros/plains-coastal.json"),
-    ),
-    (
-        "Plains - With Hills",
-        include_str!("../../../assets/macros/plains-with-hills.json"),
-    ),
-    (
-        "Plains - Marsh",
-        include_str!("../../../assets/macros/plains-marsh.json"),
-    ),
-    (
-        "Archipelago",
-        include_str!("../../../assets/macros/archipelago.json"),
-    ),
-    (
-        "Archipelago - Dense",
-        include_str!("../../../assets/macros/archipelago-dense.json"),
-    ),
-    (
-        "Archipelago - Sparse",
-        include_str!("../../../assets/macros/archipelago-sparse.json"),
-    ),
-    ("Canyon", include_str!("../../../assets/macros/canyon.json")),
-    (
-        "Canyon - Mesa",
-        include_str!("../../../assets/macros/canyon-mesa.json"),
-    ),
-    (
-        "Canyon - Slot",
-        include_str!("../../../assets/macros/canyon-slot.json"),
-    ),
-    ("Dunes", include_str!("../../../assets/macros/dunes.json")),
-    (
-        "Dunes - Rolling",
-        include_str!("../../../assets/macros/dunes-rolling.json"),
-    ),
-    (
-        "Dunes - Sharp",
-        include_str!("../../../assets/macros/dunes-sharp.json"),
-    ),
+/// One variant within a macro group. `full_name` is the canonical
+/// lookup key; `display_name` is the short label shown in menus
+/// (e.g. "Alpine" instead of "Mountain Range - Alpine").
+pub struct MacroEntry {
+    pub full_name: &'static str,
+    pub display_name: &'static str,
+    pub json: &'static str,
+}
+
+/// A group of related macro variants sharing a common archetype.
+/// The first entry in `entries` is the standard/base variant.
+pub struct MacroGroup {
+    pub name: &'static str,
+    pub entries: &'static [MacroEntry],
+}
+
+pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
+    MacroGroup {
+        name: "Mountain Range",
+        entries: &[
+            MacroEntry {
+                full_name: "Mountain Range",
+                display_name: "Standard",
+                json: include_str!("../../../assets/macros/mountain-range.json"),
+            },
+            MacroEntry {
+                full_name: "Mountain Range - Alpine",
+                display_name: "Alpine",
+                json: include_str!("../../../assets/macros/mountain-range-alpine.json"),
+            },
+            MacroEntry {
+                full_name: "Mountain Range - Foothills",
+                display_name: "Foothills",
+                json: include_str!("../../../assets/macros/mountain-range-foothills.json"),
+            },
+            MacroEntry {
+                full_name: "Mountain Range - Plateaus",
+                display_name: "Plateaus",
+                json: include_str!("../../../assets/macros/mountain-range-plateaus.json"),
+            },
+        ],
+    },
+    MacroGroup {
+        name: "Plains",
+        entries: &[
+            MacroEntry {
+                full_name: "Plains",
+                display_name: "Standard",
+                json: include_str!("../../../assets/macros/plains.json"),
+            },
+            MacroEntry {
+                full_name: "Plains - Coastal",
+                display_name: "Coastal",
+                json: include_str!("../../../assets/macros/plains-coastal.json"),
+            },
+            MacroEntry {
+                full_name: "Plains - With Hills",
+                display_name: "With Hills",
+                json: include_str!("../../../assets/macros/plains-with-hills.json"),
+            },
+            MacroEntry {
+                full_name: "Plains - Marsh",
+                display_name: "Marsh",
+                json: include_str!("../../../assets/macros/plains-marsh.json"),
+            },
+        ],
+    },
+    MacroGroup {
+        name: "Archipelago",
+        entries: &[
+            MacroEntry {
+                full_name: "Archipelago",
+                display_name: "Standard",
+                json: include_str!("../../../assets/macros/archipelago.json"),
+            },
+            MacroEntry {
+                full_name: "Archipelago - Dense",
+                display_name: "Dense",
+                json: include_str!("../../../assets/macros/archipelago-dense.json"),
+            },
+            MacroEntry {
+                full_name: "Archipelago - Sparse",
+                display_name: "Sparse",
+                json: include_str!("../../../assets/macros/archipelago-sparse.json"),
+            },
+        ],
+    },
+    MacroGroup {
+        name: "Canyon",
+        entries: &[
+            MacroEntry {
+                full_name: "Canyon",
+                display_name: "Standard",
+                json: include_str!("../../../assets/macros/canyon.json"),
+            },
+            MacroEntry {
+                full_name: "Canyon - Mesa",
+                display_name: "Mesa",
+                json: include_str!("../../../assets/macros/canyon-mesa.json"),
+            },
+            MacroEntry {
+                full_name: "Canyon - Slot",
+                display_name: "Slot",
+                json: include_str!("../../../assets/macros/canyon-slot.json"),
+            },
+        ],
+    },
+    MacroGroup {
+        name: "Dunes",
+        entries: &[
+            MacroEntry {
+                full_name: "Dunes",
+                display_name: "Standard",
+                json: include_str!("../../../assets/macros/dunes.json"),
+            },
+            MacroEntry {
+                full_name: "Dunes - Rolling",
+                display_name: "Rolling",
+                json: include_str!("../../../assets/macros/dunes-rolling.json"),
+            },
+            MacroEntry {
+                full_name: "Dunes - Sharp",
+                display_name: "Sharp",
+                json: include_str!("../../../assets/macros/dunes-sharp.json"),
+            },
+        ],
+    },
 ];
 
-/// Parse one of the built-in macros by display name.
+/// Parse one of the built-in macros by its canonical full name.
 pub fn parse(name: &str) -> Option<MacroTemplate> {
-    let (_, json) = BUILTIN_MACROS.iter().find(|(n, _)| *n == name)?;
-    serde_json::from_str(json).ok()
+    for group in BUILTIN_MACRO_GROUPS {
+        for entry in group.entries {
+            if entry.full_name == name {
+                return serde_json::from_str(entry.json).ok();
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -440,16 +514,19 @@ mod tests {
 
     #[test]
     fn all_builtin_macros_parse_and_instantiate() {
-        for (name, _) in BUILTIN_MACROS {
-            let t = parse(name).unwrap_or_else(|| panic!("macro '{name}' failed to parse"));
-            assert!(!t.nodes.is_empty(), "macro '{name}' has no nodes");
-            assert!(
-                !t.subgraph.outputs.is_empty(),
-                "macro '{name}' has no subgraph outputs"
-            );
-            let mut g = GraphEngine::new();
-            instantiate(&t, &mut g, egui::pos2(0.0, 0.0))
-                .unwrap_or_else(|e| panic!("macro '{name}' failed to instantiate: {e}"));
+        for group in BUILTIN_MACRO_GROUPS {
+            for entry in group.entries {
+                let name = entry.full_name;
+                let t = parse(name).unwrap_or_else(|| panic!("macro '{name}' failed to parse"));
+                assert!(!t.nodes.is_empty(), "macro '{name}' has no nodes");
+                assert!(
+                    !t.subgraph.outputs.is_empty(),
+                    "macro '{name}' has no subgraph outputs"
+                );
+                let mut g = GraphEngine::new();
+                instantiate(&t, &mut g, egui::pos2(0.0, 0.0))
+                    .unwrap_or_else(|e| panic!("macro '{name}' failed to instantiate: {e}"));
+            }
         }
     }
 

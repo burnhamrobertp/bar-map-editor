@@ -80,29 +80,7 @@ pub(crate) fn node_port_pos(
 }
 
 /// Returns true for file extensions that can be edited as plain text.
-pub(crate) fn is_text_file(path: &str) -> bool {
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    matches!(
-        ext.as_str(),
-        "lua"
-            | "cfg"
-            | "txt"
-            | "md"
-            | "json"
-            | "toml"
-            | "ini"
-            | "conf"
-            | "xml"
-            | "yaml"
-            | "yml"
-            | "sh"
-            | "py"
-    )
-}
+pub(crate) use crate::io::is_text_file;
 
 // `NodeVisual` and `GroupRuntime` live in `crate::state` so the undo
 // module can snapshot them without going through stringly-typed JSON.
@@ -116,9 +94,8 @@ pub(crate) fn parse_subgraph_binding(
     key_to_id: &HashMap<String, NodeId>,
 ) -> Option<(NodeId, String)> {
     let s = raw?;
-    let mut parts = s.splitn(2, ':');
-    let key = parts.next()?;
-    let port_name = parts.next()?;
+    let (key, port_name) = s.split_once(':')?;
+
     let id = *key_to_id.get(key)?;
     Some((id, port_name.to_string()))
 }
@@ -400,7 +377,7 @@ pub(crate) struct FileEditor {
 pub enum PaletteKind {
     Node(NodeType),
     Macro {
-        /// Display name of one of `macros::BUILTIN_MACROS`.
+        /// Canonical full name of one of the entries in `macros::BUILTIN_MACRO_GROUPS`.
         name: String,
     },
 }
@@ -676,6 +653,7 @@ impl ExportStatus {
 /// across all four layers. Written by brush operations; read by
 /// `pack_sculpt_record` at save time and by the renderer for live
 /// preview.
+#[derive(Default)]
 pub struct SculptState {
     /// Signed height delta. Zero where unmodified. Composite shown in
     /// the inspector is `heightmap + height_delta`.
@@ -690,20 +668,6 @@ pub struct SculptState {
     pub texture_overlay: Option<bar_data::ColorBuffer>,
     /// True when any layer has been modified since the last save.
     pub dirty: bool,
-}
-
-impl Default for SculptState {
-    fn default() -> Self {
-        Self {
-            height_delta: None,
-            metal_overlay: None,
-            metal_alpha: None,
-            type_overlay: None,
-            type_alpha: None,
-            texture_overlay: None,
-            dirty: false,
-        }
-    }
 }
 
 /// Live brush, sculpt-lock, and per-layer paint caches used by the
@@ -937,6 +901,15 @@ pub struct BarEditorApp {
     /// the user clicks Open until the dialog closes — perceived as
     /// a long delay before the dialog appears AND while it's open.
     pub(crate) pending_open_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+    /// Raw window + display handles of the editor's main window. Used to
+    /// parent native file dialogs so they belong to (and return focus
+    /// to) the editor instead of whatever window the OS happens to
+    /// consider foreground at the moment the dialog spawns. `bar-app`
+    /// populates this each frame from `eframe::Frame`.
+    pub(crate) parent_window_handles: Option<(
+        raw_window_handle::RawWindowHandle,
+        raw_window_handle::RawDisplayHandle,
+    )>,
     /// State for the inline text editor in the PassThrough properties panel.
     pub(crate) passthrough_edit: Option<PassthroughEdit>,
     /// Whether the project has unsaved changes.
@@ -1112,6 +1085,7 @@ impl Default for BarEditorApp {
             project_path: None,
             sd7_open_request: None,
             pending_open_rx: None,
+            parent_window_handles: None,
             passthrough_edit: None,
             is_dirty: false,
             run_requested: false,
@@ -1203,6 +1177,93 @@ impl BarEditorApp {
         &self.graph
     }
 
+    /// Update the cached parent window + display handles. Called each
+    /// frame by `bar-app` from `eframe::Frame`. Native file dialogs
+    /// read this so the OS knows which window to attach to.
+    pub fn set_parent_window_handles(
+        &mut self,
+        handles: Option<(
+            raw_window_handle::RawWindowHandle,
+            raw_window_handle::RawDisplayHandle,
+        )>,
+    ) {
+        self.parent_window_handles = handles;
+    }
+
+    /// Build a `ParentWindow` for the current frame's handles, if any.
+    /// Useful from `bar-app` and other crates that want to spawn their
+    /// own dialogs while preserving correct parenting.
+    pub fn parent_window(&self) -> Option<ParentWindow> {
+        self.parent_window_handles
+            .map(|(w, d)| ParentWindow::new(w, d))
+    }
+
+    /// Build an rfd::FileDialog already parented to the editor window
+    /// (when handles are available). Use this everywhere instead of
+    /// `rfd::FileDialog::new()` so dialogs don't latch onto whichever
+    /// window happens to be foreground.
+    pub(crate) fn make_dialog(&self) -> rfd::FileDialog {
+        let dialog = rfd::FileDialog::new();
+        match self.parent_window() {
+            Some(parent) => dialog.set_parent(&parent),
+            None => dialog,
+        }
+    }
+}
+
+/// Owned wrapper that re-implements `HasWindowHandle` + `HasDisplayHandle`
+/// for previously captured raw handles. Lets us pass a parent handle to
+/// rfd from a worker thread without holding a live borrow of
+/// `eframe::Frame`. Public so `bar-app` can build one for its own
+/// dialogs (folder picker in the export flow) without re-implementing
+/// the same pattern.
+pub struct ParentWindow {
+    pub window: raw_window_handle::RawWindowHandle,
+    pub display: raw_window_handle::RawDisplayHandle,
+}
+
+// SAFETY: The raw handle types are conservatively `!Send` because some
+// of their variants embed raw pointers. We only ever use a handle as
+// an opaque token passed to OS file-dialog APIs (which accept handles
+// from any thread by contract), and never dereference the embedded
+// pointer or read the underlying window memory. Crossing the
+// `thread::spawn` boundary with the wrapper is therefore safe.
+unsafe impl Send for ParentWindow {}
+unsafe impl Sync for ParentWindow {}
+
+impl ParentWindow {
+    pub fn new(
+        window: raw_window_handle::RawWindowHandle,
+        display: raw_window_handle::RawDisplayHandle,
+    ) -> Self {
+        Self { window, display }
+    }
+}
+
+impl raw_window_handle::HasWindowHandle for ParentWindow {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        // SAFETY: the underlying OS window must outlive any dialog
+        // built with this parent. In our app, the editor's main
+        // window exists for the entire process lifetime, and dialog
+        // calls always complete before shutdown -- so any handle we
+        // captured during update() is still valid here.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.window) })
+    }
+}
+
+impl raw_window_handle::HasDisplayHandle for ParentWindow {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        // SAFETY: same lifetime argument as above -- the underlying
+        // OS display connection lives for the process.
+        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.display) })
+    }
+}
+
+impl BarEditorApp {
     /// Read-only access to user settings (vertical exaggeration, etc.).
     pub fn settings(&self) -> &Settings {
         &self.settings
@@ -1457,7 +1518,7 @@ impl BarEditorApp {
     /// project-switching path (new, open .barproj, open .sd7,
     /// load macro preset, close) calls this first, then installs
     /// new state on top of the blank slate.
-    fn reset_project(&mut self) {
+    pub(crate) fn reset_project(&mut self) {
         // Graph engine — counter resets to 1 so the next project
         // gets clean NodeIds with no risk of colliding with stale
         // group member_ids from the previous project.
@@ -1561,7 +1622,7 @@ impl BarEditorApp {
         self.last_active_tab = 0;
     }
 
-    fn do_new_project(&mut self) {
+    pub(crate) fn do_new_project(&mut self) {
         self.reset_project();
 
         // Drop the two terminal nodes every project ends with: a
@@ -1589,7 +1650,7 @@ impl BarEditorApp {
             preview_id,
             NodeVisual {
                 position: preview_pos,
-                size: egui::vec2(180.0, 100.0),
+                size: egui::vec2(180.0, 150.0),
             },
         );
         self.preview_node = Some(preview_id);
@@ -1602,7 +1663,7 @@ impl BarEditorApp {
     /// hasn't been laid out yet.
     pub(crate) fn starter_terminal_positions(&self) -> (egui::Pos2, egui::Pos2) {
         let bundler_size = egui::vec2(210.0, 240.0);
-        let preview_size = egui::vec2(180.0, 100.0);
+        let preview_size = egui::vec2(180.0, 150.0);
         let margin = 40.0_f32;
         let gap = 60.0_f32;
         let canvas_w = if self.canvas_rect_last.is_positive() {
@@ -1645,7 +1706,7 @@ impl BarEditorApp {
             preview_id,
             NodeVisual {
                 position: preview_pos,
-                size: egui::vec2(180.0, 100.0),
+                size: egui::vec2(180.0, 150.0),
             },
         );
         self.preview_node = Some(preview_id);
@@ -1701,7 +1762,8 @@ impl BarEditorApp {
     }
 
     fn save_as(&mut self) {
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = self
+            .make_dialog()
             .set_title("Save Project As")
             .add_filter("BAR Map Editor Project", &["barproj"])
             .save_file()
@@ -1796,9 +1858,26 @@ impl BarEditorApp {
             struct IoEntry {
                 nid: NodeId,
                 is_input: bool,
-                kind: String,
+                /// Display label inferred from the connected port (e.g. "Slope").
+                /// Empty string means nothing is connected ("Unknown" display).
+                kind_display: String,
+                /// Underlying PortKind for type enforcement, inferred from the
+                /// connected port's actual kind.
+                port_kind: PortKind,
                 explicit_name: Option<String>,
             }
+            // Track all SubgraphOutput nids so we can reset disconnected ones.
+            let all_output_nids: Vec<NodeId> = sorted
+                .iter()
+                .filter(|&&nid| {
+                    self.graph
+                        .get_node(nid)
+                        .map(|n| n.node_type == NodeType::SubgraphOutput)
+                        .unwrap_or(false)
+                })
+                .copied()
+                .collect();
+
             let mut entries: Vec<IoEntry> = Vec::new();
             for nid in sorted {
                 let Some(node) = self.graph.get_node(nid) else {
@@ -1812,14 +1891,28 @@ impl BarEditorApp {
                 if !(is_input || is_output) {
                     continue;
                 }
-                let kind = match node.params.get("kind") {
-                    Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
-                    _ => "Heightmap".to_string(),
+                // Both input and output: infer from whatever is wired into
+                // the "value" input port. For outputs, nothing connected means
+                // no external port. For inputs, nothing connected is valid but
+                // shows as "Unknown".
+                let conn_info = self
+                    .graph
+                    .connections()
+                    .iter()
+                    .find(|c| c.to.node_id == nid && c.to.port_name == "value")
+                    .and_then(|c| {
+                        self.graph
+                            .get_node(c.from.node_id)?
+                            .outputs
+                            .iter()
+                            .find(|p| p.name == c.from.port_name)
+                            .map(|p| (p.label.clone(), p.kind))
+                    });
+                let (kind_display, port_kind) = match conn_info {
+                    Some((label, pk)) => (label, pk),
+                    None if is_output => continue, // no connection: no external port
+                    None => (String::new(), PortKind::Heightmap), // input: Unknown
                 };
-                // Empty `name` means "no explicit label" — fall
-                // back to the auto-generated kind+index. A non-
-                // empty value is treated as user-supplied and wins
-                // over auto-numbering.
                 let explicit_name = match node.params.get("name") {
                     Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
                     _ => None,
@@ -1827,49 +1920,62 @@ impl BarEditorApp {
                 entries.push(IoEntry {
                     nid,
                     is_input,
-                    kind,
+                    kind_display,
+                    port_kind,
                     explicit_name,
                 });
             }
 
             // Count auto-named ports per (role, kind) so we know
-            // which need a "2", "3", … suffix. Explicit names
-            // don't contribute to the count.
+            // which need a "2", "3", … suffix. Empty kind ("Unknown")
+            // is counted separately. Explicit names don't contribute.
             let mut auto_counts: std::collections::HashMap<(bool, String), usize> =
                 std::collections::HashMap::new();
             for e in &entries {
                 if e.explicit_name.is_none() {
-                    *auto_counts.entry((e.is_input, e.kind.clone())).or_insert(0) += 1;
+                    *auto_counts
+                        .entry((e.is_input, e.kind_display.clone()))
+                        .or_insert(0) += 1;
                 }
             }
+
+            // Collect (nid, kind_display, port_kind) for all IO nodes so
+            // we can sync their node params and port kinds after the loop.
+            let io_kind_syncs: Vec<(NodeId, String, PortKind)> = entries
+                .iter()
+                .map(|e| (e.nid, e.kind_display.clone(), e.port_kind))
+                .collect();
 
             let mut inputs: Vec<crate::state::SubgraphPortRuntime> = Vec::new();
             let mut outputs: Vec<crate::state::SubgraphPortRuntime> = Vec::new();
             let mut auto_seen: std::collections::HashMap<(bool, String), usize> =
                 std::collections::HashMap::new();
             for e in entries {
+                let display_kind = if e.kind_display.is_empty() {
+                    "Unknown"
+                } else {
+                    &e.kind_display
+                };
                 let label = if let Some(ref n) = e.explicit_name {
                     n.clone()
                 } else {
-                    let total = *auto_counts.get(&(e.is_input, e.kind.clone())).unwrap_or(&1);
-                    let idx = auto_seen.entry((e.is_input, e.kind.clone())).or_insert(0);
+                    let total = *auto_counts
+                        .get(&(e.is_input, e.kind_display.clone()))
+                        .unwrap_or(&1);
+                    let idx = auto_seen
+                        .entry((e.is_input, e.kind_display.clone()))
+                        .or_insert(0);
                     *idx += 1;
                     if total > 1 {
-                        format!("{} {}", e.kind, idx)
+                        format!("{} {}", display_kind, idx)
                     } else {
-                        e.kind.clone()
+                        display_kind.to_string()
                     }
                 };
-                // The runtime port `name` doubles as the wire-
-                // routing key on the wrapper block; auto-named
-                // ports use the same string as the label so a
-                // wire connecting to "Heightmap 2" survives
-                // save/load (member-ordering is stable via the
-                // NodeId sort above).
                 let port = crate::state::SubgraphPortRuntime {
                     name: label.clone(),
                     label,
-                    kind: e.kind,
+                    kind: format!("{:?}", e.port_kind),
                     binding: Some((e.nid, "value".to_string())),
                 };
                 if e.is_input {
@@ -1881,6 +1987,27 @@ impl BarEditorApp {
             if let Some(g) = self.groups.get_mut(&gid) {
                 g.subgraph_inputs = inputs;
                 g.subgraph_outputs = outputs;
+            }
+            // Sync kind_display param and port kind for all IO nodes
+            // that had a connection this frame.
+            let synced_nids: std::collections::HashSet<NodeId> =
+                io_kind_syncs.iter().map(|(nid, _, _)| *nid).collect();
+            for (nid, kind_display, port_kind) in io_kind_syncs {
+                if let Some(node) = self.graph.get_node_mut(nid) {
+                    node.params
+                        .insert("kind".to_string(), ParamValue::String(kind_display));
+                    node.set_io_port_kind(port_kind);
+                }
+            }
+            // Reset disconnected SubgraphOutput nodes to Unknown state.
+            for nid in all_output_nids {
+                if !synced_nids.contains(&nid) {
+                    if let Some(node) = self.graph.get_node_mut(nid) {
+                        node.params
+                            .insert("kind".to_string(), ParamValue::String(String::new()));
+                        node.set_io_port_kind(PortKind::Heightmap);
+                    }
+                }
             }
         }
     }
@@ -1943,9 +2070,11 @@ impl BarEditorApp {
         // height so the validator sees what the project will export
         // with. Other fields use defaults — full structured-mapinfo
         // editing comes in M1.1.
-        let mut settings = bar_project::MapSettings::default();
-        settings.min_height = self.map_min_height;
-        settings.max_height = self.map_max_height;
+        let settings = bar_project::MapSettings {
+            min_height: self.map_min_height,
+            max_height: self.map_max_height,
+            ..Default::default()
+        };
         self.validation_findings =
             bar_project::validate_project(&self.graph, &settings, self.map_width, self.map_height);
     }
@@ -2103,7 +2232,13 @@ impl BarEditorApp {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
-        self.graph.revision().hash(&mut h);
+        // Hash the upstream subgraph of the preview node so that changes
+        // to disconnected nodes don't trigger a re-render.
+        if let Some(pn) = self.preview_node {
+            self.graph.upstream_content_hash(pn).hash(&mut h);
+        } else {
+            self.graph.revision().hash(&mut h);
+        }
         self.preview_node
             .map(|n| n.0)
             .unwrap_or(u64::MAX)
@@ -2686,12 +2821,12 @@ impl BarEditorApp {
                 open_tabs: self
                     .tabs
                     .iter()
-                    .filter_map(|view| match view {
+                    .map(|view| match view {
                         // Index 0 (Main) is implicit at load time so
                         // we don't need to write it out.
-                        CanvasView::Main => Some(bar_project::PersistedCanvasView::Main),
+                        CanvasView::Main => bar_project::PersistedCanvasView::Main,
                         CanvasView::SubGraph(gid) => {
-                            Some(bar_project::PersistedCanvasView::SubGraph { group_id: *gid })
+                            bar_project::PersistedCanvasView::SubGraph { group_id: *gid }
                         }
                     })
                     .collect(),
@@ -2952,13 +3087,17 @@ impl BarEditorApp {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
+        let parent = self.parent_window();
         std::thread::spawn(move || {
-            let path = rfd::FileDialog::new()
+            let mut dialog = rfd::FileDialog::new()
                 .set_title("Open")
                 .add_filter("Supported Files", &["barproj", "sd7"])
                 .add_filter("BAR Map Editor Project", &["barproj"])
-                .add_filter("Spring Map Archive", &["sd7"])
-                .pick_file();
+                .add_filter("Spring Map Archive", &["sd7"]);
+            if let Some(parent) = &parent {
+                dialog = dialog.set_parent(parent);
+            }
+            let path = dialog.pick_file();
             let _ = tx.send(path);
         });
         self.pending_open_rx = Some(rx);
@@ -3167,7 +3306,7 @@ impl BarEditorApp {
                 continue;
             }
             let already_has_io_nodes = g.member_ids.iter().any(|id| {
-                self.graph.get_node(*id).map_or(false, |n| {
+                self.graph.get_node(*id).is_some_and(|n| {
                     matches!(
                         n.node_type,
                         NodeType::SubgraphInput | NodeType::SubgraphOutput
@@ -3386,8 +3525,8 @@ impl BarEditorApp {
     }
 
     /// Drop a macro into a fresh project: clears any existing graph
-    /// + session state, adds a Bundler and Preview to the right, and
-    /// wires the macro's outputs through them. Used by both the
+    /// and session state, adds a Bundler and Preview to the right,
+    /// and wires the macro's outputs through them. Used by both the
     /// welcome panel's preset cards and File → New from Preset; both
     /// surfaces produce identical starting state because they share
     /// this method.
@@ -3440,7 +3579,7 @@ impl BarEditorApp {
             preview_id,
             NodeVisual {
                 position: preview_pos,
-                size: egui::vec2(180.0, 100.0),
+                size: egui::vec2(180.0, 150.0),
             },
         );
         self.preview_open = true;
@@ -3736,8 +3875,7 @@ impl BarEditorApp {
         // the new node lives at the top level of the graph and
         // becomes invisible the moment it's dropped — properties
         // panel opens on a node the user can't see.
-        if let Some(CanvasView::SubGraph(scope)) = self.tabs.get(self.active_tab as usize).cloned()
-        {
+        if let Some(CanvasView::SubGraph(scope)) = self.tabs.get(self.active_tab).cloned() {
             if let Some(group) = self.groups.get_mut(&scope) {
                 group.member_ids.insert(id);
                 self.node_to_group.insert(id, scope);
@@ -4144,12 +4282,17 @@ impl BarEditorApp {
                         }
                         let mut macro_to_load: Option<String> = None;
                         ui.menu_button(t!("editor.menu.new_from_preset"), |ui| {
-                            ui.set_min_width(220.0);
-                            for (name, _json) in crate::macros::BUILTIN_MACROS {
-                                if ui.button(*name).clicked() {
-                                    macro_to_load = Some((*name).to_string());
-                                    ui.close_menu();
-                                }
+                            ui.set_min_width(180.0);
+                            for group in crate::macros::BUILTIN_MACRO_GROUPS {
+                                ui.menu_button(group.name, |ui| {
+                                    ui.set_min_width(140.0);
+                                    for entry in group.entries {
+                                        if ui.button(entry.display_name).clicked() {
+                                            macro_to_load = Some(entry.full_name.to_string());
+                                            ui.close_menu();
+                                        }
+                                    }
+                                });
                             }
                         });
                         if let Some(name) = macro_to_load {
@@ -4695,8 +4838,9 @@ impl BarEditorApp {
         // Action bar -- only shown inside a project.
         if self.has_project() {
             egui::TopBottomPanel::top("action_bar").show(ctx, |ui| {
+                ui.add_space(4.0);
                 ui.horizontal(|ui| {
-                    let btn_size = egui::vec2(44.0, 36.0);
+                    let btn_size = egui::vec2(37.0, 30.0);
                     let busy = self.export_status == ExportStatus::All;
                     let any_running = self.export_status.is_running();
                     let sense = if any_running {
@@ -4735,10 +4879,11 @@ impl BarEditorApp {
                         "Export all Bundler nodes"
                     };
                     let response = response.on_hover_text(tooltip);
-                    if !any_running && response.clicked() {
-                        if self.validate_before_export("Bundle all") {
-                            self.run_requested = true;
-                        }
+                    if !any_running
+                        && response.clicked()
+                        && self.validate_before_export("Bundle all")
+                    {
+                        self.run_requested = true;
                     }
 
                     // Edit Map Info button — opens the project's designated map
@@ -4884,6 +5029,7 @@ impl BarEditorApp {
                         self.paint.inspector_mode = InspectorMode::Spawns;
                     }
                 });
+                ui.add_space(4.0);
             });
         }
 
@@ -5350,204 +5496,15 @@ pub(crate) fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) ->
     changed
 }
 
-/// Convert a heightmap to an egui colour image suitable for upload as a
-/// texture. Render style is "topo map": gray gradient for land, blue tint
-/// for sub-zero elevations (water). `min_h`/`max_h` are in elmos so we
-/// know where the waterline sits.
-/// Apply a single brush "dab" centered at (cx, cy) in heightmap-pixel
-/// coordinates. Each dab modifies pixels within `brush.radius_px` with
-/// the configured strength + falloff. This is called once per frame
-/// while the user holds the primary mouse button — small per-frame
-/// strength values accumulate over the duration of a stroke.
-///
-/// All values in the heightmap are normalized [0, 1]; we clamp after
-/// modification to keep them in range.
-pub(crate) fn apply_brush_dab(hm: &mut bar_data::Heightmap, cx: f32, cy: f32, brush: &BrushState) {
-    let w = hm.width() as i32;
-    let h = hm.height() as i32;
-    let radius = brush.radius_px.max(1.0);
-    let r_i = radius.ceil() as i32;
-    let cx_i = cx.round() as i32;
-    let cy_i = cy.round() as i32;
-    let x0 = (cx_i - r_i).max(0);
-    let y0 = (cy_i - r_i).max(0);
-    let x1 = (cx_i + r_i).min(w - 1);
-    let y1 = (cy_i + r_i).min(h - 1);
-    if x1 < x0 || y1 < y0 {
-        return;
-    }
+// Brush dab math + tests live in `crate::paint::brush_math`. Re-exported
+// here under the historical names so existing callers don't break.
+pub(crate) use crate::paint::brush_math::apply_brush_dab;
+use crate::paint::brush_math::{stamp_color_dab_in_buffer, stamp_value_dab_in_heightmap};
 
-    // For Smooth we need to read pixels we may overwrite; snapshot the
-    // affected region first. The snapshot is only consulted by the
-    // Smooth branch below — other tools touch the live heightmap
-    // directly.
-    let snapshot: Option<Vec<f32>> = if brush.tool == BrushTool::Smooth {
-        let mut v = Vec::with_capacity(((x1 - x0 + 1) * (y1 - y0 + 1)) as usize);
-        for sy in y0..=y1 {
-            for sx in x0..=x1 {
-                v.push(hm.get(sx as u32, sy as u32).unwrap_or(0.0));
-            }
-        }
-        Some(v)
-    } else {
-        None
-    };
-    let snap_w = (x1 - x0 + 1) as usize;
-
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let dx = x as f32 - cx;
-            let dy = y as f32 - cy;
-            let d = (dx * dx + dy * dy).sqrt();
-            if d > radius {
-                continue;
-            }
-            // Falloff: 1.0 at center → 0.0 at the radius. Falloff
-            // exponent shapes the curve (1.0 = linear, 2.0 = squared).
-            let t = (1.0 - d / radius).clamp(0.0, 1.0);
-            let weight = t.powf(brush.falloff);
-
-            let cur = hm.get(x as u32, y as u32).unwrap_or(0.0);
-            let new_val = match brush.tool {
-                BrushTool::Raise => cur + brush.strength * weight,
-                BrushTool::Lower => cur - brush.strength * weight,
-                BrushTool::Smooth => {
-                    // Average the 3×3 neighbourhood from the snapshot,
-                    // then lerp toward it. Mix is clamped so a hot
-                    // strength setting can't overshoot the average and
-                    // oscillate.
-                    let snap = snapshot.as_ref().expect("Smooth mode pre-snapshots");
-                    let mut sum = 0.0_f32;
-                    let mut n = 0_f32;
-                    for oy in -1..=1 {
-                        for ox in -1..=1 {
-                            let nx = x + ox;
-                            let ny = y + oy;
-                            if nx >= x0 && nx <= x1 && ny >= y0 && ny <= y1 {
-                                let lx = (nx - x0) as usize;
-                                let ly = (ny - y0) as usize;
-                                sum += snap[ly * snap_w + lx];
-                                n += 1.0;
-                            }
-                        }
-                    }
-                    let avg = if n > 0.0 { sum / n } else { cur };
-                    let mix = (brush.strength * weight * 8.0).clamp(0.0, 1.0);
-                    cur + (avg - cur) * mix
-                }
-                BrushTool::Flatten => {
-                    let target = brush.flatten_target.unwrap_or(cur);
-                    let mix = (brush.strength * weight * 4.0).clamp(0.0, 1.0);
-                    cur + (target - cur) * mix
-                }
-            };
-            let _ = hm.set(x as u32, y as u32, new_val.clamp(0.0, 1.0));
-        }
-    }
-}
-
-/// Read a 16-bit grayscale PNG into a Heightmap. Inverse of
-/// `save_heightmap_as_png16`. Used to restore sculpt overlays at
-/// project load time.
-fn load_heightmap_from_png16(path: &std::path::Path) -> Result<bar_data::Heightmap, String> {
-    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let gray = img.to_luma16();
-    let (w, h) = gray.dimensions();
-    let data: Vec<f32> = gray.pixels().map(|p| p.0[0] as f32 / 65535.0).collect();
-    bar_data::Heightmap::frbar_data(w, h, data).map_err(|e| e.to_string())
-}
-
-/// Write a heightmap as a 16-bit grayscale PNG. The heightmap stores
-/// f32 in [0, 1]; we map that to the full u16 range so the round-trip
-/// through FileInput preserves precision. Errors come from disk
-/// failure or image-encoding issues — surface them as user-facing
-/// status messages instead of unwrapping.
-pub(crate) fn save_heightmap_as_png16(
-    hm: &bar_data::Heightmap,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    let w = hm.width();
-    let h = hm.height();
-    let mut buf: Vec<u16> = Vec::with_capacity((w as usize) * (h as usize));
-    for v in hm.data() {
-        buf.push((v.clamp(0.0, 1.0) * 65535.0) as u16);
-    }
-    // image::save_buffer expects the bytes in native (little-endian on
-    // x86_64) byte order — image's L16 codec handles the PNG-spec
-    // big-endian conversion internally.
-    let mut bytes: Vec<u8> = Vec::with_capacity(buf.len() * 2);
-    for v in &buf {
-        bytes.extend_from_slice(&v.to_le_bytes());
-    }
-    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::L16)
-        .map_err(|e| format!("PNG save failed: {e}"))
-}
-
-/// Write a signed height-delta as a biased 16-bit grayscale PNG.
-/// delta=0 maps to pixel value 32768; range [-1,+1] maps to [0, 65535].
-fn save_heightmap_as_png16_biased(
-    hm: &bar_data::Heightmap,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    let w = hm.width();
-    let h = hm.height();
-    let mut bytes: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize) * 2);
-    for &v in hm.data() {
-        let pixel = ((v.clamp(-1.0, 1.0) + 1.0) * 0.5 * 65535.0) as u16;
-        bytes.extend_from_slice(&pixel.to_le_bytes());
-    }
-    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::L16)
-        .map_err(|e| format!("PNG save failed: {e}"))
-}
-
-/// Load a biased 16-bit grayscale PNG back to a signed height-delta.
-fn load_heightmap_from_png16_biased(path: &std::path::Path) -> Result<bar_data::Heightmap, String> {
-    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let gray = img.to_luma16();
-    let (w, h) = gray.dimensions();
-    let data: Vec<f32> = gray
-        .pixels()
-        .map(|p| (p.0[0] as f32 / 65535.0) * 2.0 - 1.0)
-        .collect();
-    bar_data::Heightmap::frbar_data(w, h, data).map_err(|e| e.to_string())
-}
-
-/// Write a `ColorBuffer` as an RGBA PNG.
-fn save_color_buffer_as_png(
-    cb: &bar_data::ColorBuffer,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    let w = cb.width();
-    let h = cb.height();
-    let mut bytes: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize) * 4);
-    for chunk in cb.data().chunks_exact(4) {
-        bytes.push((chunk[0].clamp(0.0, 1.0) * 255.0) as u8);
-        bytes.push((chunk[1].clamp(0.0, 1.0) * 255.0) as u8);
-        bytes.push((chunk[2].clamp(0.0, 1.0) * 255.0) as u8);
-        bytes.push((chunk[3].clamp(0.0, 1.0) * 255.0) as u8);
-    }
-    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::Rgba8)
-        .map_err(|e| format!("PNG save failed: {e}"))
-}
-
-/// Load a `ColorBuffer` from an RGBA PNG.
-fn load_color_buffer_from_png(path: &std::path::Path) -> Result<bar_data::ColorBuffer, String> {
-    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    let data: Vec<f32> = rgba
-        .pixels()
-        .flat_map(|p| {
-            [
-                p.0[0] as f32 / 255.0,
-                p.0[1] as f32 / 255.0,
-                p.0[2] as f32 / 255.0,
-                p.0[3] as f32 / 255.0,
-            ]
-        })
-        .collect();
-    bar_data::ColorBuffer::frbar_data(w, h, data).map_err(|e| e.to_string())
-}
+pub(crate) use crate::io::png::{
+    load_color_buffer_from_png, load_heightmap_from_png16, load_heightmap_from_png16_biased,
+    save_color_buffer_as_png, save_heightmap_as_png16, save_heightmap_as_png16_biased,
+};
 
 pub(crate) fn heightmap_to_color_image(
     hm: &bar_data::Heightmap,
@@ -5592,90 +5549,25 @@ pub(crate) fn heightmap_to_color_image(
 }
 
 // Icon painting functions moved to panels/icons.rs; re-exported above.
+// Stamp helpers (stamp_color_dab_in_buffer / stamp_value_dab_in_heightmap)
+// are defined in `crate::paint::brush_math` and imported above.
 
-/// Stamp a circular brush of `color` into a live `ColorBuffer` cache
-/// at normalised UV `(u, v)` with normalised radius `ru` (relative
-/// to the buffer's longer side). Mirrors the executor's
-/// `apply_color_dabs` math so the live preview matches the eventual
-/// graph re-eval result.
-fn stamp_color_dab_in_buffer(
-    cb: &mut bar_data::ColorBuffer,
-    u: f32,
-    v: f32,
-    ru: f32,
-    rgb: [u8; 3],
-) {
-    let w = cb.width() as f32;
-    let h = cb.height() as f32;
-    let map_dim = w.max(h);
-    let cx = (u * w).round() as i32;
-    let cy = (v * h).round() as i32;
-    let radius_px = (ru * map_dim).max(1.0);
-    let r_i = radius_px.ceil() as i32;
-    let r2 = (radius_px * radius_px) as f32;
-    let x0 = (cx - r_i).max(0);
-    let y0 = (cy - r_i).max(0);
-    let x1 = (cx + r_i).min(cb.width() as i32 - 1);
-    let y1 = (cy + r_i).min(cb.height() as i32 - 1);
-    let rgba = [
-        rgb[0] as f32 / 255.0,
-        rgb[1] as f32 / 255.0,
-        rgb[2] as f32 / 255.0,
-        1.0,
-    ];
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let dx = (x - cx) as f32;
-            let dy = (y - cy) as f32;
-            if dx * dx + dy * dy > r2 {
-                continue;
-            }
-            cb.set(x as u32, y as u32, rgba);
-        }
-    }
-}
-
-/// Stamp a value (metal density / quantised type id) into a live
-/// `Heightmap` cache. Mirror of `stamp_color_dab_in_buffer` for the
-/// metal/type brush path.
-fn stamp_value_dab_in_heightmap(hm: &mut bar_data::Heightmap, u: f32, v: f32, ru: f32, value: f32) {
-    let w = hm.width() as f32;
-    let h = hm.height() as f32;
-    let map_dim = w.max(h);
-    let cx = (u * w).round() as i32;
-    let cy = (v * h).round() as i32;
-    let radius_px = (ru * map_dim).max(1.0);
-    let r_i = radius_px.ceil() as i32;
-    let r2 = (radius_px * radius_px) as f32;
-    let x0 = (cx - r_i).max(0);
-    let y0 = (cy - r_i).max(0);
-    let x1 = (cx + r_i).min(hm.width() as i32 - 1);
-    let y1 = (cy + r_i).min(hm.height() as i32 - 1);
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let dx = (x - cx) as f32;
-            let dy = (y - cy) as f32;
-            if dx * dx + dy * dy > r2 {
-                continue;
-            }
-            let _ = hm.set(x as u32, y as u32, value.clamp(0.0, 1.0));
-        }
-    }
-}
-
-/// Build a file-picker dialog appropriate for the given node type's `path` param.
-pub(crate) fn make_path_dialog(node_type: &NodeType) -> rfd::FileDialog {
+/// Build a file-picker dialog appropriate for the given node type's
+/// `path` param. The dialog is parented to the editor window when a
+/// handle has been pushed via `BarEditorApp::set_parent_window_handle`.
+pub(crate) fn make_path_dialog(app: &BarEditorApp, node_type: &NodeType) -> rfd::FileDialog {
+    let base = app.make_dialog();
     match node_type {
-        NodeType::SmfImport => rfd::FileDialog::new()
+        NodeType::SmfImport => base
             .set_title("Select .smf Map File")
             .add_filter("Spring Map File", &["smf"]),
-        NodeType::SmtImport => rfd::FileDialog::new()
+        NodeType::SmtImport => base
             .set_title("Select .smt Tile File")
             .add_filter("Spring Map Tiles", &["smt"]),
-        NodeType::FileInput => rfd::FileDialog::new()
+        NodeType::FileInput => base
             .set_title("Select Image File")
             .add_filter("Image", &["png", "tiff", "tif", "jpg", "jpeg"]),
-        _ => rfd::FileDialog::new().set_title("Select File"),
+        _ => base.set_title("Select File"),
     }
 }
 
@@ -5874,241 +5766,16 @@ pub(crate) fn mask_hex_decode(s: &str) -> Vec<u8> {
     out
 }
 
-/// Parse the `files` string stored in a PassThrough node's params.
-pub(crate) fn parse_passthrough_files(s: &str) -> Vec<(String, String)> {
-    s.lines()
-        .filter_map(|line| {
-            let mut parts = line.splitn(2, '|');
-            let abs = parts.next()?.trim().to_string();
-            let rel = parts.next()?.trim().to_string();
-            if abs.is_empty() {
-                None
-            } else {
-                Some((abs, rel))
-            }
-        })
-        .collect()
-}
-
-/// True if `candidate` is inside `dir` (lexically — both must be absolute,
-/// or both relative; we only canonicalise the absolute case).
-fn path_is_inside(candidate: &str, dir: &std::path::Path) -> bool {
-    let p = std::path::Path::new(candidate);
-    let canon_p = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
-    let canon_d = std::fs::canonicalize(dir).unwrap_or_else(|_| dir.to_path_buf());
-    canon_p.starts_with(canon_d)
-}
-
-/// Marker for project-relative paths in saved `.barproj` files. Anything
-/// starting with this prefix is resolved against the project's directory
-/// at load time.
-const PROJECT_RELATIVE_PREFIX: &str = "bar://";
-
-/// Build the project-relative form of an asset's path under `<stem>.assets/`.
-/// `bundle_subdir` is "maps" or "" — it's the subfolder under .assets/ where
-/// this kind of asset lives.
-fn project_relative_for(bundle_subdir: &str, file_name: &str, project_stem: &str) -> String {
-    let assets = format!("{project_stem}.assets");
-    if bundle_subdir.is_empty() {
-        format!("{PROJECT_RELATIVE_PREFIX}{assets}/{file_name}")
-    } else {
-        format!("{PROJECT_RELATIVE_PREFIX}{assets}/{bundle_subdir}/{file_name}")
-    }
-}
-
-/// Resolve a path that might be project-relative (`bar://...`) against the
-/// project's directory. Returns absolute on-disk path. Pass-through for
-/// already-absolute paths.
-pub(crate) fn resolve_project_path(value: &str, project_dir: &std::path::Path) -> String {
-    if let Some(rest) = value.strip_prefix(PROJECT_RELATIVE_PREFIX) {
-        project_dir.join(rest).to_string_lossy().into_owned()
-    } else {
-        value.to_string()
-    }
-}
-
-/// If the param holds an external file path, copy the file into
-/// `<assets_dir>/<bundle_subdir>/` and rewrite the param to a project-relative
-/// `bar://` URL. No-op for missing keys, empty strings, or paths already
-/// inside the project directory.
-fn pack_path_param(
-    params: &mut std::collections::HashMap<String, ParamValue>,
-    key: &str,
-    project_dir: &std::path::Path,
-    assets_dir: &std::path::Path,
-    bundle_subdir: &str,
-) -> Result<(), String> {
-    let Some(ParamValue::String(s)) = params.get(key).cloned() else {
-        return Ok(());
-    };
-    if s.is_empty() || s.starts_with(PROJECT_RELATIVE_PREFIX) {
-        return Ok(());
-    }
-    if path_is_inside(&s, project_dir) {
-        return Ok(()); // already local
-    }
-    let src = std::path::PathBuf::from(&s);
-    let file_name = src
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(|| format!("Invalid file name in '{s}'"))?
-        .to_string();
-    let dest_dir = if bundle_subdir.is_empty() {
-        assets_dir.to_path_buf()
-    } else {
-        assets_dir.join(bundle_subdir)
-    };
-    std::fs::create_dir_all(&dest_dir)
-        .map_err(|e| format!("Cannot create assets dir {}: {e}", dest_dir.display()))?;
-    let dest = dest_dir.join(&file_name);
-    if !dest.exists() || !files_equal(&src, &dest) {
-        std::fs::copy(&src, &dest)
-            .map_err(|e| format!("Failed to copy {} → {}: {e}", src.display(), dest.display()))?;
-    }
-    let stem = project_dir
-        .file_name() // dir name doesn't help; we need project stem
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    // Derive project stem from the assets_dir name ("<stem>.assets").
-    let project_stem = assets_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.strip_suffix(".assets"))
-        .unwrap_or(stem)
-        .to_string();
-    let new_value = project_relative_for(bundle_subdir, &file_name, &project_stem);
-    params.insert(key.to_string(), ParamValue::String(new_value));
-    Ok(())
-}
-
-/// Pack a PassThrough node's `files` param. Each line is `abs|bundle_path`;
-/// we copy `abs` to `<assets_dir>/<bundle_path>` and rewrite the line to
-/// `bar://<stem>.assets/<bundle_path>|<bundle_path>`.
-fn pack_passthrough_files(
-    params: &mut std::collections::HashMap<String, ParamValue>,
-    project_dir: &std::path::Path,
-    assets_dir: &std::path::Path,
-) -> Result<(), String> {
-    let Some(ParamValue::String(s)) = params.get("files").cloned() else {
-        return Ok(());
-    };
-    let project_stem = assets_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.strip_suffix(".assets"))
-        .unwrap_or("")
-        .to_string();
-    let mut new_lines = Vec::new();
-    for line in s.lines() {
-        let mut parts = line.splitn(2, '|');
-        let Some(abs) = parts.next() else {
-            continue;
-        };
-        let abs = abs.trim();
-        let bundle = parts.next().unwrap_or("").trim().to_string();
-        if abs.is_empty() {
-            continue;
-        }
-        if abs.starts_with(PROJECT_RELATIVE_PREFIX) || path_is_inside(abs, project_dir) {
-            new_lines.push(format!("{abs}|{bundle}"));
-            continue;
-        }
-        let dest = assets_dir.join(&bundle);
-        if let Some(parent) = dest.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
-        }
-        let src = std::path::Path::new(abs);
-        if !dest.exists() || !files_equal(src, &dest) {
-            std::fs::copy(src, &dest).map_err(|e| {
-                format!("Failed to copy {} → {}: {e}", src.display(), dest.display())
-            })?;
-        }
-        let new_abs = format!("{PROJECT_RELATIVE_PREFIX}{project_stem}.assets/{bundle}");
-        new_lines.push(format!("{new_abs}|{bundle}"));
-    }
-    params.insert(
-        "files".to_string(),
-        ParamValue::String(new_lines.join("\n")),
-    );
-    Ok(())
-}
-
-/// Inverse of `pack_path_param`: rewrite a single param value from
-/// `bar://...` to an absolute path anchored at `project_dir`.
-fn resolve_path_param(
-    params: &mut std::collections::HashMap<String, ParamValue>,
-    key: &str,
-    project_dir: &std::path::Path,
-) {
-    if let Some(ParamValue::String(s)) = params.get(key).cloned() {
-        let resolved = resolve_project_path(&s, project_dir);
-        if resolved != s {
-            params.insert(key.to_string(), ParamValue::String(resolved));
-        }
-    }
-}
-
-/// Inverse of `pack_passthrough_files`: rewrite any `bar://...` entries in
-/// the `files` param's abs column to absolute paths.
-fn resolve_passthrough_files(
-    params: &mut std::collections::HashMap<String, ParamValue>,
-    project_dir: &std::path::Path,
-) {
-    let Some(ParamValue::String(s)) = params.get("files").cloned() else {
-        return;
-    };
-    let mut changed = false;
-    let mut out = Vec::new();
-    for line in s.lines() {
-        let mut parts = line.splitn(2, '|');
-        let abs = parts.next().unwrap_or("").trim();
-        let bundle = parts.next().unwrap_or("").trim();
-        if abs.is_empty() {
-            continue;
-        }
-        let resolved = resolve_project_path(abs, project_dir);
-        if resolved != abs {
-            changed = true;
-        }
-        out.push(format!("{resolved}|{bundle}"));
-    }
-    if changed {
-        params.insert("files".to_string(), ParamValue::String(out.join("\n")));
-    }
-}
-
-/// Cheap "are these files identical" check by length first, then content.
-/// Used to skip redundant copies on repeated saves to the same destination.
-fn files_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
-    let (la, lb) = match (std::fs::metadata(a), std::fs::metadata(b)) {
-        (Ok(ma), Ok(mb)) => (ma.len(), mb.len()),
-        _ => return false,
-    };
-    if la != lb {
-        return false;
-    }
-    match (std::fs::read(a), std::fs::read(b)) {
-        (Ok(ca), Ok(cb)) => ca == cb,
-        _ => false,
-    }
-}
-
-/// Walk every PassThrough node in the graph and return its (abs_path,
-/// archive_path) entries flattened. Used by the Edit Map Info picker so the
-/// user can pick from any text file currently in the bundle.
-pub(crate) fn collect_all_passthrough_files(graph: &GraphEngine) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for (_, node) in graph.nodes() {
-        if node.node_type != NodeType::PassThrough {
-            continue;
-        }
-        if let Some(ParamValue::String(s)) = node.params.get("files") {
-            out.extend(parse_passthrough_files(s));
-        }
-    }
-    out
-}
+// Pure path helpers (PassThrough files, asset packing, bar:// URL
+// resolution) live in `crate::project::path`. Re-export the names that
+// callers outside this module use historically.
+pub(crate) use crate::project::path::{
+    collect_all_passthrough_files, parse_passthrough_files, resolve_project_path,
+};
+use crate::project::path::{
+    pack_passthrough_files, pack_path_param, resolve_passthrough_files, resolve_path_param,
+    PROJECT_RELATIVE_PREFIX,
+};
 
 /// Lightweight directory tree for rendering a hierarchical file list.
 /// Children keyed by directory name to keep ordering stable; files are stored
@@ -6166,10 +5833,10 @@ pub(crate) fn draw_path_tree(
             ui.label(file_name).on_hover_text(archive.as_str());
             // Right-align the edit button by filling the rest of the row.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if is_text_file(archive) {
-                    if ui.small_button("✏").on_hover_text("Edit file").clicked() {
-                        *edit_request = Some((abs.clone(), archive.clone()));
-                    }
+                if is_text_file(archive)
+                    && ui.small_button("✏").on_hover_text("Edit file").clicked()
+                {
+                    *edit_request = Some((abs.clone(), archive.clone()));
                 }
             });
         });
@@ -6273,300 +5940,5 @@ pub(crate) fn draw_passthrough_body(
     }
 }
 
-#[cfg(test)]
-mod brush_tests {
-    use super::*;
-
-    fn flat_hm(w: u32, h: u32, val: f32) -> bar_data::Heightmap {
-        let mut hm = bar_data::Heightmap::new(w, h).unwrap();
-        for y in 0..h {
-            for x in 0..w {
-                hm.set(x, y, val).unwrap();
-            }
-        }
-        hm
-    }
-
-    fn brush(tool: BrushTool) -> BrushState {
-        BrushState {
-            tool,
-            target: BrushTarget::Heightmap,
-            radius_px: 4.0,
-            strength: 0.1,
-            falloff: 1.0,
-            flatten_target: None,
-            color_rgb: [0x8B, 0x73, 0x55],
-            paint_value: 1.0,
-        }
-    }
-
-    #[test]
-    fn raise_brush_increases_center_pixel() {
-        let mut hm = flat_hm(16, 16, 0.5);
-        let b = brush(BrushTool::Raise);
-        apply_brush_dab(&mut hm, 8.0, 8.0, &b);
-        let center = hm.get(8, 8).unwrap();
-        assert!(center > 0.5, "expected center > 0.5, got {center}");
-        // Outside the radius, untouched.
-        let far = hm.get(0, 0).unwrap();
-        assert!(
-            (far - 0.5).abs() < 1e-6,
-            "far pixel should be unchanged: {far}"
-        );
-    }
-
-    #[test]
-    fn lower_brush_decreases_center_pixel() {
-        let mut hm = flat_hm(16, 16, 0.5);
-        apply_brush_dab(&mut hm, 8.0, 8.0, &brush(BrushTool::Lower));
-        assert!(hm.get(8, 8).unwrap() < 0.5);
-    }
-
-    #[test]
-    fn flatten_brush_pulls_toward_target() {
-        let mut hm = flat_hm(16, 16, 0.2);
-        // Spike of height 0.9 at the centre.
-        hm.set(8, 8, 0.9).unwrap();
-        let mut b = brush(BrushTool::Flatten);
-        b.flatten_target = Some(0.2);
-        b.strength = 0.5;
-        // Apply many dabs until convergence.
-        for _ in 0..40 {
-            apply_brush_dab(&mut hm, 8.0, 8.0, &b);
-        }
-        let v = hm.get(8, 8).unwrap();
-        assert!(
-            (v - 0.2).abs() < 0.05,
-            "flatten should pull centre to ~0.2, got {v}"
-        );
-    }
-
-    #[test]
-    fn smooth_brush_reduces_local_variance() {
-        let mut hm = flat_hm(16, 16, 0.5);
-        // Single spike.
-        hm.set(8, 8, 1.0).unwrap();
-        let b = BrushState {
-            tool: BrushTool::Smooth,
-            target: BrushTarget::Heightmap,
-            radius_px: 3.0,
-            strength: 0.5,
-            falloff: 1.0,
-            flatten_target: None,
-            color_rgb: [0x8B, 0x73, 0x55],
-            paint_value: 1.0,
-        };
-        // Several passes.
-        for _ in 0..10 {
-            apply_brush_dab(&mut hm, 8.0, 8.0, &b);
-        }
-        let center = hm.get(8, 8).unwrap();
-        assert!(
-            center < 1.0 && center > 0.5,
-            "smooth should pull spike toward neighbourhood mean, got {center}"
-        );
-    }
-
-    #[test]
-    fn raise_clamps_to_one() {
-        let mut hm = flat_hm(8, 8, 1.0);
-        let b = BrushState {
-            tool: BrushTool::Raise,
-            target: BrushTarget::Heightmap,
-            radius_px: 2.0,
-            strength: 0.5,
-            falloff: 1.0,
-            flatten_target: None,
-            color_rgb: [0x8B, 0x73, 0x55],
-            paint_value: 1.0,
-        };
-        apply_brush_dab(&mut hm, 4.0, 4.0, &b);
-        assert!(hm.get(4, 4).unwrap() <= 1.0);
-    }
-
-    #[test]
-    fn png_load_roundtrip_matches_save() {
-        let mut hm = bar_data::Heightmap::new(8, 8).unwrap();
-        for x in 0..8u32 {
-            for y in 0..8u32 {
-                hm.set(x, y, ((x + y) as f32) / 14.0).unwrap();
-            }
-        }
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("om_sculpt_load_test_{}.png", std::process::id()));
-        super::save_heightmap_as_png16(&hm, &path).expect("save");
-        let loaded = super::load_heightmap_from_png16(&path).expect("load");
-        let _ = std::fs::remove_file(&path);
-
-        assert_eq!(loaded.width(), 8);
-        assert_eq!(loaded.height(), 8);
-        let tol = 2e-4_f32;
-        for x in 0..8u32 {
-            for y in 0..8u32 {
-                let a = hm.get(x, y).unwrap();
-                let b = loaded.get(x, y).unwrap();
-                assert!((a - b).abs() < tol, "({x},{y}): saved={a}, loaded={b}");
-            }
-        }
-    }
-
-    #[test]
-    fn png_save_roundtrip_preserves_values() {
-        let mut hm = bar_data::Heightmap::new(8, 8).unwrap();
-        // Sprinkle a handful of distinct values.
-        hm.set(0, 0, 0.0).unwrap();
-        hm.set(1, 0, 0.25).unwrap();
-        hm.set(2, 0, 0.5).unwrap();
-        hm.set(3, 0, 0.75).unwrap();
-        hm.set(4, 0, 1.0).unwrap();
-
-        let dir = std::env::temp_dir();
-        let path = dir.join(format!("om_sculpt_test_{}.png", std::process::id()));
-        super::save_heightmap_as_png16(&hm, &path).expect("save should succeed");
-
-        let img = image::open(&path).expect("re-open").to_luma16();
-        let _ = std::fs::remove_file(&path);
-        // 16-bit precision: 1/65535 ≈ 1.5e-5; allow generous slack.
-        let tol = 2e-4_f32;
-        for x in 0..5u32 {
-            let written = (img.get_pixel(x, 0).0[0] as f32) / 65535.0;
-            let original = hm.get(x, 0).unwrap();
-            assert!(
-                (written - original).abs() < tol,
-                "x={x}: written={written}, original={original}"
-            );
-        }
-    }
-
-    #[test]
-    fn brush_dab_outside_bounds_is_a_noop() {
-        let mut hm = flat_hm(8, 8, 0.5);
-        // Centre well outside the heightmap.
-        apply_brush_dab(&mut hm, 100.0, 100.0, &brush(BrushTool::Raise));
-        for y in 0..8 {
-            for x in 0..8 {
-                assert!(
-                    (hm.get(x, y).unwrap() - 0.5).abs() < 1e-6,
-                    "no pixel should change: ({x},{y})"
-                );
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod session_reset_tests {
-    use super::*;
-
-    /// Stuff a default app with as many transient session-state fields
-    /// as the helper is meant to clear. Used by every test below so
-    /// each behaviour is asserted against a richly populated baseline,
-    /// not a fresh default.
-    fn dirtied_app() -> BarEditorApp {
-        let mut app = BarEditorApp::default();
-        app.push_undo("seed snapshot");
-        app.paint.brush.tool = BrushTool::Lower;
-        app.paint.brush.target = BrushTarget::Color;
-        app.paint.brush.color_rgb = [10, 20, 30];
-        app.paint.brush.paint_value = 0.42;
-        app.paint.brush_stroking = true;
-        app.canvas_offset = egui::vec2(123.0, 456.0);
-        app.dialog.show_validation_panel = true;
-        app.validation_findings = vec![];
-        app.validation_filter = ValidationFilter::Error;
-        app.dialog.show_inspector = true;
-        app.dialog.show_mapinfo_editor = true;
-        app.mapinfo_tab = MapInfoTab::Atmosphere;
-        app.dialog.toast = Some(("hi".into(), Instant::now()));
-        app.dialog.status_message = Some("from previous project".into());
-        app.run_requested = true;
-        app.test_in_bar_requested = true;
-        app
-    }
-
-    #[test]
-    fn reset_project_clears_all_fields() {
-        let mut app = dirtied_app();
-        app.reset_project();
-        assert!(!app.history.can_undo(), "history must be cleared");
-        assert!(
-            matches!(app.paint.brush.tool, BrushTool::Raise),
-            "brush tool defaults to Raise"
-        );
-        assert!(
-            matches!(app.paint.brush.target, BrushTarget::Heightmap),
-            "brush target defaults to Heightmap"
-        );
-        assert!(!app.paint.brush_stroking);
-        assert_eq!(
-            app.canvas_offset,
-            egui::Vec2::ZERO,
-            "canvas pan offset must reset to zero"
-        );
-        assert!(!app.dialog.show_validation_panel);
-        assert!(matches!(app.validation_filter, ValidationFilter::All));
-        assert!(!app.dialog.show_inspector);
-        assert!(!app.dialog.show_mapinfo_editor);
-        assert!(matches!(app.mapinfo_tab, MapInfoTab::Identity));
-        assert!(app.dialog.toast.is_none());
-        assert!(app.dialog.status_message.is_none());
-        assert!(!app.run_requested);
-        assert!(!app.test_in_bar_requested);
-        assert!(app.paint.color_buffer.is_none());
-        assert!(app.paint.metalmap.is_none());
-        assert!(app.paint.typemap.is_none());
-    }
-
-    #[test]
-    fn start_with_macro_resets_transient_state() {
-        let mut app = dirtied_app();
-        let prior_depth = app.history.undo_depth();
-        app.start_with_macro("Plains");
-        // History from the previous project is gone. The macro drop
-        // pushes exactly one new undo entry (so the user can undo
-        // their first action), so depth is 1, not the pre-reset value.
-        assert!(
-            app.history.undo_depth() < prior_depth.saturating_add(1) + 1,
-            "history must not accumulate the previous project's snapshots"
-        );
-        assert_eq!(
-            app.history.undo_depth(),
-            1,
-            "after start_with_macro, history holds only the macro-drop snapshot"
-        );
-        assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
-        assert_eq!(app.canvas_offset, egui::Vec2::ZERO);
-        assert!(!app.dialog.show_validation_panel);
-        // Project-data state populated.
-        assert!(
-            !app.graph.nodes().is_empty(),
-            "macro should have dropped nodes onto the graph"
-        );
-        assert!(
-            app.is_dirty,
-            "starting from a macro is a non-empty diff against the empty default"
-        );
-    }
-
-    #[test]
-    fn do_new_project_resets_transient_state() {
-        let mut app = dirtied_app();
-        app.do_new_project();
-        assert!(!app.history.can_undo());
-        assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
-        assert_eq!(app.canvas_offset, egui::Vec2::ZERO);
-        // do_new_project drops a Bundler + Preview by default.
-        assert_eq!(app.graph.nodes().len(), 2);
-    }
-
-    #[test]
-    fn unknown_macro_name_is_a_noop_with_status() {
-        let mut app = BarEditorApp::default();
-        app.start_with_macro("Definitely Not A Real Macro");
-        // The name lookup happens after the reset+graph-clear, so the
-        // graph ends up empty and the user sees a status message.
-        // (This documents current behaviour — the menu only feeds in
-        // names from BUILTIN_MACROS, so this branch is defensive.)
-        assert!(app.dialog.status_message.is_some());
-    }
-}
+// brush_tests module relocated to `crate::paint::brush_math`.
+// session_reset_tests module relocated to `crate::project::lifecycle`.

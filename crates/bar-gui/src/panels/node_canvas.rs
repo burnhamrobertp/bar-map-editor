@@ -17,6 +17,16 @@ use crate::panels::tokens;
 use crate::state::GroupRuntime;
 use crate::t;
 
+/// Return type of `draw_collapsed_subgraphs`: bounding rects keyed by
+/// group id, external-port handle positions, and the in-progress
+/// connection start/end if one was initiated this frame.
+type CollapsedSubgraphsDraw = (
+    HashMap<u64, egui::Rect>,
+    HashMap<(NodeId, String), egui::Pos2>,
+    Option<DragConnection>,
+    Option<(NodeId, String)>,
+);
+
 /// Geometry and colour constants for the standard (non-IO) node body.
 /// All node drawing passes read from here so magic numbers live in one place.
 pub(crate) struct NodeStyle {
@@ -45,12 +55,32 @@ impl NodeStyle {
             rounding: 4.0,
             title_h: 20.0,
             title_rounding: egui::CornerRadius {
-                nw: 4,
-                ne: 4,
+                nw: 0,
+                ne: 0,
                 sw: 0,
                 se: 0,
             },
         }
+    }
+}
+
+fn draw_port_circle(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    radius: f32,
+    color: egui::Color32,
+    hovered: bool,
+) {
+    painter.circle_filled(pos, radius, color);
+    if hovered {
+        painter.circle_stroke(
+            pos,
+            radius + 2.5,
+            egui::Stroke::new(
+                1.5,
+                egui::Color32::from_rgba_unmultiplied(255, 255, 255, 120),
+            ),
+        );
     }
 }
 
@@ -333,7 +363,7 @@ impl BarEditorApp {
         //    while editing a subgraph re-laid out the *outer* graph
         //    instead — leaving the subgraph's contents unchanged and
         //    silently shuffling everything outside.
-        if let Some(CanvasView::SubGraph(gid)) = self.tabs.get(self.active_tab as usize) {
+        if let Some(CanvasView::SubGraph(gid)) = self.tabs.get(self.active_tab) {
             if let Some(group) = self.groups.get(gid) {
                 // If a subset is explicitly selected inside the subgraph,
                 // honour that selection. Otherwise lay out every member.
@@ -558,7 +588,7 @@ impl BarEditorApp {
 
         // Process targets left-to-right so later wiring can chain
         // off earlier wiring within the same selection.
-        let mut sorted: Vec<NodeId> = ids.iter().copied().collect();
+        let mut sorted: Vec<NodeId> = ids.to_vec();
         sorted.sort_by(|a, b| {
             let ax = self
                 .node_visuals
@@ -821,12 +851,9 @@ impl BarEditorApp {
     /// external ports.
     pub(crate) fn draw_collapsed_subgraphs(
         &mut self,
-        painter: &egui::Painter,
+        ui: &mut egui::Ui,
         offset: egui::Vec2,
-    ) -> (
-        HashMap<u64, egui::Rect>,
-        HashMap<(NodeId, String), egui::Pos2>,
-    ) {
+    ) -> CollapsedSubgraphsDraw {
         // Reset the cached collapsed-block rects every frame; we
         // refill below as each block is drawn so the props-popup
         // hit-test sees current positions.
@@ -836,9 +863,12 @@ impl BarEditorApp {
         // wire-render pass below to reroute connections from hidden
         // inner endpoints onto the visible external port.
         let mut handle_positions: HashMap<(NodeId, String), egui::Pos2> = HashMap::new();
+        let mut conn_start: Option<DragConnection> = None;
+        let mut conn_end: Option<(NodeId, String)> = None;
         if matches!(self.current_view(), CanvasView::SubGraph(_)) {
-            return (rects, handle_positions);
+            return (rects, handle_positions, conn_start, conn_end);
         }
+        let painter = ui.painter().clone();
         let block_w = 180.0_f32;
         let header_h = 22.0_f32;
         let row_h = 18.0_f32;
@@ -917,10 +947,22 @@ impl BarEditorApp {
             // the right. The actual wiring of these handles to the
             // surrounding graph lands in the next phase along with
             // subgraph eval.
+            let hit_size = egui::vec2(14.0, 14.0);
             for (i, port) in group.subgraph_inputs.iter().enumerate() {
                 let y = rect.top() + header_h + 8.0 + i as f32 * row_h;
                 let p = egui::pos2(rect.left(), y);
-                painter.circle_filled(p, 4.0, tokens::PORT_HEIGHTMAP);
+                let port_resp = ui.interact(
+                    egui::Rect::from_center_size(p, hit_size),
+                    egui::Id::new(("subgraph_port_in", *gid, i as u32)),
+                    egui::Sense::click_and_drag(),
+                );
+                draw_port_circle(
+                    &painter,
+                    p,
+                    4.0,
+                    tokens::PORT_HEIGHTMAP,
+                    port_resp.hovered(),
+                );
                 painter.text(
                     egui::pos2(p.x + 8.0, p.y),
                     egui::Align2::LEFT_CENTER,
@@ -930,12 +972,29 @@ impl BarEditorApp {
                 );
                 if let Some((nid, pname)) = &port.binding {
                     handle_positions.insert((*nid, pname.clone()), p);
+                    if self.drag_connection.is_some()
+                        && ui.input(|inp| inp.pointer.primary_released())
+                        && port_resp.contains_pointer()
+                    {
+                        conn_end = Some((*nid, pname.clone()));
+                    }
                 }
             }
             for (i, port) in group.subgraph_outputs.iter().enumerate() {
                 let y = rect.top() + header_h + 8.0 + i as f32 * row_h;
                 let p = egui::pos2(rect.right(), y);
-                painter.circle_filled(p, 4.0, tokens::PORT_HEIGHTMAP);
+                let port_resp = ui.interact(
+                    egui::Rect::from_center_size(p, hit_size),
+                    egui::Id::new(("subgraph_port_out", *gid, i as u32)),
+                    egui::Sense::click_and_drag(),
+                );
+                draw_port_circle(
+                    &painter,
+                    p,
+                    4.0,
+                    tokens::PORT_HEIGHTMAP,
+                    port_resp.hovered(),
+                );
                 painter.text(
                     egui::pos2(p.x - 8.0, p.y),
                     egui::Align2::RIGHT_CENTER,
@@ -945,12 +1004,21 @@ impl BarEditorApp {
                 );
                 if let Some((nid, pname)) = &port.binding {
                     handle_positions.insert((*nid, pname.clone()), p);
+                    if port_resp.drag_started_by(egui::PointerButton::Primary)
+                        && self.drag_connection.is_none()
+                    {
+                        conn_start = Some(DragConnection {
+                            from_node: *nid,
+                            from_port: pname.clone(),
+                            from_pos: p,
+                        });
+                    }
                 }
             }
             rects.insert(*gid, rect);
             self.collapsed_subgraph_rects.insert(*gid, rect);
         }
-        (rects, handle_positions)
+        (rects, handle_positions, conn_start, conn_end)
     }
 
     /// Render the canvas tab bar across the top of the canvas area.
@@ -1482,7 +1550,25 @@ impl BarEditorApp {
             {
                 let additive = ui.ctx().input(|i| i.modifiers.ctrl || i.modifiers.command);
                 let mut hits: Vec<NodeId> = Vec::new();
+                // Subgraph membership set: nodes inside a is_subgraph group.
+                // Used to prevent marquee from crossing the main/subgraph boundary.
+                let subgraph_members: std::collections::HashSet<NodeId> = self
+                    .groups
+                    .values()
+                    .filter(|g| g.is_subgraph)
+                    .flat_map(|g| g.member_ids.iter().copied())
+                    .collect();
                 for (id, visual) in &self.node_visuals {
+                    let in_scope = match self.current_view() {
+                        CanvasView::Main => !subgraph_members.contains(id),
+                        CanvasView::SubGraph(gid) => self
+                            .groups
+                            .get(&gid)
+                            .is_some_and(|g| g.member_ids.contains(id)),
+                    };
+                    if !in_scope {
+                        continue;
+                    }
                     let r = egui::Rect::from_min_size(
                         egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
                         visual.size,
@@ -1652,6 +1738,38 @@ impl BarEditorApp {
             });
         }
 
+        // When the user is dragging a connection, compute which nodes
+        // have at least one compatible input port so everything else
+        // can be dimmed. The source node is always considered active.
+        let drag_active_nodes: Option<std::collections::HashSet<NodeId>> =
+            self.drag_connection.as_ref().and_then(|drag| {
+                let drag_kind = self
+                    .graph
+                    .get_node(drag.from_node)?
+                    .outputs
+                    .iter()
+                    .find(|p| p.name == drag.from_port)
+                    .map(|p| p.kind)?;
+                let mut active = std::collections::HashSet::new();
+                active.insert(drag.from_node);
+                for (nid, node) in self.graph.nodes() {
+                    // IO boundary nodes accept any kind via the engine bypass.
+                    let is_io = matches!(
+                        node.node_type,
+                        NodeType::SubgraphInput | NodeType::SubgraphOutput
+                    );
+                    if is_io
+                        || node
+                            .inputs
+                            .iter()
+                            .any(|p| drag_kind.compatible_with(p.kind))
+                    {
+                        active.insert(*nid);
+                    }
+                }
+                Some(active)
+            });
+
         // Draw connections + hit-test against the cursor for selection.
         // Compute the layout of every collapsed subgraph upfront so
         // wires can reroute through their external port handles when
@@ -1804,11 +1922,20 @@ impl BarEditorApp {
                 .as_ref()
                 .map(|(sf, st)| sf == from && st == to)
                 .unwrap_or(false);
-            let stroke = if is_selected {
-                egui::Stroke::new(3.0, tokens::WIRE_SELECTED)
+            let wire_active = drag_active_nodes.as_ref().is_none_or(|active| {
+                active.contains(&from.node_id) || active.contains(&to.node_id)
+            });
+            let (w, color) = if is_selected {
+                (3.0, tokens::WIRE_SELECTED)
             } else {
-                egui::Stroke::new(2.0, tokens::WIRE_DEFAULT)
+                (2.0, tokens::WIRE_DEFAULT)
             };
+            let color = if wire_active {
+                color
+            } else {
+                color.gamma_multiply(0.25)
+            };
+            let stroke = egui::Stroke::new(w, color);
             for i in 0..points.len() - 1 {
                 painter.line_segment([points[i], points[i + 1]], stroke);
             }
@@ -1944,16 +2071,30 @@ impl BarEditorApp {
             let is_io_input = matches!(node_type, NodeType::SubgraphInput);
             let is_io_output = matches!(node_type, NodeType::SubgraphOutput);
             let is_io = is_io_input || is_io_output;
+            // Fade nodes that have no compatible port for the in-flight drag.
+            let node_fade = drag_active_nodes.as_ref().map_or(1.0_f32, |active| {
+                if active.contains(node_id) {
+                    1.0
+                } else {
+                    0.3
+                }
+            });
             let left_input_count = node_inputs
                 .iter()
                 .filter(|p| matches!(PortPlacement::for_input(p.kind), PortPlacement::Left))
                 .count();
             let n_ports = left_input_count.max(node_outputs.len());
+            let footer_h_allowance = if node_type == NodeType::Preview {
+                22.0
+            } else {
+                0.0
+            };
             let (node_min_h, node_min_w) = if is_io {
                 (28.0_f32, 90.0_f32)
             } else {
                 (
-                    (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0),
+                    (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0 + footer_h_allowance)
+                        .max(60.0),
                     100.0_f32,
                 )
             };
@@ -1990,11 +2131,11 @@ impl BarEditorApp {
                 let top_text_size = 18.0 * scale;
                 let bottom_text_size = 15.0 * scale;
 
-                let body_color = tokens::IO_BODY;
+                let body_color = tokens::IO_BODY.gamma_multiply(node_fade);
                 let border_color = if is_selected {
                     tokens::IO_BORDER_SEL
                 } else {
-                    tokens::IO_BORDER
+                    tokens::IO_BORDER.gamma_multiply(node_fade)
                 };
                 let border_width = if is_selected { 2.0 } else { 1.5 };
                 let mid_y = node_rect.center().y;
@@ -2035,7 +2176,10 @@ impl BarEditorApp {
                 // wrapper render can read it.
                 let _ = &io_name;
                 let top_text = if is_io_input { "Input" } else { "Output" };
-                let bottom_text = io_kind.as_deref().unwrap_or("Heightmap");
+                let bottom_text = match io_kind.as_deref() {
+                    Some(s) if !s.is_empty() => s,
+                    _ => "Unknown",
+                };
                 let text_left = if is_io_input {
                     icon_rect.right() + icon_text_gap
                 } else {
@@ -2074,7 +2218,7 @@ impl BarEditorApp {
                 } else {
                     ns.bg
                 };
-                painter.rect_filled(node_rect, ns.rounding, bg_color);
+                painter.rect_filled(node_rect, ns.rounding, bg_color.gamma_multiply(node_fade));
 
                 // Node border
                 let (border_color, bw) = if is_selected {
@@ -2085,7 +2229,7 @@ impl BarEditorApp {
                 painter.rect_stroke(
                     node_rect,
                     ns.rounding,
-                    egui::Stroke::new(bw, border_color),
+                    egui::Stroke::new(bw, border_color.gamma_multiply(node_fade)),
                     egui::StrokeKind::Outside,
                 );
 
@@ -2095,7 +2239,7 @@ impl BarEditorApp {
                     egui::pos2(node_rect.min.x, node_rect.min.y + TITLE_Y_OFFSET),
                     egui::vec2(node_rect.width(), ns.title_h),
                 );
-                let title_color = node_type_color(&node_type);
+                let title_color = node_type_color(&node_type).gamma_multiply(node_fade);
                 painter.rect_filled(title_rect, ns.title_rounding, title_color);
                 painter.text(
                     title_rect.center(),
@@ -2135,7 +2279,13 @@ impl BarEditorApp {
                     egui::Id::new(("port_in", node_id.0, i)),
                     egui::Sense::click_and_drag(),
                 );
-                painter.circle_filled(port_pos, port_radius, port_color);
+                draw_port_circle(
+                    &painter,
+                    port_pos,
+                    port_radius,
+                    port_color,
+                    port_resp.hovered(),
+                );
                 if is_io {
                     // Spec: 1 px outline around the port circle in
                     // `#1F2933` so it reads against the chevron.
@@ -2155,9 +2305,16 @@ impl BarEditorApp {
                             egui::Color32::LIGHT_GRAY,
                         );
                     } else {
-                        // Top / Bottom ports skip the inline label to keep the
-                        // node body uncluttered; surface the name as a tooltip.
-                        port_resp.clone().on_hover_text(&input.label);
+                        // Top / Bottom ports skip the inline label; show tooltip
+                        // instantly (no delay) so the user gets feedback without waiting.
+                        if port_resp.hovered() {
+                            egui::show_tooltip_text(
+                                ui.ctx(),
+                                ui.layer_id(),
+                                egui::Id::new(("port_tip", node_id.0, i as u64)),
+                                &input.label,
+                            );
+                        }
                     }
                 }
                 // End an in-flight connection when the user releases
@@ -2231,7 +2388,13 @@ impl BarEditorApp {
                     egui::Id::new(("port_out", node_id.0, i)),
                     egui::Sense::click_and_drag(),
                 );
-                painter.circle_filled(port_pos, port_radius, port_color);
+                draw_port_circle(
+                    &painter,
+                    port_pos,
+                    port_radius,
+                    port_color,
+                    port_resp.hovered(),
+                );
                 if !is_io {
                     painter.text(
                         egui::pos2(port_pos.x - 10.0, port_pos.y),
@@ -2296,7 +2459,7 @@ impl BarEditorApp {
                 let busy = self.export_status.affects(*node_id);
                 let any_running = self.export_status.is_running();
 
-                let export_hov = ptr.map_or(false, |p| export_rect.contains(p));
+                let export_hov = ptr.is_some_and(|p| export_rect.contains(p));
                 let export_bg = if busy {
                     egui::Color32::from_rgb(80, 80, 30)
                 } else if any_running {
@@ -2317,7 +2480,7 @@ impl BarEditorApp {
             // Paint the Preview node's "Open" footer.
             if let Some(footer_rect) = open_footer_rect {
                 let ptr = ui.ctx().pointer_latest_pos();
-                let open_hov = ptr.map_or(false, |p| footer_rect.contains(p));
+                let open_hov = ptr.is_some_and(|p| footer_rect.contains(p));
                 let footer_bg = if open_hov {
                     egui::Color32::from_rgb(22, 148, 178)
                 } else {
@@ -2491,11 +2654,9 @@ impl BarEditorApp {
                             }
                         });
                     }
-                    if in_group.is_some() {
-                        if ui.button("Remove from group").clicked() {
-                            group_op = Some(GroupOp::RemoveFrom(this_id));
-                            ui.close_menu();
-                        }
+                    if in_group.is_some() && ui.button("Remove from group").clicked() {
+                        group_op = Some(GroupOp::RemoveFrom(this_id));
+                        ui.close_menu();
                     }
                 }
                 ui.separator();
@@ -2591,10 +2752,8 @@ impl BarEditorApp {
                 // in case multiple Preview nodes exist in the graph.
                 self.preview_node = Some(*node_id);
             }
-            if run_clicked {
-                if self.validate_before_export("Bundle") {
-                    self.run_bundler_node = Some(*node_id);
-                }
+            if run_clicked && self.validate_before_export("Bundle") {
+                self.run_bundler_node = Some(*node_id);
             }
 
             // Resize corner handles (8 px squares; processed after node interact so they
@@ -2625,15 +2784,17 @@ impl BarEditorApp {
                     };
                     ui.ctx().set_cursor_icon(cursor);
                 }
-                painter.rect_filled(
-                    handle_rect,
-                    2.0,
-                    if handle_active {
-                        egui::Color32::from_rgb(160, 200, 255)
-                    } else {
-                        egui::Color32::from_rgb(70, 80, 100)
-                    },
-                );
+                if node_response.hovered() || handle_active {
+                    painter.rect_filled(
+                        handle_rect,
+                        2.0,
+                        if handle_active {
+                            egui::Color32::from_rgb(160, 200, 255)
+                        } else {
+                            egui::Color32::from_rgb(70, 80, 100)
+                        },
+                    );
+                }
                 if handle_resp.dragged() {
                     any_resize = true;
                     let delta = handle_resp.drag_delta();
@@ -2694,67 +2855,13 @@ impl BarEditorApp {
         // Collapsed subgraphs render as compact node-like blocks AFTER
         // nodes (so they appear in the foreground). They handle their
         // own selection / double-click-to-enter-confined-mode.
-        let (subgraph_block_rects, subgraph_handle_positions) =
-            self.draw_collapsed_subgraphs(&painter, offset);
-
-        // Wire creation at external ports — same z-ordered
-        // ui.interact() pattern as the regular node ports above so a
-        // click on an external handle doesn't double-fire the
-        // canvas's marquee detection.
-        let hit_size = egui::vec2(14.0, 14.0);
-        for (gid, group) in self.groups.clone().iter() {
-            if !(group.is_subgraph && group.collapsed) {
-                continue;
-            }
-            for (i, port) in group.subgraph_outputs.iter().enumerate() {
-                let Some((nid, pname)) = &port.binding else {
-                    continue;
-                };
-                let Some(handle) = subgraph_handle_positions
-                    .get(&(*nid, pname.clone()))
-                    .copied()
-                else {
-                    continue;
-                };
-                let hit_rect = egui::Rect::from_center_size(handle, hit_size);
-                let port_resp = ui.interact(
-                    hit_rect,
-                    egui::Id::new(("subgraph_port_out", *gid, i)),
-                    egui::Sense::click_and_drag(),
-                );
-                if port_resp.drag_started_by(egui::PointerButton::Primary)
-                    && self.drag_connection.is_none()
-                {
-                    connection_start = Some(DragConnection {
-                        from_node: *nid,
-                        from_port: pname.clone(),
-                        from_pos: handle,
-                    });
-                }
-            }
-            for (i, port) in group.subgraph_inputs.iter().enumerate() {
-                let Some((nid, pname)) = &port.binding else {
-                    continue;
-                };
-                let Some(handle) = subgraph_handle_positions
-                    .get(&(*nid, pname.clone()))
-                    .copied()
-                else {
-                    continue;
-                };
-                let hit_rect = egui::Rect::from_center_size(handle, hit_size);
-                let port_resp = ui.interact(
-                    hit_rect,
-                    egui::Id::new(("subgraph_port_in", *gid, i)),
-                    egui::Sense::click_and_drag(),
-                );
-                if self.drag_connection.is_some()
-                    && ui.input(|i| i.pointer.primary_released())
-                    && port_resp.contains_pointer()
-                {
-                    connection_end = Some((*nid, pname.clone()));
-                }
-            }
+        let (subgraph_block_rects, _subgraph_handle_positions, sg_conn_start, sg_conn_end) =
+            self.draw_collapsed_subgraphs(ui, offset);
+        if let Some(s) = sg_conn_start {
+            connection_start = Some(s);
+        }
+        if let Some(e) = sg_conn_end {
+            connection_end = Some(e);
         }
         for (gid, rect) in subgraph_block_rects {
             let resp = ui.interact(
