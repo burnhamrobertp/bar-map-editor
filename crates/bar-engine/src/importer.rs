@@ -310,10 +310,9 @@ pub fn parse_mapinfo_smf_heights(lua: &str) -> Option<(f32, f32)> {
         search_from = abs + 3;
     };
     let _ = smf_idx; // documents intent; not used below.
-    let after_smf = &lua[..]; // the absolute index `brace_open` references the original string.
-    let brace_open = brace_open;
-    // Track depth so a sub-table inside smf doesn't fool us. Find the
-    // matching closing brace.
+    let after_smf = lua; // the absolute index `brace_open` references the original string.
+                         // Track depth so a sub-table inside smf doesn't fool us. Find the
+                         // matching closing brace.
     let mut depth = 0;
     let mut end = brace_open;
     for (i, c) in after_smf[brace_open..].char_indices() {
@@ -337,7 +336,7 @@ pub fn parse_mapinfo_smf_heights(lua: &str) -> Option<(f32, f32)> {
     let parse_field = |key: &str| -> Option<f32> {
         // Split on both newlines AND commas so we can parse both
         // multi-line and inline `{ a = 1, b = 2 }` forms.
-        for piece in body.split(|c: char| c == '\n' || c == ',') {
+        for piece in body.split(['\n', ',']) {
             let trimmed = piece.trim().to_lowercase();
             // Match `<key> = ` or `<key>=`. Comments and trailing chars are
             // tolerated; we just want the first numeric token after `=`.

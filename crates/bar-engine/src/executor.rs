@@ -514,7 +514,7 @@ impl NodeExecutor for CpuExecutor {
                     return Ok(outputs);
                 }
 
-                let file = std::fs::File::open(&path).map_err(|e| {
+                let file = std::fs::File::open(path).map_err(|e| {
                     EvalError::Compute(format!("SmfImport: cannot open '{}': {}", path, e))
                 })?;
                 let smf = SmfMap::read(&mut std::io::BufReader::new(file))
@@ -550,7 +550,7 @@ impl NodeExecutor for CpuExecutor {
                 // Determine tile grid: prefer reading from the paired .smf file.
                 let smf_path = get_string(params, "smf_path", "");
                 let (tiles_x, tiles_y, tile_indices) = if !smf_path.is_empty() {
-                    if let Ok(f) = std::fs::File::open(&smf_path) {
+                    if let Ok(f) = std::fs::File::open(smf_path) {
                         if let Ok(smf) = SmfMap::read(&mut std::io::BufReader::new(f)) {
                             let (tx, ty) = smf.header.tile_grid_size();
                             (tx, ty, smf.tile_indices)
@@ -577,7 +577,7 @@ impl NodeExecutor for CpuExecutor {
                     return Ok(outputs);
                 }
 
-                let file = std::fs::File::open(&path).map_err(|e| {
+                let file = std::fs::File::open(path).map_err(|e| {
                     EvalError::Compute(format!("SmtImport: cannot open '{}': {}", path, e))
                 })?;
                 let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file))
@@ -1213,7 +1213,7 @@ fn generate_auto_texture(
     let slope_blend_scale = get_float(params, "slope_blend", 1.0).clamp(0.0, 1.0);
     let ao_strength = get_float(params, "ao_strength", 1.0).clamp(0.0, 1.0);
     let rock_hex = get_string(params, "rock_color", "736B61");
-    let rock_rgb = parse_hex_color_srgb(&rock_hex).unwrap_or([0.45, 0.42, 0.38]);
+    let rock_rgb = parse_hex_color_srgb(rock_hex).unwrap_or([0.45, 0.42, 0.38]);
     let biome = get_string(params, "biome", "temperate");
     let gradient = biome_gradient(biome);
 
@@ -2015,12 +2015,12 @@ fn painted_rgb_to_color_buffer(
             let fy = sy - sy.floor();
 
             let mut rgb = [0.0_f32; 3];
-            for c in 0..3 {
+            for (c, slot) in rgb.iter_mut().enumerate() {
                 let v00 = sample(x0, y0, c);
                 let v10 = sample(x1, y0, c);
                 let v01 = sample(x0, y1, c);
                 let v11 = sample(x1, y1, c);
-                rgb[c] = v00 * (1.0 - fx) * (1.0 - fy)
+                *slot = v00 * (1.0 - fx) * (1.0 - fy)
                     + v10 * fx * (1.0 - fy)
                     + v01 * (1.0 - fx) * fy
                     + v11 * fx * fy;

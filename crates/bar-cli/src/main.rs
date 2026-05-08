@@ -514,7 +514,7 @@ fn cmd_preview(
         evaluate_graph, get_bundler_node_heightmap, get_bundler_node_texture,
         get_preview_heightmap, get_texture_output,
     };
-    use bar_render::{Camera, TerrainRenderer};
+    use bar_render::{Camera, TerrainRenderer, TerrainUpdateParams};
 
     // Resolve input — either an .barproj or an .sd7. SD7s get imported to
     // a temp dir first; the produced project is then rendered.
@@ -622,12 +622,14 @@ fn cmd_preview(
         &gpu.device,
         &gpu.queue,
         &heightmap,
-        height_scale,
-        x_extent,
-        z_extent,
-        water_y,
-        [0.2, 0.45, 0.75],
-        mesh_lod,
+        TerrainUpdateParams {
+            height_scale,
+            x_extent,
+            z_extent,
+            water_y,
+            water_color: [0.2, 0.45, 0.75],
+            grid_n: mesh_lod,
+        },
     );
     if let Some(ref tex) = texture {
         renderer.update_albedo(&gpu.device, &gpu.queue, tex);
