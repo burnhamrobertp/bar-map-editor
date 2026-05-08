@@ -1,30 +1,18 @@
 {
   "name": "Dunes - Sharp",
-  "description": "Closely-packed sharply-defined dunes. Higher frequency, less smoothing, more visible crests. Suggests a sand sea or actively-blown desert. Wire its `terrain` output to a Bundler.",
+  "description": "Active sand sea with tightly-packed sharp-crested dunes. High frequency and minimal blur keeps ridge lines prominent. Suggests an actively blown desert where crests haven't yet rounded.",
   "nodes": [
     {
       "key": "noise",
       "type": "PerlinNoise",
       "label": "Dune Noise",
       "params": {
-        "character": {
-          "String": "fine_detail"
-        },
-        "frequency": {
-          "Float": 6
-        },
-        "octaves": {
-          "UInt": 5
-        },
-        "lacunarity": {
-          "Float": 2
-        },
-        "persistence": {
-          "Float": 0.5
-        },
-        "seed": {
-          "UInt": 73
-        }
+        "character": { "String": "fine_detail" },
+        "frequency": { "Float": 6.0 },
+        "octaves": { "UInt": 5 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.5 },
+        "seed": { "UInt": 73 }
       }
     },
     {
@@ -32,23 +20,15 @@
       "type": "BiasGain",
       "label": "Compress Amplitude",
       "params": {
-        "bias": {
-          "Float": 0.5
-        },
-        "gain": {
-          "Float": 0.4
-        }
+        "bias": { "Float": 0.5 },
+        "gain": { "Float": 0.4 }
       }
     },
     {
       "key": "smooth",
       "type": "Blur",
-      "label": "Soften Crests",
-      "params": {
-        "radius": {
-          "Float": 0.7
-        }
-      }
+      "label": "Light Soften",
+      "params": { "radius": { "Float": 0.7 } }
     },
     {
       "key": "slope_map",
@@ -60,34 +40,15 @@
       "key": "auto_tex",
       "type": "AutoTexture",
       "label": "Auto Texture",
-      "params": {
-        "biome": {
-          "String": "desert"
-        }
-      }
+      "params": { "biome": { "String": "desert" } }
     }
   ],
   "connections": [
-    {
-      "from": "noise.output",
-      "to": "compress.input"
-    },
-    {
-      "from": "compress.output",
-      "to": "smooth.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "slope_map.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "auto_tex.input"
-    },
-    {
-      "from": "slope_map.output",
-      "to": "auto_tex.slope"
-    }
+    { "from": "noise.output",    "to": "compress.input" },
+    { "from": "compress.output", "to": "smooth.input" },
+    { "from": "smooth.output",   "to": "slope_map.input" },
+    { "from": "smooth.output",   "to": "auto_tex.input" },
+    { "from": "slope_map.output", "to": "auto_tex.slope" }
   ],
   "subgraph": {
     "label": "Dunes - Sharp",
@@ -95,58 +56,15 @@
     "collapsed": true,
     "inputs": [],
     "outputs": [
-      {
-        "name": "terrain",
-        "label": "Terrain",
-        "kind": "Heightmap",
-        "binding": "smooth:output"
-      },
-      {
-        "name": "texture",
-        "label": "Texture",
-        "kind": "Color",
-        "binding": "auto_tex:output"
-      },
-      {
-        "name": "slope",
-        "label": "Slope",
-        "kind": "Heightmap",
-        "binding": "slope_map:output"
-      }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "auto_tex:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    {
-      "name": "dune_size",
-      "label": "Dune size",
-      "kind": "Float",
-      "binding": "noise:frequency",
-      "min": 3,
-      "max": 12
-    },
-    {
-      "name": "dune_height",
-      "label": "Dune height",
-      "kind": "Float",
-      "binding": "compress:gain",
-      "min": 0.1,
-      "max": 0.7
-    },
-    {
-      "name": "smoothness",
-      "label": "Crest smoothness",
-      "kind": "Float",
-      "binding": "smooth:radius",
-      "min": 0,
-      "max": 2.5
-    },
-    {
-      "name": "seed",
-      "label": "Seed",
-      "kind": "UInt",
-      "binding": "noise:seed",
-      "min": 0,
-      "max": 100000
-    }
+    { "name": "dune_size",   "label": "Dune size",   "kind": "Float", "binding": "noise:frequency", "min": 3.0, "max": 12.0 },
+    { "name": "dune_height", "label": "Dune height", "kind": "Float", "binding": "compress:gain",   "min": 0.1, "max": 0.7  },
+    { "name": "smoothness",  "label": "Smoothness",  "kind": "Float", "binding": "smooth:radius",   "min": 0.0, "max": 2.5  },
+    { "name": "seed",        "label": "Seed",        "kind": "UInt",  "binding": "noise:seed" }
   ]
 }

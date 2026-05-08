@@ -439,6 +439,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn all_builtin_macros_parse_and_instantiate() {
+        for (name, _) in BUILTIN_MACROS {
+            let t = parse(name).unwrap_or_else(|| panic!("macro '{name}' failed to parse"));
+            assert!(!t.nodes.is_empty(), "macro '{name}' has no nodes");
+            assert!(
+                !t.subgraph.outputs.is_empty(),
+                "macro '{name}' has no subgraph outputs"
+            );
+            let mut g = GraphEngine::new();
+            instantiate(&t, &mut g, egui::pos2(0.0, 0.0))
+                .unwrap_or_else(|e| panic!("macro '{name}' failed to instantiate: {e}"));
+        }
+    }
+
+    #[test]
     fn mountain_range_parses() {
         let t = parse("Mountain Range").expect("mountain range macro should parse");
         assert!(!t.nodes.is_empty());

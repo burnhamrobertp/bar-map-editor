@@ -1,30 +1,18 @@
 {
   "name": "Plains - Marsh",
-  "description": "Very flat, low-elevation terrain with subtle pooling. Compressed Perlin noise + heavy blur produces an almost-uniform surface — boggy ground where the slightest depression collects water. Wire its `terrain` output to a Bundler.",
+  "description": "Very flat, low-elevation terrain. Broad-wave noise is strongly compressed in amplitude then heavily blurred, leaving an almost-uniform surface where the slightest depression pools water.",
   "nodes": [
     {
       "key": "noise",
       "type": "PerlinNoise",
       "label": "Marsh Noise",
       "params": {
-        "character": {
-          "String": "broad_waves"
-        },
-        "frequency": {
-          "Float": 1.5
-        },
-        "octaves": {
-          "UInt": 3
-        },
-        "lacunarity": {
-          "Float": 2
-        },
-        "persistence": {
-          "Float": 0.4
-        },
-        "seed": {
-          "UInt": 31
-        }
+        "character": { "String": "broad_waves" },
+        "frequency": { "Float": 1.5 },
+        "octaves": { "UInt": 3 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.4 },
+        "seed": { "UInt": 31 }
       }
     },
     {
@@ -32,23 +20,15 @@
       "type": "BiasGain",
       "label": "Flatten",
       "params": {
-        "bias": {
-          "Float": 0.5
-        },
-        "gain": {
-          "Float": 0.15
-        }
+        "bias": { "Float": 0.5 },
+        "gain": { "Float": 0.15 }
       }
     },
     {
       "key": "smooth",
       "type": "Blur",
       "label": "Soften",
-      "params": {
-        "radius": {
-          "Float": 2.5
-        }
-      }
+      "params": { "radius": { "Float": 3.0 } }
     },
     {
       "key": "slope_map",
@@ -60,34 +40,15 @@
       "key": "auto_tex",
       "type": "AutoTexture",
       "label": "Auto Texture",
-      "params": {
-        "biome": {
-          "String": "tundra"
-        }
-      }
+      "params": { "biome": { "String": "tundra" } }
     }
   ],
   "connections": [
-    {
-      "from": "noise.output",
-      "to": "compress.input"
-    },
-    {
-      "from": "compress.output",
-      "to": "smooth.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "slope_map.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "auto_tex.input"
-    },
-    {
-      "from": "slope_map.output",
-      "to": "auto_tex.slope"
-    }
+    { "from": "noise.output",    "to": "compress.input" },
+    { "from": "compress.output", "to": "smooth.input" },
+    { "from": "smooth.output",   "to": "slope_map.input" },
+    { "from": "smooth.output",   "to": "auto_tex.input" },
+    { "from": "slope_map.output", "to": "auto_tex.slope" }
   ],
   "subgraph": {
     "label": "Plains - Marsh",
@@ -95,58 +56,15 @@
     "collapsed": true,
     "inputs": [],
     "outputs": [
-      {
-        "name": "terrain",
-        "label": "Terrain",
-        "kind": "Heightmap",
-        "binding": "smooth:output"
-      },
-      {
-        "name": "texture",
-        "label": "Texture",
-        "kind": "Color",
-        "binding": "auto_tex:output"
-      },
-      {
-        "name": "slope",
-        "label": "Slope",
-        "kind": "Heightmap",
-        "binding": "slope_map:output"
-      }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "auto_tex:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    {
-      "name": "wetness",
-      "label": "Wetness",
-      "kind": "Float",
-      "binding": "compress:gain",
-      "min": 0.05,
-      "max": 0.5
-    },
-    {
-      "name": "noise_scale",
-      "label": "Noise scale",
-      "kind": "Float",
-      "binding": "noise:frequency",
-      "min": 0.5,
-      "max": 4
-    },
-    {
-      "name": "smoothing",
-      "label": "Smoothing",
-      "kind": "Float",
-      "binding": "smooth:radius",
-      "min": 0.5,
-      "max": 6
-    },
-    {
-      "name": "seed",
-      "label": "Seed",
-      "kind": "UInt",
-      "binding": "noise:seed",
-      "min": 0,
-      "max": 100000
-    }
+    { "name": "wetness",     "label": "Wetness",     "kind": "Float", "binding": "compress:gain",   "min": 0.05, "max": 0.5  },
+    { "name": "noise_scale", "label": "Noise scale", "kind": "Float", "binding": "noise:frequency", "min": 0.5,  "max": 4.0  },
+    { "name": "smoothing",   "label": "Smoothing",   "kind": "Float", "binding": "smooth:radius",   "min": 0.5,  "max": 6.0  },
+    { "name": "seed",        "label": "Seed",        "kind": "UInt",  "binding": "noise:seed" }
   ]
 }
