@@ -27,7 +27,7 @@ VIAddVersionKey "LegalCopyright" "bar-editor Contributors"
 
 ; Interface Settings
 !define MUI_ABORTWARNING
-!define MUI_ICON "..\..\assets\bar.ico"
+!define MUI_ICON "..\..\assets\bar-map-editor.ico"
 
 ; Pages
 !insertmacro MUI_PAGE_WELCOME

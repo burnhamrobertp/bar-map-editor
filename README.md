@@ -1,7 +1,7 @@
 # BAR - Map Editor
 
 <div align="center">
-  <img src="assets/bar.png" alt="BAR - Map Editor" width="200">
+  <img src="assets/bar-map-editor.png" alt="BAR - Map Editor" width="200">
 </div>
 
 A standalone map editor for **Beyond All Reason** (Spring/Recoil engine),
