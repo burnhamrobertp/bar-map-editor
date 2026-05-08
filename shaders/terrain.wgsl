@@ -17,9 +17,10 @@ struct CameraUniform {
     water_b: f32,
     water_y: f32,
     time: f32,
-    quality: f32,
-    /// 1.0 => discard water-plane fragments (reflection pre-pass).
+    /// 1.0 => discard water-plane fragments (used by reflection / refraction
+    /// pre-passes so the water surface itself isn't captured).
     skip_water: f32,
+    _pad0: f32,
     screen_w: f32,
     screen_h: f32,
     /// Half-span of the terrain mesh in world units on the X axis.
@@ -39,6 +40,11 @@ struct CameraUniform {
     /// xy = brush cursor world XZ; z = radius (world units);
     /// w = 1.0 active / 0.0 inactive.
     brush_cursor: vec4<f32>,
+    /// Signed-distance plane: discard fragments where
+    /// dot(clip_plane.xyz, world_pos) + clip_plane.w < 0.
+    /// Main pass sets (0, 0, 0, 1) so all fragments pass; reflection and
+    /// refraction passes set this to keep only one side of the water plane.
+    clip_plane: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -57,9 +63,20 @@ struct CameraUniform {
 @group(2) @binding(0) var reflection_texture: texture_2d<f32>;
 @group(2) @binding(1) var reflection_sampler: sampler;
 
+/// Planar-refraction texture -- rendered with the original camera and a clip
+/// plane that keeps only the side of the water plane opposite to the camera.
+/// Sampled in the water fragment branch for transparency / Snell's window.
+@group(2) @binding(2) var refraction_texture: texture_2d<f32>;
+@group(2) @binding(3) var refraction_sampler: sampler;
+
 /// Heightmap for GPU vertex displacement. Shares group 3 with water_normal (declared in
 /// water.wgsl at bindings 0/1). Format: R32Float, non-filterable -- use textureLoad.
 @group(3) @binding(2) var heightmap_tex: texture_2d<f32>;
+
+/// Returns true if the fragment is on the kept side of camera.clip_plane.
+fn pass_clip_plane(world_pos: vec3<f32>) -> bool {
+    return dot(camera.clip_plane.xyz, world_pos) + camera.clip_plane.w >= 0.0;
+}
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -159,6 +176,10 @@ fn height_color(height: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    if (!pass_clip_plane(in.world_position)) {
+        discard;
+    }
+
     // Water plane branch.
     if (in.uv.x < -0.5) {
         if (camera.skip_water > 0.5) {
@@ -214,14 +235,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         );
     }
 
-    // Atmospheric fog (high-pass only).
-    if (camera.quality > 0.5) {
-        let view_vec = in.world_position - camera.camera_pos;
-        let dist = length(view_vec);
-        let fog_factor = 1.0 - exp(-dist * 0.10);
-        let fog_color = sky_color(normalize(view_vec));
-        lit_color = mix(lit_color, fog_color, fog_factor * 0.18);
-    }
+    // Atmospheric fog removed: it was custom (exponential distance haze
+    // toward the sky colour) and isn't part of Recoil's pipeline, so it
+    // would make the preview diverge from in-game appearance. If/when we
+    // want fog, port Recoil's MapSettings-driven fog instead.
 
     // Brush cursor ring.
     if (camera.brush_cursor.w > 0.5) {
@@ -269,6 +286,14 @@ fn fs_sky(in: SkyVOut) -> @location(0) vec4<f32> {
     let world_h = camera.inv_view_proj * clip;
     let world_pos = world_h.xyz / world_h.w;
     let view_dir = normalize(world_pos - camera.camera_pos);
+    // Sky is treated as "infinitely far above water." Sample the clip plane
+    // along the view ray rather than at the back-plane intersection: a
+    // downward-facing ray (refraction pass with camera above water) should
+    // be discarded since the sky is on the kept-out side.
+    let half_space = camera.clip_plane.xyz;
+    if (length(half_space) > 0.5 && dot(half_space, view_dir) < 0.0) {
+        discard;
+    }
     let sky = sky_color(view_dir);
     return vec4<f32>(sky, 1.0);
 }

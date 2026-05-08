@@ -8,6 +8,18 @@ use crate::terrain::{
 };
 use bar_data::{ColorBuffer, Heightmap};
 
+/// Parameters for a full heightmap replacement. Passed to
+/// [`TerrainRenderer::update_heightmap`] to avoid a clippy `too_many_arguments`
+/// violation.
+pub struct TerrainUpdateParams {
+    pub height_scale: f32,
+    pub x_extent: f32,
+    pub z_extent: f32,
+    pub water_y: f32,
+    pub water_color: [f32; 3],
+    pub grid_n: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CameraUniform {
@@ -21,8 +33,8 @@ struct CameraUniform {
     water_b: f32,
     water_y: f32,
     time: f32,
-    quality: f32,
     skip_water: f32,
+    _pad0: f32,
     screen_w: f32,
     screen_h: f32,
     x_extent: f32,
@@ -35,9 +47,16 @@ struct CameraUniform {
     water_base_color: [f32; 4],
     water_min_color: [f32; 4],
     brush_cursor: [f32; 4],
+    // Signed-distance plane: keep fragments where dot(plane.xyz, world_pos)
+    // + plane.w >= 0. Used by reflection and refraction passes; main pass
+    // sets it to (0, 0, 0, 1) so all fragments pass.
+    clip_plane: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CameraUniform>() == 320);
+const _: () = assert!(std::mem::size_of::<CameraUniform>() == 336);
+
+/// Clip-plane value that passes every fragment. Used by the main pass.
+const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
 
 /// Per-frame parameters passed to [`TerrainRenderer::render`].
 ///
@@ -86,7 +105,7 @@ impl Default for SmfLighting {
 }
 
 impl SmfLighting {
-    fn to_uniform_slots(&self) -> SmfUniformSlots {
+    fn to_uniform_slots(self) -> SmfUniformSlots {
         let s = self.sun_dir;
         let len = (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]).sqrt().max(1e-4);
         let s = [s[0] / len, s[1] / len, s[2] / len];
@@ -151,11 +170,12 @@ pub struct TerrainRenderer {
     metalmap_texture: wgpu::Texture,
     typemap_texture: wgpu::Texture,
     has_albedo: bool,
-    // ── Group 2: planar reflection ──────────────────────────────────────────
-    reflection_bind_group_layout: wgpu::BindGroupLayout,
+    // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) ──────
+    water_planes_bind_group_layout: wgpu::BindGroupLayout,
     reflection_sampler: wgpu::Sampler,
-    reflection_bind_group: wgpu::BindGroup,
-    reflection_bind_group_dummy: wgpu::BindGroup,
+    refraction_sampler: wgpu::Sampler,
+    water_planes_bind_group: wgpu::BindGroup,
+    water_planes_bind_group_dummy: wgpu::BindGroup,
     // ── Group 3: water_normal (bindings 0,1) + heightmap (binding 2) ─────────
     #[allow(dead_code)]
     water_normal_texture: wgpu::Texture,
@@ -178,6 +198,9 @@ pub struct TerrainRenderer {
     reflection_texture: Option<wgpu::Texture>,
     reflection_view: Option<wgpu::TextureView>,
     reflection_depth_view: Option<wgpu::TextureView>,
+    refraction_texture: Option<wgpu::Texture>,
+    refraction_view: Option<wgpu::TextureView>,
+    refraction_depth_view: Option<wgpu::TextureView>,
     pub width: u32,
     pub height: u32,
     // ── Cached per-frame state ──────────────────────────────────────────────
@@ -361,10 +384,10 @@ impl TerrainRenderer {
                 ],
             });
 
-        // Group 2: planar reflection
-        let reflection_bind_group_layout =
+        // Group 2: planar reflection (b0/b1) + planar refraction (b2/b3).
+        let water_planes_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("reflection_bind_group_layout"),
+                label: Some("water_planes_bind_group_layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
@@ -378,6 +401,22 @@ impl TerrainRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
@@ -422,10 +461,10 @@ impl TerrainRenderer {
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("terrain_pipeline_layout"),
             bind_group_layouts: &[
-                &camera_bind_group_layout,     // group 0: camera uniform
-                &texture_bind_group_layout,    // group 1: albedo/metalmap/typemap
-                &reflection_bind_group_layout, // group 2: reflection texture
-                &heightmap_bind_group_layout,  // group 3: heightmap displacement
+                &camera_bind_group_layout,       // group 0: camera uniform
+                &texture_bind_group_layout,      // group 1: albedo/metalmap/typemap
+                &water_planes_bind_group_layout, // group 2: reflection + refraction
+                &heightmap_bind_group_layout,    // group 3: water normal + heightmap
             ],
             push_constant_ranges: &[],
         });
@@ -529,8 +568,8 @@ impl TerrainRenderer {
             water_b: 0.7,
             water_y: -1.0,
             time: 0.0,
-            quality: 1.0,
             skip_water: 0.0,
+            _pad0: 0.0,
             screen_w: 512.0,
             screen_h: 512.0,
             x_extent: 0.5,
@@ -543,6 +582,7 @@ impl TerrainRenderer {
             water_base_color: smf.water_base_color,
             water_min_color: smf.water_min_color,
             brush_cursor: [0.0, 0.0, 0.0, 0.0],
+            clip_plane: NO_CLIP,
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -657,24 +697,68 @@ impl TerrainRenderer {
         );
         let reflection_default_view =
             reflection_default_tex.create_view(&wgpu::TextureViewDescriptor::default());
-        let make_reflection_bg = |view: &wgpu::TextureView| {
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("reflection_bind_group"),
-                layout: &reflection_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&reflection_sampler),
-                    },
-                ],
-            })
-        };
-        let reflection_bind_group = make_reflection_bg(&reflection_default_view);
-        let reflection_bind_group_dummy = make_reflection_bg(&reflection_default_view);
+
+        let refraction_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("refraction_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let refraction_default_data: [u8; 4] = [80, 110, 140, 255];
+        let refraction_default_tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("refraction_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &refraction_default_data,
+        );
+        let refraction_default_view =
+            refraction_default_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let make_water_planes_bg =
+            |refl_view: &wgpu::TextureView, refr_view: &wgpu::TextureView| {
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("water_planes_bind_group"),
+                    layout: &water_planes_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: wgpu::BindingResource::TextureView(refl_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::Sampler(&reflection_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(refr_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 3,
+                            resource: wgpu::BindingResource::Sampler(&refraction_sampler),
+                        },
+                    ],
+                })
+            };
+        let water_planes_bind_group =
+            make_water_planes_bg(&reflection_default_view, &refraction_default_view);
+        let water_planes_bind_group_dummy =
+            make_water_planes_bg(&reflection_default_view, &refraction_default_view);
 
         let water_normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("water_normal_sampler"),
@@ -744,10 +828,11 @@ impl TerrainRenderer {
             metalmap_texture,
             typemap_texture,
             has_albedo: false,
-            reflection_bind_group_layout,
+            water_planes_bind_group_layout,
             reflection_sampler,
-            reflection_bind_group,
-            reflection_bind_group_dummy,
+            refraction_sampler,
+            water_planes_bind_group,
+            water_planes_bind_group_dummy,
             water_normal_texture,
             water_normal_sampler,
             water_normal_view,
@@ -765,6 +850,9 @@ impl TerrainRenderer {
             reflection_texture: None,
             reflection_view: None,
             reflection_depth_view: None,
+            refraction_texture: None,
+            refraction_view: None,
+            refraction_depth_view: None,
             width: 512,
             height: 512,
             height_scale: 0.3,
@@ -781,21 +869,25 @@ impl TerrainRenderer {
 
     // ── Public update methods ───────────────────────────────────────────────
 
-    /// Full heightmap replacement. Rebuilds the terrain mesh (flat grid + skirts
-    /// + water plane) and uploads the heightmap texture. Called on graph re-eval
-    /// or project switch. Recreates the heightmap GPU texture if dimensions changed.
+    /// Full heightmap replacement. Rebuilds the terrain mesh (flat grid +
+    /// skirts + water plane) and uploads the heightmap texture. Called on
+    /// graph re-eval or project switch. Recreates the heightmap GPU texture
+    /// if dimensions changed.
     pub fn update_heightmap(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         hm: &Heightmap,
-        height_scale: f32,
-        x_extent: f32,
-        z_extent: f32,
-        water_y: f32,
-        water_color: [f32; 3],
-        grid_n: u32,
+        params: TerrainUpdateParams,
     ) {
+        let TerrainUpdateParams {
+            height_scale,
+            x_extent,
+            z_extent,
+            water_y,
+            water_color,
+            grid_n,
+        } = params;
         self.height_scale = height_scale;
         self.x_extent = x_extent;
         self.z_extent = z_extent;
@@ -1311,9 +1403,42 @@ impl TerrainRenderer {
         self.reflection_depth_view =
             Some(reflection_depth.create_view(&wgpu::TextureViewDescriptor::default()));
 
-        self.reflection_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("reflection_bind_group"),
-            layout: &self.reflection_bind_group_layout,
+        let refraction_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("refraction_color"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let refraction_view = refraction_tex.create_view(&wgpu::TextureViewDescriptor::default());
+
+        let refraction_depth = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("refraction_depth"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.depth_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        self.refraction_depth_view =
+            Some(refraction_depth.create_view(&wgpu::TextureViewDescriptor::default()));
+
+        self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("water_planes_bind_group"),
+            layout: &self.water_planes_bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
@@ -1323,10 +1448,20 @@ impl TerrainRenderer {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&self.reflection_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&refraction_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.refraction_sampler),
+                },
             ],
         });
         self.reflection_view = Some(reflection_view);
         self.reflection_texture = Some(reflection_tex);
+        self.refraction_view = Some(refraction_view);
+        self.refraction_texture = Some(refraction_tex);
     }
 
     /// Render one frame. `None` clears the viewport; `Some(frame)` renders the
@@ -1421,45 +1556,84 @@ impl TerrainRenderer {
         let view_proj = camera.view_projection(aspect);
         let cam_pos = camera.position();
 
+        let smf = self.smf_lighting.to_uniform_slots();
+        let base_uniform = CameraUniform {
+            view_proj: view_proj.to_cols_array_2d(),
+            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
+            camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z],
+            has_texture: self.has_albedo as u32,
+            height_scale: self.height_scale,
+            water_r: self.water_color[0],
+            water_g: self.water_color[1],
+            water_b: self.water_color[2],
+            water_y: self.water_y,
+            time: self.time,
+            skip_water: 0.0,
+            _pad0: 0.0,
+            screen_w: self.width as f32,
+            screen_h: self.height as f32,
+            x_extent: self.x_extent,
+            z_extent: self.z_extent,
+            sun_dir_exp: smf.sun_dir_exp,
+            ground_ambient: smf.ground_ambient,
+            ground_diffuse: smf.ground_diffuse,
+            ground_specular: smf.ground_specular,
+            water_absorb: smf.water_absorb,
+            water_base_color: smf.water_base_color,
+            water_min_color: smf.water_min_color,
+            brush_cursor: [0.0, 0.0, 0.0, 0.0],
+            clip_plane: NO_CLIP,
+        };
+
         // ── Pass 1: planar reflection ───────────────────────────────────────
-        if self.quality_high && self.water_y >= 0.0 {
+        // Renders the world from a camera mirrored about y = water_y, keeping
+        // only the half-space on the SAME side of the water as the camera.
+        // Above-water cameras get a mirror image of above-water geometry
+        // (standard planar reflection); below-water cameras get a mirror
+        // image of the underwater scene (total internal reflection content).
+        if self.water_y >= 0.0 {
             if let (Some(ref reflection_view), Some(ref reflection_depth_view)) =
                 (&self.reflection_view, &self.reflection_depth_view)
             {
                 let wy = self.water_y;
+                let above_water = cam_pos.y >= wy;
+                // Build the reflection matrix R about y = wy: world point
+                // (x, y, z) maps to (x, 2*wy - y, z). As a 4x4 matrix this is
+                // ScaleY(-1) followed by TranslateY(2*wy). Det(R) = -1, so R
+                // is not a rigid transform and V*R cannot be re-expressed as
+                // a look_at; multiply V*R directly.
+                let reflect_y = Mat4::from_cols_array_2d(&[
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, -1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                    [0.0, 2.0 * wy, 0.0, 1.0],
+                ]);
+                // Render the reflected world from the original camera; the
+                // resulting framebuffer lines up 1:1 with main-pass screen
+                // coordinates, so the water shader samples it at its own
+                // screen UV (no Y flip).
+                let view_proj_refl = view_proj * reflect_y;
+                // camera_pos exposed to the shader is the *mirrored* eye --
+                // i.e. the viewpoint after R has been applied to the world.
                 let cam_pos_refl = glam::Vec3::new(cam_pos.x, 2.0 * wy - cam_pos.y, cam_pos.z);
-                let target_refl =
-                    glam::Vec3::new(camera.target.x, 2.0 * wy - camera.target.y, camera.target.z);
-                let view_refl =
-                    Mat4::look_at_rh(cam_pos_refl, target_refl, glam::Vec3::new(0.0, -1.0, 0.0));
-                let view_proj_refl = camera.projection_matrix(aspect) * view_refl;
 
-                let smf = self.smf_lighting.to_uniform_slots();
+                // Keep only the camera's own side of the water plane so the
+                // reflected content is what *would* appear in the mirror at
+                // each fragment's screen position.
+                let clip_plane = if above_water {
+                    [0.0, 1.0, 0.0, -wy] // keep world.y >= wy
+                } else {
+                    [0.0, -1.0, 0.0, wy] // keep world.y <= wy
+                };
+
                 let refl_uniform = CameraUniform {
                     view_proj: view_proj_refl.to_cols_array_2d(),
                     inv_view_proj: view_proj_refl.inverse().to_cols_array_2d(),
                     camera_pos: [cam_pos_refl.x, cam_pos_refl.y, cam_pos_refl.z],
-                    has_texture: self.has_albedo as u32,
-                    height_scale: self.height_scale,
-                    water_r: self.water_color[0],
-                    water_g: self.water_color[1],
-                    water_b: self.water_color[2],
-                    water_y: self.water_y,
-                    time: self.time,
-                    quality: 0.0,
                     skip_water: 1.0,
-                    screen_w: self.width as f32,
-                    screen_h: self.height as f32,
-                    x_extent: self.x_extent,
-                    z_extent: self.z_extent,
-                    sun_dir_exp: smf.sun_dir_exp,
-                    ground_ambient: smf.ground_ambient,
-                    ground_diffuse: smf.ground_diffuse,
-                    ground_specular: smf.ground_specular,
-                    water_absorb: smf.water_absorb,
-                    water_base_color: smf.water_base_color,
-                    water_min_color: smf.water_min_color,
+                    clip_plane,
                     brush_cursor: [0.0, 0.0, 0.0, 0.0],
+                    ..base_uniform
                 };
                 queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&refl_uniform));
 
@@ -1496,7 +1670,7 @@ impl TerrainRenderer {
                     rp.set_pipeline(&self.render_pipeline);
                     rp.set_bind_group(0, &self.camera_bind_group, &[]);
                     rp.set_bind_group(1, &self.texture_bind_group, &[]);
-                    rp.set_bind_group(2, &self.reflection_bind_group_dummy, &[]);
+                    rp.set_bind_group(2, &self.water_planes_bind_group_dummy, &[]);
                     rp.set_bind_group(3, &self.heightmap_bind_group, &[]);
                     rp.set_vertex_buffer(0, vertex_buffer.slice(..));
                     rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -1510,33 +1684,87 @@ impl TerrainRenderer {
             }
         }
 
-        // ── Pass 2: main render ─────────────────────────────────────────────
-        let smf_main = self.smf_lighting.to_uniform_slots();
+        // ── Pass 2: planar refraction ───────────────────────────────────────
+        // Renders the world from the original (un-mirrored) camera with a
+        // clip plane on the OPPOSITE side of the water from the camera, so:
+        //   - camera above water: refraction texture contains below-water
+        //     terrain (the lakebed seen through the water surface);
+        //   - camera below water: refraction texture contains above-water
+        //     terrain + sky (the world above the water, as squeezed into
+        //     Snell's window).
+        // The water plane itself is excluded via skip_water.
+        if self.water_y >= 0.0 {
+            if let (Some(ref refraction_view), Some(ref refraction_depth_view)) =
+                (&self.refraction_view, &self.refraction_depth_view)
+            {
+                let wy = self.water_y;
+                let above_water = cam_pos.y >= wy;
+                let clip_plane = if above_water {
+                    // keep world.y <= water_y (below-water half-space)
+                    [0.0, -1.0, 0.0, wy]
+                } else {
+                    // keep world.y >= water_y (above-water half-space)
+                    [0.0, 1.0, 0.0, -wy]
+                };
+                let refr_uniform = CameraUniform {
+                    skip_water: 1.0,
+                    clip_plane,
+                    brush_cursor: [0.0, 0.0, 0.0, 0.0],
+                    ..base_uniform
+                };
+                queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&refr_uniform));
+
+                let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                    label: Some("refraction_encoder"),
+                });
+                {
+                    let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("refraction_pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: refraction_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color {
+                                    r: self.water_color[0] as f64 * 0.5,
+                                    g: self.water_color[1] as f64 * 0.5,
+                                    b: self.water_color[2] as f64 * 0.5,
+                                    a: 1.0,
+                                }),
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: refraction_depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    rp.set_pipeline(&self.render_pipeline);
+                    rp.set_bind_group(0, &self.camera_bind_group, &[]);
+                    rp.set_bind_group(1, &self.texture_bind_group, &[]);
+                    rp.set_bind_group(2, &self.water_planes_bind_group_dummy, &[]);
+                    rp.set_bind_group(3, &self.heightmap_bind_group, &[]);
+                    rp.set_vertex_buffer(0, vertex_buffer.slice(..));
+                    rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    rp.draw_indexed(0..self.num_indices, 0, 0..1);
+
+                    rp.set_pipeline(&self.sky_pipeline);
+                    rp.set_bind_group(0, &self.camera_bind_group, &[]);
+                    rp.draw(0..3, 0..1);
+                }
+                queue.submit(std::iter::once(enc.finish()));
+            }
+        }
+
+        // ── Pass 3: main render ─────────────────────────────────────────────
         let camera_uniform = CameraUniform {
-            view_proj: view_proj.to_cols_array_2d(),
-            inv_view_proj: view_proj.inverse().to_cols_array_2d(),
-            camera_pos: [cam_pos.x, cam_pos.y, cam_pos.z],
-            has_texture: self.has_albedo as u32,
-            height_scale: self.height_scale,
-            water_r: self.water_color[0],
-            water_g: self.water_color[1],
-            water_b: self.water_color[2],
-            water_y: self.water_y,
-            time: self.time,
-            quality: if self.quality_high { 1.0 } else { 0.0 },
-            skip_water: 0.0,
-            screen_w: self.width as f32,
-            screen_h: self.height as f32,
-            x_extent: self.x_extent,
-            z_extent: self.z_extent,
-            sun_dir_exp: smf_main.sun_dir_exp,
-            ground_ambient: smf_main.ground_ambient,
-            ground_diffuse: smf_main.ground_diffuse,
-            ground_specular: smf_main.ground_specular,
-            water_absorb: smf_main.water_absorb,
-            water_base_color: smf_main.water_base_color,
-            water_min_color: smf_main.water_min_color,
             brush_cursor: self.brush_cursor_uniform(),
+            ..base_uniform
         };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&camera_uniform));
 
@@ -1574,7 +1802,7 @@ impl TerrainRenderer {
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
-            render_pass.set_bind_group(2, &self.reflection_bind_group, &[]);
+            render_pass.set_bind_group(2, &self.water_planes_bind_group, &[]);
             render_pass.set_bind_group(3, &self.heightmap_bind_group, &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
@@ -1622,7 +1850,7 @@ impl TerrainRenderer {
         let bytes_per_pixel = 4u32;
         let unpadded_bpr = w * bytes_per_pixel;
         let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let padded_bpr = ((unpadded_bpr + align - 1) / align) * align;
+        let padded_bpr = unpadded_bpr.div_ceil(align) * align;
         let buffer_size = (padded_bpr * h) as wgpu::BufferAddress;
 
         let staging = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1664,7 +1892,7 @@ impl TerrainRenderer {
             let _ = tx.send(r);
         });
         device.poll(wgpu::Maintain::Wait);
-        let _ = rx.recv().ok()?.ok()?;
+        rx.recv().ok()?.ok()?;
 
         let raw = slice.get_mapped_range();
         let mut out = Vec::with_capacity((unpadded_bpr * h) as usize);
