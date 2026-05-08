@@ -120,7 +120,7 @@ pub enum CanvasView {
 
 /// Active filter tab in the validation details window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ValidationFilter {
+pub enum ValidationFilter {
     All,
     Error,
     Warning,
@@ -131,7 +131,7 @@ pub(crate) enum ValidationFilter {
 /// CollapsingHeaders so only one section's controls are on screen at a
 /// time, switched via a tab strip across the top.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MapInfoTab {
+pub enum MapInfoTab {
     Identity,
     Dimensions,
     Physics,
@@ -221,7 +221,8 @@ impl LayoutUnit {
     pub(crate) fn current_top_left(&self, app: &BarEditorApp) -> egui::Pos2 {
         match self {
             LayoutUnit::Node(id) => app
-                .visuals.node_visuals
+                .visuals
+                .node_visuals
                 .get(id)
                 .map(|v| v.position)
                 .unwrap_or(egui::pos2(0.0, 0.0)),
@@ -241,7 +242,8 @@ impl LayoutUnit {
     pub(crate) fn bounding_size(&self, app: &BarEditorApp) -> egui::Vec2 {
         match self {
             LayoutUnit::Node(id) => app
-                .visuals.node_visuals
+                .visuals
+                .node_visuals
                 .get(id)
                 .map(|v| v.size)
                 .unwrap_or(egui::vec2(150.0, 80.0)),
@@ -328,7 +330,7 @@ pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32
 /// State for an in-progress connection drag. Outputs always emit from a
 /// Right placement, so the wire's tangent at the source end is always +X.
 #[derive(Clone, Debug)]
-pub(crate) struct DragConnection {
+pub struct DragConnection {
     pub from_node: NodeId,
     pub from_port: String,
     pub from_pos: egui::Pos2,
@@ -336,7 +338,7 @@ pub(crate) struct DragConnection {
 
 /// State for the inline text editor inside the PassThrough properties panel.
 #[derive(Debug, Clone)]
-pub(crate) struct PassthroughEdit {
+pub struct PassthroughEdit {
     pub node_id: NodeId,
     pub abs_path: String,
     pub archive_path: String,
@@ -348,7 +350,7 @@ pub(crate) struct PassthroughEdit {
 /// future "open this file" action. Lives outside the side panels so it can
 /// be resized and scrolled freely.
 #[derive(Debug, Clone)]
-pub(crate) struct FileEditor {
+pub struct FileEditor {
     /// Absolute path on disk; what we read from and write back to.
     abs_path: String,
     /// Bundle-relative path (forward slashes) for display.
@@ -503,7 +505,7 @@ impl Default for BrushState {
 /// Once the dialog resolves, the chosen action is performed (after Save when
 /// the user picks Save, or directly when they pick Discard).
 #[derive(Clone, Debug)]
-pub(crate) enum PendingAction {
+pub enum PendingAction {
     /// The OS or the user asked to close the window.
     Close,
     /// The user clicked New Project (Ctrl+N or menu).
@@ -517,7 +519,7 @@ pub(crate) enum PendingAction {
 
 /// Generic yes/no/cancel modal state.
 #[derive(Clone, Debug)]
-pub(crate) struct ConfirmDialog {
+pub struct ConfirmDialog {
     title: String,
     message: String,
     /// Action label for the affirmative button (e.g. "Delete", "Discard").
@@ -867,26 +869,26 @@ pub struct BarEditorApp {
     /// Visual presentation: node positions, groups, group/node
     /// reverse index, monotonic group id allocator, and per-frame
     /// hit-test rect caches. See `editor::VisualsState`.
-    pub(crate) visuals: crate::editor::VisualsState,
+    pub visuals: crate::editor::VisualsState,
     /// Canvas selection: primary node, multi-selection, group,
     /// connection, and any group queued for deletion. See
     /// `editor::SelectionState`. (`selected_node` from the old layout
     /// is now `selection.node`.)
-    pub(crate) selection: crate::editor::SelectionState,
+    pub selection: crate::editor::SelectionState,
     /// Canvas viewport + interaction: pan offset, open tabs, marquee
     /// anchor, in-progress drag connection. See `editor::CanvasState`.
-    pub(crate) canvas: crate::editor::CanvasState,
+    pub canvas: crate::editor::CanvasState,
     /// Map metadata: dimensions, height range, MapSettings,
     /// RecipeMeta identity, and the spawn-marker drag pointer. See
     /// `editor::MapState`.
-    pub(crate) map: crate::editor::MapState,
+    pub map: crate::editor::MapState,
     /// Undo/redo history.
     pub(crate) history: UndoHistory,
     /// Project lifecycle state: file path, dirty flag, autosave timer,
     /// SD7 extraction handoff, file-dialog poll receiver, inline file
     /// editor state, graph-reset pulse, and map-info file pointer.
     /// See `project::ProjectState`.
-    pub(crate) project: crate::project::ProjectState,
+    pub project: crate::project::ProjectState,
     /// Raw window + display handles of the editor's main window. Used to
     /// parent native file dialogs so they belong to (and return focus
     /// to) the editor instead of whatever window the OS happens to
@@ -899,14 +901,14 @@ pub struct BarEditorApp {
     /// Preview / export concern: viewport open flag, driving node, and
     /// the one-frame "run" / "test in BAR" / "run this bundler" pulses
     /// that `bar-app` polls each frame. See `editor::PreviewState`.
-    pub(crate) preview: crate::editor::PreviewState,
+    pub preview: crate::editor::PreviewState,
     /// Modal / popup / transient-feedback flags. See `DialogState`.
-    pub(crate) dialog: DialogState,
+    pub dialog: DialogState,
     /// Cached list of validation findings displayed in the panel. Built
     /// Validation cache: findings list, severity filter, mapinfo-modal
     /// tab, and the input fingerprint that gates re-validation. See
     /// `editor::ValidationState`.
-    pub(crate) validation: crate::editor::ValidationState,
+    pub validation: crate::editor::ValidationState,
     // groups, node_to_group, next_group_id, group_header_rects,
     // group_body_rects, and collapsed_subgraph_rects moved to
     // `self.visuals` (see `editor::VisualsState`).
@@ -918,10 +920,10 @@ pub struct BarEditorApp {
     // `self.canvas` (see `editor::CanvasState`).
     /// Floating properties popup state: target binding and last-known
     /// on-screen rect. See `editor::PropsPanelState`.
-    pub(crate) props: crate::editor::PropsPanelState,
+    pub props: crate::editor::PropsPanelState,
     /// Brush, sculpt-lock, and per-layer paint caches. See
     /// `PaintSession`.
-    pub(crate) paint: PaintSession,
+    pub paint: PaintSession,
     /// In-flight drag from the node palette (set when pointer starts dragging an item,
     /// cleared on pointer release — either creating a node or cancelling).
     pub(crate) palette_drag: Option<PaletteDrag>,
@@ -1002,9 +1004,9 @@ impl BarEditorApp {
         &self.graph
     }
 
-// `set_parent_window_handles`, `parent_window`, `make_dialog`, and
-// `ParentWindow` itself live in `crate::io::dialogs` (distributed
-// `impl BarEditorApp` block).
+    // `set_parent_window_handles`, `parent_window`, `make_dialog`, and
+    // `ParentWindow` itself live in `crate::io::dialogs` (distributed
+    // `impl BarEditorApp` block).
 }
 
 impl BarEditorApp {
@@ -1322,7 +1324,8 @@ impl BarEditorApp {
         // Snapshot member sets and node descriptors first so we can
         // iterate without holding a borrow on `self.graph`.
         let groups: Vec<(u64, Vec<NodeId>)> = self
-            .visuals.groups
+            .visuals
+            .groups
             .iter()
             .filter(|(_, g)| g.is_subgraph)
             .map(|(gid, g)| (*gid, g.member_ids.iter().copied().collect()))
@@ -1608,7 +1611,8 @@ impl BarEditorApp {
         }
         self.push_undo("Delete subgraph");
         let members: Vec<NodeId> = self
-            .visuals.groups
+            .visuals
+            .groups
             .get(&gid)
             .map(|g| g.member_ids.iter().copied().collect())
             .unwrap_or_default();
@@ -1677,10 +1681,6 @@ impl BarEditorApp {
         &mut self.graph
     }
 
-    pub fn map_dimensions(&self) -> (u32, u32) {
-        self.map.dimensions()
-    }
-
     /// SMF ground shading inputs sourced from `MapSettings.lighting`
     /// and `MapSettings.water`. Snapshot of the values an in-engine
     /// renderer would read for the same map. Consumers (bar-app's
@@ -1723,7 +1723,8 @@ impl BarEditorApp {
         } else {
             self.graph.revision().hash(&mut h);
         }
-        self.preview.node
+        self.preview
+            .node
             .map(|n| n.0)
             .unwrap_or(u64::MAX)
             .hash(&mut h);
@@ -1771,13 +1772,6 @@ impl BarEditorApp {
         }
     }
 
-    /// Returns the Spring world-unit height range `(min, max)` for the current map.
-    /// Used by `bar-app` to compute a physically-accurate `height_scale` for the
-    /// 3D preview, matching how the map actually looks in the Spring/Recoil engine.
-    pub fn map_height_range(&self) -> (f32, f32) {
-        self.map.height_range()
-    }
-
     /// Set a status message to show in the status bar.
     pub fn set_status(&mut self, msg: impl Into<String>) {
         self.dialog.status_message = Some(msg.into());
@@ -1786,18 +1780,6 @@ impl BarEditorApp {
     /// Clear the status message.
     pub fn clear_status(&mut self) {
         self.dialog.status_message = None;
-    }
-
-    pub fn preview_open(&self) -> bool {
-        self.preview.is_open()
-    }
-
-    pub fn set_preview_open(&mut self, v: bool) {
-        self.preview.set_open(v);
-    }
-
-    pub fn preview_node(&self) -> Option<NodeId> {
-        self.preview.node()
     }
 
     /// Returns a display label for the preview window title. Lives on
@@ -1809,17 +1791,6 @@ impl BarEditorApp {
             .and_then(|id| self.graph.get_node(id))
             .map(|n| format!("3D Preview — {}", n.label))
             .unwrap_or_else(|| "3D Preview".to_string())
-    }
-
-    /// Returns true if a run was requested, resetting the flag.
-    pub fn take_run_requested(&mut self) -> bool {
-        self.preview.take_run_requested()
-    }
-
-    /// Pulse-style accessor for the "Test in BAR" toolbar button. Returns
-    /// `true` once when the user clicked, then resets.
-    pub fn take_test_in_bar_requested(&mut self) -> bool {
-        self.preview.take_test_in_bar()
     }
 
     /// Push the latest evaluated heightmap so the 2D inspector can show
@@ -2068,33 +2039,6 @@ impl BarEditorApp {
         self.paint.typemap.clone()
     }
 
-    /// Returns the Bundler node ID to run individually, resetting it.
-    /// Returns `None` if the user pressed the global Run button (run all).
-    pub fn take_run_bundler_node(&mut self) -> Option<NodeId> {
-        self.preview.take_run_bundler_node()
-    }
-
-    /// Returns `true` once when the graph has been fully replaced (new map or
-    /// project loaded).  Consumed by `AppWrapper` to flush GPU preview state.
-    pub fn take_graph_reset(&mut self) -> bool {
-        self.project.take_graph_reset()
-    }
-
-    /// The human-readable name of the currently loaded map or project.
-    pub fn loaded_name(&self) -> Option<&str> {
-        self.project.loaded_name()
-    }
-
-    /// Set the current export status. Called each frame by `bar-app` so the
-    /// bundle buttons can render busy state. Idempotent and cheap.
-    pub fn set_export_status(&mut self, status: ExportStatus) {
-        self.preview.set_export_status(status);
-    }
-
-    pub fn export_status(&self) -> ExportStatus {
-        self.preview.export_status()
-    }
-
     /// Capture the entire undoable editor state.
     pub(crate) fn snapshot(&self, description: &str) -> Snapshot {
         Snapshot {
@@ -2155,8 +2099,6 @@ impl BarEditorApp {
 
     // `build_project`, `save_project`, `resolve_relative_paths`, and
     // `pack_assets_for_save` live in `crate::project::persistence`.
-
-
 
     /// Drop a macro template's contents onto the canvas at `pos`.
     /// Inner nodes get fresh ids, the SubGraph wrapper is registered,
@@ -2232,7 +2174,9 @@ impl BarEditorApp {
         // the new node lives at the top level of the graph and
         // becomes invisible the moment it's dropped — properties
         // panel opens on a node the user can't see.
-        if let Some(CanvasView::SubGraph(scope)) = self.canvas.tabs.get(self.canvas.active_tab).cloned() {
+        if let Some(CanvasView::SubGraph(scope)) =
+            self.canvas.tabs.get(self.canvas.active_tab).cloned()
+        {
             if let Some(group) = self.visuals.groups.get_mut(&scope) {
                 group.member_ids.insert(id);
                 self.visuals.node_to_group.insert(id, scope);
@@ -2404,7 +2348,10 @@ impl BarEditorApp {
         self.refresh_validation_if_dirty();
 
         // Tick auto-save. Cheap: a single Instant comparison per frame.
-        if self.settings.autosave_enabled && self.project.is_dirty && self.dialog.pending_action.is_none() {
+        if self.settings.autosave_enabled
+            && self.project.is_dirty
+            && self.dialog.pending_action.is_none()
+        {
             let interval = std::time::Duration::from_secs(self.settings.autosave_interval_secs);
             let due = self
                 .project
@@ -2500,7 +2447,8 @@ impl BarEditorApp {
                 self.selection.connection = None;
             } else if let Some(gid) = self.selection.group {
                 let is_subgraph = self
-                    .visuals.groups
+                    .visuals
+                    .groups
                     .get(&gid)
                     .map(|g| g.is_subgraph)
                     .unwrap_or(false);
@@ -2911,7 +2859,8 @@ impl BarEditorApp {
         // ── Modal: group delete (three-way: keep nodes / delete all / cancel) ─
         if let Some(gid) = self.selection.pending_group_delete {
             let label = self
-                .visuals.groups
+                .visuals
+                .groups
                 .get(&gid)
                 .map(|g| {
                     if g.label.is_empty() {
@@ -2922,7 +2871,8 @@ impl BarEditorApp {
                 })
                 .unwrap_or_else(|| format!("Group {gid}"));
             let member_count = self
-                .visuals.groups
+                .visuals
+                .groups
                 .get(&gid)
                 .map(|g| g.member_ids.len())
                 .unwrap_or(0);
@@ -2966,7 +2916,8 @@ impl BarEditorApp {
                         // stashing the snapshot here.
                         self.push_undo("Delete group with members");
                         let members: Vec<NodeId> = self
-                            .visuals.groups
+                            .visuals
+                            .groups
                             .get(&gid)
                             .map(|g| g.member_ids.iter().copied().collect())
                             .unwrap_or_default();

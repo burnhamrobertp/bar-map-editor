@@ -4,14 +4,14 @@
 //! Provides the node graph editor, property panels, and viewport integration.
 
 pub mod app;
-pub(crate) mod editor;
+pub mod editor;
 pub mod i18n;
-pub(crate) mod io;
+pub mod io;
 pub mod layouts;
 pub mod macros;
 pub(crate) mod paint;
 pub mod panels;
-pub(crate) mod project;
+pub mod project;
 pub mod settings;
 pub mod state;
 pub mod undo;

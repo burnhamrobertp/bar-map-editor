@@ -16,7 +16,7 @@ use crate::state::{GroupRuntime, NodeVisual};
 
 /// Grouped visuals state. See module docs.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct VisualsState {
+pub struct VisualsState {
     /// On-canvas position and size for each node.
     pub node_visuals: HashMap<NodeId, NodeVisual>,
     /// Visual node groups keyed by stable group id. Purely

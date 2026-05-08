@@ -431,8 +431,8 @@ impl eframe::App for AppWrapper {
         }
 
         // Handle Run button (toolbar = all bundlers; per-node button = that bundler only)
-        let run_all = self.app.take_run_requested();
-        let run_bundler_node = self.app.take_run_bundler_node();
+        let run_all = self.app.preview.take_run_requested();
+        let run_bundler_node = self.app.preview.take_run_bundler_node();
         let run_filter_label = run_bundler_node
             .and_then(|id| self.app.graph().get_node(id))
             .map(|n| n.label.clone());
@@ -481,7 +481,7 @@ impl eframe::App for AppWrapper {
                     let graph = self.app.graph().clone();
                     let recipe = self.app.recipe_for_export();
                     let sculpt_snapshot = self.app.sculpt_export_snapshot();
-                    let (w, h) = self.app.map_dimensions();
+                    let (w, h) = self.app.map.dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
                     let ctx_clone = ctx.clone();
@@ -541,7 +541,7 @@ impl eframe::App for AppWrapper {
         }
 
         // ── Test in BAR: handle button + chain export → lobby launch ──────
-        if self.app.take_test_in_bar_requested() && self.test_in_bar_rx.is_none() {
+        if self.app.preview.take_test_in_bar() && self.test_in_bar_rx.is_none() {
             self.start_test_in_bar(ctx);
         }
         if let Some(ref rx) = self.test_in_bar_rx {
@@ -557,7 +557,7 @@ impl eframe::App for AppWrapper {
 
         // Push current export status to the GUI so bundle buttons render
         // busy state. Cheap (single Copy) and idempotent.
-        self.app.set_export_status(self.export_status);
+        self.app.preview.set_export_status(self.export_status);
 
         // Run the GUI (menus, node palette, properties, status bar)
         self.app.update(ctx, frame);
@@ -583,7 +583,7 @@ impl eframe::App for AppWrapper {
         }
 
         // Handle SD7 open requests queued by the GUI file dialog
-        if let Some(sd7_path) = self.app.take_sd7_open_request() {
+        if let Some(sd7_path) = self.app.project.sd7_open_request.take() {
             let (tx, rx) = mpsc::channel::<Result<bar_engine::WorkDirScan, String>>();
             self.sd7_extract_rx = Some(rx);
             let ctx_clone = ctx.clone();
@@ -599,7 +599,7 @@ impl eframe::App for AppWrapper {
         // Dropping the old Session frees its GPU buffers, channels, and camera
         // state; the new Session starts completely clean — no manual per-field
         // reset list required.
-        if self.app.take_graph_reset() {
+        if self.app.project.take_graph_reset() {
             let id = self.next_session_id;
             self.next_session_id += 1;
             self.session = Some(Session::new(&self.gpu_context, id));
@@ -740,9 +740,9 @@ impl eframe::App for AppWrapper {
         // ── Progressive preview: spawn passes as needed ───────────────────
         if !self.app.graph().nodes().is_empty() {
             // Compute height/water params once; both passes share the same values.
-            let (w, h) = self.app.map_dimensions();
+            let (w, h) = self.app.map.dimensions();
             let (height_scale, water_y, x_extent, z_extent) = {
-                let (min_h, max_h) = self.app.map_height_range();
+                let (min_h, max_h) = self.app.map.height_range();
                 // 1:1 with the engine. Spring renders 1 elmo X = 1 elmo Y =
                 // 1 elmo Z; we mirror that by normalising X/Z to a unit-cube
                 // mesh and scaling Y by the same factor (1 / (pm * 8)). The
@@ -779,7 +779,7 @@ impl eframe::App for AppWrapper {
                 water_base: smf.water_base,
                 water_min: smf.water_min,
             };
-            let preview_node_id = self.app.preview_node();
+            let preview_node_id = self.app.preview.node();
             let session_id = session.session_id;
 
             // Pass 1 — low-res (128 px): fires immediately when any preview
@@ -863,7 +863,7 @@ impl eframe::App for AppWrapper {
         // clouds stay alive. Cheap: we don't rebuild the mesh, just push
         // a fresh time uniform and submit one draw. Skipped when there's
         // no mesh yet (nothing to animate) or no preview window open.
-        if self.app.preview_open() {
+        if self.app.preview.is_open() {
             if let Some(ref gpu) = self.gpu_context {
                 if let Some(ref mut renderer) = session.terrain_renderer {
                     if let Some(ref owned) = session.current_frame {
@@ -954,7 +954,7 @@ impl eframe::App for AppWrapper {
         // left of the Properties side panel — that's a far more useful
         // initial location than the top-left corner.
         // Not shown in Sculpt3D layout -- the embedded panel above takes over.
-        if self.app.preview_open() && self.app.active_layout() != bar_gui::Layout::Sculpt3D {
+        if self.app.preview.is_open() && self.app.active_layout() != bar_gui::Layout::Sculpt3D {
             let title = self.app.preview_node_label();
             let mut preview_open = true;
             // Properties panel is 250 px wide; allow ~24 px gutter.
@@ -978,7 +978,7 @@ impl eframe::App for AppWrapper {
                     );
                 });
             if !preview_open {
-                self.app.set_preview_open(false);
+                self.app.preview.set_open(false);
             }
         }
     }
@@ -1018,7 +1018,7 @@ impl AppWrapper {
         let graph = self.app.graph().clone();
         let recipe = self.app.recipe_for_export();
         let sculpt_snapshot = self.app.sculpt_export_snapshot();
-        let (w, h) = self.app.map_dimensions();
+        let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
         let (tx, rx) = mpsc::channel::<Result<std::path::PathBuf, String>>();
         self.test_in_bar_rx = Some(rx);

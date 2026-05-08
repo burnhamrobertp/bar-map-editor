@@ -12,7 +12,7 @@ use crate::app::{CanvasView, DragConnection};
 
 /// Grouped canvas viewport + interaction state. See module docs.
 #[derive(Debug, Clone)]
-pub(crate) struct CanvasState {
+pub struct CanvasState {
     /// Pan offset of the canvas in screen pixels.
     pub offset: egui::Vec2,
     /// Canvas rect from the previous frame -- used by palette drag

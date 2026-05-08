@@ -132,8 +132,15 @@ impl BarEditorApp {
         // header / body — handled separately below).
         let pointer = ui.ctx().pointer_latest_pos();
         let clicked_in_group = pointer.is_some_and(|p| {
-            self.visuals.group_header_rects.values().any(|r| r.contains(p))
-                || self.visuals.group_body_rects.values().any(|r| r.contains(p))
+            self.visuals
+                .group_header_rects
+                .values()
+                .any(|r| r.contains(p))
+                || self
+                    .visuals
+                    .group_body_rects
+                    .values()
+                    .any(|r| r.contains(p))
         });
         if response.clicked() && self.palette_drag.is_none() && !clicked_in_group {
             self.clear_selection();
@@ -173,7 +180,8 @@ impl BarEditorApp {
                 // Subgraph membership set: nodes inside a is_subgraph group.
                 // Used to prevent marquee from crossing the main/subgraph boundary.
                 let subgraph_members: std::collections::HashSet<NodeId> = self
-                    .visuals.groups
+                    .visuals
+                    .groups
                     .values()
                     .filter(|g| g.is_subgraph)
                     .flat_map(|g| g.member_ids.iter().copied())
@@ -182,7 +190,8 @@ impl BarEditorApp {
                     let in_scope = match self.current_view() {
                         CanvasView::Main => !subgraph_members.contains(id),
                         CanvasView::SubGraph(gid) => self
-                            .visuals.groups
+                            .visuals
+                            .groups
                             .get(&gid)
                             .is_some_and(|g| g.member_ids.contains(id)),
                     };
@@ -279,7 +288,8 @@ impl BarEditorApp {
         // child node) also selects the group; dragging the header
         // moves every member.
         let group_hits: Vec<(u64, egui::Rect, egui::Rect)> = self
-            .visuals.groups
+            .visuals
+            .groups
             .keys()
             .filter_map(|gid| {
                 let h = *self.visuals.group_header_rects.get(gid)?;
@@ -337,7 +347,8 @@ impl BarEditorApp {
             }
             // Group-level context menu — delete with confirm.
             let is_sub = self
-                .visuals.groups
+                .visuals
+                .groups
                 .get(&gid)
                 .map(|g| g.is_subgraph)
                 .unwrap_or(false);
@@ -411,7 +422,8 @@ impl BarEditorApp {
                     .get(&(conn.from.node_id, conn.from.port_name.clone()))
                     .copied()
             } else {
-                self.visuals.node_visuals
+                self.visuals
+                    .node_visuals
                     .get(&conn.from.node_id)
                     .and_then(|visual| {
                         let node = self.graph.get_node(conn.from.node_id)?;
@@ -441,27 +453,31 @@ impl BarEditorApp {
                     PortPlacement::Left,
                 )
             } else {
-                let result = self.visuals.node_visuals.get(&conn.to.node_id).and_then(|visual| {
-                    let node = self.graph.get_node(conn.to.node_id)?;
-                    let port = node.inputs.iter().find(|p| p.name == conn.to.port_name)?;
-                    let placement = PortPlacement::for_input(port.kind);
-                    let side_idx = if matches!(placement, PortPlacement::Left) {
-                        node.inputs
-                            .iter()
-                            .filter(|p| {
-                                matches!(PortPlacement::for_input(p.kind), PortPlacement::Left)
-                            })
-                            .position(|p| p.name == conn.to.port_name)?
-                    } else {
-                        0
-                    };
-                    let node_rect = egui::Rect::from_min_size(
-                        egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
-                        visual.size,
-                    );
-                    let pos = node_port_pos(&node.node_type, node_rect, placement, side_idx);
-                    Some((pos, placement))
-                });
+                let result = self
+                    .visuals
+                    .node_visuals
+                    .get(&conn.to.node_id)
+                    .and_then(|visual| {
+                        let node = self.graph.get_node(conn.to.node_id)?;
+                        let port = node.inputs.iter().find(|p| p.name == conn.to.port_name)?;
+                        let placement = PortPlacement::for_input(port.kind);
+                        let side_idx = if matches!(placement, PortPlacement::Left) {
+                            node.inputs
+                                .iter()
+                                .filter(|p| {
+                                    matches!(PortPlacement::for_input(p.kind), PortPlacement::Left)
+                                })
+                                .position(|p| p.name == conn.to.port_name)?
+                        } else {
+                            0
+                        };
+                        let node_rect = egui::Rect::from_min_size(
+                            egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
+                            visual.size,
+                        );
+                        let pos = node_port_pos(&node.node_type, node_rect, placement, side_idx);
+                        Some((pos, placement))
+                    });
                 match result {
                     Some((pos, pl)) => (Some(pos), pl),
                     None => (None, PortPlacement::Left),
@@ -668,7 +684,11 @@ impl BarEditorApp {
             else {
                 continue;
             };
-            let visual_data = self.visuals.node_visuals.get(node_id).map(|v| (v.position, v.size));
+            let visual_data = self
+                .visuals
+                .node_visuals
+                .get(node_id)
+                .map(|v| (v.position, v.size));
             let Some((node_pos_raw, node_size)) = visual_data else {
                 continue;
             };
@@ -1213,7 +1233,8 @@ impl BarEditorApp {
             let this_id = *node_id;
             let in_group = self.visuals.node_to_group.get(&this_id).copied();
             let other_groups: Vec<(u64, String)> = self
-                .visuals.groups
+                .visuals
+                .groups
                 .iter()
                 .filter_map(|(gid, g)| {
                     if Some(*gid) == in_group {
@@ -1542,7 +1563,8 @@ impl BarEditorApp {
         // enters confined-edit mode (parallel affordance to double-
         // clicking the collapsed block).
         let subgraph_double_click: Vec<u64> = self
-            .visuals.group_header_rects
+            .visuals
+            .group_header_rects
             .iter()
             .filter_map(|(gid, rect)| {
                 let g = self.visuals.groups.get(gid)?;
@@ -1608,7 +1630,8 @@ impl BarEditorApp {
             let mut group_membership_changed = false;
             // Compute candidate landing without mutating yet.
             let group_rects: Vec<(u64, egui::Rect)> = self
-                .visuals.group_header_rects
+                .visuals
+                .group_header_rects
                 .iter()
                 .filter_map(|(gid, h)| {
                     let b = self.visuals.group_body_rects.get(gid)?;
@@ -1642,7 +1665,8 @@ impl BarEditorApp {
             // Build (group_id, full_rect) snapshot. We use the cached
             // header + body rects to reconstruct the union.
             let group_rects: Vec<(u64, egui::Rect)> = self
-                .visuals.group_header_rects
+                .visuals
+                .group_header_rects
                 .iter()
                 .filter_map(|(gid, h)| {
                     let b = self.visuals.group_body_rects.get(gid)?;

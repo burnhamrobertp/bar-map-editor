@@ -16,7 +16,6 @@ use crate::panels::tokens;
 use crate::state::GroupRuntime;
 
 impl BarEditorApp {
-
     /// Render the canvas tab bar across the top of the canvas area.
     /// Main is always present at index 0 and never moves or closes;
     /// other tabs (SubGraph, Sculpt) carry an `✕` close button and
@@ -74,7 +73,8 @@ impl BarEditorApp {
             let label = match view {
                 CanvasView::Main => "Main".to_string(),
                 CanvasView::SubGraph(gid) => self
-                    .visuals.groups
+                    .visuals
+                    .groups
                     .get(gid)
                     .map(|g| {
                         if g.label.is_empty() {
@@ -288,7 +288,8 @@ impl BarEditorApp {
                     let item = self.canvas.tabs.remove(from);
                     self.canvas.tabs.insert(to, item);
                     if let Some(av) = active_view {
-                        self.canvas.active_tab = self.canvas.tabs.iter().position(|v| v == &av).unwrap_or(0);
+                        self.canvas.active_tab =
+                            self.canvas.tabs.iter().position(|v| v == &av).unwrap_or(0);
                     }
                 }
             }
@@ -344,7 +345,8 @@ impl BarEditorApp {
     /// graph or groups change so the tab bar can never display a
     /// reference to a deleted thing. The Main tab is preserved.
     pub(crate) fn prune_dangling_tabs(&mut self) {
-        let valid_groups: std::collections::HashSet<u64> = self.visuals.groups.keys().copied().collect();
+        let valid_groups: std::collections::HashSet<u64> =
+            self.visuals.groups.keys().copied().collect();
         let mut new_tabs: Vec<CanvasView> = Vec::with_capacity(self.canvas.tabs.len());
         let prev_active = self.canvas.tabs.get(self.canvas.active_tab).cloned();
         for tab in &self.canvas.tabs {
@@ -361,14 +363,20 @@ impl BarEditorApp {
         }
         self.canvas.tabs = new_tabs;
         self.canvas.active_tab = match prev_active {
-            Some(prev) => self.canvas.tabs.iter().position(|v| v == &prev).unwrap_or(0),
+            Some(prev) => self
+                .canvas
+                .tabs
+                .iter()
+                .position(|v| v == &prev)
+                .unwrap_or(0),
             None => 0,
         };
     }
 
     /// Returns the active tab's view.
     pub(crate) fn current_view(&self) -> CanvasView {
-        self.canvas.tabs
+        self.canvas
+            .tabs
             .get(self.canvas.active_tab)
             .cloned()
             .unwrap_or(CanvasView::Main)
@@ -384,7 +392,8 @@ impl BarEditorApp {
             // Subgraph tab: hide every node that isn't a member of
             // the active scope.
             let visible: std::collections::HashSet<NodeId> = self
-                .visuals.groups
+                .visuals
+                .groups
                 .get(&scope)
                 .map(|g| g.member_ids.iter().copied().collect())
                 .unwrap_or_default();
@@ -405,5 +414,4 @@ impl BarEditorApp {
         }
         hidden
     }
-
 }

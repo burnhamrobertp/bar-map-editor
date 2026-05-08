@@ -9,7 +9,7 @@ use crate::app::PropsTarget;
 
 /// Grouped properties-popup state. See module docs.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct PropsPanelState {
+pub struct PropsPanelState {
     /// What the popup is currently bound to (node id, group id, or
     /// connection endpoints). `None` means no popup is open.
     pub active: Option<PropsTarget>,

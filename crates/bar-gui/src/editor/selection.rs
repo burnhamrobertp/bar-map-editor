@@ -13,7 +13,7 @@ use bar_graph::{NodeId, PortId};
 
 /// Grouped canvas selection state. See module docs.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct SelectionState {
+pub struct SelectionState {
     /// Primary selected node -- the one whose properties show in
     /// the floating panel. `node ⊆ nodes` is always true: when a
     /// primary is set it's also a member of `nodes`.
@@ -31,4 +31,3 @@ pub(crate) struct SelectionState {
     /// dialog response).
     pub pending_group_delete: Option<u64>,
 }
-

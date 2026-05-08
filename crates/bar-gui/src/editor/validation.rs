@@ -17,7 +17,7 @@ use crate::app::{MapInfoTab, ValidationFilter};
 /// to compare. The editor recomputes this every frame; whenever it
 /// differs from the cached value, validation re-runs.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ValidationFingerprint {
+pub struct ValidationFingerprint {
     pub graph_revision: u64,
     pub map_width: u32,
     pub map_height: u32,
@@ -47,7 +47,7 @@ impl ValidationFingerprint {
 
 /// Grouped validation cache + panel state. See module docs.
 #[derive(Debug, Clone)]
-pub(crate) struct ValidationState {
+pub struct ValidationState {
     /// Cached findings from the last `validate_project` run.
     pub findings: Vec<bar_project::Finding>,
     /// Active severity filter in the validation details window.

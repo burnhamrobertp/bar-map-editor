@@ -13,7 +13,7 @@ use crate::app::ExportStatus;
 
 /// Grouped editor preview / export state. See module docs.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct PreviewState {
+pub struct PreviewState {
     /// Is the preview window open?
     pub open: bool,
     /// Which node feeds the 3D viewport. `None` => the renderer shows

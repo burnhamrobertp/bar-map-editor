@@ -20,7 +20,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     // Refresh the cached egui texture if the heightmap has changed.
     if app.paint().heightmap_rev != app.paint().texture_rev {
         let img_and_rev = app.paint().heightmap.as_ref().map(|hm| {
-            let (mn, mx) = app.map_height_range();
+            let (mn, mx) = app.map.height_range();
             (
                 heightmap_to_color_image(hm, mn, mx),
                 app.paint().heightmap_rev,
@@ -38,7 +38,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     let mut to_remove: Option<usize> = None;
     let mut new_drag: Option<usize> = None;
     let mut spawn_to_add: Option<[u32; 2]> = None;
-    let (map_w, map_h) = app.map_dimensions();
+    let (map_w, map_h) = app.map.dimensions();
     // Elmo bounds (1 heightmap pixel = 8 elmos in X/Z).
     let world_w = (map_w.saturating_sub(1)) * 8;
     let world_h = (map_h.saturating_sub(1)) * 8;

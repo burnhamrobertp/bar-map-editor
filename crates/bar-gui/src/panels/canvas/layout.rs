@@ -18,7 +18,6 @@ use eframe::egui;
 use crate::app::*;
 
 impl BarEditorApp {
-
     /// Reflow nodes into a left-to-right column layout that respects
     /// each unit's actual bounding box. The previous version used a
     /// fixed row pitch and could place a 240 px tall Bundler under
@@ -419,12 +418,14 @@ impl BarEditorApp {
         let mut sorted: Vec<NodeId> = ids.to_vec();
         sorted.sort_by(|a, b| {
             let ax = self
-                .visuals.node_visuals
+                .visuals
+                .node_visuals
                 .get(a)
                 .map(|v| v.position.x)
                 .unwrap_or(0.0);
             let bx = self
-                .visuals.node_visuals
+                .visuals
+                .node_visuals
                 .get(b)
                 .map(|v| v.position.x)
                 .unwrap_or(0.0);

@@ -12,7 +12,7 @@ use crate::app::PassthroughEdit;
 
 /// Grouped project lifecycle state. See module docs.
 #[derive(Default, Debug)]
-pub(crate) struct ProjectState {
+pub struct ProjectState {
     /// Absolute path to the loaded `.barproj` file (None until the
     /// project has been saved at least once).
     pub path: Option<std::path::PathBuf>,

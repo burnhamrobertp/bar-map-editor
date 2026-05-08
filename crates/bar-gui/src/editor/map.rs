@@ -14,7 +14,7 @@ use crate::app::RecipeMeta;
 
 /// Project map metadata + UI shadow state. See module docs.
 #[derive(Default, Debug, Clone)]
-pub(crate) struct MapState {
+pub struct MapState {
     /// Map width in samples (heightmap pixels). Shadows
     /// `settings.map_width_in_chunks * 64 + 1` for direct widget bind.
     pub width: u32,
