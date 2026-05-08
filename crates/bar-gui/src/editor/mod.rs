@@ -7,12 +7,14 @@
 //! change). Stage 3 migrates methods that only touch one cluster to
 //! that cluster's `impl` block.
 
+pub(crate) mod canvas;
 pub(crate) mod map;
 pub(crate) mod preview;
 pub(crate) mod props_panel;
 pub(crate) mod selection;
 pub(crate) mod validation;
 
+pub(crate) use canvas::CanvasState;
 pub(crate) use map::MapState;
 pub(crate) use preview::PreviewState;
 pub(crate) use props_panel::PropsPanelState;

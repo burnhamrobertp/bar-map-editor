@@ -870,8 +870,9 @@ pub struct BarEditorApp {
     /// `editor::SelectionState`. (`selected_node` from the old layout
     /// is now `selection.node`.)
     pub(crate) selection: crate::editor::SelectionState,
-    pub(crate) drag_connection: Option<DragConnection>,
-    pub(crate) canvas_offset: egui::Vec2,
+    /// Canvas viewport + interaction: pan offset, open tabs, marquee
+    /// anchor, in-progress drag connection. See `editor::CanvasState`.
+    pub(crate) canvas: crate::editor::CanvasState,
     /// Map metadata: dimensions, height range, MapSettings,
     /// RecipeMeta identity, and the spawn-marker drag pointer. See
     /// `editor::MapState`.
@@ -930,51 +931,18 @@ pub struct BarEditorApp {
     /// contextual Properties popup uses this to know "the cursor is
     /// over collapsed group N" and drive the hover gate against it.
     pub(crate) collapsed_subgraph_rects: HashMap<u64, egui::Rect>,
-    /// Anchor point of an in-progress marquee selection. Set when the
-    /// user starts a primary-button drag on empty canvas; cleared on
-    /// drag-stopped. While set, a translucent rectangle is drawn from
-    /// the anchor to the current pointer position.
-    pub(crate) marquee_start: Option<egui::Pos2>,
-    /// Open canvas tabs. Index 0 is always `CanvasView::Main` and
-    /// can't be closed. Other entries open in response to specific
-    /// user actions (double-click a SubGraph, double-click a Sculpt
-    /// node) and close via the small × on each tab. The active tab's
-    /// view drives what `draw_node_graph` actually renders.
-    pub(crate) tabs: Vec<CanvasView>,
-    /// Index into `tabs`. Always valid: `tabs.len() > 0` and
-    /// `active_tab < tabs.len()`.
-    pub(crate) active_tab: usize,
-    /// Tab the user was on before the current one. Ctrl+Tab swaps
-    /// `active_tab` and this — the conventional "back to where I
-    /// was" shortcut. Initialised to 0 (Main) and updated whenever
-    /// the active tab changes.
-    pub(crate) last_active_tab: usize,
+    // marquee_start, tabs, active_tab, last_active_tab,
+    // canvas_rect_last, and pending_auto_layout_all moved to
+    // `self.canvas` (see `editor::CanvasState`).
     /// Floating properties popup state: target binding and last-known
     /// on-screen rect. See `editor::PropsPanelState`.
     pub(crate) props: crate::editor::PropsPanelState,
     /// Brush, sculpt-lock, and per-layer paint caches. See
     /// `PaintSession`.
     pub(crate) paint: PaintSession,
-    /// Fingerprint of the inputs to `validate_project` for which the
-    // Map metadata + UI shadow state moved to `self.map`
-    // (see `editor::MapState`).
-    // loaded_name and graph_reset moved to `self.project`
-    // (see `project::ProjectState`).
     /// In-flight drag from the node palette (set when pointer starts dragging an item,
     /// cleared on pointer release — either creating a node or cancelling).
     pub(crate) palette_drag: Option<PaletteDrag>,
-    /// Canvas rect from the previous frame — used by palette drag to detect drops.
-    pub(crate) canvas_rect_last: egui::Rect,
-    /// Set when a project-creation path (welcome template, File →
-    /// New from Preset) needs an "everything" Auto Layout AFTER the
-    /// node-graph canvas has rendered at least once. Calling
-    /// `auto_layout_selection` directly from those paths uses
-    /// `canvas_rect_last`, which is stale or `NOTHING` while the
-    /// welcome panel is still on screen — the result lands off-
-    /// viewport. The flag is consumed in `draw_node_graph` right
-    /// after `canvas_rect_last` is set, so the layout sees fresh
-    /// viewport dimensions.
-    pub(crate) pending_auto_layout_all: bool,
     /// Persistent user preferences (recent files, autosave config, vertical
     /// exaggeration, etc.).
     pub(crate) settings: Settings,
@@ -991,8 +959,7 @@ impl Default for BarEditorApp {
             graph: GraphEngine::new(),
             node_visuals: HashMap::new(),
             selection: crate::editor::SelectionState::default(),
-            drag_connection: None,
-            canvas_offset: egui::Vec2::ZERO,
+            canvas: crate::editor::CanvasState::default(),
             map: crate::editor::MapState {
                 width: 256,
                 height: 256,
@@ -1012,15 +979,9 @@ impl Default for BarEditorApp {
             group_header_rects: HashMap::new(),
             group_body_rects: HashMap::new(),
             collapsed_subgraph_rects: HashMap::new(),
-            marquee_start: None,
-            tabs: vec![CanvasView::Main],
-            active_tab: 0,
-            last_active_tab: 0,
             props: crate::editor::PropsPanelState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
-            canvas_rect_last: egui::Rect::NOTHING,
-            pending_auto_layout_all: false,
             settings: Settings::default(),
             active_layout: Layout::default(),
         }
@@ -1211,7 +1172,7 @@ impl BarEditorApp {
     /// top level by accident.
     pub(crate) fn is_in_subgraph_view(&self) -> bool {
         matches!(
-            self.tabs.get(self.active_tab),
+            self.canvas.tabs.get(self.canvas.active_tab),
             Some(CanvasView::SubGraph(_))
         )
     }
@@ -1469,8 +1430,8 @@ impl BarEditorApp {
         self.selection.nodes.clear();
         self.selection.group = None;
         self.selection.connection = None;
-        self.drag_connection = None;
-        self.marquee_start = None;
+        self.canvas.drag_connection = None;
+        self.canvas.marquee_start = None;
         self.map.dragging_spawn = None;
         self.palette_drag = None;
         self.project.passthrough_edit = None;
@@ -1492,15 +1453,15 @@ impl BarEditorApp {
         // from the previous project's layout would land the new
         // graph in the wrong viewport. apply_project re-installs
         // the saved offset AFTER this reset for loaded projects.
-        self.canvas_offset = egui::Vec2::ZERO;
-        self.canvas_rect_last = egui::Rect::NOTHING;
+        self.canvas.offset = egui::Vec2::ZERO;
+        self.canvas.rect_last = egui::Rect::NOTHING;
 
         // Tabs — only the Main tab survives a project switch; any
         // SubGraph / Sculpt tabs from the previous project refer to
         // NodeIds that no longer exist.
-        self.tabs = vec![CanvasView::Main];
-        self.active_tab = 0;
-        self.last_active_tab = 0;
+        self.canvas.tabs = vec![CanvasView::Main];
+        self.canvas.active_tab = 0;
+        self.canvas.last_active_tab = 0;
     }
 
     pub(crate) fn do_new_project(&mut self) {
@@ -1547,8 +1508,8 @@ impl BarEditorApp {
         let preview_size = egui::vec2(180.0, 150.0);
         let margin = 40.0_f32;
         let gap = 60.0_f32;
-        let canvas_w = if self.canvas_rect_last.is_positive() {
-            self.canvas_rect_last.width()
+        let canvas_w = if self.canvas.rect_last.is_positive() {
+            self.canvas.rect_last.width()
         } else {
             // Welcome → Blank Project on first launch can fire
             // before any canvas frame has run; pick a width that
@@ -2639,7 +2600,7 @@ impl BarEditorApp {
             layout: EditorLayout {
                 node_positions: layout_positions,
                 node_sizes: layout_sizes,
-                canvas_offset: (self.canvas_offset.x, self.canvas_offset.y),
+                canvas_offset: (self.canvas.offset.x, self.canvas.offset.y),
                 map_info_file: self.project.map_info_file.clone(),
                 groups: self
                     .groups
@@ -2698,6 +2659,7 @@ impl BarEditorApp {
                     })
                     .collect(),
                 open_tabs: self
+                    .canvas
                     .tabs
                     .iter()
                     .map(|view| match view {
@@ -2709,7 +2671,7 @@ impl BarEditorApp {
                         }
                     })
                     .collect(),
-                active_tab: self.active_tab as u32,
+                active_tab: self.canvas.active_tab as u32,
             },
         }
     }
@@ -3051,7 +3013,7 @@ impl BarEditorApp {
         self.graph = graph;
 
         // Install per-project layout, overriding reset_project's zero-offset default.
-        self.canvas_offset = egui::vec2(
+        self.canvas.offset = egui::vec2(
             project.layout.canvas_offset.0,
             project.layout.canvas_offset.1,
         );
@@ -3316,9 +3278,9 @@ impl BarEditorApp {
                 }
             }
         }
-        self.tabs = restored_tabs;
-        self.active_tab =
-            (project.layout.active_tab as usize).min(self.tabs.len().saturating_sub(1));
+        self.canvas.tabs = restored_tabs;
+        self.canvas.active_tab =
+            (project.layout.active_tab as usize).min(self.canvas.tabs.len().saturating_sub(1));
 
         self.project.path = path;
         self.project.loaded_name = Some(name);
@@ -3670,7 +3632,7 @@ impl BarEditorApp {
         self.selection.node = None;
         self.selection.group = None;
         self.props.active = None;
-        self.pending_auto_layout_all = true;
+        self.canvas.pending_auto_layout_all = true;
 
         self.project.is_dirty = true;
         self.dialog.status_message = Some(format!(
@@ -3754,7 +3716,7 @@ impl BarEditorApp {
         // the new node lives at the top level of the graph and
         // becomes invisible the moment it's dropped — properties
         // panel opens on a node the user can't see.
-        if let Some(CanvasView::SubGraph(scope)) = self.tabs.get(self.active_tab).cloned() {
+        if let Some(CanvasView::SubGraph(scope)) = self.canvas.tabs.get(self.canvas.active_tab).cloned() {
             if let Some(group) = self.groups.get_mut(&scope) {
                 group.member_ids.insert(id);
                 self.node_to_group.insert(id, scope);
@@ -5007,7 +4969,7 @@ impl BarEditorApp {
                 let ghost_rect =
                     egui::Rect::from_min_size(pos + egui::vec2(10.0, 10.0), ghost_size);
                 let is_over_canvas =
-                    self.canvas_rect_last.is_positive() && self.canvas_rect_last.contains(pos);
+                    self.canvas.rect_last.is_positive() && self.canvas.rect_last.contains(pos);
                 let border_col = if is_over_canvas {
                     egui::Color32::from_rgba_unmultiplied(100, 200, 100, 220)
                 } else {
@@ -5133,9 +5095,9 @@ impl BarEditorApp {
         if released && self.palette_drag.is_some() {
             if let Some(drag) = self.palette_drag.take() {
                 if let Some(pos) = ctx.pointer_latest_pos() {
-                    if self.canvas_rect_last.is_positive() && self.canvas_rect_last.contains(pos) {
+                    if self.canvas.rect_last.is_positive() && self.canvas.rect_last.contains(pos) {
                         // Convert screen position → graph-space (accounts for canvas pan)
-                        let graph_pos = pos - self.canvas_offset;
+                        let graph_pos = pos - self.canvas.offset;
                         let drop_at = egui::pos2(graph_pos.x, graph_pos.y);
                         match drag.kind {
                             PaletteKind::Node(t) => {

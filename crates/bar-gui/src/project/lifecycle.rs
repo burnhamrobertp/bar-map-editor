@@ -28,7 +28,7 @@ mod session_reset_tests {
         app.paint.brush.color_rgb = [10, 20, 30];
         app.paint.brush.paint_value = 0.42;
         app.paint.brush_stroking = true;
-        app.canvas_offset = egui::vec2(123.0, 456.0);
+        app.canvas.offset = egui::vec2(123.0, 456.0);
         app.dialog.show_validation_panel = true;
         app.validation.findings = vec![];
         app.validation.filter = ValidationFilter::Error;
@@ -57,7 +57,7 @@ mod session_reset_tests {
         );
         assert!(!app.paint.brush_stroking);
         assert_eq!(
-            app.canvas_offset,
+            app.canvas.offset,
             egui::Vec2::ZERO,
             "canvas pan offset must reset to zero"
         );
@@ -93,7 +93,7 @@ mod session_reset_tests {
             "after start_with_macro, history holds only the macro-drop snapshot"
         );
         assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
-        assert_eq!(app.canvas_offset, egui::Vec2::ZERO);
+        assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
         assert!(!app.dialog.show_validation_panel);
         // Project-data state populated.
         assert!(
@@ -112,7 +112,7 @@ mod session_reset_tests {
         app.do_new_project();
         assert!(!app.history.can_undo());
         assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
-        assert_eq!(app.canvas_offset, egui::Vec2::ZERO);
+        assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
         // do_new_project drops a Bundler + Preview by default.
         assert_eq!(app.graph.nodes().len(), 2);
     }

@@ -145,8 +145,8 @@ impl BarEditorApp {
             }
             let rect = egui::Rect::from_min_size(
                 egui::pos2(
-                    visual.position.x + self.canvas_offset.x,
-                    visual.position.y + self.canvas_offset.y,
+                    visual.position.x + self.canvas.offset.x,
+                    visual.position.y + self.canvas.offset.y,
                 ),
                 visual.size,
             );
@@ -179,8 +179,8 @@ impl BarEditorApp {
                 let v = self.node_visuals.get(id)?;
                 Some(egui::Rect::from_min_size(
                     egui::pos2(
-                        v.position.x + self.canvas_offset.x,
-                        v.position.y + self.canvas_offset.y,
+                        v.position.x + self.canvas.offset.x,
+                        v.position.y + self.canvas.offset.y,
                     ),
                     v.size,
                 ))

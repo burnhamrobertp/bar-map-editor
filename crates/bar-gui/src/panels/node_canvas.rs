@@ -255,7 +255,7 @@ impl BarEditorApp {
         // so the result lands on screen. Selection: stay at the
         // current bounding-rect top-left to avoid yanking nodes
         // away from external connections.
-        let origin = if layout_everything && self.canvas_rect_last.is_positive() {
+        let origin = if layout_everything && self.canvas.rect_last.is_positive() {
             // canvas_rect_last is in screen space; node positions
             // are world space. World = screen - canvas_offset. A
             // 40 px screen margin keeps the layout off the very
@@ -263,8 +263,8 @@ impl BarEditorApp {
             // palette / scrollbar.
             const VIEWPORT_MARGIN: f32 = 40.0;
             egui::pos2(
-                self.canvas_rect_last.left() + VIEWPORT_MARGIN - self.canvas_offset.x,
-                self.canvas_rect_last.top() + VIEWPORT_MARGIN - self.canvas_offset.y,
+                self.canvas.rect_last.left() + VIEWPORT_MARGIN - self.canvas.offset.x,
+                self.canvas.rect_last.top() + VIEWPORT_MARGIN - self.canvas.offset.y,
             )
         } else {
             target_units
@@ -363,7 +363,7 @@ impl BarEditorApp {
         //    while editing a subgraph re-laid out the *outer* graph
         //    instead — leaving the subgraph's contents unchanged and
         //    silently shuffling everything outside.
-        if let Some(CanvasView::SubGraph(gid)) = self.tabs.get(self.active_tab) {
+        if let Some(CanvasView::SubGraph(gid)) = self.canvas.tabs.get(self.canvas.active_tab) {
             if let Some(group) = self.groups.get(gid) {
                 // If a subset is explicitly selected inside the subgraph,
                 // honour that selection. Otherwise lay out every member.
@@ -972,7 +972,7 @@ impl BarEditorApp {
                 );
                 if let Some((nid, pname)) = &port.binding {
                     handle_positions.insert((*nid, pname.clone()), p);
-                    if self.drag_connection.is_some()
+                    if self.canvas.drag_connection.is_some()
                         && ui.input(|inp| inp.pointer.primary_released())
                         && port_resp.contains_pointer()
                     {
@@ -1005,7 +1005,7 @@ impl BarEditorApp {
                 if let Some((nid, pname)) = &port.binding {
                     handle_positions.insert((*nid, pname.clone()), p);
                     if port_resp.drag_started_by(egui::PointerButton::Primary)
-                        && self.drag_connection.is_none()
+                        && self.canvas.drag_connection.is_none()
                     {
                         conn_start = Some(DragConnection {
                             from_node: *nid,
@@ -1074,7 +1074,7 @@ impl BarEditorApp {
 
         let pointer = ui.ctx().pointer_latest_pos();
         let mut x = strip_rect.left() + 2.0;
-        for (i, view) in self.tabs.iter().enumerate() {
+        for (i, view) in self.canvas.tabs.iter().enumerate() {
             let label = match view {
                 CanvasView::Main => "Main".to_string(),
                 CanvasView::SubGraph(gid) => self
@@ -1089,7 +1089,7 @@ impl BarEditorApp {
                     })
                     .unwrap_or_else(|| format!("SubGraph {gid}")),
             };
-            let is_active = i == self.active_tab;
+            let is_active = i == self.canvas.active_tab;
             let closable = i != 0;
 
             // Lay out the tab text + (optional) close button and
@@ -1287,12 +1287,12 @@ impl BarEditorApp {
                     .map(|(i, _)| *i)
                     .unwrap_or(from);
                 let to = target.max(1);
-                if to != from && to < self.tabs.len() {
-                    let active_view = self.tabs.get(self.active_tab).cloned();
-                    let item = self.tabs.remove(from);
-                    self.tabs.insert(to, item);
+                if to != from && to < self.canvas.tabs.len() {
+                    let active_view = self.canvas.tabs.get(self.canvas.active_tab).cloned();
+                    let item = self.canvas.tabs.remove(from);
+                    self.canvas.tabs.insert(to, item);
                     if let Some(av) = active_view {
-                        self.active_tab = self.tabs.iter().position(|v| v == &av).unwrap_or(0);
+                        self.canvas.active_tab = self.canvas.tabs.iter().position(|v| v == &av).unwrap_or(0);
                     }
                 }
             }
@@ -1304,11 +1304,11 @@ impl BarEditorApp {
     /// tab changes — direct assignment to `active_tab` skips the
     /// last-active tracking.
     pub(crate) fn set_active_tab(&mut self, idx: usize) {
-        if idx == self.active_tab || idx >= self.tabs.len() {
+        if idx == self.canvas.active_tab || idx >= self.canvas.tabs.len() {
             return;
         }
-        self.last_active_tab = self.active_tab;
-        self.active_tab = idx;
+        self.canvas.last_active_tab = self.canvas.active_tab;
+        self.canvas.active_tab = idx;
     }
 
     /// Open a tab if not already open, then make it active. Returns
@@ -1316,12 +1316,12 @@ impl BarEditorApp {
     /// reused — opening a SubGraph tab twice doesn't make two of
     /// them.
     pub(crate) fn open_or_activate_tab(&mut self, view: CanvasView) -> usize {
-        if let Some(idx) = self.tabs.iter().position(|v| v == &view) {
+        if let Some(idx) = self.canvas.tabs.iter().position(|v| v == &view) {
             self.set_active_tab(idx);
             return idx;
         }
-        self.tabs.push(view);
-        let new_idx = self.tabs.len() - 1;
+        self.canvas.tabs.push(view);
+        let new_idx = self.canvas.tabs.len() - 1;
         self.set_active_tab(new_idx);
         new_idx
     }
@@ -1330,17 +1330,17 @@ impl BarEditorApp {
     /// If the closed tab was active, focus shifts to the previous
     /// tab (or Main if there's no previous).
     pub(crate) fn close_tab(&mut self, idx: usize) {
-        if idx == 0 || idx >= self.tabs.len() {
+        if idx == 0 || idx >= self.canvas.tabs.len() {
             return;
         }
-        self.tabs.remove(idx);
-        if self.active_tab >= self.tabs.len() {
-            self.active_tab = self.tabs.len() - 1;
-        } else if self.active_tab > idx {
-            self.active_tab -= 1;
-        } else if self.active_tab == idx {
+        self.canvas.tabs.remove(idx);
+        if self.canvas.active_tab >= self.canvas.tabs.len() {
+            self.canvas.active_tab = self.canvas.tabs.len() - 1;
+        } else if self.canvas.active_tab > idx {
+            self.canvas.active_tab -= 1;
+        } else if self.canvas.active_tab == idx {
             // Closed the active one; pick the tab that was before it.
-            self.active_tab = idx.saturating_sub(1);
+            self.canvas.active_tab = idx.saturating_sub(1);
         }
     }
 
@@ -1349,9 +1349,9 @@ impl BarEditorApp {
     /// reference to a deleted thing. The Main tab is preserved.
     pub(crate) fn prune_dangling_tabs(&mut self) {
         let valid_groups: std::collections::HashSet<u64> = self.groups.keys().copied().collect();
-        let mut new_tabs: Vec<CanvasView> = Vec::with_capacity(self.tabs.len());
-        let prev_active = self.tabs.get(self.active_tab).cloned();
-        for tab in &self.tabs {
+        let mut new_tabs: Vec<CanvasView> = Vec::with_capacity(self.canvas.tabs.len());
+        let prev_active = self.canvas.tabs.get(self.canvas.active_tab).cloned();
+        for tab in &self.canvas.tabs {
             let keep = match tab {
                 CanvasView::Main => true,
                 CanvasView::SubGraph(gid) => valid_groups.contains(gid),
@@ -1363,17 +1363,17 @@ impl BarEditorApp {
         if new_tabs.is_empty() {
             new_tabs.push(CanvasView::Main);
         }
-        self.tabs = new_tabs;
-        self.active_tab = match prev_active {
-            Some(prev) => self.tabs.iter().position(|v| v == &prev).unwrap_or(0),
+        self.canvas.tabs = new_tabs;
+        self.canvas.active_tab = match prev_active {
+            Some(prev) => self.canvas.tabs.iter().position(|v| v == &prev).unwrap_or(0),
             None => 0,
         };
     }
 
     /// Returns the active tab's view.
     pub(crate) fn current_view(&self) -> CanvasView {
-        self.tabs
-            .get(self.active_tab)
+        self.canvas.tabs
+            .get(self.canvas.active_tab)
             .cloned()
             .unwrap_or(CanvasView::Main)
     }
@@ -1421,7 +1421,7 @@ impl BarEditorApp {
         // Pressing Escape on a non-Main tab returns to Main without
         // closing the tab — same speed-back affordance the old
         // confined-edit Esc had, but you don't lose the open tab.
-        if self.active_tab != 0 && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
+        if self.canvas.active_tab != 0 && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.set_active_tab(0);
         }
         // Ctrl/Cmd+W closes the current tab. Main is unclosable; the
@@ -1429,9 +1429,9 @@ impl BarEditorApp {
         if ui
             .ctx()
             .input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::W))
-            && self.active_tab != 0
+            && self.canvas.active_tab != 0
         {
-            self.close_tab(self.active_tab);
+            self.close_tab(self.canvas.active_tab);
         }
         // Ctrl/Cmd+Tab swaps with the previously-active tab — the
         // standard "back to where I was" shortcut. Skipped when
@@ -1440,8 +1440,8 @@ impl BarEditorApp {
             .ctx()
             .input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Tab))
         {
-            let target = self.last_active_tab;
-            if target != self.active_tab && target < self.tabs.len() {
+            let target = self.canvas.last_active_tab;
+            if target != self.canvas.active_tab && target < self.canvas.tabs.len() {
                 self.set_active_tab(target);
             }
         }
@@ -1449,15 +1449,15 @@ impl BarEditorApp {
         let available = ui.available_size();
         let (canvas_rect, response) =
             ui.allocate_exact_size(available, egui::Sense::click_and_drag());
-        self.canvas_rect_last = canvas_rect;
+        self.canvas.rect_last = canvas_rect;
 
         // Drain any layout that was deferred from the welcome panel
         // (template card click, File → New from Preset). The
         // viewport-pin path inside `auto_layout_selection` reads
         // `canvas_rect_last`, which is now fresh — so the layout
         // lands on screen instead of off-canvas.
-        if self.pending_auto_layout_all {
-            self.pending_auto_layout_all = false;
+        if self.canvas.pending_auto_layout_all {
+            self.canvas.pending_auto_layout_all = false;
             self.auto_layout_selection();
         }
 
@@ -1473,7 +1473,7 @@ impl BarEditorApp {
             .color
             .linear_multiply(0.2);
 
-        let offset = self.canvas_offset;
+        let offset = self.canvas.offset;
         let grid_offset_x = offset.x % grid_spacing;
         let grid_offset_y = offset.y % grid_spacing;
 
@@ -1504,7 +1504,7 @@ impl BarEditorApp {
         if response.dragged_by(egui::PointerButton::Secondary)
             || response.dragged_by(egui::PointerButton::Middle)
         {
-            self.canvas_offset += response.drag_delta();
+            self.canvas.offset += response.drag_delta();
         }
 
         // Click on empty space to deselect (suppress when palette drag
@@ -1530,10 +1530,10 @@ impl BarEditorApp {
             && !clicked_in_group
         {
             if let Some(p) = pointer {
-                self.marquee_start = Some(p);
+                self.canvas.marquee_start = Some(p);
             }
         }
-        if let Some(anchor) = self.marquee_start {
+        if let Some(anchor) = self.canvas.marquee_start {
             let cur = pointer.unwrap_or(anchor);
             let marquee = egui::Rect::from_two_pos(anchor, cur);
             painter.rect_filled(marquee, 2.0, tokens::NODE_BORDER_SEL.gamma_multiply(0.11));
@@ -1645,7 +1645,7 @@ impl BarEditorApp {
                 if self.selection.node.is_none() {
                     self.selection.node = hits.first().copied();
                 }
-                self.marquee_start = None;
+                self.canvas.marquee_start = None;
             }
         }
 
@@ -1742,7 +1742,7 @@ impl BarEditorApp {
         // have at least one compatible input port so everything else
         // can be dimmed. The source node is always considered active.
         let drag_active_nodes: Option<std::collections::HashSet<NodeId>> =
-            self.drag_connection.as_ref().and_then(|drag| {
+            self.canvas.drag_connection.as_ref().and_then(|drag| {
                 let drag_kind = self
                     .graph
                     .get_node(drag.from_node)?
@@ -1943,7 +1943,7 @@ impl BarEditorApp {
         }
 
         // Draw in-progress connection
-        if let Some(ref drag) = self.drag_connection {
+        if let Some(ref drag) = self.canvas.drag_connection {
             if let Some(pointer_pos) = ui.ctx().pointer_latest_pos() {
                 let from = drag.from_pos;
                 let dist = (pointer_pos - from).length().max(40.0);
@@ -2321,7 +2321,7 @@ impl BarEditorApp {
                 // End an in-flight connection when the user releases
                 // primary while their cursor is over this input's
                 // hit rect.
-                if self.drag_connection.is_some()
+                if self.canvas.drag_connection.is_some()
                     && ui.input(|i| i.pointer.primary_released())
                     && port_resp.contains_pointer()
                 {
@@ -2334,7 +2334,7 @@ impl BarEditorApp {
                 // move this wire to a different input" a one-gesture
                 // operation: grab the input end, drag to new target.
                 if port_resp.drag_started_by(egui::PointerButton::Primary)
-                    && self.drag_connection.is_none()
+                    && self.canvas.drag_connection.is_none()
                 {
                     let existing = self
                         .graph
@@ -2410,7 +2410,7 @@ impl BarEditorApp {
                 // this fires only when the cursor is genuinely on the
                 // port handle, not on the surrounding node body.
                 if port_resp.drag_started_by(egui::PointerButton::Primary)
-                    && self.drag_connection.is_none()
+                    && self.canvas.drag_connection.is_none()
                 {
                     connection_start = Some(DragConnection {
                         from_node: *node_id,
@@ -3067,12 +3067,12 @@ impl BarEditorApp {
         // marquee detection, but this catches edge cases where two
         // overlapping interactions both think they started.)
         if let Some(start) = connection_start {
-            self.drag_connection = Some(start);
-            self.marquee_start = None;
+            self.canvas.drag_connection = Some(start);
+            self.canvas.marquee_start = None;
         }
 
         if let Some((to_node, to_port)) = connection_end {
-            if let Some(drag) = self.drag_connection.clone() {
+            if let Some(drag) = self.canvas.drag_connection.clone() {
                 self.push_undo("Connect nodes");
                 let from = PortId {
                     node_id: drag.from_node,
@@ -3084,12 +3084,12 @@ impl BarEditorApp {
                 };
                 let _ = self.graph.connect(from, to);
             }
-            self.drag_connection = None;
+            self.canvas.drag_connection = None;
         }
 
         // Cancel drag on release without target
         if ui.input(|i| i.pointer.any_released()) {
-            self.drag_connection = None;
+            self.canvas.drag_connection = None;
         }
     }
 }
