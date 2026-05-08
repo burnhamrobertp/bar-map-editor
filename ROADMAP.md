@@ -18,6 +18,9 @@ partially built with known gaps; "Up next" is the planned short-term work.
   `MapSettings`; 7z archive packaging
 - **Sculpt overlays** -- height delta, metalmap, typemap, texture sidecar PNGs
   merged onto the base heightmap at export; overlay persists across save/load
+- **2D Sculpt pipeline node** -- delta-buffer node in the graph (u8 per pixel,
+  128 = no change); infers layer (heightmap/metalmap/typemap) from downstream
+  Bundler port; painting UI driven off the same infrastructure as PaintedHeightmap
 - **2D inspector** -- heightmap topo view; draggable start-position markers;
   metalmap / typemap toggle layers
 - **Structured mapinfo editor** -- form-based editor for all `mapinfo.lua`
@@ -37,7 +40,8 @@ partially built with known gaps; "Up next" is the planned short-term work.
   rebuild; central-difference normals computed in shader
 - **3D sculpting** -- heightmap raise/lower/smooth/flatten brushes with radius,
   strength, falloff; live preview via dirty-rect heightmap region upload; color,
-  metalmap, typemap paint layers previewed via synthesised albedo
+  metalmap, typemap paint layers previewed via synthesised albedo (via floating
+  preview window; embedded Sculpt3D layout viewport is not yet wired)
 - **Engine-faithful rendering** -- Recoil `ModernSkyVS/FS` port for sky and
   atmospheric fog; Recoil `SMFFragProg/VertProg` port for ground lighting
   (Blinn-Phong, underwater absorption); original PBR water shader (GGX
@@ -50,21 +54,24 @@ partially built with known gaps; "Up next" is the planned short-term work.
 
 ## In progress
 
-### Sculpt-to-export path
-The 3D viewport and 2D inspector both update a live heightmap in-session.
-That edited heightmap merges into the export via the sculpt overlay sidecar
-PNG (a 16-bit grayscale delta file). The current bridge is manual: the user
-clicks "Save heightmap as PNG" then wires a `FileInput` node. A proper Sculpt
-node that writes the delta automatically into the graph -- so the export round-
-trip is zero-click -- is not yet built.
+### Sculpt3D embedded viewport
+The Sculpt3D layout (`sculpt3d.rs`) has its full sidebar UI -- layer selector
+(Height/Colour/Metal/Type), tool selector, radius/strength/falloff sliders,
+and a sculpt-layer status panel. The 3D viewport (`draw_viewport_on` in
+`bar-app`) currently lives as a floating `egui::Window` launched from the
+standard layout. The Sculpt3D layout's central panel is a placeholder. Wiring
+the renderer into that panel is the next step to deliver the integrated one-
+screen sculpting experience described in `docs/3d-painting-plan.md`.
 
-### Typemap brush
-The typemap paint target is wired in the UI (3D sculpt layout, brush-target
-radio). The brush dab updates the inspector cache and synthesises a visualisation
-colour for the viewport. The overlay merge at export uses the same path as
-metalmap. Known gap: the typemap brush stroke is not yet recorded onto a
-`PaintedMask` node in the graph, so edits are lost on re-eval unless manually
-saved via the PNG bridge (same as heightmap).
+### Metal / typemap brush persistence
+Metal and typemap brush strokes write to `SculptState` (`paint.sculpt.metal_overlay`,
+`paint.sculpt.type_overlay`) and are persisted as sidecar PNGs (`sculpt-metal.png`,
+`sculpt-type.png`) alongside the `.barproj` on every save. This approach differs
+from the `MetalSculpt` / `TypeSculpt` graph-node design in the painting plan doc;
+the sidecar model was what was actually built. The strokes survive save/load correctly.
+The remaining gap is that these overlays are only visible as synthesised viewport
+tinting -- there is no per-type-id colour legend or metal density gradient shown
+in the embedded Sculpt3D viewport (which itself is not yet wired; see above).
 
 ### Water shader assets
 The water normal map is a 128x128 procedurally generated approximation. A real
@@ -81,11 +88,11 @@ Shadow map is hardcoded to 1.0 (no directional shadow). Detail texture
 
 ## Up next
 
-### Sculpt node (closes the sculpt-to-export gap)
-A `Sculpt` node type that owns the height delta directly inside the graph,
-writes it to the overlay PNG on every save, and does not require a manual
-`FileInput` hookup. This would make the "sculpt and export" workflow zero-
-friction.
+### Sculpt3D embedded viewport (closes the integrated sculpting experience)
+Wire `draw_viewport_on` (currently a floating window in `bar-app`) into the
+central panel of the Sculpt3D layout so sculpting happens in a single full-
+screen view. The sidebar controls, layer selector, and brush dispatch are
+already in place; only the central panel and the input routing need to connect.
 
 ### Pathing / movement-class overlay
 Compute and visualise BAR-style terrain passability: slope thresholds per
