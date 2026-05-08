@@ -222,7 +222,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         | NodeType::SimplexNoise
         | NodeType::WorleyNoise
         | NodeType::RidgedNoise => (
-            vec![],
+            vec![Port::new("control", "Control", PortKind::Control)],
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),
 
@@ -231,15 +231,34 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Value", PortKind::Heightmap)],
         ),
 
-        // Filters: one input, one output
+        // Filters with Control + Mask
         NodeType::HydraulicErosion
         | NodeType::ThermalErosion
         | NodeType::Blur
-        | NodeType::Sharpen
-        | NodeType::Clamp
-        | NodeType::Terrace
-        | NodeType::Invert => (
+        | NodeType::Clamp => (
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        // Passthrough placeholders. These node types don't yet have an
+        // implementation in the executor, so they expose only the input
+        // and output. Adding Control / Mask ports here would let users
+        // wire modulators to a transform that does nothing.
+        NodeType::Terrace | NodeType::Sharpen => (
             vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        // Filter with Mask only
+        NodeType::Invert => (
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
@@ -259,11 +278,22 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![],
         ),
 
-        // Combiners: two inputs, one output
-        NodeType::Blend | NodeType::Add | NodeType::Subtract | NodeType::Multiply => (
+        // Combiners
+        NodeType::Blend => (
             vec![
                 Port::new("a", "Input A", PortKind::Heightmap),
                 Port::new("b", "Input B", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        NodeType::Add | NodeType::Subtract | NodeType::Multiply => (
+            vec![
+                Port::new("a", "Input A", PortKind::Heightmap),
+                Port::new("b", "Input B", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
@@ -272,17 +302,24 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![
                 Port::new("a", "Input A", PortKind::Heightmap),
                 Port::new("b", "Input B", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
         // Texture/Splat operations
         NodeType::SlopeMap => (
-            vec![Port::new("input", "Heightmap", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Heightmap", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+            ],
             vec![Port::new("output", "Slope", PortKind::Heightmap)],
         ),
         NodeType::HeightSelect => (
-            vec![Port::new("input", "Heightmap", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Heightmap", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+            ],
             vec![Port::new("output", "Mask", PortKind::Heightmap)],
         ),
         NodeType::SplatMap => (
@@ -291,6 +328,8 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("band0", "Band 0", PortKind::Heightmap),
                 Port::new("band1", "Band 1", PortKind::Heightmap),
                 Port::new("band2", "Band 2", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Splat", PortKind::Heightmap)],
         ),
@@ -298,6 +337,8 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![
                 Port::new("input", "Heightmap", PortKind::Heightmap),
                 Port::new("slope", "Slope Map", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),
@@ -306,6 +347,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         NodeType::NormalMap => (
             vec![
                 Port::new("input", "Heightmap", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Normal Map", PortKind::Color)],
         ),
@@ -313,6 +355,9 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![
                 Port::new("input", "Heightmap", PortKind::Heightmap),
                 Port::new("slope", "Slope Map", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("density", "Density", PortKind::Density),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Grass Density", PortKind::Heightmap)],
         ),
@@ -320,18 +365,26 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![
                 Port::new("input", "Heightmap", PortKind::Heightmap),
                 Port::new("slope", "Slope Map", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Specular", PortKind::Heightmap)],
         ),
 
         NodeType::Sculpt => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
         // Mask: generates a mask output
         NodeType::Mask => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+            ],
             vec![Port::new("mask", "Mask", PortKind::Mask)],
         ),
 
@@ -352,7 +405,10 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
 
         // Mask operations
         NodeType::MaskThreshold => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+            ],
             vec![Port::new("output", "Mask", PortKind::Heightmap)],
         ),
         NodeType::MaskInvert => (
@@ -360,21 +416,28 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
         NodeType::MaskBlur => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
         NodeType::MaskApply => (
             vec![
                 Port::new("input", "Input", PortKind::Heightmap),
-                Port::new("mask", "Mask", PortKind::Heightmap),
                 Port::new("background", "Background", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
         // Curve: remaps values via a transfer function
         NodeType::Curve => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
@@ -384,31 +447,44 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),
         NodeType::Voronoi => (
-            vec![],
+            vec![Port::new("control", "Control", PortKind::Control)],
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),
         NodeType::Gradient => (
-            vec![],
+            vec![Port::new("control", "Control", PortKind::Control)],
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),
 
         // --- Additional Filters ---
         NodeType::SimpleTransform => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
         NodeType::Normalize => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
         NodeType::BiasGain => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
         NodeType::Displacement => (
             vec![
                 Port::new("input", "Input", PortKind::Heightmap),
                 Port::new("displacement", "Displacement", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
@@ -418,7 +494,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![
                 Port::new("a", "Input A", PortKind::Heightmap),
                 Port::new("b", "Input B", PortKind::Heightmap),
-                Port::new("mask", "Mask", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
