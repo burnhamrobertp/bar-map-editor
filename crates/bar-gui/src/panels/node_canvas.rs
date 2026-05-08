@@ -2456,8 +2456,8 @@ impl BarEditorApp {
             // Paint Bundler's Export button.
             if let Some(export_rect) = export_rect {
                 let ptr = ui.ctx().pointer_latest_pos();
-                let busy = self.export_status.affects(*node_id);
-                let any_running = self.export_status.is_running();
+                let busy = self.preview.export_status.affects(*node_id);
+                let any_running = self.preview.export_status.is_running();
 
                 let export_hov = ptr.is_some_and(|p| export_rect.contains(p));
                 let export_bg = if busy {
@@ -2526,8 +2526,8 @@ impl BarEditorApp {
             let mut run_clicked = false;
             let mut open_clicked = false;
             if let Some(export_rect) = export_rect {
-                let any_running = self.export_status.is_running();
-                let busy_self = self.export_status.affects(*node_id);
+                let any_running = self.preview.export_status.is_running();
+                let busy_self = self.preview.export_status.affects(*node_id);
                 let run_tooltip = if busy_self {
                     "Exporting…"
                 } else if any_running {
@@ -2746,14 +2746,14 @@ impl BarEditorApp {
             }
 
             if open_clicked {
-                self.preview_open = true;
+                self.preview.open = true;
                 // The Preview node IS the viewport target; clicking
                 // its footer just opens the panel and re-targets it
                 // in case multiple Preview nodes exist in the graph.
-                self.preview_node = Some(*node_id);
+                self.preview.node = Some(*node_id);
             }
             if run_clicked && self.validate_before_export("Bundle") {
-                self.run_bundler_node = Some(*node_id);
+                self.preview.run_bundler_node = Some(*node_id);
             }
 
             // Resize corner handles (8 px squares; processed after node interact so they

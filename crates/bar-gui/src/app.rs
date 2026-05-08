@@ -140,21 +140,8 @@ pub(crate) enum MapInfoTab {
     Water,
 }
 
-/// Snapshot of every input `validate_project` reads, in a form cheap
-/// to compare. The editor recomputes this every frame; whenever it
-/// differs from the cached value, validation re-runs.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ValidationFingerprint {
-    graph_revision: u64,
-    map_width: u32,
-    map_height: u32,
-    /// `f32::to_bits` so `Eq` works without bringing in approximate
-    /// comparisons. Validation only re-runs on exact value changes,
-    /// which matches what the user thinks of as "I changed this".
-    min_h_bits: u32,
-    max_h_bits: u32,
-    n_spawns: usize,
-}
+// `ValidationFingerprint` lives in `crate::editor::validation`.
+pub(crate) use crate::editor::ValidationFingerprint;
 
 pub(crate) enum GroupOp {
     CreateWith(NodeId),
@@ -881,12 +868,10 @@ pub struct BarEditorApp {
     pub(crate) selected_node: Option<NodeId>,
     pub(crate) drag_connection: Option<DragConnection>,
     pub(crate) canvas_offset: egui::Vec2,
-    pub(crate) map_width: u32,
-    pub(crate) map_height: u32,
-    /// Spring world-unit height range for the loaded map. Used to compute a
-    /// physically-accurate vertical scale in the 3D preview renderer.
-    pub(crate) map_min_height: f32,
-    pub(crate) map_max_height: f32,
+    /// Map metadata: dimensions, height range, MapSettings,
+    /// RecipeMeta identity, and the spawn-marker drag pointer. See
+    /// `editor::MapState`.
+    pub(crate) map: crate::editor::MapState,
     /// Undo/redo history.
     pub(crate) history: UndoHistory,
     /// Current project file path (if saved).
@@ -914,22 +899,17 @@ pub struct BarEditorApp {
     pub(crate) passthrough_edit: Option<PassthroughEdit>,
     /// Whether the project has unsaved changes.
     pub(crate) is_dirty: bool,
-    /// Whether a run/export was requested.
-    pub(crate) run_requested: bool,
-    /// True for one frame when the user clicks the toolbar's "Test in BAR"
-    /// button. `bar-app` polls this via `take_test_in_bar_requested()`,
-    /// drives the export-then-launch flow.
-    pub(crate) test_in_bar_requested: bool,
+    /// Preview / export concern: viewport open flag, driving node, and
+    /// the one-frame "run" / "test in BAR" / "run this bundler" pulses
+    /// that `bar-app` polls each frame. See `editor::PreviewState`.
+    pub(crate) preview: crate::editor::PreviewState,
     /// Modal / popup / transient-feedback flags. See `DialogState`.
     pub(crate) dialog: DialogState,
     /// Cached list of validation findings displayed in the panel. Built
-    /// fresh each time the panel is opened (or the refresh button is clicked).
-    pub(crate) validation_findings: Vec<bar_project::Finding>,
-    /// Active severity filter in the validation details window. Drives
-    /// the All / Error / Warning / Info tab strip.
-    pub(crate) validation_filter: ValidationFilter,
-    /// Active section in the Map Settings modal's tab strip.
-    pub(crate) mapinfo_tab: MapInfoTab,
+    /// Validation cache: findings list, severity filter, mapinfo-modal
+    /// tab, and the input fingerprint that gates re-validation. See
+    /// `editor::ValidationState`.
+    pub(crate) validation: crate::editor::ValidationState,
     /// Visual node groups keyed by stable group id. Purely
     /// organisational — they don't affect graph evaluation.
     pub(crate) groups: HashMap<u64, GroupRuntime>,
@@ -1002,33 +982,8 @@ pub struct BarEditorApp {
     /// `PaintSession`.
     pub(crate) paint: PaintSession,
     /// Fingerprint of the inputs to `validate_project` for which the
-    /// cached `validation_findings` are current. Compared against a
-    /// freshly-computed fingerprint at the start of every frame; a
-    /// mismatch re-runs validation. Replaces the older single-revision
-    /// cache so non-graph changes (map dimensions, height range,
-    /// spawns) also trigger a refresh.
-    pub(crate) validation_last_fingerprint: ValidationFingerprint,
-    /// Live MapSettings being edited via the structured editor. The
-    /// individual `map_min_height` / `map_max_height` fields shadow
-    /// this — the editor / 2D inspector keep them in sync. Spawn
-    /// positions live directly on `map_settings.start_positions`
-    /// (no shadow); the inspector / Map Settings editor mutate that
-    /// vector in place so there's only one source of truth.
-    pub(crate) map_settings: bar_project::MapSettings,
-    /// Recipe-level identity (shortname, description, author,
-    /// version). Single source of truth — `recipe_for_export` /
-    /// `build_project` read from here, the Map Settings editor
-    /// writes here.
-    pub(crate) recipe_meta: RecipeMeta,
-    /// Index of the marker currently being dragged in the inspector
-    /// (None if not dragging).
-    pub(crate) dragging_spawn: Option<usize>,
-    /// Whether the 3D preview window is open.
-    pub(crate) preview_open: bool,
-    /// The Bundler node whose data drives the viewport (if any).
-    pub(crate) preview_node: Option<NodeId>,
-    /// A Bundler node the user asked to run individually (None = run all).
-    pub(crate) run_bundler_node: Option<NodeId>,
+    // Map metadata + UI shadow state moved to `self.map`
+    // (see `editor::MapState`).
     /// Display name for the currently loaded map/project (shown in title bar).
     /// For project files this mirrors `project_path`'s stem; for .sd7 opens it
     /// holds the map name until a project file is saved.
@@ -1057,8 +1012,6 @@ pub struct BarEditorApp {
     pub(crate) settings: Settings,
     /// Last time an autosave completed (for interval gating).
     pub(crate) last_autosave_at: Option<Instant>,
-    /// Current export status, fed in each frame by `bar-app`.
-    pub(crate) export_status: ExportStatus,
     /// Bundle path (archive-relative, forward slashes) of the file the user
     /// has designated as the project's map-info file. `None` means the user
     /// hasn't picked one yet; the toolbar Edit Map Info button will prompt.
@@ -1077,10 +1030,13 @@ impl Default for BarEditorApp {
             selected_node: None,
             drag_connection: None,
             canvas_offset: egui::Vec2::ZERO,
-            map_width: 256,
-            map_height: 256,
-            map_min_height: 0.0,
-            map_max_height: 800.0,
+            map: crate::editor::MapState {
+                width: 256,
+                height: 256,
+                min_height: 0.0,
+                max_height: 800.0,
+                ..Default::default()
+            },
             history: UndoHistory::default(),
             project_path: None,
             sd7_open_request: None,
@@ -1088,12 +1044,9 @@ impl Default for BarEditorApp {
             parent_window_handles: None,
             passthrough_edit: None,
             is_dirty: false,
-            run_requested: false,
-            test_in_bar_requested: false,
+            preview: crate::editor::PreviewState::default(),
             dialog: DialogState::default(),
-            validation_findings: Vec::new(),
-            validation_filter: ValidationFilter::All,
-            mapinfo_tab: MapInfoTab::Identity,
+            validation: crate::editor::ValidationState::default(),
             groups: HashMap::new(),
             node_to_group: HashMap::new(),
             next_group_id: 1,
@@ -1111,23 +1064,6 @@ impl Default for BarEditorApp {
             active_props: None,
             active_props_rect: None,
             paint: PaintSession::default(),
-            // u64::MAX guarantees the very first `refresh_validation_
-            // if_dirty` call sees a "different" fingerprint and runs
-            // validation once on startup.
-            validation_last_fingerprint: ValidationFingerprint {
-                graph_revision: u64::MAX,
-                map_width: 0,
-                map_height: 0,
-                min_h_bits: 0,
-                max_h_bits: 0,
-                n_spawns: usize::MAX,
-            },
-            map_settings: bar_project::MapSettings::default(),
-            recipe_meta: RecipeMeta::default(),
-            dragging_spawn: None,
-            preview_open: false,
-            preview_node: None,
-            run_bundler_node: None,
             loaded_name: None,
             graph_reset: false,
             palette_drag: None,
@@ -1135,7 +1071,6 @@ impl Default for BarEditorApp {
             pending_auto_layout_all: false,
             settings: Settings::default(),
             last_autosave_at: None,
-            export_status: ExportStatus::Idle,
             map_info_file: None,
             active_layout: Layout::default(),
         }
@@ -1308,16 +1243,16 @@ impl BarEditorApp {
     // fingerprint` is bumped after a manual refresh so the
     // continuous-validation gate doesn't immediately re-run.
     pub(crate) fn validation_findings(&self) -> &[bar_project::Finding] {
-        &self.validation_findings
+        self.validation.findings()
     }
     pub(crate) fn validation_filter(&self) -> ValidationFilter {
-        self.validation_filter
+        self.validation.filter()
     }
     pub(crate) fn set_validation_filter(&mut self, f: ValidationFilter) {
-        self.validation_filter = f;
+        self.validation.set_filter(f);
     }
     pub(crate) fn refresh_validation_fingerprint(&mut self) {
-        self.validation_last_fingerprint = self.validation_inputs_fingerprint();
+        self.validation.last_fingerprint = self.validation_inputs_fingerprint();
     }
 
     /// True when the user is currently looking at a subgraph tab —
@@ -1361,24 +1296,24 @@ impl BarEditorApp {
     /// mapinfo editor's Identity tab binds egui text fields
     /// directly into these.
     pub(crate) fn recipe_meta_mut(&mut self) -> &mut RecipeMeta {
-        &mut self.recipe_meta
+        self.map.recipe_meta_mut()
     }
     /// Mutable access to MapSettings — binds the Physics /
     /// Atmosphere / Lighting / Water tabs.
     pub(crate) fn map_settings_mut(&mut self) -> &mut bar_project::MapSettings {
-        &mut self.map_settings
+        self.map.settings_mut()
     }
     pub(crate) fn map_dimensions_mut(&mut self) -> (&mut u32, &mut u32) {
-        (&mut self.map_width, &mut self.map_height)
+        self.map.dimensions_mut()
     }
     pub(crate) fn map_height_range_mut(&mut self) -> (&mut f32, &mut f32) {
-        (&mut self.map_min_height, &mut self.map_max_height)
+        self.map.height_range_mut()
     }
     pub(crate) fn mapinfo_tab_now(&self) -> MapInfoTab {
-        self.mapinfo_tab
+        self.validation.mapinfo_tab()
     }
     pub(crate) fn set_mapinfo_tab(&mut self, tab: MapInfoTab) {
-        self.mapinfo_tab = tab;
+        self.validation.set_mapinfo_tab(tab);
     }
 
     /// Mutable access to the live paint session — brush, sculpt
@@ -1395,10 +1330,10 @@ impl BarEditorApp {
     /// Spawn-marker drag-index accessor used by the inspector's
     /// drag-and-drop handling.
     pub(crate) fn dragging_spawn(&self) -> Option<usize> {
-        self.dragging_spawn
+        self.map.dragging_spawn
     }
     pub(crate) fn set_dragging_spawn(&mut self, idx: Option<usize>) {
-        self.dragging_spawn = idx;
+        self.map.dragging_spawn = idx;
     }
 
     /// Mark the project as dirty (unsaved changes pending).
@@ -1536,16 +1471,16 @@ impl BarEditorApp {
         self.loaded_name = None;
         self.is_dirty = false;
         self.map_info_file = None;
-        self.map_settings = bar_project::MapSettings::default();
-        self.map_width = 256;
-        self.map_height = 256;
-        self.map_min_height = 0.0;
-        self.map_max_height = 800.0;
-        self.recipe_meta = RecipeMeta::default();
+        self.map.settings = bar_project::MapSettings::default();
+        self.map.width = 256;
+        self.map.height = 256;
+        self.map.min_height = 0.0;
+        self.map.max_height = 800.0;
+        self.map.recipe_meta = RecipeMeta::default();
 
         // Inspector / preview.
-        self.preview_node = None;
-        self.preview_open = false;
+        self.preview.node = None;
+        self.preview.open = false;
 
         // Signal renderers to flush stale GPU resources.
         self.graph_reset = true;
@@ -1565,15 +1500,13 @@ impl BarEditorApp {
         // flag also reset so the user sees a clean panel state next
         // project.
         self.dialog.show_validation_panel = false;
-        self.validation_findings.clear();
-        self.validation_filter = ValidationFilter::All;
+        self.validation.reset();
 
         // Modal / window-open flags. These should never persist
         // across a project switch — the user expects the new project
         // to open with no dialogs up.
         self.dialog.show_inspector = false;
         self.dialog.show_mapinfo_editor = false;
-        self.mapinfo_tab = MapInfoTab::Identity;
         self.dialog.show_map_info_picker = false;
         self.dialog.file_editor = None;
         self.dialog.confirm_dialog = None;
@@ -1588,7 +1521,7 @@ impl BarEditorApp {
         self.selected_connection = None;
         self.drag_connection = None;
         self.marquee_start = None;
-        self.dragging_spawn = None;
+        self.map.dragging_spawn = None;
         self.palette_drag = None;
         self.passthrough_edit = None;
         self.dialog.pending_props_open = None;
@@ -1599,13 +1532,12 @@ impl BarEditorApp {
         // project would mislead the user about what just happened.
         self.dialog.toast = None;
         self.dialog.status_message = None;
-        self.export_status = ExportStatus::Idle;
 
-        // Run / export request flags — never carry a queued
-        // "run all" or "test in BAR" across a project boundary.
-        self.run_requested = false;
-        self.test_in_bar_requested = false;
-        self.run_bundler_node = None;
+        // Preview / export state -- viewport open flag, driving node,
+        // run pulses, and export status all reset together. preview_node
+        // is cleared earlier in this function (it depends on the graph,
+        // which the project replacement clobbers).
+        self.preview.reset();
 
         // Canvas viewport — pan offset and the cached canvas rect
         // from the previous project's layout would land the new
@@ -1653,7 +1585,7 @@ impl BarEditorApp {
                 size: egui::vec2(180.0, 150.0),
             },
         );
-        self.preview_node = Some(preview_id);
+        self.preview.node = Some(preview_id);
     }
 
     /// Where to place the Bundler / Preview terminal nodes on a
@@ -1709,7 +1641,7 @@ impl BarEditorApp {
                 size: egui::vec2(180.0, 150.0),
             },
         );
-        self.preview_node = Some(preview_id);
+        self.preview.node = Some(preview_id);
         self.is_dirty = true;
     }
 
@@ -1786,7 +1718,7 @@ impl BarEditorApp {
 
     /// Render the structured Map Info editor: a single window with one
     /// `CollapsingHeader` per major section of the recipe + `MapSettings`.
-    /// Edits write directly into `self.map_settings` and the recipe-side
+    /// Edits write directly into `self.map.settings` and the recipe-side
     /// mirror fields. On save those values are folded into the project's
     /// `Recipe` and `MapSettings`.
     /// Map Info modal - see `crate::panels::mapinfo_editor`.
@@ -1798,7 +1730,7 @@ impl BarEditorApp {
     /// True iff the current cached validation has any blocking
     /// errors. Cheap — just scans the cached findings list.
     pub fn validation_has_errors(&self) -> bool {
-        bar_project::has_errors(&self.validation_findings)
+        bar_project::has_errors(&self.validation.findings)
     }
 
     /// Count cached findings by severity for the sidebar display.
@@ -1806,7 +1738,7 @@ impl BarEditorApp {
         let mut errors = 0;
         let mut warnings = 0;
         let mut infos = 0;
-        for f in &self.validation_findings {
+        for f in &self.validation.findings {
             match f.severity {
                 bar_project::Severity::Error => errors += 1,
                 bar_project::Severity::Warning => warnings += 1,
@@ -2014,9 +1946,9 @@ impl BarEditorApp {
 
     fn refresh_validation_if_dirty(&mut self) {
         let fp = self.validation_inputs_fingerprint();
-        if fp != self.validation_last_fingerprint {
+        if fp != self.validation.last_fingerprint {
             self.run_validation();
-            self.validation_last_fingerprint = fp;
+            self.validation.last_fingerprint = fp;
         }
     }
 
@@ -2026,11 +1958,11 @@ impl BarEditorApp {
     pub(crate) fn validation_inputs_fingerprint(&self) -> ValidationFingerprint {
         ValidationFingerprint {
             graph_revision: self.graph.revision(),
-            map_width: self.map_width,
-            map_height: self.map_height,
-            min_h_bits: self.map_settings.min_height.to_bits(),
-            max_h_bits: self.map_settings.max_height.to_bits(),
-            n_spawns: self.map_settings.start_positions.len(),
+            map_width: self.map.width,
+            map_height: self.map.height,
+            min_h_bits: self.map.settings.min_height.to_bits(),
+            max_h_bits: self.map.settings.max_height.to_bits(),
+            n_spawns: self.map.settings.start_positions.len(),
         }
     }
 
@@ -2071,12 +2003,12 @@ impl BarEditorApp {
         // with. Other fields use defaults — full structured-mapinfo
         // editing comes in M1.1.
         let settings = bar_project::MapSettings {
-            min_height: self.map_min_height,
-            max_height: self.map_max_height,
+            min_height: self.map.min_height,
+            max_height: self.map.max_height,
             ..Default::default()
         };
-        self.validation_findings =
-            bar_project::validate_project(&self.graph, &settings, self.map_width, self.map_height);
+        self.validation.findings =
+            bar_project::validate_project(&self.graph, &settings, self.map.width, self.map.height);
     }
 
     fn handle_edit_map_info_clicked(&mut self) {
@@ -2136,9 +2068,9 @@ impl BarEditorApp {
             let _ = self.graph.remove_node(*nid);
             self.node_visuals.remove(nid);
             self.remove_node_from_group(*nid);
-            if self.preview_node == Some(*nid) {
-                self.preview_node = None;
-                self.preview_open = false;
+            if self.preview.node == Some(*nid) {
+                self.preview.node = None;
+                self.preview.open = false;
             }
         }
         self.passthrough_edit = None;
@@ -2161,9 +2093,9 @@ impl BarEditorApp {
             let _ = self.graph.remove_node(*node_id);
             self.node_visuals.remove(node_id);
             self.remove_node_from_group(*node_id);
-            if self.preview_node == Some(*node_id) {
-                self.preview_node = None;
-                self.preview_open = false;
+            if self.preview.node == Some(*node_id) {
+                self.preview.node = None;
+                self.preview.open = false;
             }
         }
         self.passthrough_edit = None;
@@ -2194,7 +2126,7 @@ impl BarEditorApp {
     }
 
     pub fn map_dimensions(&self) -> (u32, u32) {
-        (self.map_width, self.map_height)
+        self.map.dimensions()
     }
 
     /// SMF ground shading inputs sourced from `MapSettings.lighting`
@@ -2202,8 +2134,8 @@ impl BarEditorApp {
     /// renderer would read for the same map. Consumers (bar-app's
     /// preview pipeline) clone this each frame; never store.
     pub fn smf_lighting(&self) -> SmfLightingSnapshot {
-        let lit = &self.map_settings.lighting;
-        let w = &self.map_settings.water;
+        let lit = &self.map.settings.lighting;
+        let w = &self.map.settings.water;
         SmfLightingSnapshot {
             sun_dir: lit.sun_dir,
             ground_ambient: lit.ground_ambient,
@@ -2234,19 +2166,19 @@ impl BarEditorApp {
         let mut h = DefaultHasher::new();
         // Hash the upstream subgraph of the preview node so that changes
         // to disconnected nodes don't trigger a re-render.
-        if let Some(pn) = self.preview_node {
+        if let Some(pn) = self.preview.node {
             self.graph.upstream_content_hash(pn).hash(&mut h);
         } else {
             self.graph.revision().hash(&mut h);
         }
-        self.preview_node
+        self.preview.node
             .map(|n| n.0)
             .unwrap_or(u64::MAX)
             .hash(&mut h);
-        self.map_width.hash(&mut h);
-        self.map_height.hash(&mut h);
-        self.map_min_height.to_bits().hash(&mut h);
-        self.map_max_height.to_bits().hash(&mut h);
+        self.map.width.hash(&mut h);
+        self.map.height.hash(&mut h);
+        self.map.min_height.to_bits().hash(&mut h);
+        self.map.max_height.to_bits().hash(&mut h);
         h.finish()
     }
 
@@ -2268,19 +2200,19 @@ impl BarEditorApp {
                 .map(|s| s.to_string_lossy().to_string())
                 .or_else(|| self.loaded_name.clone())
                 .unwrap_or_else(|| "Untitled".to_string()),
-            shortname: self.recipe_meta.shortname.clone(),
-            description: self.recipe_meta.description.clone(),
-            author: self.recipe_meta.author.clone(),
-            version: self.recipe_meta.version.clone(),
+            shortname: self.map.recipe_meta.shortname.clone(),
+            description: self.map.recipe_meta.description.clone(),
+            author: self.map.recipe_meta.author.clone(),
+            version: self.map.recipe_meta.version.clone(),
             nodes: Vec::new(),
             connections: Vec::new(),
             output: bar_project::OutputConfig {
-                width: self.map_width,
-                height: self.map_height,
+                width: self.map.width,
+                height: self.map.height,
                 map_settings: bar_project::MapSettings {
-                    min_height: self.map_min_height,
-                    max_height: self.map_max_height,
-                    ..self.map_settings.clone()
+                    min_height: self.map.min_height,
+                    max_height: self.map.max_height,
+                    ..self.map.settings.clone()
                 },
             },
         }
@@ -2290,7 +2222,7 @@ impl BarEditorApp {
     /// Used by `bar-app` to compute a physically-accurate `height_scale` for the
     /// 3D preview, matching how the map actually looks in the Spring/Recoil engine.
     pub fn map_height_range(&self) -> (f32, f32) {
-        (self.map_min_height, self.map_max_height)
+        self.map.height_range()
     }
 
     /// Set a status message to show in the status bar.
@@ -2304,20 +2236,23 @@ impl BarEditorApp {
     }
 
     pub fn preview_open(&self) -> bool {
-        self.preview_open
+        self.preview.is_open()
     }
 
     pub fn set_preview_open(&mut self, v: bool) {
-        self.preview_open = v;
+        self.preview.set_open(v);
     }
 
     pub fn preview_node(&self) -> Option<NodeId> {
-        self.preview_node
+        self.preview.node()
     }
 
-    /// Returns a display label for the preview window title.
+    /// Returns a display label for the preview window title. Lives on
+    /// `BarEditorApp` (rather than `PreviewState`) because it needs the
+    /// node label out of `self.graph`.
     pub fn preview_node_label(&self) -> String {
-        self.preview_node
+        self.preview
+            .node()
             .and_then(|id| self.graph.get_node(id))
             .map(|n| format!("3D Preview — {}", n.label))
             .unwrap_or_else(|| "3D Preview".to_string())
@@ -2325,17 +2260,13 @@ impl BarEditorApp {
 
     /// Returns true if a run was requested, resetting the flag.
     pub fn take_run_requested(&mut self) -> bool {
-        let r = self.run_requested;
-        self.run_requested = false;
-        r
+        self.preview.take_run_requested()
     }
 
     /// Pulse-style accessor for the "Test in BAR" toolbar button. Returns
     /// `true` once when the user clicked, then resets.
     pub fn take_test_in_bar_requested(&mut self) -> bool {
-        let r = self.test_in_bar_requested;
-        self.test_in_bar_requested = false;
-        r
+        self.preview.take_test_in_bar()
     }
 
     /// Push the latest evaluated heightmap so the 2D inspector can show
@@ -2587,7 +2518,7 @@ impl BarEditorApp {
     /// Returns the Bundler node ID to run individually, resetting it.
     /// Returns `None` if the user pressed the global Run button (run all).
     pub fn take_run_bundler_node(&mut self) -> Option<NodeId> {
-        self.run_bundler_node.take()
+        self.preview.take_run_bundler_node()
     }
 
     /// Returns `true` once when the graph has been fully replaced (new map or
@@ -2606,11 +2537,11 @@ impl BarEditorApp {
     /// Set the current export status. Called each frame by `bar-app` so the
     /// bundle buttons can render busy state. Idempotent and cheap.
     pub fn set_export_status(&mut self, status: ExportStatus) {
-        self.export_status = status;
+        self.preview.set_export_status(status);
     }
 
     pub fn export_status(&self) -> ExportStatus {
-        self.export_status
+        self.preview.export_status()
     }
 
     /// Capture the entire undoable editor state.
@@ -2647,10 +2578,10 @@ impl BarEditorApp {
         self.node_to_group = snap.state.node_to_group;
         self.next_group_id = snap.state.next_group_id;
         self.clear_selection();
-        if let Some(pn) = self.preview_node {
+        if let Some(pn) = self.preview.node {
             if self.graph.get_node(pn).is_none() {
-                self.preview_node = None;
-                self.preview_open = false;
+                self.preview.node = None;
+                self.preview.open = false;
             }
         }
     }
@@ -2733,23 +2664,23 @@ impl BarEditorApp {
                 .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| "Untitled".to_string()),
-            shortname: self.recipe_meta.shortname.clone(),
-            description: self.recipe_meta.description.clone(),
-            author: self.recipe_meta.author.clone(),
-            version: self.recipe_meta.version.clone(),
+            shortname: self.map.recipe_meta.shortname.clone(),
+            description: self.map.recipe_meta.description.clone(),
+            author: self.map.recipe_meta.author.clone(),
+            version: self.map.recipe_meta.version.clone(),
             nodes,
             connections,
             output: OutputConfig {
-                width: self.map_width,
-                height: self.map_height,
+                width: self.map.width,
+                height: self.map.height,
                 map_settings: MapSettings {
-                    min_height: self.map_min_height,
-                    max_height: self.map_max_height,
-                    start_positions: self.map_settings.start_positions.clone(),
+                    min_height: self.map.min_height,
+                    max_height: self.map.max_height,
+                    start_positions: self.map.settings.start_positions.clone(),
                     // Carry the structured editor's other fields
                     // (atmosphere, lighting, water, gravity, etc.) into
                     // the saved project.
-                    ..self.map_settings.clone()
+                    ..self.map.settings.clone()
                 },
             },
         };
@@ -3176,18 +3107,18 @@ impl BarEditorApp {
             project.layout.canvas_offset.0,
             project.layout.canvas_offset.1,
         );
-        self.map_width = project.recipe.output.width;
-        self.map_height = project.recipe.output.height;
+        self.map.width = project.recipe.output.width;
+        self.map.height = project.recipe.output.height;
         self.map_info_file = project.layout.map_info_file.clone();
-        self.map_settings = project.recipe.output.map_settings.clone();
-        self.recipe_meta = RecipeMeta {
+        self.map.settings = project.recipe.output.map_settings.clone();
+        self.map.recipe_meta = RecipeMeta {
             shortname: project.recipe.shortname.clone(),
             description: project.recipe.description.clone(),
             author: project.recipe.author.clone(),
             version: project.recipe.version.clone(),
         };
-        self.map_min_height = self.map_settings.min_height;
-        self.map_max_height = self.map_settings.max_height;
+        self.map.min_height = self.map.settings.min_height;
+        self.map.max_height = self.map.settings.max_height;
 
         // Resolve any project-relative file paths (`bar://...`) against the
         // .barproj's directory so executors get absolute paths they can read.
@@ -3489,8 +3420,8 @@ impl BarEditorApp {
             .find(|n| n.node_type == NodeType::Preview)
             .map(|n| n.id)
         {
-            self.preview_node = Some(id);
-            self.preview_open = true;
+            self.preview.node = Some(id);
+            self.preview.open = true;
         }
     }
 
@@ -3582,8 +3513,8 @@ impl BarEditorApp {
                 size: egui::vec2(180.0, 150.0),
             },
         );
-        self.preview_open = true;
-        self.preview_node = Some(preview_id);
+        self.preview.open = true;
+        self.preview.node = Some(preview_id);
 
         // Wire each subgraph output to BOTH the Bundler (for
         // export) and the Preview (for the viewport). Macro IO
@@ -3884,8 +3815,8 @@ impl BarEditorApp {
         // Auto-open the 3D preview when a Bundler is created so the user
         // immediately sees the viewport associated with this export node.
         if node_type == NodeType::Bundler {
-            self.preview_open = true;
-            self.preview_node = Some(id);
+            self.preview.open = true;
+            self.preview.node = Some(id);
         }
     }
 
@@ -4467,7 +4398,7 @@ impl BarEditorApp {
                 // dimensions and the rest of the map metadata live in one
                 // place instead of a separate side dialog.
                 if ui
-                    .small_button(format!("Map: {}×{}", self.map_width, self.map_height))
+                    .small_button(format!("Map: {}×{}", self.map.width, self.map.height))
                     .on_hover_text(t!("editor.status.open_map_settings"))
                     .clicked()
                 {
@@ -4626,9 +4557,9 @@ impl BarEditorApp {
                             let _ = self.graph.remove_node(*node_id);
                             self.node_visuals.remove(node_id);
                             self.remove_node_from_group(*node_id);
-                            if self.preview_node == Some(*node_id) {
-                                self.preview_node = None;
-                                self.preview_open = false;
+                            if self.preview.node == Some(*node_id) {
+                                self.preview.node = None;
+                                self.preview.open = false;
                             }
                         }
                         self.passthrough_edit = None;
@@ -4841,8 +4772,8 @@ impl BarEditorApp {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let btn_size = egui::vec2(37.0, 30.0);
-                    let busy = self.export_status == ExportStatus::All;
-                    let any_running = self.export_status.is_running();
+                    let busy = self.preview.export_status == ExportStatus::All;
+                    let any_running = self.preview.export_status.is_running();
                     let sense = if any_running {
                         egui::Sense::hover()
                     } else {
@@ -4883,7 +4814,7 @@ impl BarEditorApp {
                         && response.clicked()
                         && self.validate_before_export("Bundle all")
                     {
-                        self.run_requested = true;
+                        self.preview.run_requested = true;
                     }
 
                     // Edit Map Info button — opens the project's designated map
@@ -4941,12 +4872,12 @@ impl BarEditorApp {
                         // broken map to BAR. Warnings are advisory and let
                         // the launch proceed.
                         self.run_validation();
-                        if bar_project::has_errors(&self.validation_findings) {
+                        if bar_project::has_errors(&self.validation.findings) {
                             self.dialog.show_validation_panel = true;
                             self.dialog.status_message =
                                 Some("Test in BAR: fix validation errors first.".to_string());
                         } else {
-                            self.test_in_bar_requested = true;
+                            self.preview.test_in_bar_requested = true;
                         }
                     }
 

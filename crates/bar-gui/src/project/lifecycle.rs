@@ -30,15 +30,15 @@ mod session_reset_tests {
         app.paint.brush_stroking = true;
         app.canvas_offset = egui::vec2(123.0, 456.0);
         app.dialog.show_validation_panel = true;
-        app.validation_findings = vec![];
-        app.validation_filter = ValidationFilter::Error;
+        app.validation.findings = vec![];
+        app.validation.filter = ValidationFilter::Error;
         app.dialog.show_inspector = true;
         app.dialog.show_mapinfo_editor = true;
-        app.mapinfo_tab = MapInfoTab::Atmosphere;
+        app.validation.mapinfo_tab = MapInfoTab::Atmosphere;
         app.dialog.toast = Some(("hi".into(), Instant::now()));
         app.dialog.status_message = Some("from previous project".into());
-        app.run_requested = true;
-        app.test_in_bar_requested = true;
+        app.preview.run_requested = true;
+        app.preview.test_in_bar_requested = true;
         app
     }
 
@@ -62,14 +62,14 @@ mod session_reset_tests {
             "canvas pan offset must reset to zero"
         );
         assert!(!app.dialog.show_validation_panel);
-        assert!(matches!(app.validation_filter, ValidationFilter::All));
+        assert!(matches!(app.validation.filter, ValidationFilter::All));
         assert!(!app.dialog.show_inspector);
         assert!(!app.dialog.show_mapinfo_editor);
-        assert!(matches!(app.mapinfo_tab, MapInfoTab::Identity));
+        assert!(matches!(app.validation.mapinfo_tab, MapInfoTab::Identity));
         assert!(app.dialog.toast.is_none());
         assert!(app.dialog.status_message.is_none());
-        assert!(!app.run_requested);
-        assert!(!app.test_in_bar_requested);
+        assert!(!app.preview.run_requested);
+        assert!(!app.preview.test_in_bar_requested);
         assert!(app.paint.color_buffer.is_none());
         assert!(app.paint.metalmap.is_none());
         assert!(app.paint.typemap.is_none());
