@@ -603,7 +603,7 @@ impl BarEditorApp {
 
         if let Some((abs, arc)) = edit_request {
             let content = std::fs::read_to_string(&abs).unwrap_or_default();
-            self.passthrough_edit = Some(PassthroughEdit {
+            self.project.passthrough_edit = Some(PassthroughEdit {
                 node_id,
                 abs_path: abs,
                 archive_path: arc,
@@ -613,6 +613,7 @@ impl BarEditorApp {
         }
 
         let show_editor = self
+            .project
             .passthrough_edit
             .as_ref()
             .map(|e| e.node_id == node_id)
@@ -622,7 +623,7 @@ impl BarEditorApp {
             let mut save_requested = false;
             let mut close_requested = false;
 
-            if let Some(edit) = &mut self.passthrough_edit {
+            if let Some(edit) = &mut self.project.passthrough_edit {
                 ui.separator();
                 let filename = std::path::Path::new(&edit.archive_path)
                     .file_name()
@@ -653,7 +654,7 @@ impl BarEditorApp {
 
             // Apply deferred actions after releasing the borrow on passthrough_edit
             if save_requested {
-                if let Some(edit) = &mut self.passthrough_edit {
+                if let Some(edit) = &mut self.project.passthrough_edit {
                     if let Err(e) = std::fs::write(&edit.abs_path, &edit.content) {
                         eprintln!("PassThrough save error for '{}': {e}", edit.abs_path);
                     } else {
@@ -662,7 +663,7 @@ impl BarEditorApp {
                 }
             }
             if close_requested {
-                self.passthrough_edit = None;
+                self.project.passthrough_edit = None;
             }
         }
     }
@@ -872,7 +873,7 @@ impl BarEditorApp {
                 // from the IO nodes inside the subgraph by
                 // `recompute_all_subgraph_io` once per frame.
                 let _ = (&inputs, &outputs);
-                self.is_dirty = true;
+                self.project.is_dirty = true;
             }
         }
     }
@@ -1021,7 +1022,7 @@ impl BarEditorApp {
                     node.mark_dirty();
                 }
             }
-            self.is_dirty = true;
+            self.project.is_dirty = true;
         }
     }
 

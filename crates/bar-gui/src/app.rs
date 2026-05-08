@@ -874,18 +874,11 @@ pub struct BarEditorApp {
     pub(crate) map: crate::editor::MapState,
     /// Undo/redo history.
     pub(crate) history: UndoHistory,
-    /// Current project file path (if saved).
-    pub(crate) project_path: Option<std::path::PathBuf>,
-    /// Receiver for the background .sd7 extraction result (owned by bar-app after refactor).
-    /// Set by `bar-app` via `set_sd7_extract_rx`; polled in `update()`.
-    pub(crate) sd7_open_request: Option<std::path::PathBuf>,
-    /// Receiver for an in-flight Open dialog. The native dialog
-    /// (`rfd::FileDialog::pick_file`) blocks the calling thread, so
-    /// we spawn it on a worker and poll the result here in `update`.
-    /// Without this, the egui main thread freezes from the moment
-    /// the user clicks Open until the dialog closes — perceived as
-    /// a long delay before the dialog appears AND while it's open.
-    pub(crate) pending_open_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
+    /// Project lifecycle state: file path, dirty flag, autosave timer,
+    /// SD7 extraction handoff, file-dialog poll receiver, inline file
+    /// editor state, graph-reset pulse, and map-info file pointer.
+    /// See `project::ProjectState`.
+    pub(crate) project: crate::project::ProjectState,
     /// Raw window + display handles of the editor's main window. Used to
     /// parent native file dialogs so they belong to (and return focus
     /// to) the editor instead of whatever window the OS happens to
@@ -895,10 +888,6 @@ pub struct BarEditorApp {
         raw_window_handle::RawWindowHandle,
         raw_window_handle::RawDisplayHandle,
     )>,
-    /// State for the inline text editor in the PassThrough properties panel.
-    pub(crate) passthrough_edit: Option<PassthroughEdit>,
-    /// Whether the project has unsaved changes.
-    pub(crate) is_dirty: bool,
     /// Preview / export concern: viewport open flag, driving node, and
     /// the one-frame "run" / "test in BAR" / "run this bundler" pulses
     /// that `bar-app` polls each frame. See `editor::PreviewState`.
@@ -984,14 +973,8 @@ pub struct BarEditorApp {
     /// Fingerprint of the inputs to `validate_project` for which the
     // Map metadata + UI shadow state moved to `self.map`
     // (see `editor::MapState`).
-    /// Display name for the currently loaded map/project (shown in title bar).
-    /// For project files this mirrors `project_path`'s stem; for .sd7 opens it
-    /// holds the map name until a project file is saved.
-    pub(crate) loaded_name: Option<String>,
-    /// Pulsed `true` whenever the graph is replaced (new map/project open).
-    /// Consumed once by `AppWrapper` via `take_graph_reset()` to flush the GPU
-    /// preview state.
-    pub(crate) graph_reset: bool,
+    // loaded_name and graph_reset moved to `self.project`
+    // (see `project::ProjectState`).
     /// In-flight drag from the node palette (set when pointer starts dragging an item,
     /// cleared on pointer release — either creating a node or cancelling).
     pub(crate) palette_drag: Option<PaletteDrag>,
@@ -1010,12 +993,7 @@ pub struct BarEditorApp {
     /// Persistent user preferences (recent files, autosave config, vertical
     /// exaggeration, etc.).
     pub(crate) settings: Settings,
-    /// Last time an autosave completed (for interval gating).
-    pub(crate) last_autosave_at: Option<Instant>,
-    /// Bundle path (archive-relative, forward slashes) of the file the user
-    /// has designated as the project's map-info file. `None` means the user
-    /// hasn't picked one yet; the toolbar Edit Map Info button will prompt.
-    pub(crate) map_info_file: Option<String>,
+    // last_autosave_at and map_info_file moved to `self.project`.
     /// Active top-level UI layout (`Layout::Standard` today). Pure
     /// UI/UX concern; switching layouts never migrates data. Loaded
     /// from settings on launch, persisted via `set_active_layout`.
@@ -1038,12 +1016,8 @@ impl Default for BarEditorApp {
                 ..Default::default()
             },
             history: UndoHistory::default(),
-            project_path: None,
-            sd7_open_request: None,
-            pending_open_rx: None,
+            project: crate::project::ProjectState::default(),
             parent_window_handles: None,
-            passthrough_edit: None,
-            is_dirty: false,
             preview: crate::editor::PreviewState::default(),
             dialog: DialogState::default(),
             validation: crate::editor::ValidationState::default(),
@@ -1064,14 +1038,10 @@ impl Default for BarEditorApp {
             active_props: None,
             active_props_rect: None,
             paint: PaintSession::default(),
-            loaded_name: None,
-            graph_reset: false,
             palette_drag: None,
             canvas_rect_last: egui::Rect::NOTHING,
             pending_auto_layout_all: false,
             settings: Settings::default(),
-            last_autosave_at: None,
-            map_info_file: None,
             active_layout: Layout::default(),
         }
     }
@@ -1338,7 +1308,7 @@ impl BarEditorApp {
 
     /// Mark the project as dirty (unsaved changes pending).
     pub(crate) fn mark_dirty(&mut self) {
-        self.is_dirty = true;
+        self.project.is_dirty = true;
     }
 
     /// Status-bar message setter used by panels that need to
@@ -1351,7 +1321,7 @@ impl BarEditorApp {
 
     /// True if the project has unsaved changes since the last save/load.
     pub fn is_dirty(&self) -> bool {
-        self.is_dirty
+        self.project.is_dirty()
     }
 
     /// True for one frame after the user has acknowledged the unsaved-changes
@@ -1424,7 +1394,7 @@ impl BarEditorApp {
     /// the close is approved immediately (next `take_allow_close` returns
     /// true).
     pub fn request_close(&mut self) {
-        if self.is_dirty {
+        if self.project.is_dirty {
             self.dialog.pending_action = Some(PendingAction::Close);
         } else {
             self.dialog.allow_close = true;
@@ -1440,7 +1410,7 @@ impl BarEditorApp {
     /// Begin a New Project, deferring through unsaved-changes confirmation
     /// when the current project is dirty.
     fn start_new_project(&mut self) {
-        if self.is_dirty {
+        if self.project.is_dirty {
             self.dialog.pending_action = Some(PendingAction::NewProject);
         } else {
             self.do_new_project();
@@ -1467,10 +1437,10 @@ impl BarEditorApp {
         self.next_group_id = 1;
 
         // Project identity and output configuration.
-        self.project_path = None;
-        self.loaded_name = None;
-        self.is_dirty = false;
-        self.map_info_file = None;
+        self.project.path = None;
+        self.project.loaded_name = None;
+        self.project.is_dirty = false;
+        self.project.map_info_file = None;
         self.map.settings = bar_project::MapSettings::default();
         self.map.width = 256;
         self.map.height = 256;
@@ -1483,7 +1453,7 @@ impl BarEditorApp {
         self.preview.open = false;
 
         // Signal renderers to flush stale GPU resources.
-        self.graph_reset = true;
+        self.project.graph_reset = true;
 
         // Undo history — never cross a project boundary, otherwise
         // Ctrl+Z would resurrect nodes from a different project.
@@ -1523,7 +1493,7 @@ impl BarEditorApp {
         self.marquee_start = None;
         self.map.dragging_spawn = None;
         self.palette_drag = None;
-        self.passthrough_edit = None;
+        self.project.passthrough_edit = None;
         self.dialog.pending_props_open = None;
         self.active_props = None;
         self.active_props_rect = None;
@@ -1642,7 +1612,7 @@ impl BarEditorApp {
             },
         );
         self.preview.node = Some(preview_id);
-        self.is_dirty = true;
+        self.project.is_dirty = true;
     }
 
     /// Welcome panel's "Open project / SD7…" button. Same as the
@@ -1664,7 +1634,7 @@ impl BarEditorApp {
     /// `start_with_macro` directly because its precondition (empty
     /// graph, no project loaded) means there's nothing to discard.
     fn start_load_macro(&mut self, name: &str) {
-        if self.is_dirty {
+        if self.project.is_dirty {
             self.dialog.pending_action = Some(PendingAction::LoadMacro {
                 name: name.to_string(),
             });
@@ -1682,11 +1652,11 @@ impl BarEditorApp {
     /// committed to a project, otherwise the welcome screen is what
     /// they should be looking at.
     pub fn has_project(&self) -> bool {
-        self.project_path.is_some() || !self.graph.nodes().is_empty()
+        self.project.path.is_some() || !self.graph.nodes().is_empty()
     }
 
     fn save_or_save_as(&mut self) {
-        if let Some(p) = self.project_path.clone() {
+        if let Some(p) = self.project.path.clone() {
             self.save_project(p);
         } else {
             self.save_as();
@@ -2073,7 +2043,7 @@ impl BarEditorApp {
                 self.preview.open = false;
             }
         }
-        self.passthrough_edit = None;
+        self.project.passthrough_edit = None;
         self.clear_selection();
     }
 
@@ -2098,7 +2068,7 @@ impl BarEditorApp {
                 self.preview.open = false;
             }
         }
-        self.passthrough_edit = None;
+        self.project.passthrough_edit = None;
         self.clear_selection();
     }
 
@@ -2194,11 +2164,12 @@ impl BarEditorApp {
         bar_project::Recipe {
             schema_version: bar_project::RECIPE_SCHEMA_VERSION,
             name: self
-                .project_path
+                .project
+                .path
                 .as_ref()
                 .and_then(|p| p.file_stem())
                 .map(|s| s.to_string_lossy().to_string())
-                .or_else(|| self.loaded_name.clone())
+                .or_else(|| self.project.loaded_name.clone())
                 .unwrap_or_else(|| "Untitled".to_string()),
             shortname: self.map.recipe_meta.shortname.clone(),
             description: self.map.recipe_meta.description.clone(),
@@ -2351,7 +2322,7 @@ impl BarEditorApp {
         }
         self.paint.sculpt.dirty = true;
         self.paint.brush_stroking = true;
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         true
     }
 
@@ -2397,7 +2368,7 @@ impl BarEditorApp {
             stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
         }
         self.paint.sculpt.dirty = true;
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         true
     }
 
@@ -2432,7 +2403,7 @@ impl BarEditorApp {
             stamp_value_dab_in_heightmap(hm, u, v, ru, value);
         }
         self.paint.sculpt.dirty = true;
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         true
     }
 
@@ -2467,7 +2438,7 @@ impl BarEditorApp {
             stamp_value_dab_in_heightmap(hm, u, v, ru, value);
         }
         self.paint.sculpt.dirty = true;
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         true
     }
 
@@ -2524,14 +2495,12 @@ impl BarEditorApp {
     /// Returns `true` once when the graph has been fully replaced (new map or
     /// project loaded).  Consumed by `AppWrapper` to flush GPU preview state.
     pub fn take_graph_reset(&mut self) -> bool {
-        let v = self.graph_reset;
-        self.graph_reset = false;
-        v
+        self.project.take_graph_reset()
     }
 
     /// The human-readable name of the currently loaded map or project.
     pub fn loaded_name(&self) -> Option<&str> {
-        self.loaded_name.as_deref()
+        self.project.loaded_name()
     }
 
     /// Set the current export status. Called each frame by `bar-app` so the
@@ -2564,7 +2533,7 @@ impl BarEditorApp {
     pub(crate) fn push_undo(&mut self, description: &str) {
         let snap = self.snapshot(description);
         self.history.push(snap);
-        self.is_dirty = true;
+        self.project.is_dirty = true;
     }
 
     /// Swap the editor's state with a captured snapshot. Resets
@@ -2692,7 +2661,7 @@ impl BarEditorApp {
                 node_positions: layout_positions,
                 node_sizes: layout_sizes,
                 canvas_offset: (self.canvas_offset.x, self.canvas_offset.y),
-                map_info_file: self.map_info_file.clone(),
+                map_info_file: self.project.map_info_file.clone(),
                 groups: self
                     .groups
                     .iter()
@@ -2780,12 +2749,12 @@ impl BarEditorApp {
         let project = self.build_project(&path);
         match project.save(&path) {
             Ok(()) => {
-                self.project_path = Some(path.clone());
-                self.is_dirty = false;
+                self.project.path = Some(path.clone());
+                self.project.is_dirty = false;
                 self.dialog.status_message = Some(format!("Saved: {}", path.display()));
                 self.settings.add_recent(&path);
                 self.settings.save();
-                self.last_autosave_at = Some(std::time::Instant::now());
+                self.project.last_autosave_at = Some(std::time::Instant::now());
             }
             Err(e) => {
                 self.dialog.status_message = Some(format!("Save failed: {e}"));
@@ -2924,7 +2893,7 @@ impl BarEditorApp {
         &self,
     ) -> Option<(bar_project::SculptRecord, std::path::PathBuf)> {
         let record = self.paint.pending_sculpt_record.as_ref()?.clone();
-        let dir = self.project_path.as_ref()?.parent()?.to_path_buf();
+        let dir = self.project.path.as_ref()?.parent()?.to_path_buf();
         Some((record, dir))
     }
 
@@ -2976,10 +2945,10 @@ impl BarEditorApp {
     /// the project is untitled. Best-effort: never updates is_dirty, never
     /// touches project_path, never enters the recent files list.
     fn autosave_now(&mut self) {
-        if !self.is_dirty {
+        if !self.project.is_dirty {
             return;
         }
-        let target = match self.project_path.as_ref() {
+        let target = match self.project.path.as_ref() {
             Some(p) => {
                 let mut q = p.clone();
                 let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("project");
@@ -2997,7 +2966,7 @@ impl BarEditorApp {
         let project = self.build_project(&target);
         match project.save(&target) {
             Ok(()) => {
-                self.last_autosave_at = Some(Instant::now());
+                self.project.last_autosave_at = Some(Instant::now());
                 self.dialog.toast = Some((
                     "Autosaved".to_string(),
                     Instant::now() + std::time::Duration::from_secs(2),
@@ -3014,7 +2983,7 @@ impl BarEditorApp {
     /// result lands in `pending_open_rx` which `update` polls each
     /// frame. No-op if a dialog is already in flight.
     pub(crate) fn open_file_dialog_async(&mut self) {
-        if self.pending_open_rx.is_some() {
+        if self.project.pending_open_rx.is_some() {
             return;
         }
         let (tx, rx) = std::sync::mpsc::channel();
@@ -3031,14 +3000,14 @@ impl BarEditorApp {
             let path = dialog.pick_file();
             let _ = tx.send(path);
         });
-        self.pending_open_rx = Some(rx);
+        self.project.pending_open_rx = Some(rx);
     }
 
     /// Begin an open operation. If the current project is dirty, this defers
     /// the open through an unsaved-changes confirmation; otherwise it opens
     /// immediately. Routes both .barproj and .sd7 paths.
     pub(crate) fn start_open_path(&mut self, path: std::path::PathBuf) {
-        if self.is_dirty {
+        if self.project.is_dirty {
             self.dialog.pending_action = Some(PendingAction::OpenPath(path));
         } else {
             self.dispatch_open(path);
@@ -3109,7 +3078,7 @@ impl BarEditorApp {
         );
         self.map.width = project.recipe.output.width;
         self.map.height = project.recipe.output.height;
-        self.map_info_file = project.layout.map_info_file.clone();
+        self.project.map_info_file = project.layout.map_info_file.clone();
         self.map.settings = project.recipe.output.map_settings.clone();
         self.map.recipe_meta = RecipeMeta {
             shortname: project.recipe.shortname.clone(),
@@ -3372,11 +3341,11 @@ impl BarEditorApp {
         self.active_tab =
             (project.layout.active_tab as usize).min(self.tabs.len().saturating_sub(1));
 
-        self.project_path = path;
-        self.loaded_name = Some(name);
+        self.project.path = path;
+        self.project.loaded_name = Some(name);
         self.dialog.status_message = Some(status);
-        self.is_dirty = false;
-        self.graph_reset = true;
+        self.project.is_dirty = false;
+        self.project.graph_reset = true;
     }
 
     /// Open a .sd7 map archive as a new project.
@@ -3395,13 +3364,13 @@ impl BarEditorApp {
 
         self.settings.add_recent(&path);
         self.settings.save();
-        self.sd7_open_request = Some(path);
+        self.project.sd7_open_request = Some(path);
     }
 
     /// Take the pending SD7 open request (if any).  Called by `bar-app` each
     /// frame; when Some, bar-app spawns the extraction thread.
     pub fn take_sd7_open_request(&mut self) -> Option<std::path::PathBuf> {
-        self.sd7_open_request.take()
+        self.project.sd7_open_request.take()
     }
 
     /// Build the node graph after a successful .sd7 extraction.
@@ -3411,7 +3380,7 @@ impl BarEditorApp {
         let project = bar_project::scan_to_project(&scan);
         self.apply_project(project, None, name, status);
         // Imported project hasn't been saved yet.
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         // Auto-open the 3D preview at the Preview node.
         if let Some(id) = self
             .graph
@@ -3724,7 +3693,7 @@ impl BarEditorApp {
         self.active_props = None;
         self.pending_auto_layout_all = true;
 
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         self.dialog.status_message = Some(format!(
             "Started a new project with the '{}' template.",
             macro_name
@@ -3768,7 +3737,7 @@ impl BarEditorApp {
         // without a separate click + hover.
         self.active_props = Some(PropsTarget::Group(gid));
         self.dialog.pending_props_open = None;
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         self.dialog.status_message = Some(format!("Dropped '{}' onto the canvas.", template.name));
     }
 
@@ -3940,10 +3909,10 @@ impl BarEditorApp {
         // user is still picking. When a result arrives, dispatch it
         // through the same `start_open_path` the synchronous code paths
         // used to call directly.
-        if let Some(rx) = self.pending_open_rx.as_ref() {
+        if let Some(rx) = self.project.pending_open_rx.as_ref() {
             match rx.try_recv() {
                 Ok(maybe_path) => {
-                    self.pending_open_rx = None;
+                    self.project.pending_open_rx = None;
                     if let Some(path) = maybe_path {
                         self.start_open_path(path);
                     }
@@ -3956,7 +3925,7 @@ impl BarEditorApp {
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                     // Worker panicked; drop the receiver so the user
                     // can try again.
-                    self.pending_open_rx = None;
+                    self.project.pending_open_rx = None;
                 }
             }
         }
@@ -3979,9 +3948,10 @@ impl BarEditorApp {
         self.refresh_validation_if_dirty();
 
         // Tick auto-save. Cheap: a single Instant comparison per frame.
-        if self.settings.autosave_enabled && self.is_dirty && self.dialog.pending_action.is_none() {
+        if self.settings.autosave_enabled && self.project.is_dirty && self.dialog.pending_action.is_none() {
             let interval = std::time::Duration::from_secs(self.settings.autosave_interval_secs);
             let due = self
+                .project
                 .last_autosave_at
                 .map(|t| t.elapsed() >= interval)
                 .unwrap_or(true);
@@ -3998,13 +3968,14 @@ impl BarEditorApp {
         }
 
         // Update window title to reflect loaded name and dirty state
-        let dirty_marker = if self.is_dirty { " *" } else { "" };
+        let dirty_marker = if self.project.is_dirty { " *" } else { "" };
         let title = match self
-            .project_path
+            .project
+            .path
             .as_ref()
             .and_then(|p| p.file_stem())
             .map(|s| s.to_string_lossy().into_owned())
-            .or_else(|| self.loaded_name.clone())
+            .or_else(|| self.project.loaded_name.clone())
         {
             Some(name) => format!("{name}{dirty_marker} — BAR - Map Editor"),
             None => "BAR - Map Editor".to_string(),
@@ -4460,7 +4431,7 @@ impl BarEditorApp {
                         // If the save succeeded, is_dirty is now false; if the
                         // user cancelled the Save As dialog it's still true and
                         // we keep the prompt open.
-                        if !self.is_dirty {
+                        if !self.project.is_dirty {
                             self.apply_pending_action(action);
                         } else {
                             close = false;
@@ -4468,7 +4439,7 @@ impl BarEditorApp {
                     }
                     UnsavedDecision::Discard => {
                         // Skip dirty check; force-apply.
-                        self.is_dirty = false;
+                        self.project.is_dirty = false;
                         self.apply_pending_action(action);
                     }
                     UnsavedDecision::Cancel => {
@@ -4562,7 +4533,7 @@ impl BarEditorApp {
                                 self.preview.open = false;
                             }
                         }
-                        self.passthrough_edit = None;
+                        self.project.passthrough_edit = None;
                         self.clear_selection();
                     }
                     GroupDeleteChoice::Cancel => {}
@@ -4661,7 +4632,7 @@ impl BarEditorApp {
                             });
                     }
                     ui.add_space(8.0);
-                    if self.map_info_file.is_some()
+                    if self.project.map_info_file.is_some()
                         && ui.button("Clear current selection").clicked()
                     {
                         cleared = true;
@@ -4669,13 +4640,13 @@ impl BarEditorApp {
                 });
             self.dialog.show_map_info_picker = open;
             if cleared {
-                self.map_info_file = None;
-                self.is_dirty = true;
+                self.project.map_info_file = None;
+                self.project.is_dirty = true;
                 self.dialog.show_map_info_picker = false;
             }
             if let Some((abs, archive)) = chosen {
-                self.map_info_file = Some(archive.clone());
-                self.is_dirty = true;
+                self.project.map_info_file = Some(archive.clone());
+                self.project.is_dirty = true;
                 self.dialog.show_map_info_picker = false;
                 self.open_file_editor(abs, archive);
             }

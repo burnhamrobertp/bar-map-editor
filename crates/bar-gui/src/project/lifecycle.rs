@@ -101,7 +101,7 @@ mod session_reset_tests {
             "macro should have dropped nodes onto the graph"
         );
         assert!(
-            app.is_dirty,
+            app.project.is_dirty,
             "starting from a macro is a non-empty diff against the empty default"
         );
     }

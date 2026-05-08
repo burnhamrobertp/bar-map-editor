@@ -319,7 +319,7 @@ impl BarEditorApp {
             target_units[i].translate(self, delta);
         }
 
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         self.dialog.status_message = Some("Auto Layout applied.".to_string());
     }
 
@@ -695,7 +695,7 @@ impl BarEditorApp {
         }
 
         if connections_made > 0 {
-            self.is_dirty = true;
+            self.project.is_dirty = true;
         }
         connections_made
     }
@@ -721,7 +721,7 @@ impl BarEditorApp {
                 macro_params: Vec::new(),
             },
         );
-        self.is_dirty = true;
+        self.project.is_dirty = true;
         id
     }
 
@@ -743,7 +743,7 @@ impl BarEditorApp {
         if let Some(g) = self.groups.get_mut(&group_id) {
             g.member_ids.insert(node_id);
             self.node_to_group.insert(node_id, group_id);
-            self.is_dirty = true;
+            self.project.is_dirty = true;
         }
     }
 
@@ -763,7 +763,7 @@ impl BarEditorApp {
         if delete {
             self.groups.remove(&group_id);
         }
-        self.is_dirty = true;
+        self.project.is_dirty = true;
     }
 
     /// Dissolve a group entirely (members keep their positions, just
@@ -775,7 +775,7 @@ impl BarEditorApp {
         for nid in &g.member_ids {
             self.node_to_group.remove(nid);
         }
-        self.is_dirty = true;
+        self.project.is_dirty = true;
     }
     /// Layout-only computation of every collapsed subgraph's rect and
     /// the screen-space position of each of its external port handles.
