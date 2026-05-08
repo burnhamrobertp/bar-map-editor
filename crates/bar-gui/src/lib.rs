@@ -16,6 +16,7 @@ pub mod settings;
 pub mod state;
 pub mod undo;
 
-pub use app::{BarEditorApp, BrushTarget, ExportStatus, Layout, ParentWindow, SmfLightingSnapshot};
+pub use app::{BarEditorApp, BrushTarget, ExportStatus, Layout, SmfLightingSnapshot};
+pub use io::ParentWindow;
 pub use settings::{Settings, WindowState};
 pub use undo::{Snapshot, UndoHistory};

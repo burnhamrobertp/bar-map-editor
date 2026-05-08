@@ -7,7 +7,10 @@
 //! Pure I/O. Anything that touches `BarEditorApp` state lives elsewhere
 //! (see `crate::project::lifecycle`).
 
+pub(crate) mod dialogs;
 pub(crate) mod png;
+
+pub use dialogs::ParentWindow;
 
 /// Quick filename-extension check used by the inline file editor and
 /// project-asset packing to decide whether a path is "text-like" and

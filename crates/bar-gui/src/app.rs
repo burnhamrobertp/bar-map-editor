@@ -1002,90 +1002,9 @@ impl BarEditorApp {
         &self.graph
     }
 
-    /// Update the cached parent window + display handles. Called each
-    /// frame by `bar-app` from `eframe::Frame`. Native file dialogs
-    /// read this so the OS knows which window to attach to.
-    pub fn set_parent_window_handles(
-        &mut self,
-        handles: Option<(
-            raw_window_handle::RawWindowHandle,
-            raw_window_handle::RawDisplayHandle,
-        )>,
-    ) {
-        self.parent_window_handles = handles;
-    }
-
-    /// Build a `ParentWindow` for the current frame's handles, if any.
-    /// Useful from `bar-app` and other crates that want to spawn their
-    /// own dialogs while preserving correct parenting.
-    pub fn parent_window(&self) -> Option<ParentWindow> {
-        self.parent_window_handles
-            .map(|(w, d)| ParentWindow::new(w, d))
-    }
-
-    /// Build an rfd::FileDialog already parented to the editor window
-    /// (when handles are available). Use this everywhere instead of
-    /// `rfd::FileDialog::new()` so dialogs don't latch onto whichever
-    /// window happens to be foreground.
-    pub(crate) fn make_dialog(&self) -> rfd::FileDialog {
-        let dialog = rfd::FileDialog::new();
-        match self.parent_window() {
-            Some(parent) => dialog.set_parent(&parent),
-            None => dialog,
-        }
-    }
-}
-
-/// Owned wrapper that re-implements `HasWindowHandle` + `HasDisplayHandle`
-/// for previously captured raw handles. Lets us pass a parent handle to
-/// rfd from a worker thread without holding a live borrow of
-/// `eframe::Frame`. Public so `bar-app` can build one for its own
-/// dialogs (folder picker in the export flow) without re-implementing
-/// the same pattern.
-pub struct ParentWindow {
-    pub window: raw_window_handle::RawWindowHandle,
-    pub display: raw_window_handle::RawDisplayHandle,
-}
-
-// SAFETY: The raw handle types are conservatively `!Send` because some
-// of their variants embed raw pointers. We only ever use a handle as
-// an opaque token passed to OS file-dialog APIs (which accept handles
-// from any thread by contract), and never dereference the embedded
-// pointer or read the underlying window memory. Crossing the
-// `thread::spawn` boundary with the wrapper is therefore safe.
-unsafe impl Send for ParentWindow {}
-unsafe impl Sync for ParentWindow {}
-
-impl ParentWindow {
-    pub fn new(
-        window: raw_window_handle::RawWindowHandle,
-        display: raw_window_handle::RawDisplayHandle,
-    ) -> Self {
-        Self { window, display }
-    }
-}
-
-impl raw_window_handle::HasWindowHandle for ParentWindow {
-    fn window_handle(
-        &self,
-    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
-        // SAFETY: the underlying OS window must outlive any dialog
-        // built with this parent. In our app, the editor's main
-        // window exists for the entire process lifetime, and dialog
-        // calls always complete before shutdown -- so any handle we
-        // captured during update() is still valid here.
-        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.window) })
-    }
-}
-
-impl raw_window_handle::HasDisplayHandle for ParentWindow {
-    fn display_handle(
-        &self,
-    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
-        // SAFETY: same lifetime argument as above -- the underlying
-        // OS display connection lives for the process.
-        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.display) })
-    }
+// `set_parent_window_handles`, `parent_window`, `make_dialog`, and
+// `ParentWindow` itself live in `crate::io::dialogs` (distributed
+// `impl BarEditorApp` block).
 }
 
 impl BarEditorApp {
@@ -2757,108 +2676,8 @@ impl BarEditorApp {
         Ok(())
     }
 
-    /// Write the in-memory sculpt layers that are marked dirty to sidecar
-    /// PNG files in `assets_dir`, then stash a `SculptRecord` carrying
-    /// project-relative `bar://` URLs in `pending_sculpt_record`. No-op
-    /// when no sculpt data exists.
-    fn pack_sculpt_record(
-        &mut self,
-        assets_dir: &std::path::Path,
-        project_dir: &std::path::Path,
-    ) -> Result<(), String> {
-        if !self.paint.sculpt.dirty {
-            return Ok(());
-        }
-        let assets_name = assets_dir
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("assets")
-            .to_string();
-        let bar_url =
-            |name: &str| -> String { format!("{PROJECT_RELATIVE_PREFIX}{assets_name}/{name}") };
-        std::fs::create_dir_all(assets_dir).map_err(|e| format!("create assets dir: {e}"))?;
-
-        let mut record = bar_project::SculptRecord::default();
-
-        if let Some(ref hm) = self.paint.sculpt.height_delta {
-            let p = assets_dir.join("sculpt-height.png");
-            save_heightmap_as_png16_biased(hm, &p)?;
-            record.height = Some(bar_url("sculpt-height.png"));
-        }
-        if let Some(ref hm) = self.paint.sculpt.metal_overlay {
-            let p = assets_dir.join("sculpt-metal.png");
-            save_heightmap_as_png16(hm, &p)?;
-            record.metal = Some(bar_url("sculpt-metal.png"));
-        }
-        if let Some(ref hm) = self.paint.sculpt.type_overlay {
-            let p = assets_dir.join("sculpt-type.png");
-            save_heightmap_as_png16(hm, &p)?;
-            record.type_map = Some(bar_url("sculpt-type.png"));
-        }
-        if let Some(ref cb) = self.paint.sculpt.texture_overlay {
-            let p = assets_dir.join("sculpt-texture.png");
-            save_color_buffer_as_png(cb, &p)?;
-            record.texture = Some(bar_url("sculpt-texture.png"));
-        }
-
-        self.paint.pending_sculpt_record = Some(record);
-        let _ = project_dir;
-        Ok(())
-    }
-
-    /// Returns the most recently packed `SculptRecord` and its project
-    /// directory for use by export threads. Returns `None` when the project
-    /// has never been saved (no record exists) or has no path on disk.
-    pub fn sculpt_export_snapshot(
-        &self,
-    ) -> Option<(bar_project::SculptRecord, std::path::PathBuf)> {
-        let record = self.paint.pending_sculpt_record.as_ref()?.clone();
-        let dir = self.project.path.as_ref()?.parent()?.to_path_buf();
-        Some((record, dir))
-    }
-
-    /// Restore sculpt layers from a loaded `SculptRecord`. Resolves
-    /// `bar://` URLs against `project_dir` and populates `paint.sculpt`.
-    /// Missing or unreadable sidecar files are skipped with a warning.
-    fn unpack_sculpt_record(
-        &mut self,
-        record: &bar_project::SculptRecord,
-        project_dir: &std::path::Path,
-    ) {
-        let resolve = |url: &str| -> String { resolve_project_path(url, project_dir) };
-
-        if let Some(ref url) = record.height {
-            match load_heightmap_from_png16_biased(std::path::Path::new(&resolve(url))) {
-                Ok(hm) => self.paint.sculpt.height_delta = Some(hm),
-                Err(e) => tracing::warn!("sculpt height sidecar unreadable: {e}"),
-            }
-        }
-        if let Some(ref url) = record.metal {
-            match load_heightmap_from_png16(std::path::Path::new(&resolve(url))) {
-                Ok(hm) => self.paint.sculpt.metal_overlay = Some(hm),
-                Err(e) => tracing::warn!("sculpt metal sidecar unreadable: {e}"),
-            }
-        }
-        if let Some(ref url) = record.type_map {
-            match load_heightmap_from_png16(std::path::Path::new(&resolve(url))) {
-                Ok(hm) => self.paint.sculpt.type_overlay = Some(hm),
-                Err(e) => tracing::warn!("sculpt type sidecar unreadable: {e}"),
-            }
-        }
-        if let Some(ref url) = record.texture {
-            match load_color_buffer_from_png(std::path::Path::new(&resolve(url))) {
-                Ok(cb) => self.paint.sculpt.texture_overlay = Some(cb),
-                Err(e) => tracing::warn!("sculpt texture sidecar unreadable: {e}"),
-            }
-        }
-        if self.paint.sculpt.height_delta.is_some()
-            || self.paint.sculpt.metal_overlay.is_some()
-            || self.paint.sculpt.type_overlay.is_some()
-            || self.paint.sculpt.texture_overlay.is_some()
-        {
-            self.paint.sculpt.dirty = false;
-        }
-    }
+    // `pack_sculpt_record`, `sculpt_export_snapshot`, and
+    // `unpack_sculpt_record` live in `crate::project::sculpt_sidecar`.
 
     /// Auto-save the current project to a sidecar file (`<project>.autosave`)
     /// when a project file path is set, or to the platform autosave dir when
@@ -2898,30 +2717,7 @@ impl BarEditorApp {
         }
     }
 
-    /// Spawn the Open file dialog on a worker thread so the egui
-    /// main loop can keep rendering while the OS dialog is up. The
-    /// result lands in `pending_open_rx` which `update` polls each
-    /// frame. No-op if a dialog is already in flight.
-    pub(crate) fn open_file_dialog_async(&mut self) {
-        if self.project.pending_open_rx.is_some() {
-            return;
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        let parent = self.parent_window();
-        std::thread::spawn(move || {
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("Open")
-                .add_filter("Supported Files", &["barproj", "sd7"])
-                .add_filter("BAR Map Editor Project", &["barproj"])
-                .add_filter("Spring Map Archive", &["sd7"]);
-            if let Some(parent) = &parent {
-                dialog = dialog.set_parent(parent);
-            }
-            let path = dialog.pick_file();
-            let _ = tx.send(path);
-        });
-        self.project.pending_open_rx = Some(rx);
-    }
+    // `open_file_dialog_async` lives in `crate::io::dialogs`.
 
     /// Begin an open operation. If the current project is dirty, this defers
     /// the open through an unsaved-changes confirmation; otherwise it opens
@@ -5321,10 +5117,7 @@ pub(crate) fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) ->
 pub(crate) use crate::paint::brush_math::apply_brush_dab;
 use crate::paint::brush_math::{stamp_color_dab_in_buffer, stamp_value_dab_in_heightmap};
 
-pub(crate) use crate::io::png::{
-    load_color_buffer_from_png, load_heightmap_from_png16, load_heightmap_from_png16_biased,
-    save_color_buffer_as_png, save_heightmap_as_png16, save_heightmap_as_png16_biased,
-};
+pub(crate) use crate::io::png::save_heightmap_as_png16;
 
 pub(crate) fn heightmap_to_color_image(
     hm: &bar_data::Heightmap,
@@ -5589,12 +5382,9 @@ pub(crate) fn mask_hex_decode(s: &str) -> Vec<u8> {
 // Pure path helpers (PassThrough files, asset packing, bar:// URL
 // resolution) live in `crate::project::path`. Re-export the names that
 // callers outside this module use historically.
-pub(crate) use crate::project::path::{
-    collect_all_passthrough_files, parse_passthrough_files, resolve_project_path,
-};
+pub(crate) use crate::project::path::{collect_all_passthrough_files, parse_passthrough_files};
 use crate::project::path::{
     pack_passthrough_files, pack_path_param, resolve_passthrough_files, resolve_path_param,
-    PROJECT_RELATIVE_PREFIX,
 };
 
 /// Lightweight directory tree for rendering a hierarchical file list.

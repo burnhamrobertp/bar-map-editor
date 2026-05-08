@@ -7,6 +7,7 @@
 
 pub(crate) mod lifecycle;
 pub(crate) mod path;
+pub(crate) mod sculpt_sidecar;
 pub(crate) mod state;
 
 pub(crate) use state::ProjectState;
