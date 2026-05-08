@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 use bar_compute::GpuContext;
 use bar_engine::{CpuExecutor, HybridExecutor};
 use bar_graph::{evaluate_graph, NodeExecutor};
-use bar_render::{pick_terrain, Camera, TerrainRenderer};
+use bar_render::{pick_terrain, Camera, TerrainRenderer, TerrainUpdateParams};
 
 /// Result sent back from a background preview evaluation thread.
 ///
@@ -216,11 +216,16 @@ fn main() -> Result<()> {
         None => (None, [1440.0, 900.0], true),
     };
 
-    // Run the GUI application
+    // Run the GUI application. The window is created hidden and made
+    // visible after the first frame paints; otherwise winit/Windows
+    // briefly flashes the OS-default white background between window
+    // creation and the first egui frame, which is jarring on every
+    // reload.
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size(default_size)
         .with_min_inner_size([800.0, 600.0])
         .with_maximized(default_maximized)
+        .with_visible(false)
         .with_title("BAR - Map Editor");
     if let Some(pos) = default_pos {
         viewport = viewport.with_position(pos);
@@ -271,6 +276,7 @@ fn main() -> Result<()> {
                 session: Some(initial_session),
                 next_session_id: 1,
                 pending_maximize: default_maximized,
+                has_shown_window: false,
             }))
         }),
     )
@@ -328,6 +334,11 @@ struct AppWrapper {
     /// the runtime command is reliably honoured. Set from the saved
     /// window state at startup.
     pending_maximize: bool,
+    /// `false` until the first frame has been queued, then flips to
+    /// `true` and a viewport-show command is emitted. We start the
+    /// window hidden (see `with_visible(false)` in `main`) so the
+    /// OS-default white background doesn't flash before egui paints.
+    has_shown_window: bool,
 }
 
 impl eframe::App for AppWrapper {
@@ -341,6 +352,27 @@ impl eframe::App for AppWrapper {
         if self.pending_maximize {
             self.pending_maximize = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+
+        // Reveal the window after the first frame has been queued. The
+        // window was created hidden in `main` so the OS doesn't paint
+        // a white default background before egui's first frame lands.
+        if !self.has_shown_window {
+            self.has_shown_window = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+
+        // Hand the editor's window + display handles to bar-gui so
+        // native file dialogs spawned from worker threads can be
+        // parented to *our* window instead of whichever OS window
+        // happens to be foreground at dialog-spawn time.
+        {
+            use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+            let handles = match (frame.window_handle(), frame.display_handle()) {
+                (Ok(w), Ok(d)) => Some((w.as_raw(), d.as_raw())),
+                _ => None,
+            };
+            self.app.set_parent_window_handles(handles);
         }
 
         // ── Window close intercept ──────────────────────────────────────────
@@ -414,10 +446,16 @@ impl eframe::App for AppWrapper {
         if should_request_dir {
             let (tx, rx) = mpsc::channel::<Option<std::path::PathBuf>>();
             let ctx_clone = ctx.clone();
+            // Capture the editor's window + display handles on the main
+            // thread so the folder picker is parented to our window
+            // rather than the OS's current foreground.
+            let parent = self.app.parent_window();
             std::thread::spawn(move || {
-                let dir = rfd::FileDialog::new()
-                    .set_title("Choose export folder")
-                    .pick_folder();
+                let mut dialog = rfd::FileDialog::new().set_title("Choose export folder");
+                if let Some(parent) = &parent {
+                    dialog = dialog.set_parent(parent);
+                }
+                let dir = dialog.pick_folder();
                 let _ = tx.send(dir);
                 ctx_clone.request_repaint();
             });
@@ -648,12 +686,14 @@ impl eframe::App for AppWrapper {
                                 &gpu.device,
                                 &gpu.queue,
                                 &heightmap,
-                                result.height_scale,
-                                result.x_extent,
-                                result.z_extent,
-                                result.water_y,
-                                result.water_color,
-                                grid_n,
+                                TerrainUpdateParams {
+                                    height_scale: result.height_scale,
+                                    x_extent: result.x_extent,
+                                    z_extent: result.z_extent,
+                                    water_y: result.water_y,
+                                    water_color: result.water_color,
+                                    grid_n,
+                                },
                             );
                             if let Some(ref tex) = result.texture {
                                 renderer.update_albedo(&gpu.device, &gpu.queue, tex);
@@ -1556,7 +1596,7 @@ fn eval_preview(
 }
 
 fn load_icon() -> Option<eframe::egui::IconData> {
-    let bytes = include_bytes!("../../../assets/bar.png");
+    let bytes = include_bytes!("../../../assets/bar-map-editor.png");
     let image = image::load_from_memory(bytes).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
     Some(eframe::egui::IconData {

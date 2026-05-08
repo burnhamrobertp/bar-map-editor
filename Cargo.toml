@@ -54,6 +54,11 @@ clap = { version = "4", features = ["derive"] }
 # File dialogs
 rfd = "0.15"
 
+# Raw window handle (for parenting native dialogs to the editor window).
+# Pinned to 0.6 because that is what eframe 0.31 and rfd 0.15 both pull
+# in transitively.
+raw-window-handle = "0.6"
+
 # Platform directories
 directories = "6"
 
