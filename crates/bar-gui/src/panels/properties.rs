@@ -38,7 +38,7 @@ impl BarEditorApp {
                 // User moved on (or clicked an action button etc.).
                 self.dialog.pending_props_open = None;
             } else if elapsed >= PROPS_OPEN_DELAY_MS {
-                self.active_props = Some(pending.target.clone());
+                self.props.active = Some(pending.target.clone());
                 self.dialog.pending_props_open = None;
             } else {
                 // Still inside the gate — request a repaint so we
@@ -49,8 +49,8 @@ impl BarEditorApp {
         }
 
         // ── Render ─────────────────────────────────────────────────────
-        let Some(target) = self.active_props.clone() else {
-            self.active_props_rect = None;
+        let Some(target) = self.props.active.clone() else {
+            self.props.active_rect = None;
             return;
         };
         // Validate the target still exists; if it doesn't, drop the
@@ -58,8 +58,8 @@ impl BarEditorApp {
         let target_rect = match self.props_target_screen_rect(&target) {
             Some(r) => r,
             None => {
-                self.active_props = None;
-                self.active_props_rect = None;
+                self.props.active = None;
+                self.props.active_rect = None;
                 return;
             }
         };
@@ -99,7 +99,7 @@ impl BarEditorApp {
                     });
             });
         let panel_rect = resp.response.rect;
-        self.active_props_rect = Some(panel_rect);
+        self.props.active_rect = Some(panel_rect);
 
         // Click-outside-to-close. Only triggers on the press, not on
         // hold/drag, so dragging from inside the panel doesn't close
@@ -116,8 +116,8 @@ impl BarEditorApp {
             close_panel = true;
         }
         if close_panel {
-            self.active_props = None;
-            self.active_props_rect = None;
+            self.props.active = None;
+            self.props.active_rect = None;
         }
     }
 

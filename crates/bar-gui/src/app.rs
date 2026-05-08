@@ -960,13 +960,9 @@ pub struct BarEditorApp {
     /// was" shortcut. Initialised to 0 (Main) and updated whenever
     /// the active tab changes.
     pub(crate) last_active_tab: usize,
-    /// Target whose properties are currently being shown in the
-    /// floating panel. None when no panel is up.
-    pub(crate) active_props: Option<PropsTarget>,
-    /// Screen rect of the active properties panel, captured each
-    /// frame after rendering. Used by the click-outside-to-close
-    /// detector on the next frame.
-    pub(crate) active_props_rect: Option<egui::Rect>,
+    /// Floating properties popup state: target binding and last-known
+    /// on-screen rect. See `editor::PropsPanelState`.
+    pub(crate) props: crate::editor::PropsPanelState,
     /// Brush, sculpt-lock, and per-layer paint caches. See
     /// `PaintSession`.
     pub(crate) paint: PaintSession,
@@ -1035,8 +1031,7 @@ impl Default for BarEditorApp {
             tabs: vec![CanvasView::Main],
             active_tab: 0,
             last_active_tab: 0,
-            active_props: None,
-            active_props_rect: None,
+            props: crate::editor::PropsPanelState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
             canvas_rect_last: egui::Rect::NOTHING,
@@ -1495,8 +1490,7 @@ impl BarEditorApp {
         self.palette_drag = None;
         self.project.passthrough_edit = None;
         self.dialog.pending_props_open = None;
-        self.active_props = None;
-        self.active_props_rect = None;
+        self.props.close();
 
         // Transient status / toast — messages from the previous
         // project would mislead the user about what just happened.
@@ -3690,7 +3684,7 @@ impl BarEditorApp {
         self.selected_nodes.clear();
         self.selected_node = None;
         self.selected_group = None;
-        self.active_props = None;
+        self.props.active = None;
         self.pending_auto_layout_all = true;
 
         self.project.is_dirty = true;
@@ -3735,7 +3729,7 @@ impl BarEditorApp {
         // Same direct-open as `add_node_at` — drop a macro, see its
         // properties immediately so you can tweak the parameters
         // without a separate click + hover.
-        self.active_props = Some(PropsTarget::Group(gid));
+        self.props.active = Some(PropsTarget::Group(gid));
         self.dialog.pending_props_open = None;
         self.project.is_dirty = true;
         self.dialog.status_message = Some(format!("Dropped '{}' onto the canvas.", template.name));
@@ -3751,7 +3745,7 @@ impl BarEditorApp {
         // without waiting for the hover gate. Skipping the gate is
         // intentional: there's no ambiguity here (no "did they
         // mean to drag instead?"), the node is the click result.
-        self.active_props = Some(PropsTarget::Node(id));
+        self.props.active = Some(PropsTarget::Node(id));
         self.dialog.pending_props_open = None;
         let default_size = match node_type {
             NodeType::PassThrough => egui::vec2(180.0, 200.0),
@@ -3832,8 +3826,7 @@ impl BarEditorApp {
         // Also drop any open / pending Properties panel — its target
         // is no longer interesting.
         self.dialog.pending_props_open = None;
-        self.active_props = None;
-        self.active_props_rect = None;
+        self.props.close();
     }
 
     /// Select a group as the active editing target.
@@ -3886,7 +3879,7 @@ impl BarEditorApp {
         self.dialog.show_inspector = false;
         self.dialog.file_editor = None;
         self.dialog.show_validation_panel = false;
-        self.active_props = None;
+        self.props.active = None;
         self.dialog.pending_props_open = None;
     }
 

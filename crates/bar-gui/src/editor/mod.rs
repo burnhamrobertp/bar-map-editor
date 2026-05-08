@@ -9,8 +9,10 @@
 
 pub(crate) mod map;
 pub(crate) mod preview;
+pub(crate) mod props_panel;
 pub(crate) mod validation;
 
 pub(crate) use map::MapState;
 pub(crate) use preview::PreviewState;
+pub(crate) use props_panel::PropsPanelState;
 pub(crate) use validation::{ValidationFingerprint, ValidationState};
