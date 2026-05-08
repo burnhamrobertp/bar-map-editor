@@ -12,13 +12,8 @@ use eframe::egui;
 
 use crate::panels::tokens;
 
-
 /// "BAR" wordmark for the Test-in-BAR toolbar button.
-pub(crate) fn paint_bar_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
+pub(crate) fn paint_bar_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     painter.text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
@@ -29,11 +24,7 @@ pub(crate) fn paint_bar_icon(
 }
 
 /// "Document with pencil" icon for the Edit Map Info toolbar button.
-pub(crate) fn paint_map_info_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
+pub(crate) fn paint_map_info_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let stroke = egui::Stroke::new(1.8, color);
     let cx = rect.center().x;
     let cy = rect.center().y;
@@ -43,9 +34,18 @@ pub(crate) fn paint_map_info_icon(
     let px = cx - pw / 2.0 - 2.0;
     let py = cy - ph / 2.0;
     painter.line_segment([egui::pos2(px, py), egui::pos2(px + pw - 3.0, py)], stroke);
-    painter.line_segment([egui::pos2(px + pw - 3.0, py), egui::pos2(px + pw, py + 3.0)], stroke);
-    painter.line_segment([egui::pos2(px + pw, py + 3.0), egui::pos2(px + pw, py + ph)], stroke);
-    painter.line_segment([egui::pos2(px + pw, py + ph), egui::pos2(px, py + ph)], stroke);
+    painter.line_segment(
+        [egui::pos2(px + pw - 3.0, py), egui::pos2(px + pw, py + 3.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(px + pw, py + 3.0), egui::pos2(px + pw, py + ph)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(px + pw, py + ph), egui::pos2(px, py + ph)],
+        stroke,
+    );
     painter.line_segment([egui::pos2(px, py + ph), egui::pos2(px, py)], stroke);
 
     for i in 0..3 {
@@ -63,11 +63,7 @@ pub(crate) fn paint_map_info_icon(
 }
 
 /// Upload-arrow icon for the Export / Run toolbar button.
-pub(crate) fn paint_export_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
+pub(crate) fn paint_export_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let stroke = egui::Stroke::new(2.0, color);
     let cx = rect.center().x;
     let cy = rect.center().y;
@@ -77,9 +73,18 @@ pub(crate) fn paint_export_icon(
     let by = cy + 3.0;
     let gap = 3.5_f32;
 
-    painter.line_segment([egui::pos2(cx - bw, by), egui::pos2(cx - bw, by + bh)], stroke);
-    painter.line_segment([egui::pos2(cx - bw, by + bh), egui::pos2(cx + bw, by + bh)], stroke);
-    painter.line_segment([egui::pos2(cx + bw, by + bh), egui::pos2(cx + bw, by)], stroke);
+    painter.line_segment(
+        [egui::pos2(cx - bw, by), egui::pos2(cx - bw, by + bh)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx - bw, by + bh), egui::pos2(cx + bw, by + bh)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx + bw, by + bh), egui::pos2(cx + bw, by)],
+        stroke,
+    );
     painter.line_segment([egui::pos2(cx - bw, by), egui::pos2(cx - gap, by)], stroke);
     painter.line_segment([egui::pos2(cx + gap, by), egui::pos2(cx + bw, by)], stroke);
 
@@ -124,16 +129,15 @@ pub(crate) fn paint_mapinfo_form_icon(
         points.push(pt(inner_r, a + half_tooth));
         points.push(pt(inner_r, a_next - half_tooth));
     }
-    painter.add(egui::Shape::closed_line(points, egui::Stroke::new(1.6, color)));
+    painter.add(egui::Shape::closed_line(
+        points,
+        egui::Stroke::new(1.6, color),
+    ));
     painter.circle_stroke(egui::pos2(cx, cy), hub_r, egui::Stroke::new(1.6, color));
 }
 
 /// Outer rectangle + two corner filled squares, representing a 2-team map.
-pub(crate) fn paint_startbox_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
+pub(crate) fn paint_startbox_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let cx = rect.center().x;
     let cy = rect.center().y;
     let half = 8.0_f32;
@@ -207,9 +211,7 @@ pub(crate) fn paint_busy_dot(painter: &egui::Painter, rect: egui::Rect, time: f6
 pub(crate) fn draw_io_icon(painter: &egui::Painter, rect: egui::Rect, is_input: bool) {
     let scale_x = rect.width() / 24.0;
     let scale_y = rect.height() / 24.0;
-    let to_local = |x: f32, y: f32| {
-        egui::pos2(rect.left() + x * scale_x, rect.top() + y * scale_y)
-    };
+    let to_local = |x: f32, y: f32| egui::pos2(rect.left() + x * scale_x, rect.top() + y * scale_y);
     // Stroke width scales with the average dimension so non-square icon rects
     // don't end up with anisotropic strokes.
     let stroke_w = (1.5 * (scale_x + scale_y) * 0.5).max(1.0);
@@ -220,20 +222,41 @@ pub(crate) fn draw_io_icon(painter: &egui::Painter, rect: egui::Rect, is_input: 
     painter.rect_stroke(frame, frame_radius, stroke, egui::StrokeKind::Inside);
 
     let (shaft_start, shaft_end, head_top, head_tip, head_bot) = if is_input {
-        ((7.0, 12.0), (14.0, 12.0), (11.0, 9.0), (14.0, 12.0), (11.0, 15.0))
+        (
+            (7.0, 12.0),
+            (14.0, 12.0),
+            (11.0, 9.0),
+            (14.0, 12.0),
+            (11.0, 15.0),
+        )
     } else {
-        ((10.0, 12.0), (17.0, 12.0), (14.0, 9.0), (17.0, 12.0), (14.0, 15.0))
+        (
+            (10.0, 12.0),
+            (17.0, 12.0),
+            (14.0, 9.0),
+            (17.0, 12.0),
+            (14.0, 15.0),
+        )
     };
     painter.line_segment(
-        [to_local(shaft_start.0, shaft_start.1), to_local(shaft_end.0, shaft_end.1)],
+        [
+            to_local(shaft_start.0, shaft_start.1),
+            to_local(shaft_end.0, shaft_end.1),
+        ],
         stroke,
     );
     painter.line_segment(
-        [to_local(head_top.0, head_top.1), to_local(head_tip.0, head_tip.1)],
+        [
+            to_local(head_top.0, head_top.1),
+            to_local(head_tip.0, head_tip.1),
+        ],
         stroke,
     );
     painter.line_segment(
-        [to_local(head_bot.0, head_bot.1), to_local(head_tip.0, head_tip.1)],
+        [
+            to_local(head_bot.0, head_bot.1),
+            to_local(head_tip.0, head_tip.1),
+        ],
         stroke,
     );
 }

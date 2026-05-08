@@ -6,8 +6,8 @@
 //! through `add_node_at`. The canvas's drop handler (still in
 //! `app.rs`) is what actually creates the node.
 
-use eframe::egui;
 use bar_graph::NodeType;
+use eframe::egui;
 
 use crate::app::{BarEditorApp, PaletteDrag, PaletteKind};
 use crate::t;

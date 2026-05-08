@@ -115,10 +115,7 @@ impl SmfHeader {
     /// Tile grid dimensions: how many 32×32 tiles span the texture.
     pub fn tile_grid_size(&self) -> (u32, u32) {
         let tile_res = (self.tile_size / self.square_size).max(1) as u32;
-        (
-            self.map_x as u32 / tile_res,
-            self.map_y as u32 / tile_res,
-        )
+        (self.map_x as u32 / tile_res, self.map_y as u32 / tile_res)
     }
 
     /// Create a default header for a given map size in spring units.
@@ -391,7 +388,7 @@ impl SmfMap {
         // Write tile header (MapTileHeader struct: numTileFiles + numTiles)
         write_i32(writer, 1)?; // numTileFiles = 1
         write_i32(writer, num_tile_indices as i32)?; // numTiles (total across all files)
-        // Per tile file entry: numTilesInFile + null-terminated filename
+                                                     // Per tile file entry: numTilesInFile + null-terminated filename
         write_i32(writer, num_tile_indices as i32)?;
         writer.write_all(&smt_filename_bytes)?;
 

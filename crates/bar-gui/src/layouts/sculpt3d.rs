@@ -32,11 +32,7 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
                     BrushTarget::Metalmap,
                     BrushTarget::Typemap,
                 ] {
-                    ui.selectable_value(
-                        &mut app.paint.brush.target,
-                        target,
-                        target.label(),
-                    );
+                    ui.selectable_value(&mut app.paint.brush.target, target, target.label());
                 }
             });
             ui.add_space(4.0);
@@ -80,15 +76,8 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
                 ui.label("Colour");
                 let [r, g, b] = app.paint.brush.color_rgb;
                 let mut color32 = egui::Color32::from_rgb(r, g, b);
-                if ui
-                    .color_edit_button_srgba(&mut color32)
-                    .changed()
-                {
-                    app.paint.brush.color_rgb = [
-                        color32.r(),
-                        color32.g(),
-                        color32.b(),
-                    ];
+                if ui.color_edit_button_srgba(&mut color32).changed() {
+                    app.paint.brush.color_rgb = [color32.r(), color32.g(), color32.b()];
                 }
             }
 
@@ -112,10 +101,22 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
             ui.strong("Layers");
             let sculpt = &app.paint.sculpt;
             let present = |opt: bool| if opt { "filled" } else { "empty" };
-            ui.weak(format!("Height: {}", present(sculpt.height_delta.is_some())));
-            ui.weak(format!("Colour: {}", present(sculpt.texture_overlay.is_some())));
-            ui.weak(format!("Metal:  {}", present(sculpt.metal_overlay.is_some())));
-            ui.weak(format!("Type:   {}", present(sculpt.type_overlay.is_some())));
+            ui.weak(format!(
+                "Height: {}",
+                present(sculpt.height_delta.is_some())
+            ));
+            ui.weak(format!(
+                "Colour: {}",
+                present(sculpt.texture_overlay.is_some())
+            ));
+            ui.weak(format!(
+                "Metal:  {}",
+                present(sculpt.metal_overlay.is_some())
+            ));
+            ui.weak(format!(
+                "Type:   {}",
+                present(sculpt.type_overlay.is_some())
+            ));
 
             ui.add_space(8.0);
             if ui

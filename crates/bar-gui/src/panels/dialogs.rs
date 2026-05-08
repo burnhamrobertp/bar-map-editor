@@ -25,10 +25,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.heading("Auto-save");
             let mut autosave_enabled = app.settings().autosave_enabled;
-            if ui
-                .checkbox(&mut autosave_enabled, "Enabled")
-                .changed()
-            {
+            if ui.checkbox(&mut autosave_enabled, "Enabled").changed() {
                 app.settings_mut().autosave_enabled = autosave_enabled;
                 changed = true;
             }

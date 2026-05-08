@@ -5,8 +5,8 @@
 //! be applied at the right spot on the terrain.
 
 use crate::Camera;
-use glam::{Vec3, Vec4};
 use bar_data::Heightmap;
+use glam::{Vec3, Vec4};
 
 /// Result of a successful pick.
 #[derive(Debug, Clone, Copy)]
@@ -78,7 +78,15 @@ pub fn pick_terrain(
     }
 
     let mut prev_t = march_start;
-    let mut prev_dy = ray_y_above_terrain(near, dir, prev_t, heightmap, x_extent, z_extent, height_scale);
+    let mut prev_dy = ray_y_above_terrain(
+        near,
+        dir,
+        prev_t,
+        heightmap,
+        x_extent,
+        z_extent,
+        height_scale,
+    );
     for i in 1..=steps {
         let t = march_start + step_len * i as f32;
         let dy = ray_y_above_terrain(near, dir, t, heightmap, x_extent, z_extent, height_scale);
@@ -94,7 +102,13 @@ pub fn pick_terrain(
                 for _ in 0..6 {
                     let mid = (lo + hi) * 0.5;
                     let dmid = ray_y_above_terrain(
-                        near, dir, mid, heightmap, x_extent, z_extent, height_scale,
+                        near,
+                        dir,
+                        mid,
+                        heightmap,
+                        x_extent,
+                        z_extent,
+                        height_scale,
                     );
                     match dmid {
                         Some(v) if v > 0.0 => lo = mid,
@@ -104,8 +118,13 @@ pub fn pick_terrain(
                 }
                 let t_hit = (lo + hi) * 0.5;
                 let world = near + dir * t_hit;
-                return world_to_heightmap(world, x_extent, z_extent, heightmap)
-                    .map(|(hx, hy)| PickResult { world, hm_x: hx, hm_y: hy });
+                return world_to_heightmap(world, x_extent, z_extent, heightmap).map(|(hx, hy)| {
+                    PickResult {
+                        world,
+                        hm_x: hx,
+                        hm_y: hy,
+                    }
+                });
             }
         }
         prev_t = t;
@@ -116,9 +135,15 @@ pub fn pick_terrain(
 
 /// Slab-method ray-AABB intersection for the terrain bounding box.
 /// Returns `(t_min, t_max)` along the ray; caller should check `t_min < t_max`.
-fn aabb_intersect(origin: Vec3, dir: Vec3, x_extent: f32, z_extent: f32, height_scale: f32) -> (f32, f32) {
+fn aabb_intersect(
+    origin: Vec3,
+    dir: Vec3,
+    x_extent: f32,
+    z_extent: f32,
+    height_scale: f32,
+) -> (f32, f32) {
     let aabb_min = Vec3::new(-x_extent, -height_scale * 0.1, -z_extent);
-    let aabb_max = Vec3::new( x_extent,  height_scale * 1.1,  z_extent);
+    let aabb_max = Vec3::new(x_extent, height_scale * 1.1, z_extent);
 
     let mut t_min = f32::NEG_INFINITY;
     let mut t_max = f32::INFINITY;
@@ -163,12 +188,7 @@ fn ray_y_above_terrain(
 
 /// Convert a world-space point's XZ to heightmap pixel coordinates.
 /// Returns `None` if outside the mesh bounds.
-fn world_to_heightmap(
-    p: Vec3,
-    x_extent: f32,
-    z_extent: f32,
-    hm: &Heightmap,
-) -> Option<(f32, f32)> {
+fn world_to_heightmap(p: Vec3, x_extent: f32, z_extent: f32, hm: &Heightmap) -> Option<(f32, f32)> {
     if p.x < -x_extent || p.x > x_extent || p.z < -z_extent || p.z > z_extent {
         return None;
     }

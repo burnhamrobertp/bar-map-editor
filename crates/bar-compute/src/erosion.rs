@@ -135,7 +135,10 @@ fn pcg_hash(input: u32) -> u32 {
 }
 
 /// Simulate hydraulic erosion on a heightmap (CPU implementation).
-pub fn hydraulic_erosion(heightmap: &Heightmap, params: &HydraulicErosionParams) -> Result<Heightmap, ErosionError> {
+pub fn hydraulic_erosion(
+    heightmap: &Heightmap,
+    params: &HydraulicErosionParams,
+) -> Result<Heightmap, ErosionError> {
     let w = heightmap.width();
     let h = heightmap.height();
     let mut data = heightmap.data().to_vec();
@@ -248,8 +251,8 @@ pub fn hydraulic_erosion(heightmap: &Heightmap, params: &HydraulicErosionParams)
             let height_diff = new_height - old_height;
 
             // Sediment capacity
-            let capacity = (-height_diff * speed * water * params.capacity_factor)
-                .max(params.min_capacity);
+            let capacity =
+                (-height_diff * speed * water * params.capacity_factor).max(params.min_capacity);
 
             if sediment > capacity || height_diff > 0.0 {
                 // Deposit
@@ -283,7 +286,9 @@ pub fn hydraulic_erosion(heightmap: &Heightmap, params: &HydraulicErosionParams)
             }
 
             // Update physics
-            speed = (speed * speed + height_diff * params.gravity).max(0.0).sqrt();
+            speed = (speed * speed + height_diff * params.gravity)
+                .max(0.0)
+                .sqrt();
             water *= 1.0 - params.evaporation_rate;
             pos_x = new_x;
             pos_y = new_y;
@@ -303,16 +308,24 @@ pub fn hydraulic_erosion(heightmap: &Heightmap, params: &HydraulicErosionParams)
 }
 
 /// Simulate thermal erosion (weathering) on a heightmap (CPU implementation).
-pub fn thermal_erosion(heightmap: &Heightmap, params: &ThermalErosionParams) -> Result<Heightmap, ErosionError> {
+pub fn thermal_erosion(
+    heightmap: &Heightmap,
+    params: &ThermalErosionParams,
+) -> Result<Heightmap, ErosionError> {
     let w = heightmap.width() as usize;
     let h = heightmap.height() as usize;
     let mut current = heightmap.data().to_vec();
     let mut next = current.clone();
 
     let offsets: [(i32, i32, f32); 8] = [
-        (-1, -1, 1.414), (0, -1, 1.0), (1, -1, 1.414),
-        (-1, 0, 1.0),                   (1, 0, 1.0),
-        (-1, 1, 1.414),  (0, 1, 1.0),  (1, 1, 1.414),
+        (-1, -1, 1.414),
+        (0, -1, 1.0),
+        (1, -1, 1.414),
+        (-1, 0, 1.0),
+        (1, 0, 1.0),
+        (-1, 1, 1.414),
+        (0, 1, 1.0),
+        (1, 1, 1.414),
     ];
 
     for _ in 0..params.iterations {

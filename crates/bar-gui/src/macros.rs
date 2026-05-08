@@ -12,8 +12,8 @@
 //! list of inner nodes, the connections between them, and a
 //! SubGraph wrapper (label, colour, port bindings).
 
-use eframe::egui;
 use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId};
+use eframe::egui;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
@@ -158,10 +158,7 @@ pub fn instantiate(
         let id = graph.add_node(node);
         key_to_id.insert(n.key.clone(), id);
         member_ids.insert(id);
-        let pos = egui::pos2(
-            drop_pos.x + step.x * i as f32,
-            drop_pos.y,
-        );
+        let pos = egui::pos2(drop_pos.x + step.x * i as f32, drop_pos.y);
         visuals.push((
             id,
             NodeVisual {
@@ -176,8 +173,14 @@ pub fn instantiate(
         let (to_id, to_port) = parse_node_port(&c.to, &key_to_id, ".")?;
         graph
             .connect(
-                PortId { node_id: from_id, port_name: from_port },
-                PortId { node_id: to_id, port_name: to_port },
+                PortId {
+                    node_id: from_id,
+                    port_name: from_port,
+                },
+                PortId {
+                    node_id: to_id,
+                    port_name: to_port,
+                },
             )
             .map_err(|e| format!("connect failed: {e:?}"))?;
     }
@@ -214,23 +217,27 @@ pub fn instantiate(
         let id = graph.add_node(node);
         member_ids.insert(id);
         // Lay out IO nodes in a column to the right of the inner pipeline.
-        let pos = egui::pos2(
-            drop_pos.x - 220.0,
-            drop_pos.y + io_index as f32 * 90.0,
-        );
+        let pos = egui::pos2(drop_pos.x - 220.0, drop_pos.y + io_index as f32 * 90.0);
         visuals.push((
             id,
-            NodeVisual { position: pos, size: egui::vec2(160.0, 47.0) },
+            NodeVisual {
+                position: pos,
+                size: egui::vec2(160.0, 47.0),
+            },
         ));
         // Connect the IO node's value output to the inner node port
         // declared in the template binding (if it parses).
         if let Some(binding_str) = p.binding.as_deref() {
-            if let Ok((inner_id, inner_port)) =
-                parse_node_port(binding_str, &key_to_id, ":")
-            {
+            if let Ok((inner_id, inner_port)) = parse_node_port(binding_str, &key_to_id, ":") {
                 let _ = graph.connect(
-                    PortId { node_id: id, port_name: "value".to_string() },
-                    PortId { node_id: inner_id, port_name: inner_port },
+                    PortId {
+                        node_id: id,
+                        port_name: "value".to_string(),
+                    },
+                    PortId {
+                        node_id: inner_id,
+                        port_name: inner_port,
+                    },
                 );
             }
         }
@@ -252,15 +259,22 @@ pub fn instantiate(
         );
         visuals.push((
             id,
-            NodeVisual { position: pos, size: egui::vec2(160.0, 47.0) },
+            NodeVisual {
+                position: pos,
+                size: egui::vec2(160.0, 47.0),
+            },
         ));
         if let Some(binding_str) = p.binding.as_deref() {
-            if let Ok((inner_id, inner_port)) =
-                parse_node_port(binding_str, &key_to_id, ":")
-            {
+            if let Ok((inner_id, inner_port)) = parse_node_port(binding_str, &key_to_id, ":") {
                 let _ = graph.connect(
-                    PortId { node_id: inner_id, port_name: inner_port },
-                    PortId { node_id: id, port_name: "value".to_string() },
+                    PortId {
+                        node_id: inner_id,
+                        port_name: inner_port,
+                    },
+                    PortId {
+                        node_id: id,
+                        port_name: "value".to_string(),
+                    },
                 );
             }
         }
@@ -339,7 +353,9 @@ fn parse_node_port(
 ) -> Result<(NodeId, String), String> {
     let mut parts = s.splitn(2, sep);
     let key = parts.next().ok_or_else(|| format!("bad ref '{s}'"))?;
-    let port = parts.next().ok_or_else(|| format!("bad ref '{s}' (missing port)"))?;
+    let port = parts
+        .next()
+        .ok_or_else(|| format!("bad ref '{s}' (missing port)"))?;
     let id = key_to_id
         .get(key)
         .copied()
@@ -367,10 +383,7 @@ pub static BUILTIN_MACROS: &[(&str, &str)] = &[
         "Mountain Range - Plateaus",
         include_str!("../../../assets/macros/mountain-range-plateaus.json"),
     ),
-    (
-        "Plains",
-        include_str!("../../../assets/macros/plains.json"),
-    ),
+    ("Plains", include_str!("../../../assets/macros/plains.json")),
     (
         "Plains - Coastal",
         include_str!("../../../assets/macros/plains-coastal.json"),
@@ -395,10 +408,7 @@ pub static BUILTIN_MACROS: &[(&str, &str)] = &[
         "Archipelago - Sparse",
         include_str!("../../../assets/macros/archipelago-sparse.json"),
     ),
-    (
-        "Canyon",
-        include_str!("../../../assets/macros/canyon.json"),
-    ),
+    ("Canyon", include_str!("../../../assets/macros/canyon.json")),
     (
         "Canyon - Mesa",
         include_str!("../../../assets/macros/canyon-mesa.json"),
@@ -407,10 +417,7 @@ pub static BUILTIN_MACROS: &[(&str, &str)] = &[
         "Canyon - Slot",
         include_str!("../../../assets/macros/canyon-slot.json"),
     ),
-    (
-        "Dunes",
-        include_str!("../../../assets/macros/dunes.json"),
-    ),
+    ("Dunes", include_str!("../../../assets/macros/dunes.json")),
     (
         "Dunes - Rolling",
         include_str!("../../../assets/macros/dunes-rolling.json"),
@@ -466,8 +473,7 @@ mod tests {
                 g.get_node(**id).map_or(false, |n| {
                     matches!(
                         n.node_type,
-                        bar_graph::NodeType::SubgraphInput
-                            | bar_graph::NodeType::SubgraphOutput
+                        bar_graph::NodeType::SubgraphInput | bar_graph::NodeType::SubgraphOutput
                     )
                 })
             })

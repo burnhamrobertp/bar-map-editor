@@ -3,8 +3,8 @@
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
 use bar_compute::{
-    hydraulic_erosion, thermal_erosion, FlowErosionParams, GpuContext, GpuErosionPipeline,
-    HydraulicErosionParams, ThermalErosionParams, NoiseParams, NoiseType, generate_noise_cpu,
+    generate_noise_cpu, hydraulic_erosion, thermal_erosion, FlowErosionParams, GpuContext,
+    GpuErosionPipeline, HydraulicErosionParams, NoiseParams, NoiseType, ThermalErosionParams,
 };
 
 const RESOLUTIONS: &[u32] = &[256, 512, 1024];
@@ -93,7 +93,11 @@ fn bench_gpu_hydraulic(c: &mut Criterion) {
         };
 
         group.bench_with_input(BenchmarkId::new("flow_iters_20", size), &size, |b, _| {
-            b.iter(|| pipeline.hydraulic_flow_erode(&gpu_context, &hm, &params).unwrap());
+            b.iter(|| {
+                pipeline
+                    .hydraulic_flow_erode(&gpu_context, &hm, &params)
+                    .unwrap()
+            });
         });
     }
     group.finish();

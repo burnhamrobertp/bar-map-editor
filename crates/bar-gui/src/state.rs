@@ -3,8 +3,8 @@
 //! `undo` module can store them directly without JSON round-tripping,
 //! giving type-safe undo/redo coverage of node visuals and group state.
 
-use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use bar_graph::{GraphEngine, NodeId};
+use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -51,11 +51,11 @@ pub fn install_system_symbol_font(ctx: &eframe::egui::Context) {
 fn candidate_font_paths() -> Vec<(&'static str, std::path::PathBuf)> {
     let win = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".to_string());
     let mut out = Vec::new();
-    for (label, name) in [
-        ("seguisym", "seguisym.ttf"),
-        ("seguiemj", "seguiemj.ttf"),
-    ] {
-        out.push((label, std::path::PathBuf::from(&win).join("Fonts").join(name)));
+    for (label, name) in [("seguisym", "seguisym.ttf"), ("seguiemj", "seguiemj.ttf")] {
+        out.push((
+            label,
+            std::path::PathBuf::from(&win).join("Fonts").join(name),
+        ));
     }
     out
 }
@@ -79,9 +79,7 @@ fn candidate_font_paths() -> Vec<(&'static str, std::path::PathBuf)> {
     vec![
         (
             "notosymbols2",
-            std::path::PathBuf::from(
-                "/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf",
-            ),
+            std::path::PathBuf::from("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"),
         ),
         (
             "dejavu",

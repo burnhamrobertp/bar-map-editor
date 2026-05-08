@@ -264,10 +264,10 @@ mod tests {
         let mut project = Project::from_recipe(recipe);
 
         // Add some layout
-        project.layout.node_positions.insert(
-            "perlin".to_string(),
-            Position { x: 100.0, y: 200.0 },
-        );
+        project
+            .layout
+            .node_positions
+            .insert("perlin".to_string(), Position { x: 100.0, y: 200.0 });
         project.layout.canvas_offset = (50.0, -30.0);
         project.recipe.output.width = 512;
         project.recipe.output.height = 512;

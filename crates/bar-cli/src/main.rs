@@ -183,7 +183,14 @@ fn main() -> Result<()> {
             height,
             target,
             bundler,
-        } => cmd_run(&recipe, &output, width, height, target.as_deref(), bundler.as_deref()),
+        } => cmd_run(
+            &recipe,
+            &output,
+            width,
+            height,
+            target.as_deref(),
+            bundler.as_deref(),
+        ),
         Commands::Validate { recipe } => cmd_validate(&recipe),
         Commands::Info { recipe } => cmd_info(&recipe),
         Commands::New { output } => cmd_new(output.as_deref()),
@@ -198,7 +205,9 @@ fn main() -> Result<()> {
             elevation,
             distance,
             mesh_lod,
-        } => cmd_preview(&input, &output, width, height, azimuth, elevation, distance, mesh_lod),
+        } => cmd_preview(
+            &input, &output, width, height, azimuth, elevation, distance, mesh_lod,
+        ),
         Commands::PreviewMacro {
             macro_arg,
             knobs,
@@ -247,13 +256,21 @@ fn cmd_run(
     // If --target is specified, use the codec-based export path (backward compat shortcut)
     if let Some(target_id) = target {
         let written = bar_engine::export_with_target(
-            &graph, &executor, &recipe, output_dir, &sanitize_filename(&recipe.name),
+            &graph,
+            &executor,
+            &recipe,
+            output_dir,
+            &sanitize_filename(&recipe.name),
             target_id,
         )
         .with_context(|| format!("Export with target '{}' failed", target_id))?;
 
         let elapsed = start.elapsed();
-        println!("  ✓ Target '{}': {} files written", target_id, written.files.len());
+        println!(
+            "  ✓ Target '{}': {} files written",
+            target_id,
+            written.files.len()
+        );
         for f in &written.files {
             println!("    - {}", f);
         }
@@ -419,9 +436,7 @@ fn cmd_import(sd7_path: &Path, output_dir: Option<&Path>) -> Result<()> {
 
     // Default output dir: <sd7_dir>/<sd7_stem>/
     let default_out = {
-        let parent = sd7_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."));
+        let parent = sd7_path.parent().unwrap_or_else(|| Path::new("."));
         let stem = sd7_path
             .file_stem()
             .map(|s| s.to_string_lossy().to_string())
@@ -456,10 +471,7 @@ fn cmd_import(sd7_path: &Path, output_dir: Option<&Path>) -> Result<()> {
         project.recipe.output.map_settings.max_height
     );
     println!("  Project:   {}", project_path.display());
-    println!(
-        "  Heightmap: {}",
-        out_dir.join("heightmap.png").display()
-    );
+    println!("  Heightmap: {}", out_dir.join("heightmap.png").display());
 
     Ok(())
 }
@@ -498,7 +510,10 @@ fn cmd_preview(
     use anyhow::Context as _;
     use bar_compute::GpuContext;
     use bar_engine::CpuExecutor;
-    use bar_graph::{evaluate_graph, get_bundler_node_heightmap, get_bundler_node_texture, get_preview_heightmap, get_texture_output};
+    use bar_graph::{
+        evaluate_graph, get_bundler_node_heightmap, get_bundler_node_texture,
+        get_preview_heightmap, get_texture_output,
+    };
     use bar_render::{Camera, TerrainRenderer};
 
     // Resolve input — either an .barproj or an .sd7. SD7s get imported to
@@ -596,15 +611,12 @@ fn cmd_preview(
     );
 
     // Build the headless GPU context.
-    let gpu = pollster::block_on(GpuContext::new_standalone())
-        .context("Failed to create wgpu device")?;
+    let gpu =
+        pollster::block_on(GpuContext::new_standalone()).context("Failed to create wgpu device")?;
 
     // Set up the renderer at the requested output resolution.
-    let mut renderer = TerrainRenderer::new(
-        &gpu.device,
-        &gpu.queue,
-        wgpu::TextureFormat::Rgba8UnormSrgb,
-    );
+    let mut renderer =
+        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
     renderer.resize(&gpu.device, out_w, out_h);
     renderer.update_heightmap(
         &gpu.device,
@@ -751,8 +763,7 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
                 params: Map::new(),
             });
 
-            let (min_height, max_height) =
-                scan.height_range.unwrap_or((0.0, 1024.0));
+            let (min_height, max_height) = scan.height_range.unwrap_or((0.0, 1024.0));
             let (width, height) = scan.map_dims.unwrap_or((257, 257));
 
             let recipe = Recipe {
@@ -847,7 +858,8 @@ fn resolve_relative_paths_in_graph(graph: &mut bar_graph::GraphEngine, project_d
                     .collect::<Vec<_>>()
                     .join("\n");
                 if changed {
-                    node.params.insert("files".to_string(), ParamValue::String(new));
+                    node.params
+                        .insert("files".to_string(), ParamValue::String(new));
                 }
             }
         }

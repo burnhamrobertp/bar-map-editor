@@ -81,18 +81,26 @@ impl GraphEngine {
     /// Connect an output port to an input port.
     pub fn connect(&mut self, from: PortId, to: PortId) -> Result<(), GraphError> {
         // Validate nodes exist
-        let from_node = self.nodes.get(&from.node_id)
+        let from_node = self
+            .nodes
+            .get(&from.node_id)
             .ok_or(GraphError::NodeNotFound(from.node_id))?;
-        let to_node = self.nodes.get(&to.node_id)
+        let to_node = self
+            .nodes
+            .get(&to.node_id)
             .ok_or(GraphError::NodeNotFound(to.node_id))?;
 
         // Validate source port is an output
-        let source_port = from_node.outputs.iter()
+        let source_port = from_node
+            .outputs
+            .iter()
             .find(|p| p.name == from.port_name)
             .ok_or_else(|| GraphError::PortNotFound(from.clone()))?;
 
         // Validate dest port is an input
-        let dest_port = to_node.inputs.iter()
+        let dest_port = to_node
+            .inputs
+            .iter()
             .find(|p| p.name == to.port_name)
             .ok_or_else(|| GraphError::PortNotFound(to.clone()))?;
 
@@ -234,8 +242,12 @@ fn port_kinds_compatible(from: crate::port::PortKind, to: crate::port::PortKind)
     if from == to {
         return true;
     }
-    let is_f32_field =
-        |k: PortKind| matches!(k, PortKind::Heightmap | PortKind::Mask | PortKind::Control | PortKind::Density);
+    let is_f32_field = |k: PortKind| {
+        matches!(
+            k,
+            PortKind::Heightmap | PortKind::Mask | PortKind::Control | PortKind::Density
+        )
+    };
     is_f32_field(from) && is_f32_field(to)
 }
 
@@ -343,11 +355,20 @@ mod tests {
         let r_pre_connect = engine.revision();
         engine
             .connect(
-                PortId { node_id: a, port_name: "output".to_string() },
-                PortId { node_id: b, port_name: "heightmap".to_string() },
+                PortId {
+                    node_id: a,
+                    port_name: "output".to_string(),
+                },
+                PortId {
+                    node_id: b,
+                    port_name: "heightmap".to_string(),
+                },
             )
             .unwrap();
-        assert!(engine.revision() > r_pre_connect, "connect should bump revision");
+        assert!(
+            engine.revision() > r_pre_connect,
+            "connect should bump revision"
+        );
 
         // get_node_mut — the bug we're regressing on. A param edit via
         // the mutable reference returned here must be observable as a
@@ -377,20 +398,35 @@ mod tests {
         // nodes_mut
         let r_pre_nodes_mut = engine.revision();
         for (_, _) in engine.nodes_mut() {}
-        assert!(engine.revision() > r_pre_nodes_mut, "nodes_mut should bump revision");
+        assert!(
+            engine.revision() > r_pre_nodes_mut,
+            "nodes_mut should bump revision"
+        );
 
         // disconnect
         let r_pre_disconnect = engine.revision();
         engine.disconnect(
-            &PortId { node_id: a, port_name: "output".to_string() },
-            &PortId { node_id: b, port_name: "heightmap".to_string() },
+            &PortId {
+                node_id: a,
+                port_name: "output".to_string(),
+            },
+            &PortId {
+                node_id: b,
+                port_name: "heightmap".to_string(),
+            },
         );
-        assert!(engine.revision() > r_pre_disconnect, "disconnect should bump revision");
+        assert!(
+            engine.revision() > r_pre_disconnect,
+            "disconnect should bump revision"
+        );
 
         // remove_node
         let r_pre_remove = engine.revision();
         engine.remove_node(a).unwrap();
-        assert!(engine.revision() > r_pre_remove, "remove_node should bump revision");
+        assert!(
+            engine.revision() > r_pre_remove,
+            "remove_node should bump revision"
+        );
     }
 
     #[test]
@@ -455,29 +491,56 @@ mod tests {
     fn port_kinds_compatible_f32_field_set() {
         use crate::port::PortKind;
         // Same kind always compatible
-        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Heightmap));
+        assert!(port_kinds_compatible(
+            PortKind::Heightmap,
+            PortKind::Heightmap
+        ));
         assert!(port_kinds_compatible(PortKind::Color, PortKind::Color));
         // All f32-field variants interchangeable
         assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Mask));
-        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Control));
-        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Density));
+        assert!(port_kinds_compatible(
+            PortKind::Heightmap,
+            PortKind::Control
+        ));
+        assert!(port_kinds_compatible(
+            PortKind::Heightmap,
+            PortKind::Density
+        ));
         assert!(port_kinds_compatible(PortKind::Mask, PortKind::Control));
         assert!(port_kinds_compatible(PortKind::Control, PortKind::Density));
         assert!(port_kinds_compatible(PortKind::Density, PortKind::Mask));
         // Rejections
         assert!(!port_kinds_compatible(PortKind::Color, PortKind::Control));
         assert!(!port_kinds_compatible(PortKind::Color, PortKind::Heightmap));
-        assert!(!port_kinds_compatible(PortKind::Scalar, PortKind::Heightmap));
+        assert!(!port_kinds_compatible(
+            PortKind::Scalar,
+            PortKind::Heightmap
+        ));
         assert!(!port_kinds_compatible(PortKind::File, PortKind::Mask));
     }
 
     #[test]
     fn port_placement_for_input() {
         use crate::port::{PortKind, PortPlacement};
-        assert_eq!(PortPlacement::for_input(PortKind::Control), PortPlacement::Top(0));
-        assert_eq!(PortPlacement::for_input(PortKind::Density), PortPlacement::Top(1));
-        assert_eq!(PortPlacement::for_input(PortKind::Mask), PortPlacement::Bottom);
-        assert_eq!(PortPlacement::for_input(PortKind::Heightmap), PortPlacement::Left);
-        assert_eq!(PortPlacement::for_input(PortKind::Color), PortPlacement::Left);
+        assert_eq!(
+            PortPlacement::for_input(PortKind::Control),
+            PortPlacement::Top(0)
+        );
+        assert_eq!(
+            PortPlacement::for_input(PortKind::Density),
+            PortPlacement::Top(1)
+        );
+        assert_eq!(
+            PortPlacement::for_input(PortKind::Mask),
+            PortPlacement::Bottom
+        );
+        assert_eq!(
+            PortPlacement::for_input(PortKind::Heightmap),
+            PortPlacement::Left
+        );
+        assert_eq!(
+            PortPlacement::for_input(PortKind::Color),
+            PortPlacement::Left
+        );
     }
 }

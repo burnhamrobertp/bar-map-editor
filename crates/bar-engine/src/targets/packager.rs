@@ -18,12 +18,7 @@ pub trait Packager: Send + Sync {
     /// The `layout` mappings describe which files in source_dir map to
     /// which paths in the final archive. If layout is empty, all files
     /// in source_dir are included at their relative paths.
-    fn package(
-        &self,
-        source_dir: &Path,
-        output_path: &Path,
-        layout: &[FileMapping],
-    ) -> Result<()>;
+    fn package(&self, source_dir: &Path, output_path: &Path, layout: &[FileMapping]) -> Result<()>;
 
     /// Human-readable name for this packager.
     fn name(&self) -> &str;
@@ -87,8 +82,12 @@ impl Packager for SevenZipPackager {
 
         // Remove existing archive if present
         if output_path.exists() {
-            std::fs::remove_file(output_path)
-                .with_context(|| format!("Failed to remove existing archive: {}", output_path.display()))?;
+            std::fs::remove_file(output_path).with_context(|| {
+                format!(
+                    "Failed to remove existing archive: {}",
+                    output_path.display()
+                )
+            })?;
         }
 
         // Create parent directory
@@ -153,12 +152,13 @@ impl Packager for ZipPackager {
             .compression_method(zip::CompressionMethod::Deflated);
 
         // Walk source_dir recursively
-        for entry in walkdir::WalkDir::new(source_dir).into_iter().filter_map(|e| e.ok()) {
+        for entry in walkdir::WalkDir::new(source_dir)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
             let path = entry.path();
             if path.is_file() {
-                let relative = path
-                    .strip_prefix(source_dir)
-                    .unwrap_or(path);
+                let relative = path.strip_prefix(source_dir).unwrap_or(path);
                 let name = relative.to_slash_lossy();
                 zip.start_file(name.as_ref(), options)
                     .with_context(|| format!("Failed to add {} to zip", name))?;
@@ -187,8 +187,12 @@ impl Packager for DirectoryPackager {
         _layout: &[FileMapping],
     ) -> Result<()> {
         // Create the output directory
-        std::fs::create_dir_all(output_path)
-            .with_context(|| format!("Failed to create output directory: {}", output_path.display()))?;
+        std::fs::create_dir_all(output_path).with_context(|| {
+            format!(
+                "Failed to create output directory: {}",
+                output_path.display()
+            )
+        })?;
 
         // Copy all files recursively
         copy_dir_recursive(source_dir, output_path)

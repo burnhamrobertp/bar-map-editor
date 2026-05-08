@@ -15,11 +15,7 @@ use crate::panels;
 /// layout. Calls pre-frame work and the persistent shell chrome
 /// (menu bar, status bar, action bar, floating windows) before
 /// routing to the layout-specific panels.
-pub fn draw_active(
-    app: &mut BarEditorApp,
-    ctx: &egui::Context,
-    frame: &mut eframe::Frame,
-) {
+pub fn draw_active(app: &mut BarEditorApp, ctx: &egui::Context, frame: &mut eframe::Frame) {
     app.pre_frame_work(ctx, frame);
     app.draw_shell(ctx, frame);
 

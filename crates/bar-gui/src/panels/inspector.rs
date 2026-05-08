@@ -8,8 +8,8 @@
 use eframe::egui;
 
 use crate::app::{
-    apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp,
-    BrushTarget, BrushTool, InspectorMode,
+    apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp, BrushTarget,
+    BrushTool, InspectorMode,
 };
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
@@ -19,17 +19,13 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 
     // Refresh the cached egui texture if the heightmap has changed.
     if app.paint().heightmap_rev != app.paint().texture_rev {
-        let img_and_rev = app
-            .paint()
-            .heightmap
-            .as_ref()
-            .map(|hm| {
-                let (mn, mx) = app.map_height_range();
-                (
-                    heightmap_to_color_image(hm, mn, mx),
-                    app.paint().heightmap_rev,
-                )
-            });
+        let img_and_rev = app.paint().heightmap.as_ref().map(|hm| {
+            let (mn, mx) = app.map_height_range();
+            (
+                heightmap_to_color_image(hm, mn, mx),
+                app.paint().heightmap_rev,
+            )
+        });
         if let Some((img, rev)) = img_and_rev {
             let tex = ctx.load_texture("inspector_heightmap", img, egui::TextureOptions::LINEAR);
             let p = app.paint_mut();

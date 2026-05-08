@@ -143,11 +143,8 @@ struct Session {
 impl Session {
     fn new(gpu_context: &Option<GpuContext>, session_id: u64) -> Self {
         let terrain_renderer = gpu_context.as_ref().map(|ctx| {
-            let mut r = TerrainRenderer::new(
-                &ctx.device,
-                &ctx.queue,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            );
+            let mut r =
+                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
             r.resize(&ctx.device, 512, 512);
             r
         });
@@ -231,7 +228,10 @@ fn main() -> Result<()> {
     if let Some(icon_data) = icon {
         viewport = viewport.with_icon(icon_data);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
 
     eframe::run_native(
         "BAR - Map Editor",
@@ -242,9 +242,9 @@ fn main() -> Result<()> {
             // Extract wgpu render state from eframe for shared GPU access
             let render_state = cc.wgpu_render_state.clone();
 
-            let gpu_context = render_state.as_ref().map(|rs| {
-                GpuContext::from_existing(rs.device.clone(), rs.queue.clone())
-            });
+            let gpu_context = render_state
+                .as_ref()
+                .map(|rs| GpuContext::from_existing(rs.device.clone(), rs.queue.clone()));
 
             // Create HybridExecutor if GPU available, otherwise use CPU only
             let executor: Arc<dyn NodeExecutor + Send + Sync> = if let Some(ref ctx) = gpu_context {
@@ -404,10 +404,9 @@ impl eframe::App for AppWrapper {
         let run_filter_label = run_bundler_node
             .and_then(|id| self.app.graph().get_node(id))
             .map(|n| n.label.clone());
-        let no_export_in_flight = self.export_result_rx.is_none()
-            && self.pending_export_dir.is_none();
-        let should_request_dir =
-            (run_all || run_bundler_node.is_some()) && no_export_in_flight;
+        let no_export_in_flight =
+            self.export_result_rx.is_none() && self.pending_export_dir.is_none();
+        let should_request_dir = (run_all || run_bundler_node.is_some()) && no_export_in_flight;
 
         // Phase 1: spawn the folder picker on a worker. The egui main
         // loop keeps rendering while the OS dialog is up, instead of
@@ -538,7 +537,8 @@ impl eframe::App for AppWrapper {
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.app.set_status("Open operation failed unexpectedly".to_string());
+                    self.app
+                        .set_status("Open operation failed unexpectedly".to_string());
                     self.sd7_extract_rx = None;
                 }
             }
@@ -550,8 +550,8 @@ impl eframe::App for AppWrapper {
             self.sd7_extract_rx = Some(rx);
             let ctx_clone = ctx.clone();
             std::thread::spawn(move || {
-                let result = bar_engine::extract_sd7_to_work_dir(&sd7_path)
-                    .map_err(|e| e.to_string());
+                let result =
+                    bar_engine::extract_sd7_to_work_dir(&sd7_path).map_err(|e| e.to_string());
                 let _ = tx.send(result);
                 ctx_clone.request_repaint();
             });
@@ -746,8 +746,8 @@ impl eframe::App for AppWrapper {
             // input changes. Allowed to run even while a stale high-res thread
             // is still in flight; the stale result will be discarded by the
             // session_id + cache_key guard.
-            let needs_low_res = current_key != session.last_low_res_key
-                && current_key != session.last_high_res_key;
+            let needs_low_res =
+                current_key != session.last_low_res_key && current_key != session.last_high_res_key;
 
             if needs_low_res && !session.low_res_pending {
                 let low_res_size = 128u32.min(w.min(h));
@@ -758,12 +758,8 @@ impl eframe::App for AppWrapper {
 
                 session.low_res_pending = true;
                 std::thread::spawn(move || {
-                    let (heightmap, texture) = eval_preview(
-                        &graph,
-                        executor.as_ref(),
-                        low_res_size,
-                        preview_node_id,
-                    );
+                    let (heightmap, texture) =
+                        eval_preview(&graph, executor.as_ref(), low_res_size, preview_node_id);
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -802,12 +798,8 @@ impl eframe::App for AppWrapper {
 
                 session.high_res_pending = true;
                 std::thread::spawn(move || {
-                    let (heightmap, texture) = eval_preview(
-                        &graph,
-                        executor.as_ref(),
-                        high_res_size,
-                        preview_node_id,
-                    );
+                    let (heightmap, texture) =
+                        eval_preview(&graph, executor.as_ref(), high_res_size, preview_node_id);
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -837,12 +829,7 @@ impl eframe::App for AppWrapper {
                     if let Some(ref owned) = session.current_frame {
                         let elapsed = session.started_at.elapsed().as_secs_f32();
                         let frame = owned.as_frame(elapsed);
-                        renderer.render(
-                            &gpu.device,
-                            &gpu.queue,
-                            &session.camera,
-                            Some(&frame),
-                        );
+                        renderer.render(&gpu.device, &gpu.queue, &session.camera, Some(&frame));
                         Self::update_viewport_texture_on(
                             &mut session.viewport_texture_id,
                             &session.terrain_renderer,
@@ -876,19 +863,33 @@ impl eframe::App for AppWrapper {
                             if let Some(ref mut renderer) = session.terrain_renderer {
                                 renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
                                 let elapsed = session.started_at.elapsed().as_secs_f32();
-                                let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                                renderer.render(&gpu.device, &gpu.queue, &session.camera, frame_borrow.as_ref());
+                                let frame_borrow =
+                                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                                renderer.render(
+                                    &gpu.device,
+                                    &gpu.queue,
+                                    &session.camera,
+                                    frame_borrow.as_ref(),
+                                );
                             }
                         }
                     }
                     bar_gui::BrushTarget::Heightmap | bar_gui::BrushTarget::Color => {
                         // Switching back to height/color: restore normal terrain albedo.
-                        if let (Some(ref gpu), Some(cb)) = (&self.gpu_context, self.app.inspector_color_buffer_clone()) {
+                        if let (Some(ref gpu), Some(cb)) =
+                            (&self.gpu_context, self.app.inspector_color_buffer_clone())
+                        {
                             if let Some(ref mut renderer) = session.terrain_renderer {
                                 renderer.update_albedo(&gpu.device, &gpu.queue, &cb);
                                 let elapsed = session.started_at.elapsed().as_secs_f32();
-                                let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                                renderer.render(&gpu.device, &gpu.queue, &session.camera, frame_borrow.as_ref());
+                                let frame_borrow =
+                                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                                renderer.render(
+                                    &gpu.device,
+                                    &gpu.queue,
+                                    &session.camera,
+                                    frame_borrow.as_ref(),
+                                );
                             }
                         }
                     }
@@ -952,7 +953,8 @@ impl AppWrapper {
     fn start_test_in_bar(&mut self, ctx: &eframe::egui::Context) {
         let Some(_install) = bar_install::BarInstall::detect() else {
             self.app.set_status(
-                "BAR install not found. Install Beyond All Reason or set the path manually.".to_string(),
+                "BAR install not found. Install Beyond All Reason or set the path manually."
+                    .to_string(),
             );
             return;
         };
@@ -968,7 +970,8 @@ impl AppWrapper {
                 .unwrap_or(0),
         ));
         if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-            self.app.set_status(format!("Test in BAR: cannot create temp dir: {e}"));
+            self.app
+                .set_status(format!("Test in BAR: cannot create temp dir: {e}"));
             return;
         }
 
@@ -985,15 +988,9 @@ impl AppWrapper {
         std::thread::spawn(move || {
             let result = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                 Ok(outputs) => {
-                    let sculpt_ref =
-                        sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
+                    let sculpt_ref = sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
                     match bar_engine::execute_bundlers(
-                        &graph,
-                        &outputs,
-                        &recipe,
-                        &temp_dir,
-                        None,
-                        sculpt_ref,
+                        &graph, &outputs, &recipe, &temp_dir, None, sculpt_ref,
                     ) {
                         Ok(results) => {
                             // Pick the first SD7 produced. Bundlers can
@@ -1001,7 +998,10 @@ impl AppWrapper {
                             // launch with the first one.
                             results
                                 .into_iter()
-                                .find(|r| r.output_path.extension().and_then(|s| s.to_str()) == Some("sd7"))
+                                .find(|r| {
+                                    r.output_path.extension().and_then(|s| s.to_str())
+                                        == Some("sd7")
+                                })
                                 .map(|r| Ok(r.output_path))
                                 .unwrap_or_else(|| Err("Bundler produced no SD7".to_string()))
                         }
@@ -1019,7 +1019,8 @@ impl AppWrapper {
     /// lobby. Surfaces the result in the status bar.
     fn finish_test_in_bar(&mut self, sd7_path: &std::path::Path) {
         let Some(install) = bar_install::BarInstall::detect() else {
-            self.app.set_status("BAR install vanished mid-flight".to_string());
+            self.app
+                .set_status("BAR install vanished mid-flight".to_string());
             return;
         };
         match install.launch_lobby_with_map(sd7_path) {
@@ -1039,8 +1040,12 @@ impl AppWrapper {
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         ctx: &eframe::egui::Context,
     ) {
-        let Some(ref renderer) = terrain_renderer else { return };
-        let Some(view) = renderer.output_view() else { return };
+        let Some(ref renderer) = terrain_renderer else {
+            return;
+        };
+        let Some(view) = renderer.output_view() else {
+            return;
+        };
         let Some(ref rs) = render_state else { return };
 
         let mut egui_rend = rs.renderer.write();
@@ -1053,11 +1058,8 @@ impl AppWrapper {
                 tex_id,
             );
         } else {
-            let tex_id = egui_rend.register_native_texture(
-                &rs.device,
-                view,
-                wgpu::FilterMode::Linear,
-            );
+            let tex_id =
+                egui_rend.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear);
             *viewport_texture_id = Some(tex_id);
         }
 
@@ -1081,7 +1083,11 @@ impl AppWrapper {
         };
         let rect = response.rect;
         if !rect.contains(pointer) {
-            tracing::debug!("sculpt: pointer outside rect ({:?} not in {:?})", pointer, rect);
+            tracing::debug!(
+                "sculpt: pointer outside rect ({:?} not in {:?})",
+                pointer,
+                rect
+            );
             return;
         }
         let cursor_uv = (
@@ -1108,7 +1114,11 @@ impl AppWrapper {
             height_scale,
         );
         let Some(p) = pick else {
-            tracing::debug!("sculpt: pick_terrain miss (uv={:?}, extents={:?})", cursor_uv, (x_extent, z_extent, height_scale));
+            tracing::debug!(
+                "sculpt: pick_terrain miss (uv={:?}, extents={:?})",
+                cursor_uv,
+                (x_extent, z_extent, height_scale)
+            );
             return;
         };
         tracing::debug!("sculpt: dab at hm=({:.1},{:.1})", p.hm_x, p.hm_y);
@@ -1122,15 +1132,9 @@ impl AppWrapper {
             bar_gui::BrushTarget::Heightmap => {
                 app.apply_brush_at_heightmap(p.hm_x, p.hm_y, stroke_starting)
             }
-            bar_gui::BrushTarget::Color => {
-                app.apply_color_brush_at_heightmap(p.hm_x, p.hm_y)
-            }
-            bar_gui::BrushTarget::Metalmap => {
-                app.apply_metal_brush_at_heightmap(p.hm_x, p.hm_y)
-            }
-            bar_gui::BrushTarget::Typemap => {
-                app.apply_type_brush_at_heightmap(p.hm_x, p.hm_y)
-            }
+            bar_gui::BrushTarget::Color => app.apply_color_brush_at_heightmap(p.hm_x, p.hm_y),
+            bar_gui::BrushTarget::Metalmap => app.apply_metal_brush_at_heightmap(p.hm_x, p.hm_y),
+            bar_gui::BrushTarget::Typemap => app.apply_type_brush_at_heightmap(p.hm_x, p.hm_y),
         };
         // Color and other-target paints don't mutate the heightmap, so
         // the renderer's mesh stays put — only the texture (which the
@@ -1162,12 +1166,15 @@ impl AppWrapper {
                         if rw > 0 && rh > 0 {
                             let hm_ref = &updated;
                             let data: Vec<f32> = (y0..y1)
-                                .flat_map(|y| (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0)))
+                                .flat_map(|y| {
+                                    (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0))
+                                })
                                 .collect();
                             renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
                         }
                         let elapsed = session.started_at.elapsed().as_secs_f32();
-                        let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        let frame_borrow =
+                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                         renderer.render(
                             &gpu.device,
                             &gpu.queue,
@@ -1188,7 +1195,8 @@ impl AppWrapper {
                     if let Some(ref mut renderer) = session.terrain_renderer {
                         renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
                         let elapsed = session.started_at.elapsed().as_secs_f32();
-                        let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        let frame_borrow =
+                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                         renderer.render(
                             &gpu.device,
                             &gpu.queue,
@@ -1213,7 +1221,8 @@ impl AppWrapper {
                     if let Some(ref mut renderer) = session.terrain_renderer {
                         renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
                         let elapsed = session.started_at.elapsed().as_secs_f32();
-                        let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        let frame_borrow =
+                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                         renderer.render(
                             &gpu.device,
                             &gpu.queue,
@@ -1316,8 +1325,7 @@ impl AppWrapper {
                 if renderer.width != vp_w || renderer.height != vp_h {
                     renderer.resize(&gpu.device, vp_w, vp_h);
                     let elapsed = session.started_at.elapsed().as_secs_f32();
-                    let frame_borrow =
-                        session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                    let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                     renderer.render(
                         &gpu.device,
                         &gpu.queue,
@@ -1396,15 +1404,13 @@ impl AppWrapper {
         // ring disappears so the user knows their next click won't
         // land. Updated every frame regardless of drag state, so the
         // ring follows the cursor while idle.
-        let cursor_uv = response
-            .hover_pos()
-            .map(|p| {
-                let r = response.rect;
-                (
-                    (p.x - r.left()) / r.width().max(1.0),
-                    (p.y - r.top()) / r.height().max(1.0),
-                )
-            });
+        let cursor_uv = response.hover_pos().map(|p| {
+            let r = response.rect;
+            (
+                (p.x - r.left()) / r.width().max(1.0),
+                (p.y - r.top()) / r.height().max(1.0),
+            )
+        });
         let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
         let cursor_world = if sculpt_active {
             cursor_uv.and_then(|uv| {
@@ -1412,7 +1418,13 @@ impl AppWrapper {
                 let renderer = session.terrain_renderer.as_ref()?;
                 let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
                 let pick = pick_terrain(
-                    &session.camera, aspect, uv, hm, x_extent, z_extent, height_scale,
+                    &session.camera,
+                    aspect,
+                    uv,
+                    hm,
+                    x_extent,
+                    z_extent,
+                    height_scale,
                 )?;
                 // Brush radius in world-space units. The mesh spans
                 // 2 * x_extent across `hm.width()` heightmap pixels,
@@ -1463,9 +1475,7 @@ impl AppWrapper {
             // any zoom level.
             let delta = response.drag_delta();
             let speed = session.camera.distance * 0.0015;
-            session
-                .camera
-                .pan_xz(delta.x * speed, -delta.y * speed);
+            session.camera.pan_xz(delta.x * speed, -delta.y * speed);
             camera_changed = true;
         }
 
@@ -1486,8 +1496,7 @@ impl AppWrapper {
                 (&mut session.terrain_renderer, gpu_context)
             {
                 let elapsed = session.started_at.elapsed().as_secs_f32();
-                let frame_borrow =
-                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                 renderer.render(
                     &gpu.device,
                     &gpu.queue,

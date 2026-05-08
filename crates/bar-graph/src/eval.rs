@@ -88,12 +88,7 @@ pub fn evaluate_graph(
                 outputs.insert(node_id, node_outputs);
             }
             Err(e) => {
-                tracing::debug!(
-                    "Skipping {:?} ({:?}): {:?}",
-                    node.node_type,
-                    node_id,
-                    e
-                );
+                tracing::debug!("Skipping {:?} ({:?}): {:?}", node.node_type, node_id, e);
             }
         }
     }
@@ -184,10 +179,7 @@ pub fn get_bundler_node_heightmap(
 /// Heightmap directly off a node's own `output` port. Used for
 /// Preview-style mid-pipeline taps where the node itself produces
 /// a heightmap (rather than consuming one as a Bundler does).
-pub fn get_node_output_heightmap(
-    outputs: &NodeOutputs,
-    node_id: NodeId,
-) -> Option<Heightmap> {
+pub fn get_node_output_heightmap(outputs: &NodeOutputs, node_id: NodeId) -> Option<Heightmap> {
     let ports = outputs.get(&node_id)?;
     if let Some(PortValue::Heightmap(hm)) = ports.get("output") {
         return Some(hm.clone());
@@ -258,8 +250,7 @@ fn get_bundler_heightmap(
             for conn in graph.connections() {
                 if conn.to.node_id == *node_id && conn.to.port_name == port {
                     if let Some(upstream) = outputs.get(&conn.from.node_id) {
-                        if let Some(PortValue::Heightmap(hm)) = upstream.get(&conn.from.port_name)
-                        {
+                        if let Some(PortValue::Heightmap(hm)) = upstream.get(&conn.from.port_name) {
                             return Some(hm.clone());
                         }
                     }

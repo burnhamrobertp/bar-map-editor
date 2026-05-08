@@ -9,10 +9,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use bar_graph::{NodeId, NodeType, ParamValue, PortId, PortPlacement};
 use eframe::egui;
-use bar_graph::{
-    NodeId, NodeType, ParamValue, PortId, PortPlacement,
-};
 
 use crate::app::*;
 use crate::panels::tokens;
@@ -22,31 +20,36 @@ use crate::t;
 /// Geometry and colour constants for the standard (non-IO) node body.
 /// All node drawing passes read from here so magic numbers live in one place.
 pub(crate) struct NodeStyle {
-    pub bg:            egui::Color32,
-    pub bg_sel:        egui::Color32,
-    pub bg_pri:        egui::Color32,
-    pub border:        egui::Color32,
-    pub border_sel:    egui::Color32,
-    pub border_w:      f32,
-    pub border_w_sel:  f32,
-    pub rounding:      f32,
-    pub title_h:       f32,
+    pub bg: egui::Color32,
+    pub bg_sel: egui::Color32,
+    pub bg_pri: egui::Color32,
+    pub border: egui::Color32,
+    pub border_sel: egui::Color32,
+    pub border_w: f32,
+    pub border_w_sel: f32,
+    pub rounding: f32,
+    pub title_h: f32,
     pub title_rounding: egui::CornerRadius,
 }
 
 impl NodeStyle {
     pub(crate) fn default() -> Self {
         Self {
-            bg:            tokens::NODE_BG,
-            bg_sel:        tokens::NODE_BG_SEL,
-            bg_pri:        tokens::NODE_BG_PRI,
-            border:        tokens::NODE_BORDER,
-            border_sel:    tokens::NODE_BORDER_SEL,
-            border_w:      1.5,
-            border_w_sel:  2.0,
-            rounding:      4.0,
-            title_h:       20.0,
-            title_rounding: egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 },
+            bg: tokens::NODE_BG,
+            bg_sel: tokens::NODE_BG_SEL,
+            bg_pri: tokens::NODE_BG_PRI,
+            border: tokens::NODE_BORDER,
+            border_sel: tokens::NODE_BORDER_SEL,
+            border_w: 1.5,
+            border_w_sel: 2.0,
+            rounding: 4.0,
+            title_h: 20.0,
+            title_rounding: egui::CornerRadius {
+                nw: 4,
+                ne: 4,
+                sw: 0,
+                se: 0,
+            },
         }
     }
 }
@@ -118,7 +121,12 @@ impl BarEditorApp {
             );
             painter.rect_filled(
                 header_rect,
-                egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                egui::CornerRadius {
+                    nw: 6,
+                    ne: 6,
+                    sw: 0,
+                    se: 0,
+                },
                 egui::Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 200),
             );
             // Border is painted last so the header fill never covers
@@ -146,10 +154,8 @@ impl BarEditorApp {
                 egui::Color32::WHITE,
             );
             // Body rect = full minus header, for click hit-testing.
-            let body_rect = egui::Rect::from_min_max(
-                egui::pos2(rect.left(), header_rect.bottom()),
-                rect.max,
-            );
+            let body_rect =
+                egui::Rect::from_min_max(egui::pos2(rect.left(), header_rect.bottom()), rect.max);
             self.group_header_rects.insert(*gid, header_rect);
             self.group_body_rects.insert(*gid, body_rect);
         }
@@ -192,27 +198,20 @@ impl BarEditorApp {
         // external connections stay put would produce 3000-px wires
         // across the canvas. The selection case keeps the existing
         // "anchor at the target's current top-left" behaviour.
-        let layout_everything = self.selected_group.is_none()
-            && self.selected_nodes.is_empty();
+        let layout_everything = self.selected_group.is_none() && self.selected_nodes.is_empty();
 
         self.push_undo("Auto Layout");
 
         // Per-unit bounding-box size (width × height). For a
         // subgraph, this is the bounding box of every member node.
-        let sizes: Vec<egui::Vec2> = target_units
-            .iter()
-            .map(|u| u.bounding_size(self))
-            .collect();
+        let sizes: Vec<egui::Vec2> = target_units.iter().map(|u| u.bounding_size(self)).collect();
 
         // Topological depth → column index for each unit.
         let depths = self.compute_layout_depths(&target_units);
         let mut columns: std::collections::BTreeMap<u32, Vec<usize>> =
             std::collections::BTreeMap::new();
         for (idx, unit) in target_units.iter().enumerate() {
-            let d = depths
-                .get(&unit.representative_id())
-                .copied()
-                .unwrap_or(0);
+            let d = depths.get(&unit.representative_id()).copied().unwrap_or(0);
             columns.entry(d).or_default().push(idx);
         }
 
@@ -234,10 +233,8 @@ impl BarEditorApp {
             // palette / scrollbar.
             const VIEWPORT_MARGIN: f32 = 40.0;
             egui::pos2(
-                self.canvas_rect_last.left() + VIEWPORT_MARGIN
-                    - self.canvas_offset.x,
-                self.canvas_rect_last.top() + VIEWPORT_MARGIN
-                    - self.canvas_offset.y,
+                self.canvas_rect_last.left() + VIEWPORT_MARGIN - self.canvas_offset.x,
+                self.canvas_rect_last.top() + VIEWPORT_MARGIN - self.canvas_offset.y,
             )
         } else {
             target_units
@@ -264,31 +261,16 @@ impl BarEditorApp {
             // sources falls back to its current Y so the user's
             // manual ordering is preserved for unconnected units.
             indices.sort_by(|&a, &b| {
-                let ka = barycentric_key(
-                    a,
-                    &edges_from,
-                    &sizes,
-                    &placed_top_y,
-                    &target_units,
-                    self,
-                );
-                let kb = barycentric_key(
-                    b,
-                    &edges_from,
-                    &sizes,
-                    &placed_top_y,
-                    &target_units,
-                    self,
-                );
+                let ka =
+                    barycentric_key(a, &edges_from, &sizes, &placed_top_y, &target_units, self);
+                let kb =
+                    barycentric_key(b, &edges_from, &sizes, &placed_top_y, &target_units, self);
                 ka.total_cmp(&kb)
             });
 
             // Stack vertically using each unit's actual height so
             // tall units don't overlap their neighbours below.
-            let col_w = indices
-                .iter()
-                .map(|&i| sizes[i].x)
-                .fold(0.0_f32, f32::max);
+            let col_w = indices.iter().map(|&i| sizes[i].x).fold(0.0_f32, f32::max);
             let mut y = origin.y;
             for &i in &indices {
                 let target_pos = egui::pos2(col_x, y);
@@ -315,10 +297,7 @@ impl BarEditorApp {
     /// it. Used for barycentric ordering. Connections from outside
     /// the target set are ignored — those edges hang off the layout
     /// and don't influence in-set placement.
-    pub(crate) fn compute_incoming_unit_edges(
-        &self,
-        units: &[LayoutUnit],
-    ) -> Vec<Vec<usize>> {
+    pub(crate) fn compute_incoming_unit_edges(&self, units: &[LayoutUnit]) -> Vec<Vec<usize>> {
         let mut node_to_unit: std::collections::HashMap<NodeId, usize> =
             std::collections::HashMap::new();
         for (idx, u) in units.iter().enumerate() {
@@ -354,9 +333,7 @@ impl BarEditorApp {
         //    while editing a subgraph re-laid out the *outer* graph
         //    instead — leaving the subgraph's contents unchanged and
         //    silently shuffling everything outside.
-        if let Some(CanvasView::SubGraph(gid)) =
-            self.tabs.get(self.active_tab as usize)
-        {
+        if let Some(CanvasView::SubGraph(gid)) = self.tabs.get(self.active_tab as usize) {
             if let Some(group) = self.groups.get(gid) {
                 // If a subset is explicitly selected inside the subgraph,
                 // honour that selection. Otherwise lay out every member.
@@ -403,11 +380,7 @@ impl BarEditorApp {
                         if group.is_subgraph && group.collapsed {
                             if emitted_groups.insert(gid) {
                                 units.push(LayoutUnit::Subgraph {
-                                    members: group
-                                        .member_ids
-                                        .iter()
-                                        .copied()
-                                        .collect(),
+                                    members: group.member_ids.iter().copied().collect(),
                                 });
                             }
                             continue;
@@ -423,12 +396,10 @@ impl BarEditorApp {
         // subgraphs are bundled into their group; everyone else is
         // a standalone node.
         let mut units: Vec<LayoutUnit> = Vec::new();
-        let mut handled: std::collections::HashSet<NodeId> =
-            std::collections::HashSet::new();
+        let mut handled: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
         for (gid, group) in &self.groups {
             if group.is_subgraph && group.collapsed {
-                let members: Vec<NodeId> =
-                    group.member_ids.iter().copied().collect();
+                let members: Vec<NodeId> = group.member_ids.iter().copied().collect();
                 for m in &members {
                     handled.insert(*m);
                 }
@@ -466,13 +437,9 @@ impl BarEditorApp {
 
         // Iterate in graph topo order so a unit's dependencies are
         // resolved before it.
-        let topo = self
-            .graph
-            .topological_sort()
-            .unwrap_or_default();
+        let topo = self.graph.topological_sort().unwrap_or_default();
 
-        let mut depths: std::collections::HashMap<NodeId, u32> =
-            std::collections::HashMap::new();
+        let mut depths: std::collections::HashMap<NodeId, u32> = std::collections::HashMap::new();
         for nid in topo {
             let Some(rep) = node_to_rep.get(&nid).copied() else {
                 continue;
@@ -483,8 +450,7 @@ impl BarEditorApp {
                 if conn.to.node_id != nid {
                     continue;
                 }
-                let Some(src_rep) = node_to_rep.get(&conn.from.node_id).copied()
-                else {
+                let Some(src_rep) = node_to_rep.get(&conn.from.node_id).copied() else {
                     continue; // external feed — doesn't influence depth
                 };
                 if src_rep == rep {
@@ -523,7 +489,12 @@ impl BarEditorApp {
             egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
             visual.size,
         );
-        Some(node_port_pos(&node.node_type, node_rect, PortPlacement::Right, port_index))
+        Some(node_port_pos(
+            &node.node_type,
+            node_rect,
+            PortPlacement::Right,
+            port_index,
+        ))
     }
 
     /// Count input ports across `ids` that have no incoming
@@ -532,11 +503,15 @@ impl BarEditorApp {
     pub(crate) fn count_unwired_inputs(&self, ids: &[NodeId]) -> usize {
         let mut total = 0;
         for &nid in ids {
-            let Some(node) = self.graph.get_node(nid) else { continue };
+            let Some(node) = self.graph.get_node(nid) else {
+                continue;
+            };
             for input_port in &node.inputs {
-                let wired = self.graph.connections().iter().any(|c| {
-                    c.to.node_id == nid && c.to.port_name == input_port.name
-                });
+                let wired = self
+                    .graph
+                    .connections()
+                    .iter()
+                    .any(|c| c.to.node_id == nid && c.to.port_name == input_port.name);
                 if !wired {
                     total += 1;
                 }
@@ -601,8 +576,7 @@ impl BarEditorApp {
         let mut connections_made = 0usize;
 
         for target_id in sorted {
-            let Some(target_visual) = self.node_visuals.get(&target_id).cloned()
-            else {
+            let Some(target_visual) = self.node_visuals.get(&target_id).cloned() else {
                 continue;
             };
             let Some(target_node) = self.graph.get_node(target_id).cloned() else {
@@ -618,10 +592,11 @@ impl BarEditorApp {
 
             for input_port in &target_node.inputs {
                 // Skip already-wired inputs.
-                let already_wired = self.graph.connections().iter().any(|c| {
-                    c.to.node_id == target_id
-                        && c.to.port_name == input_port.name
-                });
+                let already_wired = self
+                    .graph
+                    .connections()
+                    .iter()
+                    .any(|c| c.to.node_id == target_id && c.to.port_name == input_port.name);
                 if already_wired {
                     continue;
                 }
@@ -643,12 +618,10 @@ impl BarEditorApp {
                     if *other_id == target_id {
                         continue;
                     }
-                    let Some(other_visual) = self.node_visuals.get(other_id)
-                    else {
+                    let Some(other_visual) = self.node_visuals.get(other_id) else {
                         continue;
                     };
-                    let other_right =
-                        other_visual.position.x + other_visual.size.x;
+                    let other_right = other_visual.position.x + other_visual.size.x;
                     if other_right > target_left {
                         continue;
                     }
@@ -666,11 +639,7 @@ impl BarEditorApp {
                     }
                     let dist = (target_anchor - other_anchor).length();
                     for output_port in &other_node.outputs {
-                        candidates.push((
-                            *other_id,
-                            output_port.name.clone(),
-                            dist,
-                        ));
+                        candidates.push((*other_id, output_port.name.clone(), dist));
                     }
                 }
                 candidates.sort_by(|a, b| a.2.total_cmp(&b.2));
@@ -817,7 +786,10 @@ impl BarEditorApp {
             } else {
                 egui::pos2(300.0, 200.0)
             };
-            let rows = group.subgraph_inputs.len().max(group.subgraph_outputs.len());
+            let rows = group
+                .subgraph_inputs
+                .len()
+                .max(group.subgraph_outputs.len());
             let block_h = header_h + (rows.max(1) as f32) * row_h + 10.0;
             let rect = egui::Rect::from_min_size(
                 egui::pos2(centre.x - block_w * 0.5, centre.y - block_h * 0.5),
@@ -890,7 +862,10 @@ impl BarEditorApp {
             } else {
                 egui::pos2(300.0, 200.0)
             };
-            let rows = group.subgraph_inputs.len().max(group.subgraph_outputs.len());
+            let rows = group
+                .subgraph_inputs
+                .len()
+                .max(group.subgraph_outputs.len());
             let block_h = header_h + (rows.max(1) as f32) * row_h + 10.0;
             let rect = egui::Rect::from_min_size(
                 egui::pos2(centre.x - block_w * 0.5, centre.y - block_h * 0.5),
@@ -905,13 +880,16 @@ impl BarEditorApp {
                 egui::Color32::from_rgba_unmultiplied(tint.r(), tint.g(), tint.b(), 230),
             );
             // Header band.
-            let header_rect = egui::Rect::from_min_size(
-                rect.min,
-                egui::vec2(rect.width(), header_h),
-            );
+            let header_rect =
+                egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), header_h));
             painter.rect_filled(
                 header_rect,
-                egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                egui::CornerRadius {
+                    nw: 6,
+                    ne: 6,
+                    sw: 0,
+                    se: 0,
+                },
                 tint.gamma_multiply(0.7),
             );
             let label_text = if group.label.is_empty() {
@@ -1000,21 +978,22 @@ impl BarEditorApp {
         );
         let painter = ui.painter_at(strip_rect);
 
-        let neutral_active   = tokens::TAB_BG_ACTIVE;
+        let neutral_active = tokens::TAB_BG_ACTIVE;
         let neutral_inactive = tokens::TAB_BG_INACTIVE;
-        let neutral_hover    = tokens::TAB_BG_HOVER;
-        let baseline         = tokens::TAB_BASELINE;
+        let neutral_hover = tokens::TAB_BG_HOVER;
+        let baseline = tokens::TAB_BASELINE;
 
         // Pick the tab's tinted base colour. SubGraph tabs use their
         // group's palette colour so two SubGraphs with different
         // colours look visibly different in the tab strip. Main and
         // any tab whose target is missing fall back to neutral.
-        let tab_tint = |view: &CanvasView, groups: &HashMap<u64, GroupRuntime>| -> Option<egui::Color32> {
-            match view {
-                CanvasView::Main => None,
-                CanvasView::SubGraph(gid) => groups.get(gid).map(|g| group_color(g.color_idx)),
-            }
-        };
+        let tab_tint =
+            |view: &CanvasView, groups: &HashMap<u64, GroupRuntime>| -> Option<egui::Color32> {
+                match view {
+                    CanvasView::Main => None,
+                    CanvasView::SubGraph(gid) => groups.get(gid).map(|g| group_color(g.color_idx)),
+                }
+            };
 
         // Baseline along the bottom of the strip.
         painter.line_segment(
@@ -1051,7 +1030,11 @@ impl BarEditorApp {
             let label_galley = painter.layout_no_wrap(
                 label.clone(),
                 font.clone(),
-                if is_active { tokens::TAB_LABEL_ACTIVE } else { tokens::TAB_LABEL_DIM },
+                if is_active {
+                    tokens::TAB_LABEL_ACTIVE
+                } else {
+                    tokens::TAB_LABEL_DIM
+                },
             );
             let close_w = if closable { 18.0 } else { 0.0 };
             let raw_w = label_galley.size().x + 24.0 + close_w;
@@ -1097,7 +1080,12 @@ impl BarEditorApp {
             };
             painter.rect_filled(
                 tab_rect,
-                egui::CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+                egui::CornerRadius {
+                    nw: 6,
+                    ne: 6,
+                    sw: 0,
+                    se: 0,
+                },
                 bg,
             );
             // Side + top stroke. Skip the bottom side for the active
@@ -1155,11 +1143,8 @@ impl BarEditorApp {
                 while !truncated.is_empty() {
                     truncated.pop();
                     let test = format!("{truncated}…");
-                    let galley = painter.layout_no_wrap(
-                        test.clone(),
-                        font.clone(),
-                        egui::Color32::WHITE,
-                    );
+                    let galley =
+                        painter.layout_no_wrap(test.clone(), font.clone(), egui::Color32::WHITE);
                     if galley.size().x <= max_label_w {
                         painter.galley(
                             egui::pos2(label_x, label_y - galley.size().y * 0.5),
@@ -1239,8 +1224,7 @@ impl BarEditorApp {
                     let item = self.tabs.remove(from);
                     self.tabs.insert(to, item);
                     if let Some(av) = active_view {
-                        self.active_tab =
-                            self.tabs.iter().position(|v| v == &av).unwrap_or(0);
+                        self.active_tab = self.tabs.iter().position(|v| v == &av).unwrap_or(0);
                     }
                 }
             }
@@ -1313,11 +1297,7 @@ impl BarEditorApp {
         }
         self.tabs = new_tabs;
         self.active_tab = match prev_active {
-            Some(prev) => self
-                .tabs
-                .iter()
-                .position(|v| v == &prev)
-                .unwrap_or(0),
+            Some(prev) => self.tabs.iter().position(|v| v == &prev).unwrap_or(0),
             None => 0,
         };
     }
@@ -1373,31 +1353,30 @@ impl BarEditorApp {
         // Pressing Escape on a non-Main tab returns to Main without
         // closing the tab — same speed-back affordance the old
         // confined-edit Esc had, but you don't lose the open tab.
-        if self.active_tab != 0
-            && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape))
-        {
+        if self.active_tab != 0 && ui.ctx().input(|i| i.key_pressed(egui::Key::Escape)) {
             self.set_active_tab(0);
         }
         // Ctrl/Cmd+W closes the current tab. Main is unclosable; the
         // shortcut is a no-op when Main is active.
-        if ui.ctx().input(|i| {
-            (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::W)
-        }) && self.active_tab != 0
+        if ui
+            .ctx()
+            .input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::W))
+            && self.active_tab != 0
         {
             self.close_tab(self.active_tab);
         }
         // Ctrl/Cmd+Tab swaps with the previously-active tab — the
         // standard "back to where I was" shortcut. Skipped when
         // there's only one tab (or `last_active_tab` is the same).
-        if ui.ctx().input(|i| {
-            (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Tab)
-        }) {
+        if ui
+            .ctx()
+            .input(|i| (i.modifiers.ctrl || i.modifiers.command) && i.key_pressed(egui::Key::Tab))
+        {
             let target = self.last_active_tab;
             if target != self.active_tab && target < self.tabs.len() {
                 self.set_active_tab(target);
             }
         }
-
 
         let available = ui.available_size();
         let (canvas_rect, response) =
@@ -1489,11 +1468,7 @@ impl BarEditorApp {
         if let Some(anchor) = self.marquee_start {
             let cur = pointer.unwrap_or(anchor);
             let marquee = egui::Rect::from_two_pos(anchor, cur);
-            painter.rect_filled(
-                marquee,
-                2.0,
-                tokens::NODE_BORDER_SEL.gamma_multiply(0.11),
-            );
+            painter.rect_filled(marquee, 2.0, tokens::NODE_BORDER_SEL.gamma_multiply(0.11));
             painter.rect_stroke(
                 marquee,
                 2.0,
@@ -1501,7 +1476,10 @@ impl BarEditorApp {
                 egui::StrokeKind::Inside,
             );
             // On drag end, finalize the selection.
-            if !ui.ctx().input(|i| i.pointer.button_down(egui::PointerButton::Primary)) {
+            if !ui
+                .ctx()
+                .input(|i| i.pointer.button_down(egui::PointerButton::Primary))
+            {
                 let additive = ui.ctx().input(|i| i.modifiers.ctrl || i.modifiers.command);
                 let mut hits: Vec<NodeId> = Vec::new();
                 for (id, visual) in &self.node_visuals {
@@ -1658,7 +1636,11 @@ impl BarEditorApp {
                 .map(|g| g.is_subgraph)
                 .unwrap_or(false);
             header_resp.context_menu(|ui| {
-                let label = if is_sub { "Delete subgraph" } else { "Delete group…" };
+                let label = if is_sub {
+                    "Delete subgraph"
+                } else {
+                    "Delete group…"
+                };
                 if ui.button(label).clicked() {
                     if is_sub {
                         self.delete_subgraph_with_contents(gid);
@@ -1674,8 +1656,7 @@ impl BarEditorApp {
         // Compute the layout of every collapsed subgraph upfront so
         // wires can reroute through their external port handles when
         // an endpoint is on a hidden inner node that's bound to one.
-        let (_collapsed_rects_pre, subgraph_handles) =
-            self.collapsed_subgraph_layout(offset);
+        let (_collapsed_rects_pre, subgraph_handles) = self.collapsed_subgraph_layout(offset);
         let hidden_for_wires = self.hidden_nodes_this_frame();
         let connections_snapshot = self.graph.connections().to_vec();
         let mut wire_polylines: Vec<((PortId, PortId), Vec<egui::Pos2>)> = Vec::new();
@@ -1692,15 +1673,25 @@ impl BarEditorApp {
                     .get(&(conn.from.node_id, conn.from.port_name.clone()))
                     .copied()
             } else {
-                self.node_visuals.get(&conn.from.node_id).and_then(|visual| {
-                    let node = self.graph.get_node(conn.from.node_id)?;
-                    let out_idx = node.outputs.iter().position(|p| p.name == conn.from.port_name)?;
-                    let node_rect = egui::Rect::from_min_size(
-                        egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
-                        visual.size,
-                    );
-                    Some(node_port_pos(&node.node_type, node_rect, PortPlacement::Right, out_idx))
-                })
+                self.node_visuals
+                    .get(&conn.from.node_id)
+                    .and_then(|visual| {
+                        let node = self.graph.get_node(conn.from.node_id)?;
+                        let out_idx = node
+                            .outputs
+                            .iter()
+                            .position(|p| p.name == conn.from.port_name)?;
+                        let node_rect = egui::Rect::from_min_size(
+                            egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
+                            visual.size,
+                        );
+                        Some(node_port_pos(
+                            &node.node_type,
+                            node_rect,
+                            PortPlacement::Right,
+                            out_idx,
+                        ))
+                    })
             };
             // to_pos and to_placement computed together so control-point
             // axis can reflect which edge the input port sits on.
@@ -1719,7 +1710,9 @@ impl BarEditorApp {
                     let side_idx = if matches!(placement, PortPlacement::Left) {
                         node.inputs
                             .iter()
-                            .filter(|p| matches!(PortPlacement::for_input(p.kind), PortPlacement::Left))
+                            .filter(|p| {
+                                matches!(PortPlacement::for_input(p.kind), PortPlacement::Left)
+                            })
                             .position(|p| p.name == conn.to.port_name)?
                     } else {
                         0
@@ -1740,15 +1733,15 @@ impl BarEditorApp {
                 continue;
             };
             let to_axis = match to_placement {
-                PortPlacement::Left   => egui::vec2(-1.0,  0.0),
-                PortPlacement::Right  => egui::vec2( 1.0,  0.0),
-                PortPlacement::Top(_) => egui::vec2( 0.0, -1.0),
-                PortPlacement::Bottom => egui::vec2( 0.0,  1.0),
+                PortPlacement::Left => egui::vec2(-1.0, 0.0),
+                PortPlacement::Right => egui::vec2(1.0, 0.0),
+                PortPlacement::Top(_) => egui::vec2(0.0, -1.0),
+                PortPlacement::Bottom => egui::vec2(0.0, 1.0),
             };
             let dist = (from_pos - to_pos).length().max(40.0);
             let strength = 0.4 * dist;
             let ctrl1 = from_pos + egui::vec2(1.0, 0.0) * strength;
-            let ctrl2 = to_pos   + to_axis * strength;
+            let ctrl2 = to_pos + to_axis * strength;
             let points: Vec<egui::Pos2> = (0..=20)
                 .map(|i| {
                     let t = i as f32 / 20.0;
@@ -1905,17 +1898,37 @@ impl BarEditorApp {
                 } else {
                     (None, None)
                 };
-                (n.node_type.clone(), n.label.clone(), n.inputs.clone(), n.outputs.clone(), passthrough_files, io_name, io_kind)
+                (
+                    n.node_type.clone(),
+                    n.label.clone(),
+                    n.inputs.clone(),
+                    n.outputs.clone(),
+                    passthrough_files,
+                    io_name,
+                    io_kind,
+                )
             });
-            let Some((node_type, node_label, node_inputs, node_outputs, passthrough_files, io_name, io_kind)) = extracted else {
+            let Some((
+                node_type,
+                node_label,
+                node_inputs,
+                node_outputs,
+                passthrough_files,
+                io_name,
+                io_kind,
+            )) = extracted
+            else {
                 continue;
             };
             let visual_data = self.node_visuals.get(node_id).map(|v| (v.position, v.size));
-            let Some((node_pos_raw, node_size)) = visual_data else { continue; };
+            let Some((node_pos_raw, node_size)) = visual_data else {
+                continue;
+            };
             // All borrows on self.graph and self.node_visuals released here.
 
             let node_pos = node_pos_raw + offset;
-            let node_rect = egui::Rect::from_min_size(egui::pos2(node_pos.x, node_pos.y), node_size);
+            let node_rect =
+                egui::Rect::from_min_size(egui::pos2(node_pos.x, node_pos.y), node_size);
 
             if !canvas_rect.intersects(node_rect) {
                 continue;
@@ -1986,8 +1999,7 @@ impl BarEditorApp {
                 let border_width = if is_selected { 2.0 } else { 1.5 };
                 let mid_y = node_rect.center().y;
 
-                let outline_pts =
-                    build_io_outline(node_rect, chevron_w, body_radius, is_io_input);
+                let outline_pts = build_io_outline(node_rect, chevron_w, body_radius, is_io_input);
                 painter.add(egui::Shape::convex_polygon(
                     outline_pts,
                     body_color,
@@ -1998,10 +2010,7 @@ impl BarEditorApp {
                 // port, vertically centred.
                 let icon_rect = if is_io_input {
                     egui::Rect::from_min_size(
-                        egui::pos2(
-                            node_rect.left() + inner_pad,
-                            mid_y - icon_size / 2.0,
-                        ),
+                        egui::pos2(node_rect.left() + inner_pad, mid_y - icon_size / 2.0),
                         egui::vec2(icon_size, icon_size),
                     )
                 } else {
@@ -2173,10 +2182,7 @@ impl BarEditorApp {
                         .graph
                         .connections()
                         .iter()
-                        .find(|c| {
-                            c.to.node_id == *node_id
-                                && c.to.port_name == input.name
-                        })
+                        .find(|c| c.to.node_id == *node_id && c.to.port_name == input.name)
                         .map(|c| {
                             (
                                 c.from.node_id,
@@ -2185,9 +2191,7 @@ impl BarEditorApp {
                                 c.to.port_name.clone(),
                             )
                         });
-                    if let Some((src_node, src_port, dst_node, dst_port)) =
-                        existing
-                    {
+                    if let Some((src_node, src_port, dst_node, dst_port)) = existing {
                         self.push_undo("Disconnect");
                         self.graph.disconnect(
                             &PortId {
@@ -2247,7 +2251,7 @@ impl BarEditorApp {
                     connection_start = Some(DragConnection {
                         from_node: *node_id,
                         from_port: output.name.clone(),
-                        from_pos:  port_pos,
+                        from_pos: port_pos,
                     });
                 }
             }
@@ -2321,7 +2325,12 @@ impl BarEditorApp {
                 };
                 painter.rect_filled(
                     footer_rect,
-                    egui::CornerRadius { nw: 0, ne: 0, sw: 4, se: 4 },
+                    egui::CornerRadius {
+                        nw: 0,
+                        ne: 0,
+                        sw: 4,
+                        se: 4,
+                    },
                     footer_bg,
                 );
                 // "Open" reads as "open the viewport" — the Preview
@@ -2600,10 +2609,8 @@ impl BarEditorApp {
                     (-1, 1) => node_rect.left_bottom(),
                     _ => node_rect.right_bottom(),
                 };
-                let handle_rect = egui::Rect::from_center_size(
-                    corner_pos,
-                    egui::vec2(handle_sz, handle_sz),
-                );
+                let handle_rect =
+                    egui::Rect::from_center_size(corner_pos, egui::vec2(handle_sz, handle_sz));
                 let handle_resp = ui.interact(
                     handle_rect,
                     egui::Id::new(("resize", node_id.0, cx, cy)),
@@ -2703,8 +2710,9 @@ impl BarEditorApp {
                 let Some((nid, pname)) = &port.binding else {
                     continue;
                 };
-                let Some(handle) =
-                    subgraph_handle_positions.get(&(*nid, pname.clone())).copied()
+                let Some(handle) = subgraph_handle_positions
+                    .get(&(*nid, pname.clone()))
+                    .copied()
                 else {
                     continue;
                 };
@@ -2720,7 +2728,7 @@ impl BarEditorApp {
                     connection_start = Some(DragConnection {
                         from_node: *nid,
                         from_port: pname.clone(),
-                        from_pos:  handle,
+                        from_pos: handle,
                     });
                 }
             }
@@ -2728,8 +2736,9 @@ impl BarEditorApp {
                 let Some((nid, pname)) = &port.binding else {
                     continue;
                 };
-                let Some(handle) =
-                    subgraph_handle_positions.get(&(*nid, pname.clone())).copied()
+                let Some(handle) = subgraph_handle_positions
+                    .get(&(*nid, pname.clone()))
+                    .copied()
                 else {
                     continue;
                 };
@@ -2811,7 +2820,10 @@ impl BarEditorApp {
                 let g = self.groups.get(gid)?;
                 if g.is_subgraph
                     && pointer.is_some_and(|p| rect.contains(p))
-                    && ui.ctx().input(|i| i.pointer.button_double_clicked(egui::PointerButton::Primary))
+                    && ui.ctx().input(|i| {
+                        i.pointer
+                            .button_double_clicked(egui::PointerButton::Primary)
+                    })
                 {
                     Some(*gid)
                 } else {
@@ -2857,8 +2869,7 @@ impl BarEditorApp {
         // subgraph it's a member of. Skip the whole pass — group
         // membership only changes via Main-view drags or the right-
         // click menu.
-        let in_subgraph_view =
-            matches!(self.current_view(), CanvasView::SubGraph(_));
+        let in_subgraph_view = matches!(self.current_view(), CanvasView::SubGraph(_));
         if in_subgraph_view {
             drag_drop_into_group.clear();
         }
@@ -2973,6 +2984,4 @@ impl BarEditorApp {
             self.drag_connection = None;
         }
     }
-
 }
-

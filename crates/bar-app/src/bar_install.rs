@@ -58,7 +58,10 @@ impl BarInstall {
             return None;
         }
 
-        Some(Self { lobby_exe, maps_dir })
+        Some(Self {
+            lobby_exe,
+            maps_dir,
+        })
     }
 }
 
@@ -163,8 +166,9 @@ impl BarInstall {
             .ok_or_else(|| LaunchError::Sd7Unreadable("path has no filename".into()))?;
         let dest = self.maps_dir.join(file_name);
 
-        std::fs::copy(sd7_path, &dest)
-            .map_err(|e| LaunchError::CopyFailed(format!("{} -> {}: {e}", sd7_path.display(), dest.display())))?;
+        std::fs::copy(sd7_path, &dest).map_err(|e| {
+            LaunchError::CopyFailed(format!("{} -> {}: {e}", sd7_path.display(), dest.display()))
+        })?;
 
         // Spawn the lobby. We don't wait for it to exit — the user will
         // interact with the lobby UI; OM continues running.

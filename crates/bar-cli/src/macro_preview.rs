@@ -86,8 +86,8 @@ pub fn run(
     height: u32,
     out_dir: &Path,
 ) -> Result<()> {
-    let template = load_macro(macro_arg)
-        .with_context(|| format!("Failed to load macro: {macro_arg}"))?;
+    let template =
+        load_macro(macro_arg).with_context(|| format!("Failed to load macro: {macro_arg}"))?;
 
     // Parse `--knob name=value` pairs into a map.
     let knob_map = parse_knobs(knobs)?;
@@ -122,9 +122,11 @@ pub fn run(
     // Diagnostic: data range so I can see whether the macro is
     // producing flat output (bug) vs. legitimately gentle terrain.
     let data = heightmap.data();
-    let (min, max) = data.iter().fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
-        (lo.min(v), hi.max(v))
-    });
+    let (min, max) = data
+        .iter()
+        .fold((f32::INFINITY, f32::NEG_INFINITY), |(lo, hi), &v| {
+            (lo.min(v), hi.max(v))
+        });
     let mean: f32 = data.iter().sum::<f32>() / data.len() as f32;
 
     println!(
@@ -153,9 +155,8 @@ fn load_macro(arg: &str) -> Result<MacroTemplate> {
     };
     let text = std::fs::read_to_string(&candidate)
         .with_context(|| format!("read {}", candidate.display()))?;
-    let tpl: MacroTemplate = serde_json::from_str(&text).with_context(|| {
-        format!("parse macro JSON {}", candidate.display())
-    })?;
+    let tpl: MacroTemplate = serde_json::from_str(&text)
+        .with_context(|| format!("parse macro JSON {}", candidate.display()))?;
     Ok(tpl)
 }
 
@@ -214,7 +215,10 @@ fn build_recipe(
             .split_once(':')
             .ok_or_else(|| anyhow!("Bad binding '{}' for knob '{knob_name}'", spec.binding))?;
         let typed = parse_param_value(&spec.kind, knob_val).with_context(|| {
-            format!("Knob '{knob_name}': can't parse '{knob_val}' as {}", spec.kind)
+            format!(
+                "Knob '{knob_name}': can't parse '{knob_val}' as {}",
+                spec.kind
+            )
         })?;
         let node = nodes
             .iter_mut()
@@ -299,7 +303,10 @@ fn build_recipe(
         })
         .collect();
     let (out_node, out_port) = height_binding.split_once(':').ok_or_else(|| {
-        anyhow!("Macro output binding '{}' must be node:port", height_binding)
+        anyhow!(
+            "Macro output binding '{}' must be node:port",
+            height_binding
+        )
     })?;
     connections.push(RecipeConnection {
         from: format!("{out_node}.{out_port}"),

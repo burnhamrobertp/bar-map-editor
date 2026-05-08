@@ -33,7 +33,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let (rect, _resp) = ui.allocate_exact_size(available, egui::Sense::hover());
     // Match the regular canvas backdrop so the transition into a
     // loaded project doesn't flash a different colour.
-    ui.painter().rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
+    ui.painter()
+        .rect_filled(rect, 0.0, ui.visuals().extreme_bg_color);
 
     // Centred card-list. We measure heading + body + each card and
     // lay them out vertically inside a max-width rect so the
@@ -76,14 +77,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                         ui.add_space(2.0);
                         ui.weak(&desc);
                     });
-                    ui.with_layout(
-                        egui::Layout::right_to_left(egui::Align::Center),
-                        |ui| {
-                            if ui.button(t!("editor.welcome.use_this")).clicked() {
-                                to_drop = Some(macro_name);
-                            }
-                        },
-                    );
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(t!("editor.welcome.use_this")).clicked() {
+                            to_drop = Some(macro_name);
+                        }
+                    });
                 });
             });
         if card.response.interact(egui::Sense::click()).clicked() {

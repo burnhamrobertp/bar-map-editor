@@ -11,7 +11,9 @@ use std::path::PathBuf;
 use bar_graph::{NodeType, ParamValue};
 
 use crate::project::{EditorLayout, NodeSize, Position, Project};
-use crate::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, RECIPE_SCHEMA_VERSION};
+use crate::recipe::{
+    MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, RECIPE_SCHEMA_VERSION,
+};
 
 /// Convert a scanned SD7 work directory into a `Project` ready for `apply_project`.
 ///
@@ -48,28 +50,71 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
     let has_smf = scan.smf_abs.is_some();
     if let Some(ref smf_abs) = scan.smf_abs {
         let mut params = HashMap::new();
-        params.insert("path".to_string(), ParamValue::String(smf_abs.to_string_lossy().to_string()));
+        params.insert(
+            "path".to_string(),
+            ParamValue::String(smf_abs.to_string_lossy().to_string()),
+        );
         params.insert("load_metalmap".to_string(), ParamValue::Bool(true));
         params.insert("load_typemap".to_string(), ParamValue::Bool(true));
-        nodes.push(RecipeNode { key: "smf".to_string(), node_type: NodeType::SmfImport, label: "SMF Import".to_string(), params });
-        node_positions.insert("smf".to_string(), Position { x: source_x, y: 130.0 });
-        node_sizes.insert("smf".to_string(), NodeSize { width: 165.0, height: 100.0 });
+        nodes.push(RecipeNode {
+            key: "smf".to_string(),
+            node_type: NodeType::SmfImport,
+            label: "SMF Import".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "smf".to_string(),
+            Position {
+                x: source_x,
+                y: 130.0,
+            },
+        );
+        node_sizes.insert(
+            "smf".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 100.0,
+            },
+        );
     }
 
     // SmtImport
     if let Some(ref smt_abs) = scan.smt_abs {
         let mut params = HashMap::new();
-        params.insert("path".to_string(), ParamValue::String(smt_abs.to_string_lossy().to_string()));
+        params.insert(
+            "path".to_string(),
+            ParamValue::String(smt_abs.to_string_lossy().to_string()),
+        );
         if let Some(ref smf_abs) = scan.smf_abs {
-            params.insert("smf_path".to_string(), ParamValue::String(smf_abs.to_string_lossy().to_string()));
+            params.insert(
+                "smf_path".to_string(),
+                ParamValue::String(smf_abs.to_string_lossy().to_string()),
+            );
         }
         if let Some((tx, ty)) = scan.tile_grid {
             params.insert("tiles_x".to_string(), ParamValue::UInt(tx));
             params.insert("tiles_y".to_string(), ParamValue::UInt(ty));
         }
-        nodes.push(RecipeNode { key: "smt".to_string(), node_type: NodeType::SmtImport, label: "SMT Import".to_string(), params });
-        node_positions.insert("smt".to_string(), Position { x: source_x, y: 360.0 });
-        node_sizes.insert("smt".to_string(), NodeSize { width: 165.0, height: 100.0 });
+        nodes.push(RecipeNode {
+            key: "smt".to_string(),
+            node_type: NodeType::SmtImport,
+            label: "SMT Import".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "smt".to_string(),
+            Position {
+                x: source_x,
+                y: 360.0,
+            },
+        );
+        node_sizes.insert(
+            "smt".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 100.0,
+            },
+        );
     }
 
     // PassThrough
@@ -85,9 +130,26 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             .join("\n");
         let mut params = HashMap::new();
         params.insert("files".to_string(), ParamValue::String(file_list));
-        nodes.push(RecipeNode { key: "pass".to_string(), node_type: NodeType::PassThrough, label: "Pass-Through".to_string(), params });
-        node_positions.insert("pass".to_string(), Position { x: source_x, y: 570.0 });
-        node_sizes.insert("pass".to_string(), NodeSize { width: 165.0, height: 80.0 });
+        nodes.push(RecipeNode {
+            key: "pass".to_string(),
+            node_type: NodeType::PassThrough,
+            label: "Pass-Through".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "pass".to_string(),
+            Position {
+                x: source_x,
+                y: 570.0,
+            },
+        );
+        node_sizes.insert(
+            "pass".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 80.0,
+            },
+        );
     }
 
     // NormalMap (only when SMF present)
@@ -99,16 +161,42 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             params: HashMap::new(),
         });
         node_positions.insert("nm".to_string(), Position { x: nm_x, y: 478.0 });
-        node_sizes.insert("nm".to_string(), NodeSize { width: 140.0, height: 60.0 });
+        node_sizes.insert(
+            "nm".to_string(),
+            NodeSize {
+                width: 140.0,
+                height: 60.0,
+            },
+        );
     }
 
     // Bundler (always)
     {
         let mut params = HashMap::new();
-        params.insert("map_name".to_string(), ParamValue::String(scan.map_name.clone()));
-        nodes.push(RecipeNode { key: "bundler".to_string(), node_type: NodeType::Bundler, label: "BAR .sd7".to_string(), params });
-        node_positions.insert("bundler".to_string(), Position { x: bundler_x, y: 270.0 });
-        node_sizes.insert("bundler".to_string(), NodeSize { width: 165.0, height: 210.0 });
+        params.insert(
+            "map_name".to_string(),
+            ParamValue::String(scan.map_name.clone()),
+        );
+        nodes.push(RecipeNode {
+            key: "bundler".to_string(),
+            node_type: NodeType::Bundler,
+            label: "BAR .sd7".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "bundler".to_string(),
+            Position {
+                x: bundler_x,
+                y: 270.0,
+            },
+        );
+        node_sizes.insert(
+            "bundler".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 210.0,
+            },
+        );
     }
 
     // Preview (only when SMF is present -- heightmap is required to render anything)
@@ -119,26 +207,68 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             label: "3D Preview".to_string(),
             params: HashMap::new(),
         });
-        node_positions.insert("preview".to_string(), Position { x: bundler_x, y: 540.0 });
-        node_sizes.insert("preview".to_string(), NodeSize { width: 165.0, height: 150.0 });
+        node_positions.insert(
+            "preview".to_string(),
+            Position {
+                x: bundler_x,
+                y: 540.0,
+            },
+        );
+        node_sizes.insert(
+            "preview".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 150.0,
+            },
+        );
     }
 
     // Connections
     if has_smf {
-        connections.push(RecipeConnection { from: "smf.heightmap".to_string(), to: "bundler.heightmap".to_string() });
-        connections.push(RecipeConnection { from: "smf.metalmap".to_string(), to: "bundler.metalmap".to_string() });
-        connections.push(RecipeConnection { from: "smf.typemap".to_string(), to: "bundler.typemap".to_string() });
-        connections.push(RecipeConnection { from: "smf.heightmap".to_string(), to: "nm.input".to_string() });
-        connections.push(RecipeConnection { from: "nm.output".to_string(), to: "bundler.normalmap".to_string() });
-        connections.push(RecipeConnection { from: "smf.heightmap".to_string(), to: "preview.heightmap".to_string() });
-        connections.push(RecipeConnection { from: "nm.output".to_string(), to: "preview.normal_map".to_string() });
+        connections.push(RecipeConnection {
+            from: "smf.heightmap".to_string(),
+            to: "bundler.heightmap".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "smf.metalmap".to_string(),
+            to: "bundler.metalmap".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "smf.typemap".to_string(),
+            to: "bundler.typemap".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "smf.heightmap".to_string(),
+            to: "nm.input".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "nm.output".to_string(),
+            to: "bundler.normalmap".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "smf.heightmap".to_string(),
+            to: "preview.heightmap".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "nm.output".to_string(),
+            to: "preview.normal_map".to_string(),
+        });
     }
     if scan.smt_abs.is_some() {
-        connections.push(RecipeConnection { from: "smt.texture".to_string(), to: "bundler.texture".to_string() });
-        connections.push(RecipeConnection { from: "smt.texture".to_string(), to: "preview.texture".to_string() });
+        connections.push(RecipeConnection {
+            from: "smt.texture".to_string(),
+            to: "bundler.texture".to_string(),
+        });
+        connections.push(RecipeConnection {
+            from: "smt.texture".to_string(),
+            to: "preview.texture".to_string(),
+        });
     }
     if has_pass {
-        connections.push(RecipeConnection { from: "pass.files".to_string(), to: "bundler.files".to_string() });
+        connections.push(RecipeConnection {
+            from: "pass.files".to_string(),
+            to: "bundler.files".to_string(),
+        });
     }
 
     let (width, height) = scan.map_dims.unwrap_or((256, 256));
@@ -158,7 +288,11 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         version: None,
         nodes,
         connections,
-        output: OutputConfig { width, height, map_settings },
+        output: OutputConfig {
+            width,
+            height,
+            map_settings,
+        },
     };
 
     let layout = EditorLayout {
@@ -171,7 +305,11 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         active_tab: 0,
     };
 
-    Project { recipe, layout, sculpt: Default::default() }
+    Project {
+        recipe,
+        layout,
+        sculpt: Default::default(),
+    }
 }
 
 /// Result of scanning an extracted .sd7 work directory.

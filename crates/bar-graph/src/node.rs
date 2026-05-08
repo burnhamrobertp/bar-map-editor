@@ -514,10 +514,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![], // terminal node — action buttons rendered directly in node body
         ),
 
-        NodeType::FileReference => (
-            vec![],
-            vec![Port::new("file", "File", PortKind::File)],
-        ),
+        NodeType::FileReference => (vec![], vec![Port::new("file", "File", PortKind::File)]),
 
         // --- Import/Export ---
         NodeType::SmfImport => (
@@ -531,16 +528,12 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
 
         NodeType::SmtImport => (
             vec![],
-            vec![
-                Port::new("texture", "Texture", PortKind::Color),
-            ],
+            vec![Port::new("texture", "Texture", PortKind::Color)],
         ),
 
         NodeType::PassThrough => (
             vec![],
-            vec![
-                Port::new("files", "Files", PortKind::FileList),
-            ],
+            vec![Port::new("files", "Files", PortKind::FileList)],
         ),
 
         // SubgraphInput: 1 input ("value") + 1 output ("value"). Both
@@ -560,6 +553,5 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("value", "Value", PortKind::Heightmap)],
             vec![Port::new("value", "Value", PortKind::Heightmap)],
         ),
-
     }
 }

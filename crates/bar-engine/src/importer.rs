@@ -68,10 +68,7 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
     let result = import_sd7(archive_path, output_dir)?;
 
     // Normalise to forward-slash for cross-platform recipe portability
-    let hm_path_str = result
-        .heightmap_png
-        .to_slash_lossy()
-        .to_string();
+    let hm_path_str = result.heightmap_png.to_slash_lossy().to_string();
 
     let nodes = vec![
         RecipeNode {
@@ -138,7 +135,10 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         shortname: None,
         description: format!(
             "Imported from .sd7: {}",
-            archive_path.file_name().unwrap_or_default().to_string_lossy()
+            archive_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
         ),
         author: None,
         version: None,
@@ -166,7 +166,11 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         active_tab: 0,
     };
 
-    Ok(Project { recipe, layout, sculpt: Default::default() })
+    Ok(Project {
+        recipe,
+        layout,
+        sculpt: Default::default(),
+    })
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────
@@ -240,9 +244,7 @@ fn find_single_smf(maps_dir: &Path) -> Result<PathBuf> {
     match smf_files.len() {
         0 => bail!("No .smf file found in maps/ directory"),
         1 => Ok(smf_files.into_iter().next().unwrap()),
-        n => bail!(
-            "Found {n} .smf files in maps/ directory; expected exactly 1"
-        ),
+        n => bail!("Found {n} .smf files in maps/ directory; expected exactly 1"),
     }
 }
 
@@ -381,9 +383,7 @@ pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {
     for line in lua.lines() {
         let trimmed = line.trim();
         // Match `<key> =` ignoring whitespace around the equals
-        let stripped = trimmed
-            .strip_prefix(key)
-            .map(|rest| rest.trim_start());
+        let stripped = trimmed.strip_prefix(key).map(|rest| rest.trim_start());
         let rest = match stripped {
             Some(r) if r.starts_with('=') => &r[1..],
             _ => {
@@ -501,19 +501,13 @@ local mapinfo = {
     author = "Somebody",
 }
 "#;
-        assert_eq!(
-            parse_mapinfo_name(lua),
-            Some("Open Plains v2".to_string())
-        );
+        assert_eq!(parse_mapinfo_name(lua), Some("Open Plains v2".to_string()));
     }
 
     #[test]
     fn parse_name_single_quotes() {
         let lua = "name = 'rocky_hills'";
-        assert_eq!(
-            parse_mapinfo_name(lua),
-            Some("rocky_hills".to_string())
-        );
+        assert_eq!(parse_mapinfo_name(lua), Some("rocky_hills".to_string()));
     }
 
     #[test]

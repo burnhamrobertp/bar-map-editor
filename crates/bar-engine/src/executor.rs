@@ -260,7 +260,14 @@ impl NodeExecutor for CpuExecutor {
                 let band2 = get_optional_heightmap(inputs, "band2");
                 let ctrl = get_optional_heightmap(inputs, "control");
                 let mask = get_optional_heightmap(inputs, "mask");
-                let hm = compose_splat_map(slope.as_ref(), band0.as_ref(), band1.as_ref(), band2.as_ref(), width, height);
+                let hm = compose_splat_map(
+                    slope.as_ref(),
+                    band0.as_ref(),
+                    band1.as_ref(),
+                    band2.as_ref(),
+                    width,
+                    height,
+                );
                 let hm = scale_by_field(hm, ctrl.as_ref());
                 let hm = scale_by_field(hm, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
@@ -274,7 +281,12 @@ impl NodeExecutor for CpuExecutor {
                 let color = generate_auto_texture(&input, slope.as_ref(), params);
                 // Neutral = transparent black so masked regions don't paint
                 // opaque gray over downstream composite layers.
-                let color = apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, ctrl.as_ref(), mask.as_ref());
+                let color = apply_color_modulation(
+                    [0.0, 0.0, 0.0, 0.0],
+                    color,
+                    ctrl.as_ref(),
+                    mask.as_ref(),
+                );
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -285,7 +297,8 @@ impl NodeExecutor for CpuExecutor {
                 let strength = get_float(params, "strength", 1.0);
                 let color = generate_normal_map(&input, strength);
                 // Neutral normal = flat surface [0.5, 0.5, 1.0, 1.0] in tangent space
-                let color = apply_color_modulation([0.5, 0.5, 1.0, 1.0], color, None, mask.as_ref());
+                let color =
+                    apply_color_modulation([0.5, 0.5, 1.0, 1.0], color, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
             NodeType::GrassMap => {
@@ -345,12 +358,7 @@ impl NodeExecutor for CpuExecutor {
             NodeType::PaintedTexture => {
                 let data_str = get_string(params, "data", "");
                 let pixels = hex_decode_mask(data_str);
-                let tex = painted_rgb_to_color_buffer(
-                    pixels,
-                    PAINTED_TEXTURE_RES,
-                    width,
-                    height,
-                );
+                let tex = painted_rgb_to_color_buffer(pixels, PAINTED_TEXTURE_RES, width, height);
                 outputs.insert("output".to_string(), PortValue::Color(tex));
             }
 
@@ -362,12 +370,18 @@ impl NodeExecutor for CpuExecutor {
                 let smoothness = get_float(params, "smoothness", 0.0);
                 let hm = if let Some(c) = &ctrl {
                     // Control shifts the threshold spatially (WM: higher control = threshold moves up)
-                    let data: Vec<f32> = input.data().iter()
+                    let data: Vec<f32> = input
+                        .data()
+                        .iter()
                         .zip(c.data())
                         .map(|(&v, &cv)| {
                             let t = (threshold + cv - 0.5).clamp(0.0, 1.0);
                             if smoothness <= 0.001 {
-                                if v >= t { 1.0 } else { 0.0 }
+                                if v >= t {
+                                    1.0
+                                } else {
+                                    0.0
+                                }
                             } else {
                                 let s = ((v - t) / smoothness + 0.5).clamp(0.0, 1.0);
                                 s * s * (3.0 - 2.0 * s)
@@ -500,8 +514,9 @@ impl NodeExecutor for CpuExecutor {
                     return Ok(outputs);
                 }
 
-                let file = std::fs::File::open(&path)
-                    .map_err(|e| EvalError::Compute(format!("SmfImport: cannot open '{}': {}", path, e)))?;
+                let file = std::fs::File::open(&path).map_err(|e| {
+                    EvalError::Compute(format!("SmfImport: cannot open '{}': {}", path, e))
+                })?;
                 let smf = SmfMap::read(&mut std::io::BufReader::new(file))
                     .map_err(|e| EvalError::Compute(format!("SmfImport: parse error: {}", e)))?;
 
@@ -509,7 +524,8 @@ impl NodeExecutor for CpuExecutor {
 
                 if get_bool(params, "load_metalmap", true) {
                     let (mm_w, mm_h) = smf.header.metalmap_size();
-                    let mm_data: Vec<f32> = smf.metalmap.iter().map(|&v| v as f32 / 255.0).collect();
+                    let mm_data: Vec<f32> =
+                        smf.metalmap.iter().map(|&v| v as f32 / 255.0).collect();
                     if let Ok(mm_hm) = Heightmap::frbar_data(mm_w, mm_h, mm_data) {
                         outputs.insert("metalmap".to_string(), PortValue::Heightmap(mm_hm));
                     }
@@ -561,8 +577,9 @@ impl NodeExecutor for CpuExecutor {
                     return Ok(outputs);
                 }
 
-                let file = std::fs::File::open(&path)
-                    .map_err(|e| EvalError::Compute(format!("SmtImport: cannot open '{}': {}", path, e)))?;
+                let file = std::fs::File::open(&path).map_err(|e| {
+                    EvalError::Compute(format!("SmtImport: cannot open '{}': {}", path, e))
+                })?;
                 let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file))
                     .map_err(|e| EvalError::Compute(format!("SmtImport: parse error: {}", e)))?;
 
@@ -571,7 +588,8 @@ impl NodeExecutor for CpuExecutor {
                 let out_w = max_preview.min(src_w).max(1);
                 let out_h = max_preview.min(src_h).max(1);
 
-                let rgba = assemble_texture_preview(&tiles, &tile_indices, tiles_x, tiles_y, out_w, out_h);
+                let rgba =
+                    assemble_texture_preview(&tiles, &tile_indices, tiles_x, tiles_y, out_w, out_h);
                 let color_buf = ColorBuffer::from_rgba8(out_w, out_h, &rgba)
                     .map_err(|e| EvalError::Compute(e.to_string()))?;
                 outputs.insert("texture".to_string(), PortValue::Color(color_buf));
@@ -588,13 +606,15 @@ impl NodeExecutor for CpuExecutor {
                         // legacy backslashed entries from older saved projects
                         // so the bundler validator doesn't reject them.
                         let bundle_path = parts.next()?.trim().replace('\\', "/");
-                        if path.is_empty() { None }
-                        else { Some(bar_graph::FileRef { path, bundle_path }) }
+                        if path.is_empty() {
+                            None
+                        } else {
+                            Some(bar_graph::FileRef { path, bundle_path })
+                        }
                     })
                     .collect();
                 outputs.insert("files".to_string(), PortValue::FileList(file_list));
             }
-
         }
 
         Ok(outputs)
@@ -747,9 +767,15 @@ fn get_optional_heightmap(inputs: &HashMap<String, PortValue>, name: &str) -> Op
 /// Multiply every pixel by an optional scale field, in place.
 /// Returns `effect` unchanged when `field` is None.
 fn scale_by_field(mut effect: Heightmap, field: Option<&Heightmap>) -> Heightmap {
-    let Some(f) = field else { return effect; };
+    let Some(f) = field else {
+        return effect;
+    };
     debug_assert_eq!(effect.width(), f.width(), "scale_by_field: width mismatch");
-    debug_assert_eq!(effect.height(), f.height(), "scale_by_field: height mismatch");
+    debug_assert_eq!(
+        effect.height(),
+        f.height(),
+        "scale_by_field: height mismatch"
+    );
     for (e, &s) in effect.data_mut().iter_mut().zip(f.data()) {
         *e *= s.clamp(0.0, 1.0);
     }
@@ -773,11 +799,23 @@ fn apply_modulation(
     if control.is_none() && mask.is_none() {
         return effect;
     }
-    debug_assert_eq!(input.width(), effect.width(), "apply_modulation: input/effect width");
-    debug_assert_eq!(input.height(), effect.height(), "apply_modulation: input/effect height");
+    debug_assert_eq!(
+        input.width(),
+        effect.width(),
+        "apply_modulation: input/effect width"
+    );
+    debug_assert_eq!(
+        input.height(),
+        effect.height(),
+        "apply_modulation: input/effect height"
+    );
     if let Some(c) = control {
         debug_assert_eq!(input.width(), c.width(), "apply_modulation: control width");
-        debug_assert_eq!(input.height(), c.height(), "apply_modulation: control height");
+        debug_assert_eq!(
+            input.height(),
+            c.height(),
+            "apply_modulation: control height"
+        );
     }
     if let Some(m) = mask {
         debug_assert_eq!(input.width(), m.width(), "apply_modulation: mask width");
@@ -819,12 +857,28 @@ fn apply_color_modulation(
         return effect;
     }
     if let Some(c) = control {
-        debug_assert_eq!(effect.width(), c.width(), "apply_color_modulation: control width");
-        debug_assert_eq!(effect.height(), c.height(), "apply_color_modulation: control height");
+        debug_assert_eq!(
+            effect.width(),
+            c.width(),
+            "apply_color_modulation: control width"
+        );
+        debug_assert_eq!(
+            effect.height(),
+            c.height(),
+            "apply_color_modulation: control height"
+        );
     }
     if let Some(m) = mask {
-        debug_assert_eq!(effect.width(), m.width(), "apply_color_modulation: mask width");
-        debug_assert_eq!(effect.height(), m.height(), "apply_color_modulation: mask height");
+        debug_assert_eq!(
+            effect.width(),
+            m.width(),
+            "apply_color_modulation: mask width"
+        );
+        debug_assert_eq!(
+            effect.height(),
+            m.height(),
+            "apply_color_modulation: mask height"
+        );
     }
     let ctrl_d = control.map(Heightmap::data);
     let mask_d = mask.map(Heightmap::data);
@@ -914,7 +968,11 @@ fn apply_mask_threshold(input: &Heightmap, threshold: f32, smoothness: f32) -> H
         .iter()
         .map(|&v| {
             if smoothness <= 0.001 {
-                if v >= threshold { 1.0 } else { 0.0 }
+                if v >= threshold {
+                    1.0
+                } else {
+                    0.0
+                }
             } else {
                 // Smooth transition using hermite interpolation
                 let t = ((v - threshold) / smoothness + 0.5).clamp(0.0, 1.0);
@@ -1441,9 +1499,8 @@ fn load_file_input(path: &str, width: u32, height: u32) -> Result<Heightmap, Eva
             .map_err(|e| EvalError::Compute(e.to_string()));
     }
 
-    let img = image::open(path).map_err(|e| {
-        EvalError::Compute(format!("Failed to load image '{}': {}", path, e))
-    })?;
+    let img = image::open(path)
+        .map_err(|e| EvalError::Compute(format!("Failed to load image '{}': {}", path, e)))?;
 
     let gray = img.to_luma16();
     let (iw, ih) = gray.dimensions();
@@ -1604,7 +1661,11 @@ fn apply_curve(input: &Heightmap, params: &HashMap<String, ParamValue>) -> Heigh
     let points: Vec<(f32, f32)> = if num_points >= 2 {
         (0..num_points)
             .map(|i| {
-                let px = get_float(params, &format!("p{}_x", i), i as f32 / (num_points - 1) as f32);
+                let px = get_float(
+                    params,
+                    &format!("p{}_x", i),
+                    i as f32 / (num_points - 1) as f32,
+                );
                 let py = get_float(params, &format!("p{}_y", i), px);
                 (px, py)
             })
@@ -1724,7 +1785,8 @@ fn apply_bias_gain(input: &Heightmap, bias: f32, gain: f32) -> Heightmap {
                 let bt = (2.0 * biased).powf((1.0 - gain).clamp(0.001, 0.999).ln() / (0.5f32).ln());
                 bt / 2.0
             } else {
-                let bt = (2.0 - 2.0 * biased).powf((1.0 - gain).clamp(0.001, 0.999).ln() / (0.5f32).ln());
+                let bt = (2.0 - 2.0 * biased)
+                    .powf((1.0 - gain).clamp(0.001, 0.999).ln() / (0.5f32).ln());
                 1.0 - bt / 2.0
             };
 
@@ -1939,9 +2001,8 @@ fn painted_rgb_to_color_buffer(
     };
 
     let mut buf = ColorBuffer::new(out_w, out_h).unwrap();
-    let sample = |x: usize, y: usize, c: usize| -> f32 {
-        pixels[(y * src_w + x) * 3 + c] as f32 / 255.0
-    };
+    let sample =
+        |x: usize, y: usize, c: usize| -> f32 { pixels[(y * src_w + x) * 3 + c] as f32 / 255.0 };
     for oy in 0..out_h {
         for ox in 0..out_w {
             let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
@@ -1990,10 +2051,7 @@ mod tests {
                 hm.set(x, y, ((x * 7 + y) as f32) / 100.0).unwrap();
             }
         }
-        let inputs = HashMap::from([(
-            "heightmap".to_string(),
-            PortValue::Heightmap(hm.clone()),
-        )]);
+        let inputs = HashMap::from([("heightmap".to_string(), PortValue::Heightmap(hm.clone()))]);
         let result = executor
             .execute(&NodeType::Preview, &HashMap::new(), &inputs, 8, 8)
             .unwrap();
@@ -2016,13 +2074,7 @@ mod tests {
         // (Preview only re-emits what it received.)
         let executor = CpuExecutor;
         let result = executor
-            .execute(
-                &NodeType::Preview,
-                &HashMap::new(),
-                &HashMap::new(),
-                8,
-                8,
-            )
+            .execute(&NodeType::Preview, &HashMap::new(), &HashMap::new(), 8, 8)
             .unwrap();
         assert!(result.is_empty());
     }
@@ -2171,9 +2223,10 @@ mod tests {
     #[test]
     fn test_gradient_generator() {
         let executor = CpuExecutor;
-        let params = HashMap::from([
-            ("direction".to_string(), ParamValue::String("vertical".to_string())),
-        ]);
+        let params = HashMap::from([(
+            "direction".to_string(),
+            ParamValue::String("vertical".to_string()),
+        )]);
         let result = executor
             .execute(&NodeType::Gradient, &params, &HashMap::new(), 8, 8)
             .unwrap();
@@ -2394,7 +2447,10 @@ mod tests {
             panic!("expected heightmap")
         };
         for &v in hm.data() {
-            assert!((v - 0.1).abs() < 1e-6, "blend with mask=0 should keep `a`, got {v}");
+            assert!(
+                (v - 0.1).abs() < 1e-6,
+                "blend with mask=0 should keep `a`, got {v}"
+            );
         }
     }
 }

@@ -53,10 +53,7 @@ fn bilinear_sample(hm: &bar_data::Heightmap, u: f32, v: f32) -> f32 {
     let h10 = hm.get(x1, y0).unwrap_or(0.0);
     let h01 = hm.get(x0, y1).unwrap_or(0.0);
     let h11 = hm.get(x1, y1).unwrap_or(0.0);
-    h00 * (1.0 - fx) * (1.0 - fy)
-        + h10 * fx * (1.0 - fy)
-        + h01 * (1.0 - fx) * fy
-        + h11 * fx * fy
+    h00 * (1.0 - fx) * (1.0 - fy) + h10 * fx * (1.0 - fy) + h01 * (1.0 - fx) * fy + h11 * fx * fy
 }
 
 fn add_edge_skirt(
@@ -69,16 +66,28 @@ fn add_edge_skirt(
     let n = positions.len();
     for (i, &(px, py, pz)) in positions.iter().enumerate() {
         let u = i as f32 / (n - 1) as f32;
-        vertices.push(TerrainVertex { position: [px, py, pz], normal, uv: [u, 2.0] });
-        vertices.push(TerrainVertex { position: [px, 0.0, pz], normal, uv: [u, 2.0] });
+        vertices.push(TerrainVertex {
+            position: [px, py, pz],
+            normal,
+            uv: [u, 2.0],
+        });
+        vertices.push(TerrainVertex {
+            position: [px, 0.0, pz],
+            normal,
+            uv: [u, 2.0],
+        });
     }
     for i in 0..(n - 1) {
         let tl = base + (i * 2) as u32;
         let bl = base + (i * 2 + 1) as u32;
         let tr = base + ((i + 1) * 2) as u32;
         let br = base + ((i + 1) * 2 + 1) as u32;
-        indices.push(tl); indices.push(bl); indices.push(tr);
-        indices.push(tr); indices.push(bl); indices.push(br);
+        indices.push(tl);
+        indices.push(bl);
+        indices.push(tr);
+        indices.push(tr);
+        indices.push(bl);
+        indices.push(br);
     }
 }
 
@@ -114,8 +123,12 @@ pub fn generate_flat_grid(grid_n: u32) -> (Vec<TerrainVertex>, Vec<u32>) {
             let tr = (z * n + x + 1) as u32;
             let bl = ((z + 1) * n + x) as u32;
             let br = ((z + 1) * n + x + 1) as u32;
-            indices.push(tl); indices.push(bl); indices.push(tr);
-            indices.push(tr); indices.push(bl); indices.push(br);
+            indices.push(tl);
+            indices.push(bl);
+            indices.push(tr);
+            indices.push(tr);
+            indices.push(bl);
+            indices.push(br);
         }
     }
 
@@ -140,40 +153,64 @@ pub fn generate_terrain_skirts_and_cap(
     let mut indices = Vec::new();
 
     // North (v = 0)
-    let north: Vec<_> = (0..n).map(|i| {
-        let u = i as f32 / (n - 1) as f32;
-        ((u - 0.5) * 2.0 * x_extent, bilinear_sample(hm, u, 0.0) * height_scale, -z_extent)
-    }).collect();
+    let north: Vec<_> = (0..n)
+        .map(|i| {
+            let u = i as f32 / (n - 1) as f32;
+            (
+                (u - 0.5) * 2.0 * x_extent,
+                bilinear_sample(hm, u, 0.0) * height_scale,
+                -z_extent,
+            )
+        })
+        .collect();
     add_edge_skirt(&mut vertices, &mut indices, &north, [0.0, 0.0, -1.0]);
 
     // South (v = 1)
-    let south: Vec<_> = (0..n).map(|i| {
-        let u = i as f32 / (n - 1) as f32;
-        ((u - 0.5) * 2.0 * x_extent, bilinear_sample(hm, u, 1.0) * height_scale, z_extent)
-    }).collect();
+    let south: Vec<_> = (0..n)
+        .map(|i| {
+            let u = i as f32 / (n - 1) as f32;
+            (
+                (u - 0.5) * 2.0 * x_extent,
+                bilinear_sample(hm, u, 1.0) * height_scale,
+                z_extent,
+            )
+        })
+        .collect();
     add_edge_skirt(&mut vertices, &mut indices, &south, [0.0, 0.0, 1.0]);
 
     // West (u = 0)
-    let west: Vec<_> = (0..n).map(|i| {
-        let v = i as f32 / (n - 1) as f32;
-        (-x_extent, bilinear_sample(hm, 0.0, v) * height_scale, (v - 0.5) * 2.0 * z_extent)
-    }).collect();
+    let west: Vec<_> = (0..n)
+        .map(|i| {
+            let v = i as f32 / (n - 1) as f32;
+            (
+                -x_extent,
+                bilinear_sample(hm, 0.0, v) * height_scale,
+                (v - 0.5) * 2.0 * z_extent,
+            )
+        })
+        .collect();
     add_edge_skirt(&mut vertices, &mut indices, &west, [-1.0, 0.0, 0.0]);
 
     // East (u = 1)
-    let east: Vec<_> = (0..n).map(|i| {
-        let v = i as f32 / (n - 1) as f32;
-        (x_extent, bilinear_sample(hm, 1.0, v) * height_scale, (v - 0.5) * 2.0 * z_extent)
-    }).collect();
+    let east: Vec<_> = (0..n)
+        .map(|i| {
+            let v = i as f32 / (n - 1) as f32;
+            (
+                x_extent,
+                bilinear_sample(hm, 1.0, v) * height_scale,
+                (v - 0.5) * 2.0 * z_extent,
+            )
+        })
+        .collect();
     add_edge_skirt(&mut vertices, &mut indices, &east, [1.0, 0.0, 0.0]);
 
     // Bottom cap (always at y = 0)
     let base = vertices.len() as u32;
     for &(px, pz) in &[
         (-x_extent, -z_extent),
-        (x_extent,  -z_extent),
-        (x_extent,   z_extent),
-        (-x_extent,  z_extent),
+        (x_extent, -z_extent),
+        (x_extent, z_extent),
+        (-x_extent, z_extent),
     ] {
         vertices.push(TerrainVertex {
             position: [px, 0.0, pz],
@@ -182,8 +219,12 @@ pub fn generate_terrain_skirts_and_cap(
         });
     }
     // CCW from below (-Y)
-    indices.push(base); indices.push(base + 2); indices.push(base + 1);
-    indices.push(base); indices.push(base + 3); indices.push(base + 2);
+    indices.push(base);
+    indices.push(base + 2);
+    indices.push(base + 1);
+    indices.push(base);
+    indices.push(base + 3);
+    indices.push(base + 2);
 
     (vertices, indices)
 }
@@ -201,9 +242,9 @@ pub fn generate_water_plane(
     let mut vertices = Vec::new();
     for &(px, pz) in &[
         (-x_extent, -z_extent),
-        (x_extent,  -z_extent),
-        (x_extent,   z_extent),
-        (-x_extent,  z_extent),
+        (x_extent, -z_extent),
+        (x_extent, z_extent),
+        (-x_extent, z_extent),
     ] {
         vertices.push(TerrainVertex {
             position: [px, water_y, pz],
@@ -237,9 +278,15 @@ mod tests {
     fn flat_grid_positions_are_normalized() {
         let (verts, _) = generate_flat_grid(4);
         for v in &verts {
-            assert!(v.position[0] >= -0.5 && v.position[0] <= 0.5, "x out of range");
+            assert!(
+                v.position[0] >= -0.5 && v.position[0] <= 0.5,
+                "x out of range"
+            );
             assert_eq!(v.position[1], 0.0, "y must be 0 for flat grid");
-            assert!(v.position[2] >= -0.5 && v.position[2] <= 0.5, "z out of range");
+            assert!(
+                v.position[2] >= -0.5 && v.position[2] <= 0.5,
+                "z out of range"
+            );
         }
     }
 

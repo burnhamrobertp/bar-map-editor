@@ -216,9 +216,7 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
 pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'static str]> {
     match (node_type, key) {
         (NodeType::Voronoi, "mode") => Some(&["f1", "f2", "f2_f1", "cell"]),
-        (NodeType::Gradient, "direction") => {
-            Some(&["linear_x", "linear_y", "radial", "angular"])
-        }
+        (NodeType::Gradient, "direction") => Some(&["linear_x", "linear_y", "radial", "angular"]),
         (NodeType::AutoTexture, "biome") => Some(&[
             "temperate",
             "grassland",
@@ -228,16 +226,15 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "tundra",
             "lunar",
         ]),
-        (
-            NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise,
-            "character",
-        ) => Some(&[
-            "rolling_hills",
-            "rugged",
-            "broad_waves",
-            "fine_detail",
-            "wispy",
-        ]),
+        (NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise, "character") => {
+            Some(&[
+                "rolling_hills",
+                "rugged",
+                "broad_waves",
+                "fine_detail",
+                "wispy",
+            ])
+        }
         (NodeType::RidgedNoise, "character") => Some(&[
             "ridges",
             "jagged_peaks",
@@ -245,14 +242,9 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "broad_ridges",
             "spires",
         ]),
-        (NodeType::SubgraphInput | NodeType::SubgraphOutput, "kind") => Some(&[
-            "Heightmap",
-            "Color",
-            "Mask",
-            "Scalar",
-            "File",
-            "FileList",
-        ]),
+        (NodeType::SubgraphInput | NodeType::SubgraphOutput, "kind") => {
+            Some(&["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"])
+        }
         _ => None,
     }
 }
@@ -263,8 +255,7 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
 pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
     matches!(
         (node_type, key),
-        (NodeType::AutoTexture, "rock_color")
-            | (NodeType::PaintedTexture, "brush_color")
+        (NodeType::AutoTexture, "rock_color") | (NodeType::PaintedTexture, "brush_color")
     )
 }
 

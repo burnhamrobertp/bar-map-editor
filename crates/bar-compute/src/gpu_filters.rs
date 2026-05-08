@@ -3,8 +3,8 @@
 //! Implements the same 3-pass box blur algorithm as the CPU path to ensure
 //! deterministic, semantically identical results regardless of backend.
 
-use bytemuck::{Pod, Zeroable};
 use bar_data::Heightmap;
+use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 use tracing::info;
 use wgpu::util::DeviceExt;
@@ -44,67 +44,62 @@ impl GpuFilterPipeline {
     pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("blur_box"),
-            source: wgpu::ShaderSource::Wgsl(
-                include_str!("../../../shaders/blur_box.wgsl").into(),
-            ),
+            source: wgpu::ShaderSource::Wgsl(include_str!("../../../shaders/blur_box.wgsl").into()),
         });
 
-        let blur_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("blur_bind_group_layout"),
-                entries: &[
-                    // Uniform params
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let blur_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur_bind_group_layout"),
+            entries: &[
+                // Uniform params
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // Input storage (read-only)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: true },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // Input storage (read-only)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    // Output storage (read-write)
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                // Output storage (read-write)
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
-        let pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("blur_pipeline_layout"),
-                bind_group_layouts: &[&blur_layout],
-                push_constant_ranges: &[],
-            });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur_pipeline_layout"),
+            bind_group_layouts: &[&blur_layout],
+            push_constant_ranges: &[],
+        });
 
-        let blur_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("blur_pipeline"),
-                layout: Some(&pipeline_layout),
-                module: &shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let blur_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("blur_pipeline"),
+            layout: Some(&pipeline_layout),
+            module: &shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         Self {
             blur_pipeline,
@@ -135,13 +130,13 @@ impl GpuFilterPipeline {
         }
 
         // Create two storage buffers for ping-pong
-        let buffer_a =
-            ctx.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("blur_buffer_a"),
-                    contents: bytemuck::cast_slice(heightmap.data()),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                });
+        let buffer_a = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("blur_buffer_a"),
+                contents: bytemuck::cast_slice(heightmap.data()),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
 
         let buffer_b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("blur_buffer_b"),
@@ -160,11 +155,11 @@ impl GpuFilterPipeline {
         let groups_x = w.div_ceil(16);
         let groups_y = h.div_ceil(16);
 
-        let mut encoder =
-            ctx.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("blur_encoder"),
-                });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("blur_encoder"),
+            });
 
         // 3 passes × 2 directions = 6 dispatches
         // State tracking: which buffer is current input
@@ -181,13 +176,13 @@ impl GpuFilterPipeline {
                 horizontal,
             };
 
-            let params_buffer =
-                ctx.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("blur_params"),
-                        contents: bytemuck::bytes_of(&params),
-                        usage: wgpu::BufferUsages::UNIFORM,
-                    });
+            let params_buffer = ctx
+                .device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("blur_params"),
+                    contents: bytemuck::bytes_of(&params),
+                    usage: wgpu::BufferUsages::UNIFORM,
+                });
 
             // Even passes: A→B, Odd passes: B→A
             let (input_buf, output_buf) = if pass % 2 == 0 {
@@ -248,8 +243,7 @@ impl GpuFilterPipeline {
 
         info!("GPU box blur complete: {}x{}, radius={}", w, h, r);
 
-        Heightmap::frbar_data(w, h, result)
-            .map_err(|e| GpuFilterError::Filter(e.to_string()))
+        Heightmap::frbar_data(w, h, result).map_err(|e| GpuFilterError::Filter(e.to_string()))
     }
 }
 
@@ -349,4 +343,3 @@ mod tests {
         }
     }
 }
-

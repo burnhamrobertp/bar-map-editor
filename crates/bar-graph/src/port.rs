@@ -63,8 +63,8 @@ impl PortPlacement {
         match kind {
             PortKind::Control => PortPlacement::Top(0),
             PortKind::Density => PortPlacement::Top(1),
-            PortKind::Mask    => PortPlacement::Bottom,
-            _                 => PortPlacement::Left,
+            PortKind::Mask => PortPlacement::Bottom,
+            _ => PortPlacement::Left,
         }
     }
 }

@@ -18,6 +18,7 @@ pub mod project;
 pub mod recipe;
 pub mod targets;
 
+pub use bundler::{execute_bundlers, find_bundler_nodes, BundlerResult};
 pub use executor::CpuExecutor;
 pub use export::{
     export_grassmap_png, export_heightmap_png, export_normalmap_png, export_sd7_directory,
@@ -25,12 +26,11 @@ pub use export::{
 };
 pub use extract::{extract_sd7_to_work_dir, prune_old_work_dirs, work_dir_root, WorkDirScan};
 pub use hybrid_executor::HybridExecutor;
-pub use bundler::{execute_bundlers, find_bundler_nodes, BundlerResult};
 pub use importer::{import_sd7, import_sd7_to_project, ImportResult};
 pub use project::{EditorLayout, Position, Project};
 pub use recipe::{
-    AtmosphereSettings, DetailTexture, LightingSettings, MapSettings, OutputConfig,
-    Recipe, RecipeConnection, RecipeNode, WaterSettings,
+    AtmosphereSettings, DetailTexture, LightingSettings, MapSettings, OutputConfig, Recipe,
+    RecipeConnection, RecipeNode, WaterSettings,
 };
 // Validation lives in bar-project so the GUI can use it without pulling
 // in bar-engine. Re-exported here for callers that already depend on

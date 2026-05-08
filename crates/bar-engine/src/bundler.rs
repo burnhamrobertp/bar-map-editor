@@ -127,7 +127,9 @@ fn execute_single_bundler(
     let registry = TargetRegistry::new();
     let config = registry
         .get_target(&target_id)
-        .ok_or_else(|| anyhow::anyhow!("Unknown target '{}' in bundler '{}'", target_id, node.label))?
+        .ok_or_else(|| {
+            anyhow::anyhow!("Unknown target '{}' in bundler '{}'", target_id, node.label)
+        })?
         .clone();
 
     let codec = registry
@@ -180,7 +182,11 @@ fn execute_single_bundler(
         }
         if src.exists() {
             std::fs::copy(src, &dest).with_context(|| {
-                format!("Failed to copy file reference: {} → {}", src.display(), dest.display())
+                format!(
+                    "Failed to copy file reference: {} → {}",
+                    src.display(),
+                    dest.display()
+                )
             })?;
         } else {
             tracing::warn!(
@@ -374,7 +380,8 @@ fn apply_sculpt_record(
         if let Ok(overlay) = load_png_as_heightmap(&abs, width, height) {
             let base = layers.metalmap.get_or_insert_with(|| {
                 Heightmap::new(width, height).unwrap_or_else(|_| {
-                    Heightmap::frbar_data(width, height, vec![0.0; (width * height) as usize]).unwrap()
+                    Heightmap::frbar_data(width, height, vec![0.0; (width * height) as usize])
+                        .unwrap()
                 })
             });
             lerp_heightmap_overlay(base, &overlay);
@@ -386,7 +393,8 @@ fn apply_sculpt_record(
         if let Ok(overlay) = load_png_as_heightmap(&abs, width, height) {
             let base = layers.typemap.get_or_insert_with(|| {
                 Heightmap::new(width, height).unwrap_or_else(|_| {
-                    Heightmap::frbar_data(width, height, vec![0.0; (width * height) as usize]).unwrap()
+                    Heightmap::frbar_data(width, height, vec![0.0; (width * height) as usize])
+                        .unwrap()
                 })
             });
             lerp_heightmap_overlay(base, &overlay);
@@ -454,12 +462,16 @@ fn load_png_as_color_buffer(path: &Path, w: u32, h: u32) -> anyhow::Result<bar_d
             let sx = (x as u64 * iw as u64 / w as u64) as u32;
             let sy = (y as u64 * ih as u64 / h as u64) as u32;
             let p = img.get_pixel(sx.min(iw - 1), sy.min(ih - 1));
-            cb.set(x, y, [
-                p[0] as f32 / 255.0,
-                p[1] as f32 / 255.0,
-                p[2] as f32 / 255.0,
-                p[3] as f32 / 255.0,
-            ]);
+            cb.set(
+                x,
+                y,
+                [
+                    p[0] as f32 / 255.0,
+                    p[1] as f32 / 255.0,
+                    p[2] as f32 / 255.0,
+                    p[3] as f32 / 255.0,
+                ],
+            );
         }
     }
     Ok(cb)

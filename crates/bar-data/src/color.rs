@@ -98,7 +98,11 @@ impl ColorBuffer {
             });
         }
         let data = rgba8.iter().map(|&v| v as f32 / 255.0).collect();
-        Ok(Self { width, height, data })
+        Ok(Self {
+            width,
+            height,
+            data,
+        })
     }
 
     /// Convert to 8-bit RGBA packed bytes (for image encoding).

@@ -228,7 +228,11 @@ fn unpack565(c: u16) -> [u8; 3] {
     let r = ((c >> 11) & 0x1F) as u8;
     let g = ((c >> 5) & 0x3F) as u8;
     let b = (c & 0x1F) as u8;
-    [(r << 3) | (r >> 2), (g << 2) | (g >> 4), (b << 3) | (b >> 2)]
+    [
+        (r << 3) | (r >> 2),
+        (g << 2) | (g >> 4),
+        (b << 3) | (b >> 2),
+    ]
 }
 
 /// Compress a 32×32 tile (RGBA8 bytes, row-major) into DXT1 with 4 mipmap levels.
@@ -251,8 +255,12 @@ pub fn compress_tile_dxt1(rgba8: &[u8]) -> Vec<u8> {
                         let y = (by + dy).min(size - 1);
                         let x = (bx + dx).min(size - 1);
                         let src = y * stride + x * 4;
-                        block[dy * 4 + dx] =
-                            [current[src], current[src + 1], current[src + 2], current[src + 3]];
+                        block[dy * 4 + dx] = [
+                            current[src],
+                            current[src + 1],
+                            current[src + 2],
+                            current[src + 3],
+                        ];
                     }
                 }
                 compressed.extend_from_slice(&compress_dxt1_block(&block));

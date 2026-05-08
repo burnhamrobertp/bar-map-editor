@@ -2,8 +2,8 @@
 //!
 //! Provides both GPU (WGSL compute shader) and CPU (via `noise` crate) implementations.
 
-use noise::NoiseFn;
 use bar_data::Heightmap;
+use noise::NoiseFn;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -213,9 +213,13 @@ fn fill_worley(params: &NoiseParams, data: &mut [f32]) {
     // Generate random feature points using PCG hash
     let mut rng_state = params.seed as u64;
     for _ in 0..num_points {
-        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng_state = rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let px = ((rng_state >> 33) as f64) / (u32::MAX as f64);
-        rng_state = rng_state.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        rng_state = rng_state
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
         let py = ((rng_state >> 33) as f64) / (u32::MAX as f64);
         points.push((px, py));
     }

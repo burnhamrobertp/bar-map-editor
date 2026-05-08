@@ -52,7 +52,10 @@ mod tests {
         let parsed = parse_target_toml(&toml_str).unwrap();
         assert_eq!(parsed.id, config.id);
         assert_eq!(parsed.codec, config.codec);
-        assert_eq!(parsed.codec_params.square_size, config.codec_params.square_size);
+        assert_eq!(
+            parsed.codec_params.square_size,
+            config.codec_params.square_size
+        );
         assert_eq!(parsed.layers.len(), config.layers.len());
     }
 

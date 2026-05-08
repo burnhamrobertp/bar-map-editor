@@ -80,10 +80,7 @@ fn out_hm(outputs: &HashMap<String, PortValue>, port: &str) -> Heightmap {
     }
 }
 
-fn out_color(
-    outputs: &HashMap<String, PortValue>,
-    port: &str,
-) -> bar_data::ColorBuffer {
+fn out_color(outputs: &HashMap<String, PortValue>, port: &str) -> bar_data::ColorBuffer {
     match outputs.get(port).expect("port present") {
         PortValue::Color(cb) => cb.clone(),
         other => panic!("expected colour buffer on '{port}', got {other:?}"),
@@ -220,7 +217,10 @@ fn gradient_linear_y_increases_top_to_bottom() {
     assert_hm_dims(&h);
     let top = h.get(W / 2, 0).unwrap();
     let bot = h.get(W / 2, H - 1).unwrap();
-    assert!(bot > top, "linear_y should increase downward: top {top}, bot {bot}");
+    assert!(
+        bot > top,
+        "linear_y should increase downward: top {top}, bot {bot}"
+    );
 }
 
 #[test]
@@ -241,7 +241,10 @@ fn gradient_invert_flips_direction() {
     let inverted = out_hm(&run(NodeType::Gradient, &p2, &empty_inputs()), "output");
     let n = normal.get(W / 2, 0).unwrap();
     let i = inverted.get(W / 2, 0).unwrap();
-    assert!((n + i - 1.0).abs() < 0.05, "invert should mirror values: {n} vs {i}");
+    assert!(
+        (n + i - 1.0).abs() < 0.05,
+        "invert should mirror values: {n} vs {i}"
+    );
 }
 
 #[test]
@@ -251,7 +254,10 @@ fn painted_heightmap_with_empty_data_emits_flat_zero() {
         ("data", ParamValue::String(String::new())),
         ("resolution", ParamValue::UInt(64)),
     ];
-    let h = out_hm(&run(NodeType::PaintedHeightmap, p, &empty_inputs()), "output");
+    let h = out_hm(
+        &run(NodeType::PaintedHeightmap, p, &empty_inputs()),
+        "output",
+    );
     assert_hm_dims(&h);
     let (mn, mx) = min_max(&h);
     assert!(mn >= 0.0 && mx <= 1.0);
@@ -285,7 +291,10 @@ fn blur_smooths_a_delta() {
     let centre = h.get(cx as u32, cy as u32).unwrap();
     let neighbour = h.get((cx + 1) as u32, cy as u32).unwrap();
     assert!(centre < 1.0, "centre should be lower after blur: {centre}");
-    assert!(neighbour > 0.0, "neighbour should pick up some value: {neighbour}");
+    assert!(
+        neighbour > 0.0,
+        "neighbour should pick up some value: {neighbour}"
+    );
 }
 
 #[test]
@@ -298,7 +307,10 @@ fn sharpen_amplifies_contrast() {
     let h = out_hm(&run(NodeType::Sharpen, &[], &inputs), "output");
     assert_hm_dims(&h);
     let (mn, mx) = min_max(&h);
-    assert!(mn >= 0.0 && mx <= 1.0, "sharpen escapes range: ({mn}, {mx})");
+    assert!(
+        mn >= 0.0 && mx <= 1.0,
+        "sharpen escapes range: ({mn}, {mx})"
+    );
 }
 
 #[test]
@@ -356,7 +368,10 @@ fn invert_reflects_values_around_half() {
     // Inverted ramp should run high→low.
     let left = h.get(0, H / 2).unwrap();
     let right = h.get(W - 1, H / 2).unwrap();
-    assert!(left > right, "invert should reverse the ramp: {left} vs {right}");
+    assert!(
+        left > right,
+        "invert should reverse the ramp: {left} vs {right}"
+    );
 }
 
 #[test]
@@ -411,7 +426,10 @@ fn displacement_runs_with_zero_displacement_is_near_identity() {
     // weights the impl uses.
     let want = mean(&base);
     let got = mean(&h);
-    assert!((want - got).abs() < 0.05, "mean drift: want {want}, got {got}");
+    assert!(
+        (want - got).abs() < 0.05,
+        "mean drift: want {want}, got {got}"
+    );
 }
 
 // ── Combiners ───────────────────────────────────────────────────────
@@ -489,7 +507,10 @@ fn slope_map_is_zero_on_flat_input() {
     let h = out_hm(&run(NodeType::SlopeMap, &[], &inputs), "output");
     assert_hm_dims(&h);
     let (_, mx) = min_max(&h);
-    assert!(mx < 0.05, "flat input should give near-zero slope: max {mx}");
+    assert!(
+        mx < 0.05,
+        "flat input should give near-zero slope: max {mx}"
+    );
 }
 
 #[test]
@@ -518,7 +539,10 @@ fn height_select_picks_band() {
     // Edge columns (u=0, u=1) should be near 0.
     let left = h.get(0, H / 2).unwrap();
     let right = h.get(W - 1, H / 2).unwrap();
-    assert!(left < 0.5 && right < 0.5, "edges deselected: {left}, {right}");
+    assert!(
+        left < 0.5 && right < 0.5,
+        "edges deselected: {left}, {right}"
+    );
 }
 
 #[test]
@@ -537,10 +561,7 @@ fn splat_map_blends_three_bands() {
 #[test]
 fn auto_texture_outputs_color_buffer() {
     let mut inputs = input_hm("input", gen(|u, _| u));
-    inputs.insert(
-        "slope".to_string(),
-        PortValue::Heightmap(flat(0.2)),
-    );
+    inputs.insert("slope".to_string(), PortValue::Heightmap(flat(0.2)));
     let p = &[
         ("biome", ParamValue::String("temperate".to_string())),
         ("slope_power", ParamValue::Float(0.7)),
@@ -676,7 +697,10 @@ fn subgraph_input_passes_value_through() {
     let h = out_hm(&outputs, "value");
     assert_hm_dims(&h);
     let m = mean(&h);
-    assert!((m - 0.42).abs() < 1e-3, "passthrough should preserve value: {m}");
+    assert!(
+        (m - 0.42).abs() < 1e-3,
+        "passthrough should preserve value: {m}"
+    );
 }
 
 #[test]
@@ -687,7 +711,10 @@ fn subgraph_output_passes_value_through() {
     let h = out_hm(&outputs, "value");
     assert_hm_dims(&h);
     let m = mean(&h);
-    assert!((m - 0.7).abs() < 1e-3, "passthrough should preserve value: {m}");
+    assert!(
+        (m - 0.7).abs() < 1e-3,
+        "passthrough should preserve value: {m}"
+    );
 }
 
 #[test]
@@ -696,7 +723,8 @@ fn subgraph_io_with_no_input_emits_no_output() {
     // generic "skip nodes whose inputs aren't present" behaviour
     // every other passthrough node uses, e.g. Preview).
     let outputs = run(NodeType::SubgraphInput, &[], &empty_inputs());
-    assert!(outputs.get("value").is_none(),
-        "no input → no output: {outputs:?}");
+    assert!(
+        outputs.get("value").is_none(),
+        "no input → no output: {outputs:?}"
+    );
 }
-

@@ -5,8 +5,8 @@
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 
-use bar_engine::{execute_bundlers, CpuExecutor};
 use bar_engine::recipe::{MapSettings, OutputConfig, Recipe};
+use bar_engine::{execute_bundlers, CpuExecutor};
 use bar_graph::{evaluate_graph, GraphEngine, Node, NodeId, NodeType, ParamValue, PortId};
 
 const RESOLUTIONS: &[u32] = &[256, 512, 1024];
@@ -16,21 +16,40 @@ fn build_graph() -> GraphEngine {
     let mut graph = GraphEngine::new();
 
     let mut noise_node = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-    noise_node.params.insert("frequency".to_string(), ParamValue::Float(2.0));
-    noise_node.params.insert("octaves".to_string(), ParamValue::UInt(4));
-    noise_node.params.insert("persistence".to_string(), ParamValue::Float(0.5));
-    noise_node.params.insert("lacunarity".to_string(), ParamValue::Float(2.0));
-    noise_node.params.insert("seed".to_string(), ParamValue::UInt(0));
+    noise_node
+        .params
+        .insert("frequency".to_string(), ParamValue::Float(2.0));
+    noise_node
+        .params
+        .insert("octaves".to_string(), ParamValue::UInt(4));
+    noise_node
+        .params
+        .insert("persistence".to_string(), ParamValue::Float(0.5));
+    noise_node
+        .params
+        .insert("lacunarity".to_string(), ParamValue::Float(2.0));
+    noise_node
+        .params
+        .insert("seed".to_string(), ParamValue::UInt(0));
     let noise_id = graph.add_node(noise_node);
 
     let mut bundler_node = Node::new(NodeId(0), NodeType::Bundler, "BAR Export");
-    bundler_node.params.insert("target".to_string(), ParamValue::String("spring-smf".to_string()));
+    bundler_node.params.insert(
+        "target".to_string(),
+        ParamValue::String("spring-smf".to_string()),
+    );
     let bundler_id = graph.add_node(bundler_node);
 
     graph
         .connect(
-            PortId { node_id: noise_id, port_name: "output".to_string() },
-            PortId { node_id: bundler_id, port_name: "heightmap".to_string() },
+            PortId {
+                node_id: noise_id,
+                port_name: "output".to_string(),
+            },
+            PortId {
+                node_id: bundler_id,
+                port_name: "heightmap".to_string(),
+            },
         )
         .unwrap();
 
@@ -45,9 +64,13 @@ fn bench_graph_evaluation(c: &mut Criterion) {
     let graph = build_graph();
 
     for &size in RESOLUTIONS {
-        group.bench_with_input(BenchmarkId::new("noise_to_bundler", size), &size, |b, &size| {
-            b.iter(|| evaluate_graph(&graph, &executor, size, size).unwrap());
-        });
+        group.bench_with_input(
+            BenchmarkId::new("noise_to_bundler", size),
+            &size,
+            |b, &size| {
+                b.iter(|| evaluate_graph(&graph, &executor, size, size).unwrap());
+            },
+        );
     }
     group.finish();
 }

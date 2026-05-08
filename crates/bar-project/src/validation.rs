@@ -34,9 +34,9 @@ pub struct Finding {
     /// For Map Settings tabs, this matches the tab's lowercase id so
     /// the modal can decorate the right tab.
     pub category: String,
-    /// Optional field within the category — e.g. category "physics"
-    /// + field "gravity" lets the modal draw a per-control outline
-    /// rather than only flagging the whole tab.
+    /// Optional field within the category. When combined with a category,
+    /// e.g. category "physics" + field "gravity", the modal can draw a
+    /// per-control outline rather than only flagging the whole tab.
     pub field: Option<String>,
     pub message: String,
 }
@@ -164,10 +164,7 @@ fn check_dimensions(map_w: u32, map_h: u32, out: &mut Vec<Finding>) {
     // Map width corresponds to the "Width" field; height to "Depth"
     // in the modal. The field tags below let the modal draw the
     // outline on the correct control.
-    for (axis, dim, field) in [
-        ("width", map_w, "width"),
-        ("depth", map_h, "depth"),
-    ] {
+    for (axis, dim, field) in [("width", map_w, "width"), ("depth", map_h, "depth")] {
         if dim < 65 {
             out.push(
                 Finding::err(
@@ -250,12 +247,7 @@ fn check_height_range(settings: &MapSettings, out: &mut Vec<Finding>) {
 /// where 1 heightmap pixel = 8 elmos). We can't (yet) detect water
 /// vs. land here without sampling the heightmap, but range checks are
 /// cheap and catch transposed coordinates.
-fn check_start_positions(
-    settings: &MapSettings,
-    map_w: u32,
-    map_h: u32,
-    out: &mut Vec<Finding>,
-) {
+fn check_start_positions(settings: &MapSettings, map_w: u32, map_h: u32, out: &mut Vec<Finding>) {
     let world_w = (map_w.saturating_sub(1)) * 8;
     let world_h = (map_h.saturating_sub(1)) * 8;
 
@@ -292,8 +284,10 @@ fn check_start_positions(
         // Edge proximity — closer than 256 elmos to any edge tends to
         // place units outside the visible map area in BAR.
         let edge = 256u32;
-        if *x < edge || *x > world_w.saturating_sub(edge)
-            || *z < edge || *z > world_h.saturating_sub(edge)
+        if *x < edge
+            || *x > world_w.saturating_sub(edge)
+            || *z < edge
+            || *z > world_h.saturating_sub(edge)
         {
             out.push(
                 Finding::warn(
@@ -333,7 +327,10 @@ fn check_physics(settings: &MapSettings, out: &mut Vec<Finding>) {
         out.push(
             Finding::err(
                 "physics",
-                format!("Tidal strength {} can't be negative.", settings.tidal_strength),
+                format!(
+                    "Tidal strength {} can't be negative.",
+                    settings.tidal_strength
+                ),
             )
             .on_field("tidal_strength"),
         );
@@ -351,7 +348,10 @@ fn check_physics(settings: &MapSettings, out: &mut Vec<Finding>) {
         out.push(
             Finding::err(
                 "physics",
-                format!("Extractor radius {} must be > 0.", settings.extractor_radius),
+                format!(
+                    "Extractor radius {} must be > 0.",
+                    settings.extractor_radius
+                ),
             )
             .on_field("extractor_radius"),
         );
@@ -385,8 +385,11 @@ fn check_atmosphere(settings: &MapSettings, out: &mut Vec<Finding>) {
     }
     if atm.min_wind < 0.0 {
         out.push(
-            Finding::err("atmosphere", format!("Min wind {} can't be negative.", atm.min_wind))
-                .on_field("min_wind"),
+            Finding::err(
+                "atmosphere",
+                format!("Min wind {} can't be negative.", atm.min_wind),
+            )
+            .on_field("min_wind"),
         );
     }
     if !(0.0..=1.0).contains(&atm.fog_start) {
@@ -472,7 +475,12 @@ fn check_lighting(settings: &MapSettings, out: &mut Vec<Finding>) {
     };
     color_check(out, "Ground ambient", "ground_ambient", &lit.ground_ambient);
     color_check(out, "Ground diffuse", "ground_diffuse", &lit.ground_diffuse);
-    color_check(out, "Ground specular", "ground_specular", &lit.ground_specular);
+    color_check(
+        out,
+        "Ground specular",
+        "ground_specular",
+        &lit.ground_specular,
+    );
 }
 
 /// Water block — non-negative damage, colours in range.
@@ -480,8 +488,11 @@ fn check_water(settings: &MapSettings, out: &mut Vec<Finding>) {
     let w = &settings.water;
     if w.damage < 0.0 {
         out.push(
-            Finding::err("water", format!("Water damage {} can't be negative.", w.damage))
-                .on_field("damage"),
+            Finding::err(
+                "water",
+                format!("Water damage {} can't be negative.", w.damage),
+            )
+            .on_field("damage"),
         );
     }
     let color_check = |out: &mut Vec<Finding>, label: &str, field: &str, c: &[f32; 3]| {
@@ -543,10 +554,7 @@ fn check_bundler_inputs(graph: &GraphEngine, out: &mut Vec<Finding>) {
         .map(|(id, _)| *id)
         .collect();
     for id in bundler_ids {
-        let has_input = graph
-            .connections()
-            .iter()
-            .any(|c| c.to.node_id == id);
+        let has_input = graph.connections().iter().any(|c| c.to.node_id == id);
         if !has_input {
             let label = graph
                 .nodes()
@@ -639,9 +647,7 @@ fn check_mapinfo_lua_collisions(graph: &GraphEngine, out: &mut Vec<Finding>) {
                         continue;
                     }
                     let bundle_path = parts[1].trim().replace('\\', "/");
-                    let stripped = bundle_path
-                        .strip_prefix("./")
-                        .unwrap_or(&bundle_path);
+                    let stripped = bundle_path.strip_prefix("./").unwrap_or(&bundle_path);
                     if stripped.eq_ignore_ascii_case(target) {
                         out.push(Finding::err(
                             "mapinfo",
@@ -654,14 +660,11 @@ fn check_mapinfo_lua_collisions(graph: &GraphEngine, out: &mut Vec<Finding>) {
                 }
             }
             NodeType::FileReference => {
-                let Some(ParamValue::String(p)) = node.params.get("bundle_path")
-                else {
+                let Some(ParamValue::String(p)) = node.params.get("bundle_path") else {
                     continue;
                 };
                 let path = p.trim().replace('\\', "/");
-                let stripped = path
-                    .strip_prefix("./")
-                    .unwrap_or(&path);
+                let stripped = path.strip_prefix("./").unwrap_or(&path);
                 if stripped.eq_ignore_ascii_case(target) {
                     out.push(Finding::err(
                         "mapinfo",
@@ -775,10 +778,7 @@ fn check_input_sources_present(graph: &GraphEngine, out: &mut Vec<Finding>) {
         if !found {
             // Don't double-flag when the Bundler also has no inputs at
             // all; check_bundler_inputs already covers that case.
-            let has_any_input = graph
-                .connections()
-                .iter()
-                .any(|c| c.to.node_id == *bid);
+            let has_any_input = graph.connections().iter().any(|c| c.to.node_id == *bid);
             if has_any_input {
                 let label = bnode.label.clone();
                 out.push(Finding::err(
@@ -822,8 +822,8 @@ fn check_disconnected_filter_inputs(graph: &GraphEngine, out: &mut Vec<Finding>)
             // the exception -- its mask is the primary input, not an
             // optional modulator.
             let is_modulator = !matches!(PortPlacement::for_input(port.kind), PortPlacement::Left);
-            let is_required_mask = matches!(node.node_type, NodeType::MaskApply)
-                && port.name == "mask";
+            let is_required_mask =
+                matches!(node.node_type, NodeType::MaskApply) && port.name == "mask";
             if is_modulator && !is_required_mask {
                 continue;
             }
@@ -869,8 +869,10 @@ mod tests {
         let graph = empty_graph();
         let f = validate_project(&graph, &MapSettings::default(), 1025, 1025);
         assert!(
-            f.iter().any(|x| x.category == "bundler" && x.severity == Severity::Error),
-            "expected bundler error in {:?}", f
+            f.iter()
+                .any(|x| x.category == "bundler" && x.severity == Severity::Error),
+            "expected bundler error in {:?}",
+            f
         );
     }
 
@@ -880,13 +882,16 @@ mod tests {
         graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
         let bad = validate_project(&graph, &MapSettings::default(), 256, 256);
         assert!(
-            bad.iter().any(|x| x.category == "dimensions" && x.severity == Severity::Error),
-            "expected dimension error for 256: {:?}", bad
+            bad.iter()
+                .any(|x| x.category == "dimensions" && x.severity == Severity::Error),
+            "expected dimension error for 256: {:?}",
+            bad
         );
         let good = validate_project(&graph, &MapSettings::default(), 257, 257);
         assert!(
             good.iter().all(|x| x.category != "dimensions"),
-            "expected no dimension error for 257: {:?}", good
+            "expected no dimension error for 257: {:?}",
+            good
         );
     }
 
@@ -899,9 +904,11 @@ mod tests {
         settings.max_height = 50.0;
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
-            f.iter().any(|x| x.category == "dimensions" && x.severity == Severity::Error
+            f.iter().any(|x| x.category == "dimensions"
+                && x.severity == Severity::Error
                 && x.field.as_deref() == Some("max_height")),
-            "expected height-range error: {:?}", f
+            "expected height-range error: {:?}",
+            f
         );
     }
 
@@ -913,8 +920,10 @@ mod tests {
         settings.start_positions.push([99_999, 99_999]);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
-            f.iter().any(|x| x.category == "startboxes" && x.severity == Severity::Error),
-            "expected spawn-outside-map error: {:?}", f
+            f.iter()
+                .any(|x| x.category == "startboxes" && x.severity == Severity::Error),
+            "expected spawn-outside-map error: {:?}",
+            f
         );
     }
 
@@ -927,7 +936,8 @@ mod tests {
             f.iter().any(|x| x.category == "bundler"
                 && x.severity == Severity::Error
                 && x.message.contains("no inputs")),
-            "expected 'no inputs' error: {:?}", f
+            "expected 'no inputs' error: {:?}",
+            f
         );
     }
 
@@ -941,8 +951,14 @@ mod tests {
         // Connect node 1 to the bundler so only #2 is orphaned.
         graph
             .connect(
-                PortId { node_id: NodeId(1), port_name: "out".to_string() },
-                PortId { node_id: NodeId(0), port_name: "heightmap".to_string() },
+                PortId {
+                    node_id: NodeId(1),
+                    port_name: "out".to_string(),
+                },
+                PortId {
+                    node_id: NodeId(0),
+                    port_name: "heightmap".to_string(),
+                },
             )
             .ok();
         let f = validate_project(&graph, &MapSettings::default(), 257, 257);
@@ -951,7 +967,8 @@ mod tests {
         assert_eq!(orphans[0].severity, Severity::Warning);
         assert!(
             orphans[0].message.contains("Orphan"),
-            "expected orphan label in message: {}", orphans[0].message,
+            "expected orphan label in message: {}",
+            orphans[0].message,
         );
     }
 
@@ -964,14 +981,22 @@ mod tests {
         // Wire Blur → Bundler.heightmap with no source feeding Blur.
         graph
             .connect(
-                PortId { node_id: blur, port_name: "output".to_string() },
-                PortId { node_id: bundler, port_name: "heightmap".to_string() },
+                PortId {
+                    node_id: blur,
+                    port_name: "output".to_string(),
+                },
+                PortId {
+                    node_id: bundler,
+                    port_name: "heightmap".to_string(),
+                },
             )
             .expect("connect should succeed");
         let f = validate_project(&graph, &MapSettings::default(), 257, 257);
         assert!(
-            f.iter().any(|x| x.category == "sources" && x.severity == Severity::Error),
-            "expected sources error: {:?}", f
+            f.iter()
+                .any(|x| x.category == "sources" && x.severity == Severity::Error),
+            "expected sources error: {:?}",
+            f
         );
     }
 
@@ -982,8 +1007,10 @@ mod tests {
         graph.add_node(Node::new(NodeId(0), NodeType::Blur, "Blur"));
         let f = validate_project(&graph, &MapSettings::default(), 257, 257);
         assert!(
-            f.iter().any(|x| x.category == "wiring" && x.severity == Severity::Warning),
-            "expected wiring warning: {:?}", f
+            f.iter()
+                .any(|x| x.category == "wiring" && x.severity == Severity::Warning),
+            "expected wiring warning: {:?}",
+            f
         );
     }
 
@@ -996,21 +1023,35 @@ mod tests {
         let blur = graph.add_node(Node::new(NodeId(0), NodeType::Blur, "Blur"));
         graph
             .connect(
-                PortId { node_id: source, port_name: "output".to_string() },
-                PortId { node_id: blur, port_name: "input".to_string() },
+                PortId {
+                    node_id: source,
+                    port_name: "output".to_string(),
+                },
+                PortId {
+                    node_id: blur,
+                    port_name: "input".to_string(),
+                },
             )
             .expect("source → blur connect should succeed");
         graph
             .connect(
-                PortId { node_id: blur, port_name: "output".to_string() },
-                PortId { node_id: bundler, port_name: "heightmap".to_string() },
+                PortId {
+                    node_id: blur,
+                    port_name: "output".to_string(),
+                },
+                PortId {
+                    node_id: bundler,
+                    port_name: "heightmap".to_string(),
+                },
             )
             .expect("blur → bundler connect should succeed");
         let f = validate_project(&graph, &MapSettings::default(), 257, 257);
         assert!(
-            !f.iter().any(|x| x.category == "wiring" && x.severity == Severity::Warning
+            !f.iter().any(|x| x.category == "wiring"
+                && x.severity == Severity::Warning
                 && x.message.contains("'Blur'")),
-            "Blur shouldn't be flagged when its input is connected: {:?}", f
+            "Blur shouldn't be flagged when its input is connected: {:?}",
+            f
         );
     }
 
@@ -1037,7 +1078,8 @@ mod tests {
             f.iter().any(|x| x.category == "files"
                 && x.severity == Severity::Error
                 && x.message.contains("same archive path")),
-            "expected collision error: {:?}", f
+            "expected collision error: {:?}",
+            f
         );
     }
 
@@ -1056,16 +1098,9 @@ mod tests {
         (graph, s)
     }
 
-    fn has_finding(
-        f: &[Finding],
-        category: &str,
-        field: Option<&str>,
-        severity: Severity,
-    ) -> bool {
+    fn has_finding(f: &[Finding], category: &str, field: Option<&str>, severity: Severity) -> bool {
         f.iter().any(|x| {
-            x.category == category
-                && x.severity == severity
-                && x.field.as_deref() == field
+            x.category == category && x.severity == severity && x.field.as_deref() == field
         })
     }
 
@@ -1075,7 +1110,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             !f.iter().any(|x| x.category == "physics"),
-            "default settings shouldn't flag physics: {:?}", f
+            "default settings shouldn't flag physics: {:?}",
+            f
         );
     }
 
@@ -1086,7 +1122,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "physics", Some("gravity"), Severity::Error),
-            "expected physics/gravity error: {:?}", f
+            "expected physics/gravity error: {:?}",
+            f
         );
     }
 
@@ -1097,7 +1134,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "physics", Some("map_hardness"), Severity::Warning),
-            "expected physics/map_hardness warning: {:?}", f
+            "expected physics/map_hardness warning: {:?}",
+            f
         );
     }
 
@@ -1108,7 +1146,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "physics", Some("tidal_strength"), Severity::Error),
-            "expected physics/tidal_strength error: {:?}", f
+            "expected physics/tidal_strength error: {:?}",
+            f
         );
     }
 
@@ -1120,7 +1159,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("max_wind"), Severity::Error),
-            "expected atmosphere/max_wind error: {:?}", f
+            "expected atmosphere/max_wind error: {:?}",
+            f
         );
     }
 
@@ -1131,7 +1171,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("min_wind"), Severity::Error),
-            "expected atmosphere/min_wind error: {:?}", f
+            "expected atmosphere/min_wind error: {:?}",
+            f
         );
     }
 
@@ -1143,7 +1184,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("fog_end"), Severity::Error),
-            "expected atmosphere/fog_end error: {:?}", f
+            "expected atmosphere/fog_end error: {:?}",
+            f
         );
     }
 
@@ -1154,7 +1196,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("fog_color"), Severity::Warning),
-            "expected atmosphere/fog_color warning: {:?}", f
+            "expected atmosphere/fog_color warning: {:?}",
+            f
         );
     }
 
@@ -1165,7 +1208,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "lighting", Some("sun_dir"), Severity::Error),
-            "expected lighting/sun_dir error: {:?}", f
+            "expected lighting/sun_dir error: {:?}",
+            f
         );
     }
 
@@ -1176,7 +1220,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "lighting", Some("spec_exponent"), Severity::Error),
-            "expected lighting/spec_exponent error: {:?}", f
+            "expected lighting/spec_exponent error: {:?}",
+            f
         );
     }
 
@@ -1187,7 +1232,8 @@ mod tests {
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "water", Some("damage"), Severity::Error),
-            "expected water/damage error: {:?}", f
+            "expected water/damage error: {:?}",
+            f
         );
     }
 
@@ -1203,7 +1249,8 @@ mod tests {
             .collect();
         assert!(
             !width_findings.is_empty(),
-            "expected dimensions/width error: {:?}", f
+            "expected dimensions/width error: {:?}",
+            f
         );
         let depth_findings: Vec<&Finding> = f
             .iter()
@@ -1211,7 +1258,8 @@ mod tests {
             .collect();
         assert!(
             depth_findings.is_empty(),
-            "depth should be valid (257), but got: {:?}", depth_findings
+            "depth should be valid (257), but got: {:?}",
+            depth_findings
         );
     }
 

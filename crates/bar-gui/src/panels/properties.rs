@@ -10,10 +10,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
+use bar_graph::{self, GraphEngine, NodeId, NodeType, ParamValue};
 use eframe::egui;
-use bar_graph::{
-    self, GraphEngine, NodeId, NodeType, ParamValue,
-};
 
 use crate::app::*;
 
@@ -218,10 +216,7 @@ impl BarEditorApp {
         }
         // Left
         if target_rect.left() - margin - size.x >= screen.left() {
-            return egui::pos2(
-                target_rect.left() - margin - size.x,
-                target_rect.top(),
-            );
+            return egui::pos2(target_rect.left() - margin - size.x, target_rect.top());
         }
         // Below
         if target_rect.bottom() + margin + size.y <= screen.bottom() {
@@ -229,10 +224,7 @@ impl BarEditorApp {
         }
         // Above
         if target_rect.top() - margin - size.y >= screen.top() {
-            return egui::pos2(
-                target_rect.left(),
-                target_rect.top() - margin - size.y,
-            );
+            return egui::pos2(target_rect.left(), target_rect.top() - margin - size.y);
         }
         // Fallback: clamp to top-right of screen with a margin so
         // the panel is at least visible.
@@ -273,7 +265,9 @@ impl BarEditorApp {
         if let Some(node_id) = self.selected_node {
             // Extract node data upfront so we don't hold a borrow on self.graph
             // while also needing to mutate other fields (e.g. passthrough_edit).
-            let node_data = self.graph.get_node(node_id)
+            let node_data = self
+                .graph
+                .get_node(node_id)
                 .map(|n| (n.node_type.clone(), n.label.clone(), n.params.clone()));
 
             if let Some((node_type, node_label, node_params)) = node_data {
@@ -330,159 +324,187 @@ impl BarEditorApp {
                         .num_columns(2)
                         .spacing([8.0, 4.0])
                         .show(ui, |ui| {
-                        for (key, default_val) in &params_to_show {
-                            let current = node_params.get(key).unwrap_or(default_val);
-                            match current {
-                                ParamValue::Float(v) => {
-                                    let mut val = *v;
-                                    ui.label(key);
-                                    if ui.add(egui::DragValue::new(&mut val).speed(0.01)).changed() {
-                                        changed_params.push((key.clone(), ParamValue::Float(val)));
+                            for (key, default_val) in &params_to_show {
+                                let current = node_params.get(key).unwrap_or(default_val);
+                                match current {
+                                    ParamValue::Float(v) => {
+                                        let mut val = *v;
+                                        ui.label(key);
+                                        if ui
+                                            .add(egui::DragValue::new(&mut val).speed(0.01))
+                                            .changed()
+                                        {
+                                            changed_params
+                                                .push((key.clone(), ParamValue::Float(val)));
+                                        }
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
-                                }
-                                ParamValue::UInt(v) => {
-                                    let mut val = *v as i32;
-                                    ui.label(key);
-                                    if ui.add(egui::DragValue::new(&mut val).range(1..=20)).changed() {
-                                        changed_params.push((key.clone(), ParamValue::UInt(val as u32)));
+                                    ParamValue::UInt(v) => {
+                                        let mut val = *v as i32;
+                                        ui.label(key);
+                                        if ui
+                                            .add(egui::DragValue::new(&mut val).range(1..=20))
+                                            .changed()
+                                        {
+                                            changed_params
+                                                .push((key.clone(), ParamValue::UInt(val as u32)));
+                                        }
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
-                                }
-                                ParamValue::Int(v) => {
-                                    let mut val = *v;
-                                    ui.label(key);
-                                    if ui.add(egui::DragValue::new(&mut val)).changed() {
-                                        changed_params.push((key.clone(), ParamValue::Int(val)));
+                                    ParamValue::Int(v) => {
+                                        let mut val = *v;
+                                        ui.label(key);
+                                        if ui.add(egui::DragValue::new(&mut val)).changed() {
+                                            changed_params
+                                                .push((key.clone(), ParamValue::Int(val)));
+                                        }
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
-                                }
-                                ParamValue::Bool(v) => {
-                                    let mut val = *v;
-                                    ui.label("");
-                                    if ui.checkbox(&mut val, key).changed() {
-                                        changed_params.push((key.clone(), ParamValue::Bool(val)));
+                                    ParamValue::Bool(v) => {
+                                        let mut val = *v;
+                                        ui.label("");
+                                        if ui.checkbox(&mut val, key).changed() {
+                                            changed_params
+                                                .push((key.clone(), ParamValue::Bool(val)));
+                                        }
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
-                                }
-                                ParamValue::String(v) => {
-                                    let mut val = v.clone();
-                                    ui.label(key);
-                                    if let Some(choices) =
-                                        bar_graph::param_choices(&node_type, key)
-                                    {
-                                        let id = ("param_choice", node_id.0, key.as_str());
-                                        egui::ComboBox::from_id_salt(id)
-                                            .selected_text(&val)
-                                            .show_ui(ui, |ui| {
-                                                for choice in choices {
-                                                    if ui
-                                                        .selectable_label(
-                                                            val == *choice,
-                                                            *choice,
-                                                        )
-                                                        .clicked()
+                                    ParamValue::String(v) => {
+                                        let mut val = v.clone();
+                                        ui.label(key);
+                                        if let Some(choices) =
+                                            bar_graph::param_choices(&node_type, key)
+                                        {
+                                            let id = ("param_choice", node_id.0, key.as_str());
+                                            egui::ComboBox::from_id_salt(id)
+                                                .selected_text(&val)
+                                                .show_ui(ui, |ui| {
+                                                    for choice in choices {
+                                                        if ui
+                                                            .selectable_label(
+                                                                val == *choice,
+                                                                *choice,
+                                                            )
+                                                            .clicked()
+                                                        {
+                                                            let prev = val.clone();
+                                                            val = (*choice).to_string();
+                                                            changed_params.push((
+                                                                key.clone(),
+                                                                ParamValue::String(val.clone()),
+                                                            ));
+                                                            if node_type == NodeType::AutoTexture
+                                                                && key == "biome"
+                                                                && val != prev
+                                                            {
+                                                                let bd =
+                                                                    bar_graph::biome_defaults(&val);
+                                                                changed_params.push((
+                                                                    "rock_color".to_string(),
+                                                                    ParamValue::String(
+                                                                        bd.rock_color.to_string(),
+                                                                    ),
+                                                                ));
+                                                                changed_params.push((
+                                                                    "slope_power".to_string(),
+                                                                    ParamValue::Float(
+                                                                        bd.slope_power,
+                                                                    ),
+                                                                ));
+                                                            }
+                                                            let is_noise = matches!(
+                                                                node_type,
+                                                                NodeType::PerlinNoise
+                                                                    | NodeType::SimplexNoise
+                                                                    | NodeType::WorleyNoise
+                                                                    | NodeType::RidgedNoise
+                                                            );
+                                                            if is_noise
+                                                                && key == "character"
+                                                                && val != prev
+                                                            {
+                                                                let cd =
+                                                                    bar_graph::character_defaults(
+                                                                        &node_type, &val,
+                                                                    );
+                                                                changed_params.push((
+                                                                    "frequency".to_string(),
+                                                                    ParamValue::Float(cd.frequency),
+                                                                ));
+                                                                changed_params.push((
+                                                                    "octaves".to_string(),
+                                                                    ParamValue::UInt(cd.octaves),
+                                                                ));
+                                                                changed_params.push((
+                                                                    "lacunarity".to_string(),
+                                                                    ParamValue::Float(
+                                                                        cd.lacunarity,
+                                                                    ),
+                                                                ));
+                                                                changed_params.push((
+                                                                    "persistence".to_string(),
+                                                                    ParamValue::Float(
+                                                                        cd.persistence,
+                                                                    ),
+                                                                ));
+                                                            }
+                                                        }
+                                                    }
+                                                });
+                                        } else if bar_graph::param_is_color(&node_type, key) {
+                                            let rgb =
+                                                parse_hex_color(&val).unwrap_or([128, 128, 128]);
+                                            let mut c32 =
+                                                egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                            if ui.color_edit_button_srgba(&mut c32).changed() {
+                                                let new_hex = format!(
+                                                    "{:02X}{:02X}{:02X}",
+                                                    c32.r(),
+                                                    c32.g(),
+                                                    c32.b()
+                                                );
+                                                val = new_hex;
+                                                changed_params.push((
+                                                    key.clone(),
+                                                    ParamValue::String(val.clone()),
+                                                ));
+                                            }
+                                        } else {
+                                            ui.horizontal(|ui| {
+                                                if ui
+                                                    .add(
+                                                        egui::TextEdit::singleline(&mut val)
+                                                            .desired_width(f32::INFINITY),
+                                                    )
+                                                    .changed()
+                                                {
+                                                    changed_params.push((
+                                                        key.clone(),
+                                                        ParamValue::String(val.clone()),
+                                                    ));
+                                                }
+                                                if key == "path" && ui.button("…").clicked() {
+                                                    if let Some(picked) =
+                                                        make_path_dialog(&node_type).pick_file()
                                                     {
-                                                        let prev = val.clone();
-                                                        val = (*choice).to_string();
                                                         changed_params.push((
                                                             key.clone(),
-                                                            ParamValue::String(val.clone()),
+                                                            ParamValue::String(
+                                                                picked
+                                                                    .to_string_lossy()
+                                                                    .to_string(),
+                                                            ),
                                                         ));
-                                                        if node_type == NodeType::AutoTexture
-                                                            && key == "biome"
-                                                            && val != prev
-                                                        {
-                                                            let bd = bar_graph::biome_defaults(&val);
-                                                            changed_params.push((
-                                                                "rock_color".to_string(),
-                                                                ParamValue::String(
-                                                                    bd.rock_color.to_string(),
-                                                                ),
-                                                            ));
-                                                            changed_params.push((
-                                                                "slope_power".to_string(),
-                                                                ParamValue::Float(bd.slope_power),
-                                                            ));
-                                                        }
-                                                        let is_noise = matches!(
-                                                            node_type,
-                                                            NodeType::PerlinNoise
-                                                                | NodeType::SimplexNoise
-                                                                | NodeType::WorleyNoise
-                                                                | NodeType::RidgedNoise
-                                                        );
-                                                        if is_noise
-                                                            && key == "character"
-                                                            && val != prev
-                                                        {
-                                                            let cd = bar_graph::character_defaults(
-                                                                &node_type, &val,
-                                                            );
-                                                            changed_params.push((
-                                                                "frequency".to_string(),
-                                                                ParamValue::Float(cd.frequency),
-                                                            ));
-                                                            changed_params.push((
-                                                                "octaves".to_string(),
-                                                                ParamValue::UInt(cd.octaves),
-                                                            ));
-                                                            changed_params.push((
-                                                                "lacunarity".to_string(),
-                                                                ParamValue::Float(cd.lacunarity),
-                                                            ));
-                                                            changed_params.push((
-                                                                "persistence".to_string(),
-                                                                ParamValue::Float(cd.persistence),
-                                                            ));
-                                                        }
                                                     }
                                                 }
                                             });
-                                    } else if bar_graph::param_is_color(&node_type, key) {
-                                        let rgb = parse_hex_color(&val)
-                                            .unwrap_or([128, 128, 128]);
-                                        let mut c32 =
-                                            egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                        if ui.color_edit_button_srgba(&mut c32).changed() {
-                                            let new_hex = format!(
-                                                "{:02X}{:02X}{:02X}",
-                                                c32.r(),
-                                                c32.g(),
-                                                c32.b()
-                                            );
-                                            val = new_hex;
-                                            changed_params.push((
-                                                key.clone(),
-                                                ParamValue::String(val.clone()),
-                                            ));
                                         }
-                                    } else {
-                                        ui.horizontal(|ui| {
-                                            if ui.add(
-                                                egui::TextEdit::singleline(&mut val)
-                                                    .desired_width(f32::INFINITY),
-                                            ).changed() {
-                                                changed_params.push((key.clone(), ParamValue::String(val.clone())));
-                                            }
-                                            if key == "path" && ui.button("…").clicked() {
-                                                if let Some(picked) = make_path_dialog(&node_type).pick_file() {
-                                                    changed_params.push((
-                                                        key.clone(),
-                                                        ParamValue::String(
-                                                            picked.to_string_lossy().to_string(),
-                                                        ),
-                                                    ));
-                                                }
-                                            }
-                                        });
+                                        ui.end_row();
                                     }
-                                    ui.end_row();
+                                    ParamValue::Vec2(_) => {}
                                 }
-                                ParamValue::Vec2(_) => {}
                             }
-                        }
-                    });
+                        });
                 }
 
                 // Apply parameter changes
@@ -530,7 +552,11 @@ impl BarEditorApp {
                 let mut parts = line.splitn(2, '|');
                 let abs = parts.next()?.trim().to_string();
                 let rel = parts.next()?.trim().to_string();
-                if abs.is_empty() { None } else { Some((abs, rel)) }
+                if abs.is_empty() {
+                    None
+                } else {
+                    Some((abs, rel))
+                }
             })
             .collect();
 
@@ -557,7 +583,9 @@ impl BarEditorApp {
             });
         }
 
-        let show_editor = self.passthrough_edit.as_ref()
+        let show_editor = self
+            .passthrough_edit
+            .as_ref()
             .map(|e| e.node_id == node_id)
             .unwrap_or(false);
 
@@ -681,7 +709,10 @@ impl BarEditorApp {
         // SubGraph toggle: a visual group can be promoted to a reusable
         // subgraph with explicit inputs/outputs. Demoting back drops
         // the port definitions.
-        if ui.checkbox(&mut is_subgraph, "Use as a SubGraph (reusable)").changed() {
+        if ui
+            .checkbox(&mut is_subgraph, "Use as a SubGraph (reusable)")
+            .changed()
+        {
             dirty = true;
             if !is_subgraph {
                 inputs.clear();
@@ -690,7 +721,10 @@ impl BarEditorApp {
             }
         }
         if is_subgraph {
-            if ui.checkbox(&mut collapsed, "Collapsed (single block)").changed() {
+            if ui
+                .checkbox(&mut collapsed, "Collapsed (single block)")
+                .changed()
+            {
                 dirty = true;
             }
             ui.add_space(4.0);
@@ -828,125 +862,124 @@ impl BarEditorApp {
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-            for p in params {
-                let Some((nid, param_name)) = p.binding.clone() else {
+                for p in params {
+                    let Some((nid, param_name)) = p.binding.clone() else {
+                        ui.label(&p.label);
+                        ui.weak("(unbound)");
+                        ui.end_row();
+                        continue;
+                    };
+                    let cur = self
+                        .graph
+                        .get_node(nid)
+                        .and_then(|n| n.params.get(&param_name).cloned());
                     ui.label(&p.label);
-                    ui.weak("(unbound)");
-                    ui.end_row();
-                    continue;
-                };
-                let cur = self
-                    .graph
-                    .get_node(nid)
-                    .and_then(|n| n.params.get(&param_name).cloned());
-                ui.label(&p.label);
-                match (p.kind.as_str(), cur) {
-                    ("Float", Some(ParamValue::Float(v))) => {
-                        let mut val = v;
-                        let mut drag = egui::DragValue::new(&mut val).speed(0.01);
-                        if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                            drag = drag.range(lo..=hi);
+                    match (p.kind.as_str(), cur) {
+                        ("Float", Some(ParamValue::Float(v))) => {
+                            let mut val = v;
+                            let mut drag = egui::DragValue::new(&mut val).speed(0.01);
+                            if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                                drag = drag.range(lo..=hi);
+                            }
+                            if ui.add(drag).changed() {
+                                writes.push((nid, param_name.clone(), ParamValue::Float(val)));
+                            }
                         }
-                        if ui.add(drag).changed() {
-                            writes.push((nid, param_name.clone(), ParamValue::Float(val)));
+                        ("UInt", Some(ParamValue::UInt(v))) => {
+                            let mut val = v as i64;
+                            let mut drag = egui::DragValue::new(&mut val);
+                            if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                                drag = drag.range((lo as i64)..=(hi as i64));
+                            }
+                            if ui.add(drag).changed() {
+                                writes.push((
+                                    nid,
+                                    param_name.clone(),
+                                    ParamValue::UInt(val.max(0) as u32),
+                                ));
+                            }
                         }
-                    }
-                    ("UInt", Some(ParamValue::UInt(v))) => {
-                        let mut val = v as i64;
-                        let mut drag = egui::DragValue::new(&mut val);
-                        if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                            drag = drag.range((lo as i64)..=(hi as i64));
+                        ("Int", Some(ParamValue::Int(v))) => {
+                            let mut val = v;
+                            let mut drag = egui::DragValue::new(&mut val);
+                            if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                                drag = drag.range((lo as i32)..=(hi as i32));
+                            }
+                            if ui.add(drag).changed() {
+                                writes.push((nid, param_name.clone(), ParamValue::Int(val)));
+                            }
                         }
-                        if ui.add(drag).changed() {
-                            writes.push((
-                                nid,
-                                param_name.clone(),
-                                ParamValue::UInt(val.max(0) as u32),
-                            ));
+                        ("Bool", Some(ParamValue::Bool(v))) => {
+                            let mut val = v;
+                            if ui.checkbox(&mut val, "").changed() {
+                                writes.push((nid, param_name.clone(), ParamValue::Bool(val)));
+                            }
                         }
-                    }
-                    ("Int", Some(ParamValue::Int(v))) => {
-                        let mut val = v;
-                        let mut drag = egui::DragValue::new(&mut val);
-                        if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                            drag = drag.range((lo as i32)..=(hi as i32));
-                        }
-                        if ui.add(drag).changed() {
-                            writes.push((nid, param_name.clone(), ParamValue::Int(val)));
-                        }
-                    }
-                    ("Bool", Some(ParamValue::Bool(v))) => {
-                        let mut val = v;
-                        if ui.checkbox(&mut val, "").changed() {
-                            writes.push((nid, param_name.clone(), ParamValue::Bool(val)));
-                        }
-                    }
-                    ("String", Some(ParamValue::String(v))) => {
-                        let mut val = v;
-                        let bound_node_type = self
-                            .graph
-                            .get_node(nid)
-                            .map(|n| n.node_type.clone());
-                        let mut new_val: Option<String> = None;
-                        if let Some(nt) = &bound_node_type {
-                            if let Some(choices) = bar_graph::param_choices(nt, &param_name) {
-                                let id =
-                                    ("macro_param_choice", nid.0, param_name.as_str());
-                                egui::ComboBox::from_id_salt(id)
-                                    .selected_text(&val)
-                                    .show_ui(ui, |ui| {
-                                        for c in choices {
-                                            if ui
-                                                .selectable_label(val == *c, *c)
-                                                .clicked()
-                                            {
-                                                new_val = Some((*c).to_string());
+                        ("String", Some(ParamValue::String(v))) => {
+                            let mut val = v;
+                            let bound_node_type =
+                                self.graph.get_node(nid).map(|n| n.node_type.clone());
+                            let mut new_val: Option<String> = None;
+                            if let Some(nt) = &bound_node_type {
+                                if let Some(choices) = bar_graph::param_choices(nt, &param_name) {
+                                    let id = ("macro_param_choice", nid.0, param_name.as_str());
+                                    egui::ComboBox::from_id_salt(id)
+                                        .selected_text(&val)
+                                        .show_ui(ui, |ui| {
+                                            for c in choices {
+                                                if ui.selectable_label(val == *c, *c).clicked() {
+                                                    new_val = Some((*c).to_string());
+                                                }
                                             }
-                                        }
-                                    });
-                            } else if bar_graph::param_is_color(nt, &param_name) {
-                                let rgb = parse_hex_color(&val).unwrap_or([128, 128, 128]);
-                                let mut c32 =
-                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                if ui.color_edit_button_srgba(&mut c32).changed() {
-                                    new_val = Some(format!(
-                                        "{:02X}{:02X}{:02X}",
-                                        c32.r(),
-                                        c32.g(),
-                                        c32.b()
-                                    ));
+                                        });
+                                } else if bar_graph::param_is_color(nt, &param_name) {
+                                    let rgb = parse_hex_color(&val).unwrap_or([128, 128, 128]);
+                                    let mut c32 = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+                                    if ui.color_edit_button_srgba(&mut c32).changed() {
+                                        new_val = Some(format!(
+                                            "{:02X}{:02X}{:02X}",
+                                            c32.r(),
+                                            c32.g(),
+                                            c32.b()
+                                        ));
+                                    }
+                                } else if ui
+                                    .add(
+                                        egui::TextEdit::singleline(&mut val)
+                                            .desired_width(f32::INFINITY),
+                                    )
+                                    .changed()
+                                {
+                                    new_val = Some(val);
                                 }
-                            } else if ui.add(
-                                egui::TextEdit::singleline(&mut val)
-                                    .desired_width(f32::INFINITY),
-                            ).changed() {
+                            } else if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut val)
+                                        .desired_width(f32::INFINITY),
+                                )
+                                .changed()
+                            {
                                 new_val = Some(val);
                             }
-                        } else if ui.add(
-                            egui::TextEdit::singleline(&mut val)
-                                .desired_width(f32::INFINITY),
-                        ).changed() {
-                            new_val = Some(val);
-                        }
-                        if let Some(nv) = new_val {
-                            let pv = ParamValue::String(nv.clone());
-                            writes.push((nid, param_name.clone(), pv.clone()));
-                            if let Some(nt) = &bound_node_type {
-                                for (k, v) in
-                                    bar_graph::param_side_effects(nt, &param_name, &pv)
-                                {
-                                    writes.push((nid, k, v));
+                            if let Some(nv) = new_val {
+                                let pv = ParamValue::String(nv.clone());
+                                writes.push((nid, param_name.clone(), pv.clone()));
+                                if let Some(nt) = &bound_node_type {
+                                    for (k, v) in
+                                        bar_graph::param_side_effects(nt, &param_name, &pv)
+                                    {
+                                        writes.push((nid, k, v));
+                                    }
                                 }
                             }
                         }
+                        _ => {
+                            ui.weak("(missing or kind mismatch)");
+                        }
                     }
-                    _ => {
-                        ui.weak("(missing or kind mismatch)");
-                    }
+                    ui.end_row();
                 }
-                ui.end_row();
-            }
-        });
+            });
         if !writes.is_empty() {
             // One undo entry per macro-param change keeps the history
             // granular; if the user sweeps a slider the undo stack
@@ -985,8 +1018,7 @@ impl BarEditorApp {
             _ => String::new(),
         };
         let mut pixels = mask_hex_decode(&data_str);
-        let has_painted = pixels.len() == resolution * resolution
-            && pixels.iter().any(|p| *p != 0);
+        let has_painted = pixels.len() == resolution * resolution && pixels.iter().any(|p| *p != 0);
         if pixels.len() != resolution * resolution {
             pixels = vec![0u8; resolution * resolution];
         }
@@ -1057,16 +1089,24 @@ impl BarEditorApp {
 
         let color_image = egui::ColorImage {
             size: [resolution, resolution],
-            pixels: pixels.iter().map(|&g| egui::Color32::from_gray(g)).collect(),
+            pixels: pixels
+                .iter()
+                .map(|&g| egui::Color32::from_gray(g))
+                .collect(),
         };
         let needs_reupload = changed
             || self
-                .paint.mask_textures
+                .paint
+                .mask_textures
                 .get(&node_id)
                 .map(|t| t.size() != [resolution, resolution])
                 .unwrap_or(true);
         let tex_handle = self.paint.mask_textures.entry(node_id).or_insert_with(|| {
-            ctx.load_texture("painted_heightmap", color_image.clone(), egui::TextureOptions::NEAREST)
+            ctx.load_texture(
+                "painted_heightmap",
+                color_image.clone(),
+                egui::TextureOptions::NEAREST,
+            )
         });
         if needs_reupload {
             tex_handle.set(color_image, egui::TextureOptions::NEAREST);
@@ -1182,13 +1222,9 @@ impl BarEditorApp {
                         if dx * dx + dy * dy <= br * br {
                             let nx = px + dx;
                             let ny = py + dy;
-                            if nx >= 0
-                                && ny >= 0
-                                && nx < PAINT_RES as i32
-                                && ny < PAINT_RES as i32
+                            if nx >= 0 && ny >= 0 && nx < PAINT_RES as i32 && ny < PAINT_RES as i32
                             {
-                                let idx =
-                                    (ny as usize * PAINT_RES + nx as usize) * 3;
+                                let idx = (ny as usize * PAINT_RES + nx as usize) * 3;
                                 pixels[idx] = stamp[0];
                                 pixels[idx + 1] = stamp[1];
                                 pixels[idx + 2] = stamp[2];
@@ -1211,12 +1247,17 @@ impl BarEditorApp {
         };
         let needs_reupload = changed
             || self
-                .paint.mask_textures
+                .paint
+                .mask_textures
                 .get(&node_id)
                 .map(|t| t.size() != [PAINT_RES, PAINT_RES])
                 .unwrap_or(true);
         let tex_handle = self.paint.mask_textures.entry(node_id).or_insert_with(|| {
-            ctx.load_texture("painted_texture", color_image.clone(), egui::TextureOptions::NEAREST)
+            ctx.load_texture(
+                "painted_texture",
+                color_image.clone(),
+                egui::TextureOptions::NEAREST,
+            )
         });
         if needs_reupload {
             tex_handle.set(color_image, egui::TextureOptions::NEAREST);
@@ -1277,7 +1318,7 @@ impl BarEditorApp {
         let layer_label = match layer {
             SculptLayer::Heightmap => "Layer: Heightmap",
             SculptLayer::Metalmap => "Layer: Metal Map",
-            SculptLayer::Typemap  => "Layer: Type Map",
+            SculptLayer::Typemap => "Layer: Type Map",
         };
         ui.label(egui::RichText::new(layer_label).color(sculpt_layer_color(layer)));
         ui.add_space(2.0);
@@ -1337,20 +1378,19 @@ impl BarEditorApp {
         if layer == SculptLayer::Heightmap {
             ui.horizontal(|ui| {
                 ui.label("Strength:");
-                ui.add(egui::Slider::new(
-                    &mut self.paint.sculpt_brush_strength,
-                    0.05..=1.0,
-                ).step_by(0.05));
+                ui.add(
+                    egui::Slider::new(&mut self.paint.sculpt_brush_strength, 0.05..=1.0)
+                        .step_by(0.05),
+                );
             });
         }
 
         let hint = match layer {
-            SculptLayer::Heightmap =>
-                "Left drag: raise  *  Right drag: lower  *  Middle/Ctrl: reset",
-            SculptLayer::Metalmap =>
-                "Left drag: add metal  *  Right drag: remove metal",
-            SculptLayer::Typemap =>
-                "Left drag: set type  *  Right drag: clear type",
+            SculptLayer::Heightmap => {
+                "Left drag: raise  *  Right drag: lower  *  Middle/Ctrl: reset"
+            }
+            SculptLayer::Metalmap => "Left drag: add metal  *  Right drag: remove metal",
+            SculptLayer::Typemap => "Left drag: set type  *  Right drag: clear type",
         };
         ui.label(hint);
         ui.add_space(4.0);
@@ -1375,13 +1415,19 @@ impl BarEditorApp {
         let ctx = ui.ctx().clone();
         let mut changed = false;
 
-        let primary   = canvas_resp.dragged_by(egui::PointerButton::Primary);
+        let primary = canvas_resp.dragged_by(egui::PointerButton::Primary);
         let secondary = canvas_resp.dragged_by(egui::PointerButton::Secondary);
-        let middle    = canvas_resp.dragged_by(egui::PointerButton::Middle)
+        let middle = canvas_resp.dragged_by(egui::PointerButton::Middle)
             || (primary && ctx.input(|i| i.modifiers.ctrl));
 
         if primary || secondary || middle {
-            let val = if middle { 128u8 } else if secondary { lower_val } else { raise_val };
+            let val = if middle {
+                128u8
+            } else if secondary {
+                lower_val
+            } else {
+                raise_val
+            };
             if let Some(pos) = ctx.input(|i| i.pointer.interact_pos()) {
                 let rel = pos - canvas_rect.min;
                 let px = (rel.x / DISPLAY * resolution as f32) as i32;
@@ -1422,7 +1468,11 @@ impl BarEditorApp {
                 .map(|t| t.size() != [resolution, resolution])
                 .unwrap_or(true);
         let tex_handle = self.paint.mask_textures.entry(node_id).or_insert_with(|| {
-            ctx.load_texture("sculpt_delta", color_image.clone(), egui::TextureOptions::NEAREST)
+            ctx.load_texture(
+                "sculpt_delta",
+                color_image.clone(),
+                egui::TextureOptions::NEAREST,
+            )
         });
         if needs_reupload {
             tex_handle.set(color_image, egui::TextureOptions::NEAREST);
@@ -1464,7 +1514,8 @@ impl BarEditorApp {
                 } else {
                     mask_hex_encode(&pixels)
                 };
-                node.params.insert("data".to_string(), ParamValue::String(new_data));
+                node.params
+                    .insert("data".to_string(), ParamValue::String(new_data));
                 if resolution_changed || cleared {
                     node.params.insert(
                         "resolution".to_string(),
@@ -1475,7 +1526,6 @@ impl BarEditorApp {
             }
         }
     }
-
 }
 
 // ---------------------------------------------------------------------------
@@ -1485,7 +1535,11 @@ impl BarEditorApp {
 /// Which Bundler layer a Sculpt node ultimately feeds. Inferred by
 /// walking the downstream connection chain; never stored on the node.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SculptLayer { Heightmap, Metalmap, Typemap }
+enum SculptLayer {
+    Heightmap,
+    Metalmap,
+    Typemap,
+}
 
 /// Walk the graph BFS-style from `node_id`'s "output" port and return
 /// the first Bundler port name found downstream. Falls back to Heightmap.
@@ -1504,8 +1558,8 @@ fn infer_sculpt_layer(node_id: NodeId, graph: &GraphEngine) -> SculptLayer {
                 if target.node_type == NodeType::Bundler {
                     return match conn.to.port_name.as_str() {
                         "metalmap" => SculptLayer::Metalmap,
-                        "typemap"  => SculptLayer::Typemap,
-                        _          => SculptLayer::Heightmap,
+                        "typemap" => SculptLayer::Typemap,
+                        _ => SculptLayer::Heightmap,
                     };
                 }
                 queue.push(conn.to.node_id);
@@ -1519,8 +1573,8 @@ fn infer_sculpt_layer(node_id: NodeId, graph: &GraphEngine) -> SculptLayer {
 fn sculpt_layer_color(layer: SculptLayer) -> egui::Color32 {
     match layer {
         SculptLayer::Heightmap => egui::Color32::from_rgb(160, 200, 160),
-        SculptLayer::Metalmap  => egui::Color32::from_rgb(220, 185, 80),
-        SculptLayer::Typemap   => egui::Color32::from_rgb(100, 180, 220),
+        SculptLayer::Metalmap => egui::Color32::from_rgb(220, 185, 80),
+        SculptLayer::Typemap => egui::Color32::from_rgb(100, 180, 220),
     }
 }
 
@@ -1560,4 +1614,3 @@ fn sculpt_delta_color(val: u8, layer: SculptLayer) -> egui::Color32 {
         }
     }
 }
-

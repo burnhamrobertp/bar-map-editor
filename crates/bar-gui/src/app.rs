@@ -1,5 +1,5 @@
-use eframe::egui;
 use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId, PortKind, PortPlacement};
+use eframe::egui;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -13,20 +13,19 @@ use crate::panels::tokens;
 // Re-export icon painters so that `use crate::app::*` in panel modules keeps
 // finding them after they moved to panels/icons.rs.
 pub(crate) use crate::panels::icons::{
-    draw_io_icon, paint_bar_icon, paint_busy_dot, paint_export_icon,
-    paint_inspector_icon, paint_map_info_icon, paint_mapinfo_form_icon,
-    paint_startbox_icon,
+    draw_io_icon, paint_bar_icon, paint_busy_dot, paint_export_icon, paint_inspector_icon,
+    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.
 
 /// Port layout constants -- shared between rendering and wire drawing.
 /// Title bar is 20 px, inset 8 px from the top edge; ports stack below it.
-pub(crate) const PORT_Y_BASE:    f32 = 38.0;
-pub(crate) const PORT_Y_STEP:    f32 = 20.0;
-pub(crate) const TITLE_Y_OFFSET: f32 =  8.0;
+pub(crate) const PORT_Y_BASE: f32 = 38.0;
+pub(crate) const PORT_Y_STEP: f32 = 20.0;
+pub(crate) const TITLE_Y_OFFSET: f32 = 8.0;
 pub(crate) const TOP_PORT_INSET: f32 = 28.0;
-pub(crate) const TOP_PORT_STEP:  f32 = 22.0;
+pub(crate) const TOP_PORT_STEP: f32 = 22.0;
 
 /// Default visual size for `SubgraphInput` / `SubgraphOutput` nodes.
 /// All other dimensions (chevron width, corner radius, icon size,
@@ -53,7 +52,10 @@ pub(crate) fn node_port_pos(
     placement: PortPlacement,
     side_index: usize,
 ) -> egui::Pos2 {
-    if matches!(node_type, NodeType::SubgraphInput | NodeType::SubgraphOutput) {
+    if matches!(
+        node_type,
+        NodeType::SubgraphInput | NodeType::SubgraphOutput
+    ) {
         let x = match placement {
             PortPlacement::Right => node_rect.max.x,
             _ => node_rect.min.x,
@@ -73,10 +75,7 @@ pub(crate) fn node_port_pos(
             node_rect.min.x + TOP_PORT_INSET + slot as f32 * TOP_PORT_STEP,
             node_rect.min.y,
         ),
-        PortPlacement::Bottom => egui::pos2(
-            node_rect.center().x,
-            node_rect.max.y,
-        ),
+        PortPlacement::Bottom => egui::pos2(node_rect.center().x, node_rect.max.y),
     }
 }
 
@@ -89,8 +88,19 @@ pub(crate) fn is_text_file(path: &str) -> bool {
         .unwrap_or_default();
     matches!(
         ext.as_str(),
-        "lua" | "cfg" | "txt" | "md" | "json" | "toml" | "ini" | "conf"
-            | "xml" | "yaml" | "yml" | "sh" | "py"
+        "lua"
+            | "cfg"
+            | "txt"
+            | "md"
+            | "json"
+            | "toml"
+            | "ini"
+            | "conf"
+            | "xml"
+            | "yaml"
+            | "yml"
+            | "sh"
+            | "py"
     )
 }
 
@@ -112,7 +122,6 @@ pub(crate) fn parse_subgraph_binding(
     let id = *key_to_id.get(key)?;
     Some((id, port_name.to_string()))
 }
-
 
 /// One-shot context-menu action carried out after the menu closes,
 /// since the menu closure can't borrow `self` mutably while iterating
@@ -329,12 +338,12 @@ enum GroupDeleteChoice {
 /// Fixed palette of subtle tints for group rectangles. Members store
 /// an index into this so the colour serialises as a single u8.
 pub(crate) const GROUP_PALETTE: &[(u8, u8, u8)] = &[
-    (90, 110, 150),  // slate blue
-    (110, 130, 90),  // moss
-    (150, 110, 90),  // terracotta
-    (130, 90, 130),  // mauve
-    (90, 140, 130),  // teal-grey
-    (140, 130, 70),  // ochre
+    (90, 110, 150), // slate blue
+    (110, 130, 90), // moss
+    (150, 110, 90), // terracotta
+    (130, 90, 130), // mauve
+    (90, 140, 130), // teal-grey
+    (140, 130, 70), // ochre
 ];
 
 pub(crate) fn group_color(idx: u8) -> egui::Color32 {
@@ -349,11 +358,7 @@ pub(crate) fn group_color(idx: u8) -> egui::Color32 {
 pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     let t = t.clamp(0.0, 1.0);
     let lerp = |x: u8, y: u8| (x as f32 * (1.0 - t) + y as f32 * t).round() as u8;
-    egui::Color32::from_rgb(
-        lerp(a.r(), b.r()),
-        lerp(a.g(), b.g()),
-        lerp(a.b(), b.b()),
-    )
+    egui::Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
 }
 
 /// State for an in-progress connection drag. Outputs always emit from a
@@ -362,7 +367,7 @@ pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32
 pub(crate) struct DragConnection {
     pub from_node: NodeId,
     pub from_port: String,
-    pub from_pos:  egui::Pos2,
+    pub from_pos: egui::Pos2,
 }
 
 /// State for the inline text editor inside the PassThrough properties panel.
@@ -543,9 +548,7 @@ pub(crate) enum PendingAction {
     /// resolving the unsaved-changes prompt.
     OpenPath(std::path::PathBuf),
     /// The user picked a built-in macro from the File menu.
-    LoadMacro {
-        name: String,
-    },
+    LoadMacro { name: String },
 }
 
 /// Generic yes/no/cancel modal state.
@@ -625,9 +628,7 @@ const CONFIRM_KEY_DELETE_CONNECTED_NODE: &str = "delete_connected_node";
 /// the developer forgets to update this).
 pub(crate) fn confirm_key_display_name(key: &str) -> String {
     match key {
-        CONFIRM_KEY_DELETE_CONNECTED_NODE => {
-            "Delete a node that has wires connected".to_string()
-        }
+        CONFIRM_KEY_DELETE_CONNECTED_NODE => "Delete a node that has wires connected".to_string(),
         other => other.to_string(),
     }
 }
@@ -1182,9 +1183,7 @@ impl BarEditorApp {
         // the field.
         app.active_layout = app.settings.active_layout;
         // Drop recents that no longer exist on disk so the menu stays useful.
-        app.settings
-            .recent_files
-            .retain(|p| p.exists());
+        app.settings.recent_files.retain(|p| p.exists());
         // Reopen the most-recently-loaded project on launch so the
         // user picks up where they left off. Skipped when the user
         // turned the preference off, when there are no recent files,
@@ -1399,7 +1398,13 @@ impl BarEditorApp {
                 maximized: true,
             }
         } else {
-            crate::settings::WindowState { x, y, width, height, maximized: false }
+            crate::settings::WindowState {
+                x,
+                y,
+                width,
+                height,
+                maximized: false,
+            }
         };
         let differs = self
             .settings
@@ -1577,11 +1582,9 @@ impl BarEditorApp {
                 size: egui::vec2(210.0, 240.0),
             },
         );
-        let preview_id = self.graph.add_node(Node::new(
-            NodeId(0),
-            NodeType::Preview,
-            "3D Preview",
-        ));
+        let preview_id = self
+            .graph
+            .add_node(Node::new(NodeId(0), NodeType::Preview, "3D Preview"));
         self.node_visuals.insert(
             preview_id,
             NodeVisual {
@@ -1615,8 +1618,7 @@ impl BarEditorApp {
         let preview_x = right_x - preview_size.x;
         let top_y = 80.0;
         let bundler_pos = egui::pos2(bundler_x, top_y);
-        let preview_pos =
-            egui::pos2(preview_x, top_y + bundler_size.y + gap);
+        let preview_pos = egui::pos2(preview_x, top_y + bundler_size.y + gap);
         (bundler_pos, preview_pos)
     }
 
@@ -1799,7 +1801,9 @@ impl BarEditorApp {
             }
             let mut entries: Vec<IoEntry> = Vec::new();
             for nid in sorted {
-                let Some(node) = self.graph.get_node(nid) else { continue };
+                let Some(node) = self.graph.get_node(nid) else {
+                    continue;
+                };
                 let (is_input, is_output) = match node.node_type {
                     NodeType::SubgraphInput => (true, false),
                     NodeType::SubgraphOutput => (false, true),
@@ -1817,9 +1821,7 @@ impl BarEditorApp {
                 // empty value is treated as user-supplied and wins
                 // over auto-numbering.
                 let explicit_name = match node.params.get("name") {
-                    Some(ParamValue::String(s)) if !s.is_empty() => {
-                        Some(s.clone())
-                    }
+                    Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
                     _ => None,
                 };
                 entries.push(IoEntry {
@@ -1849,12 +1851,8 @@ impl BarEditorApp {
                 let label = if let Some(ref n) = e.explicit_name {
                     n.clone()
                 } else {
-                    let total = *auto_counts
-                        .get(&(e.is_input, e.kind.clone()))
-                        .unwrap_or(&1);
-                    let idx = auto_seen
-                        .entry((e.is_input, e.kind.clone()))
-                        .or_insert(0);
+                    let total = *auto_counts.get(&(e.is_input, e.kind.clone())).unwrap_or(&1);
+                    let idx = auto_seen.entry((e.is_input, e.kind.clone())).or_insert(0);
                     *idx += 1;
                     if total > 1 {
                         format!("{} {}", e.kind, idx)
@@ -1932,9 +1930,8 @@ impl BarEditorApp {
         self.run_validation();
         if self.validation_has_errors() {
             self.dialog.show_validation_panel = true;
-            self.dialog.status_message = Some(format!(
-                "{action_label}: fix validation errors first."
-            ));
+            self.dialog.status_message =
+                Some(format!("{action_label}: fix validation errors first."));
             false
         } else {
             true
@@ -1949,12 +1946,8 @@ impl BarEditorApp {
         let mut settings = bar_project::MapSettings::default();
         settings.min_height = self.map_min_height;
         settings.max_height = self.map_max_height;
-        self.validation_findings = bar_project::validate_project(
-            &self.graph,
-            &settings,
-            self.map_width,
-            self.map_height,
-        );
+        self.validation_findings =
+            bar_project::validate_project(&self.graph, &settings, self.map_width, self.map_height);
     }
 
     fn handle_edit_map_info_clicked(&mut self) {
@@ -2111,7 +2104,10 @@ impl BarEditorApp {
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
         self.graph.revision().hash(&mut h);
-        self.preview_node.map(|n| n.0).unwrap_or(u64::MAX).hash(&mut h);
+        self.preview_node
+            .map(|n| n.0)
+            .unwrap_or(u64::MAX)
+            .hash(&mut h);
         self.map_width.hash(&mut h);
         self.map_height.hash(&mut h);
         self.map_min_height.to_bits().hash(&mut h);
@@ -2262,12 +2258,7 @@ impl BarEditorApp {
     /// Two effects per dab:
     /// 1. `sculpt.height_delta` is updated for persistent save/export.
     /// 2. The inspector heightmap is mutated in-place for instant feedback.
-    pub fn apply_brush_at_heightmap(
-        &mut self,
-        hx: f32,
-        hy: f32,
-        stroke_starting: bool,
-    ) -> bool {
+    pub fn apply_brush_at_heightmap(&mut self, hx: f32, hy: f32, stroke_starting: bool) -> bool {
         let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
             Some(hm) => (hm.width() as f32, hm.height() as f32),
             None => return false,
@@ -2282,8 +2273,7 @@ impl BarEditorApp {
         }
         // Write to the persistent sculpt height delta.
         if self.paint.sculpt.height_delta.is_none() {
-            self.paint.sculpt.height_delta =
-                bar_data::Heightmap::new(dim_w, dim_h).ok();
+            self.paint.sculpt.height_delta = bar_data::Heightmap::new(dim_w, dim_h).ok();
         }
         if let Some(ref mut delta) = self.paint.sculpt.height_delta {
             apply_brush_dab(delta, hx, hy, &self.paint.brush);
@@ -2331,8 +2321,7 @@ impl BarEditorApp {
         let [r, g, b] = self.paint.brush.color_rgb;
         // Write to the persistent sculpt texture overlay.
         if self.paint.sculpt.texture_overlay.is_none() {
-            self.paint.sculpt.texture_overlay =
-                bar_data::ColorBuffer::new(hm_w, hm_h).ok();
+            self.paint.sculpt.texture_overlay = bar_data::ColorBuffer::new(hm_w, hm_h).ok();
         }
         if let Some(ref mut cb) = self.paint.sculpt.texture_overlay {
             stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
@@ -2551,8 +2540,10 @@ impl BarEditorApp {
     /// path. Does not touch any in-memory state — pure serialiser. The path is
     /// only used to derive the recipe `name` field.
     fn build_project(&mut self, path: &std::path::Path) -> bar_project::Project {
+        use bar_project::recipe::{
+            MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode,
+        };
         use bar_project::{EditorLayout, Position, Project};
-        use bar_project::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode};
 
         let mut nodes = Vec::new();
         let mut key_map: HashMap<NodeId, String> = HashMap::new();
@@ -2658,9 +2649,7 @@ impl BarEditorApp {
                                 label: p.label.clone(),
                                 kind: p.kind.clone(),
                                 binding: p.binding.as_ref().and_then(|(nid, port_name)| {
-                                    key_map
-                                        .get(nid)
-                                        .map(|k| format!("{}:{}", k, port_name))
+                                    key_map.get(nid).map(|k| format!("{}:{}", k, port_name))
                                 }),
                             })
                             .collect(),
@@ -2672,9 +2661,7 @@ impl BarEditorApp {
                                 label: p.label.clone(),
                                 kind: p.kind.clone(),
                                 binding: p.binding.as_ref().and_then(|(nid, port_name)| {
-                                    key_map
-                                        .get(nid)
-                                        .map(|k| format!("{}:{}", k, port_name))
+                                    key_map.get(nid).map(|k| format!("{}:{}", k, port_name))
                                 }),
                             })
                             .collect(),
@@ -2704,9 +2691,7 @@ impl BarEditorApp {
                         // we don't need to write it out.
                         CanvasView::Main => Some(bar_project::PersistedCanvasView::Main),
                         CanvasView::SubGraph(gid) => {
-                            Some(bar_project::PersistedCanvasView::SubGraph {
-                                group_id: *gid,
-                            })
+                            Some(bar_project::PersistedCanvasView::SubGraph { group_id: *gid })
                         }
                     })
                     .collect(),
@@ -2793,7 +2778,13 @@ impl BarEditorApp {
                 }
                 NodeType::SmtImport => {
                     pack_path_param(&mut node.params, "path", &project_dir, &assets_dir, "maps")?;
-                    pack_path_param(&mut node.params, "smf_path", &project_dir, &assets_dir, "maps")?;
+                    pack_path_param(
+                        &mut node.params,
+                        "smf_path",
+                        &project_dir,
+                        &assets_dir,
+                        "maps",
+                    )?;
                 }
                 NodeType::FileReference => {
                     pack_path_param(&mut node.params, "path", &project_dir, &assets_dir, "")?;
@@ -2828,11 +2819,9 @@ impl BarEditorApp {
             .and_then(|s| s.to_str())
             .unwrap_or("assets")
             .to_string();
-        let bar_url = |name: &str| -> String {
-            format!("{PROJECT_RELATIVE_PREFIX}{assets_name}/{name}")
-        };
-        std::fs::create_dir_all(assets_dir)
-            .map_err(|e| format!("create assets dir: {e}"))?;
+        let bar_url =
+            |name: &str| -> String { format!("{PROJECT_RELATIVE_PREFIX}{assets_name}/{name}") };
+        std::fs::create_dir_all(assets_dir).map_err(|e| format!("create assets dir: {e}"))?;
 
         let mut record = bar_project::SculptRecord::default();
 
@@ -2869,11 +2858,7 @@ impl BarEditorApp {
         &self,
     ) -> Option<(bar_project::SculptRecord, std::path::PathBuf)> {
         let record = self.paint.pending_sculpt_record.as_ref()?.clone();
-        let dir = self
-            .project_path
-            .as_ref()?
-            .parent()?
-            .to_path_buf();
+        let dir = self.project_path.as_ref()?.parent()?.to_path_buf();
         Some((record, dir))
     }
 
@@ -2931,10 +2916,7 @@ impl BarEditorApp {
         let target = match self.project_path.as_ref() {
             Some(p) => {
                 let mut q = p.clone();
-                let name = p
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or("project");
+                let name = p.file_name().and_then(|s| s.to_str()).unwrap_or("project");
                 q.set_file_name(format!("{name}.autosave"));
                 Some(q)
             }
@@ -3018,7 +3000,8 @@ impl BarEditorApp {
                 return;
             }
         };
-        let name = path.file_stem()
+        let name = path
+            .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_else(|| "Untitled".to_string());
         let display = path.display().to_string();
@@ -3028,9 +3011,13 @@ impl BarEditorApp {
     }
 
     /// Apply a loaded/parsed project as the current session.
-    fn apply_project(&mut self, project: bar_project::Project,
-        path: Option<std::path::PathBuf>, name: String, status: String)
-    {
+    fn apply_project(
+        &mut self,
+        project: bar_project::Project,
+        path: Option<std::path::PathBuf>,
+        name: String,
+        status: String,
+    ) {
         let graph = match project.recipe.build_graph() {
             Ok(g) => g,
             Err(e) => {
@@ -3080,13 +3067,25 @@ impl BarEditorApp {
         for (idx, recipe_node) in project.recipe.nodes.iter().enumerate() {
             let node_id = NodeId((idx + 1) as u64);
             key_to_id.insert(recipe_node.key.clone(), node_id);
-            let pos = project.layout.node_positions.get(&recipe_node.key)
+            let pos = project
+                .layout
+                .node_positions
+                .get(&recipe_node.key)
                 .map(|p| egui::pos2(p.x, p.y))
                 .unwrap_or_else(|| egui::pos2(200.0 + (idx as f32 * 180.0), 200.0));
-            let size = project.layout.node_sizes.get(&recipe_node.key)
+            let size = project
+                .layout
+                .node_sizes
+                .get(&recipe_node.key)
                 .map(|s| egui::vec2(s.width, s.height))
                 .unwrap_or_else(|| egui::vec2(150.0, 80.0));
-            self.node_visuals.insert(node_id, NodeVisual { position: pos, size });
+            self.node_visuals.insert(
+                node_id,
+                NodeVisual {
+                    position: pos,
+                    size,
+                },
+            );
         }
 
         // Restore groups: convert recipe-key references back to NodeIds
@@ -3158,7 +3157,11 @@ impl BarEditorApp {
         // port, and clear the legacy lists. The next frame's
         // `recompute_all_subgraph_io` rebuilds the runtime port lists
         // from the new nodes.
-        let mut migrations: Vec<(u64, Vec<crate::state::SubgraphPortRuntime>, Vec<crate::state::SubgraphPortRuntime>)> = Vec::new();
+        let mut migrations: Vec<(
+            u64,
+            Vec<crate::state::SubgraphPortRuntime>,
+            Vec<crate::state::SubgraphPortRuntime>,
+        )> = Vec::new();
         for (gid, g) in &self.groups {
             if !g.is_subgraph {
                 continue;
@@ -3177,11 +3180,7 @@ impl BarEditorApp {
             if g.subgraph_inputs.is_empty() && g.subgraph_outputs.is_empty() {
                 continue;
             }
-            migrations.push((
-                *gid,
-                g.subgraph_inputs.clone(),
-                g.subgraph_outputs.clone(),
-            ));
+            migrations.push((*gid, g.subgraph_inputs.clone(), g.subgraph_outputs.clone()));
         }
         for (gid, ins, outs) in migrations {
             // Lay legacy-migrated IO nodes near (0, 0) of the
@@ -3230,8 +3229,14 @@ impl BarEditorApp {
                 self.node_to_group.insert(id, gid);
                 if let Some((inner_id, inner_port)) = p.binding.clone() {
                     let _ = self.graph.connect(
-                        bar_graph::PortId { node_id: id, port_name: "value".to_string() },
-                        bar_graph::PortId { node_id: inner_id, port_name: inner_port },
+                        bar_graph::PortId {
+                            node_id: id,
+                            port_name: "value".to_string(),
+                        },
+                        bar_graph::PortId {
+                            node_id: inner_id,
+                            port_name: inner_port,
+                        },
                     );
                 }
             }
@@ -3256,8 +3261,14 @@ impl BarEditorApp {
                 self.node_to_group.insert(id, gid);
                 if let Some((inner_id, inner_port)) = p.binding.clone() {
                     let _ = self.graph.connect(
-                        bar_graph::PortId { node_id: inner_id, port_name: inner_port },
-                        bar_graph::PortId { node_id: id, port_name: "value".to_string() },
+                        bar_graph::PortId {
+                            node_id: inner_id,
+                            port_name: inner_port,
+                        },
+                        bar_graph::PortId {
+                            node_id: id,
+                            port_name: "value".to_string(),
+                        },
                     );
                 }
             }
@@ -3455,8 +3466,7 @@ impl BarEditorApp {
                     .collect()
             })
             .unwrap_or_default();
-        let mut routed: std::collections::HashSet<&'static str> =
-            std::collections::HashSet::new();
+        let mut routed: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
         let mut heightmap_src: Option<(NodeId, String)> = None;
         for (kind, src_id, src_port) in outputs {
             // Map port kind → bundler/preview input port name.
@@ -3524,16 +3534,34 @@ impl BarEditorApp {
                 },
             );
             let _ = self.graph.connect(
-                PortId { node_id: hm_id, port_name: hm_port.clone() },
-                PortId { node_id: nm_id, port_name: "input".into() },
+                PortId {
+                    node_id: hm_id,
+                    port_name: hm_port.clone(),
+                },
+                PortId {
+                    node_id: nm_id,
+                    port_name: "input".into(),
+                },
             );
             let _ = self.graph.connect(
-                PortId { node_id: nm_id, port_name: "output".into() },
-                PortId { node_id: bundler_id, port_name: "normalmap".into() },
+                PortId {
+                    node_id: nm_id,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: bundler_id,
+                    port_name: "normalmap".into(),
+                },
             );
             let _ = self.graph.connect(
-                PortId { node_id: nm_id, port_name: "output".into() },
-                PortId { node_id: preview_id, port_name: "normal_map".into() },
+                PortId {
+                    node_id: nm_id,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: preview_id,
+                    port_name: "normal_map".into(),
+                },
             );
             aux_y += aux_step;
 
@@ -3548,16 +3576,34 @@ impl BarEditorApp {
                 },
             );
             let _ = self.graph.connect(
-                PortId { node_id: hm_id, port_name: hm_port },
-                PortId { node_id: sm_id, port_name: "input".into() },
+                PortId {
+                    node_id: hm_id,
+                    port_name: hm_port,
+                },
+                PortId {
+                    node_id: sm_id,
+                    port_name: "input".into(),
+                },
             );
             let _ = self.graph.connect(
-                PortId { node_id: sm_id, port_name: "output".into() },
-                PortId { node_id: bundler_id, port_name: "specular".into() },
+                PortId {
+                    node_id: sm_id,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: bundler_id,
+                    port_name: "specular".into(),
+                },
             );
             let _ = self.graph.connect(
-                PortId { node_id: sm_id, port_name: "output".into() },
-                PortId { node_id: preview_id, port_name: "specular_map".into() },
+                PortId {
+                    node_id: sm_id,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: preview_id,
+                    port_name: "specular_map".into(),
+                },
             );
             aux_y += aux_step;
         }
@@ -3572,8 +3618,7 @@ impl BarEditorApp {
         ];
         for (port_name, label) in constants {
             let mut k = Node::new(NodeId(0), NodeType::Constant, *label);
-            k.params
-                .insert("value".into(), ParamValue::Float(0.0));
+            k.params.insert("value".into(), ParamValue::Float(0.0));
             let k_id = self.graph.add_node(k);
             self.node_visuals.insert(
                 k_id,
@@ -3583,8 +3628,14 @@ impl BarEditorApp {
                 },
             );
             let _ = self.graph.connect(
-                PortId { node_id: k_id, port_name: "output".into() },
-                PortId { node_id: bundler_id, port_name: (*port_name).into() },
+                PortId {
+                    node_id: k_id,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: bundler_id,
+                    port_name: (*port_name).into(),
+                },
             );
             aux_y += aux_step;
         }
@@ -3616,8 +3667,7 @@ impl BarEditorApp {
     /// show in the side panel. The whole drop is one undo step.
     pub(crate) fn instantiate_macro(&mut self, macro_name: &str, pos: egui::Pos2) {
         let Some(template) = crate::macros::parse(macro_name) else {
-            self.dialog.status_message =
-                Some(format!("Macro '{macro_name}' not found"));
+            self.dialog.status_message = Some(format!("Macro '{macro_name}' not found"));
             return;
         };
         self.push_undo(&format!("Drop macro '{}'", template.name));
@@ -3649,8 +3699,7 @@ impl BarEditorApp {
         self.active_props = Some(PropsTarget::Group(gid));
         self.dialog.pending_props_open = None;
         self.is_dirty = true;
-        self.dialog.status_message =
-            Some(format!("Dropped '{}' onto the canvas.", template.name));
+        self.dialog.status_message = Some(format!("Dropped '{}' onto the canvas.", template.name));
     }
 
     pub(crate) fn add_node_at(&mut self, node_type: NodeType, label: &str, pos: egui::Pos2) {
@@ -3687,8 +3736,7 @@ impl BarEditorApp {
         // the new node lives at the top level of the graph and
         // becomes invisible the moment it's dropped — properties
         // panel opens on a node the user can't see.
-        if let Some(CanvasView::SubGraph(scope)) =
-            self.tabs.get(self.active_tab as usize).cloned()
+        if let Some(CanvasView::SubGraph(scope)) = self.tabs.get(self.active_tab as usize).cloned()
         {
             if let Some(group) = self.groups.get_mut(&scope) {
                 group.member_ids.insert(id);
@@ -3707,8 +3755,6 @@ impl BarEditorApp {
     fn draw_node_palette(&mut self, ui: &mut egui::Ui) {
         crate::panels::palette::draw(self, ui);
     }
-
-
 
     /// Replace the selection with a single primary node. Clears every
     /// other kind of selection (group, connection) — they share the
@@ -3767,7 +3813,6 @@ impl BarEditorApp {
         self.selected_group = None;
         self.selected_connection = Some((from, to));
     }
-
 }
 
 impl eframe::App for BarEditorApp {
@@ -3865,10 +3910,7 @@ impl BarEditorApp {
         self.refresh_validation_if_dirty();
 
         // Tick auto-save. Cheap: a single Instant comparison per frame.
-        if self.settings.autosave_enabled
-            && self.is_dirty
-            && self.dialog.pending_action.is_none()
-        {
+        if self.settings.autosave_enabled && self.is_dirty && self.dialog.pending_action.is_none() {
             let interval = std::time::Duration::from_secs(self.settings.autosave_interval_secs);
             let due = self
                 .last_autosave_at
@@ -3888,7 +3930,9 @@ impl BarEditorApp {
 
         // Update window title to reflect loaded name and dirty state
         let dirty_marker = if self.is_dirty { " *" } else { "" };
-        let title = match self.project_path.as_ref()
+        let title = match self
+            .project_path
+            .as_ref()
             .and_then(|p| p.file_stem())
             .map(|s| s.to_string_lossy().into_owned())
             .or_else(|| self.loaded_name.clone())
@@ -3912,7 +3956,8 @@ impl BarEditorApp {
                 let shift = i.modifiers.shift;
                 (
                     !typing && ctrl && !shift && i.key_pressed(egui::Key::Z),
-                    !typing && ctrl
+                    !typing
+                        && ctrl
                         && ((!shift && i.key_pressed(egui::Key::Y))
                             || (shift && i.key_pressed(egui::Key::Z))),
                     !typing && ctrl && !shift && i.key_pressed(egui::Key::S),
@@ -3921,23 +3966,32 @@ impl BarEditorApp {
                     !typing && ctrl && i.key_pressed(egui::Key::N),
                 )
             });
-            if do_undo { self.undo(); }
-            if do_redo { self.redo(); }
-            if do_save { self.save_or_save_as(); }
-            if do_save_as { self.save_as(); }
+            if do_undo {
+                self.undo();
+            }
+            if do_redo {
+                self.redo();
+            }
+            if do_save {
+                self.save_or_save_as();
+            }
+            if do_save_as {
+                self.save_as();
+            }
             if do_open {
                 self.open_file_dialog_async();
             }
-            if do_new { self.start_new_project(); }
+            if do_new {
+                self.start_new_project();
+            }
         }
 
         // Delete selected node via Delete / Backspace. Routes through the
         // confirm dialog when the user has destructive-confirmation enabled.
         let do_delete = !modal_open
             && !typing
-            && ctx.input(|i| {
-                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace)
-            });
+            && ctx
+                .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
         if do_delete {
             // Selection precedence: connection > group > node. A
             // user with a wire highlighted who hits Delete probably
@@ -4003,9 +4057,7 @@ impl BarEditorApp {
                         message: msg,
                         affirm_label: "Delete".to_string(),
                         on_affirm: ConfirmAction::DeleteSelected,
-                        suppression_key: Some(
-                            CONFIRM_KEY_DELETE_CONNECTED_NODE.to_string(),
-                        ),
+                        suppression_key: Some(CONFIRM_KEY_DELETE_CONNECTED_NODE.to_string()),
                         dont_ask_again: false,
                     });
                 } else {
@@ -4041,233 +4093,229 @@ impl BarEditorApp {
                     }),
             )
             .show(ctx, |ui| {
-            egui::menu::bar(ui, |ui| {
-                // `menu::bar` resets spacing/button_padding on its
-                // internal Ui — these overrides have to live INSIDE
-                // the closure to survive that reset.
-                //
-                // Asymmetric top/bottom: button_padding.y = 5 puts
-                // 5 px above and 5 px below the text inside each
-                // entry's rect (so hover highlights cover both
-                // bands). The extra ~1.7 px of bottom margin lives
-                // on the panel itself (above) — totals 5 above,
-                // ~6.7 below.
-                //
-                // Symmetric left/right at 7.78 px: the hover rect
-                // fully owns the padding on both sides, adjacent
-                // entries butt edge-to-edge with no panel-fill
-                // strip between them.
-                ui.style_mut().spacing.button_padding =
-                    egui::vec2(7.78, 5.0);
-                ui.style_mut().spacing.item_spacing.x = 0.0;
-                let v = &mut ui.style_mut().visuals;
-                v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(60, 70, 90);
-                v.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 70, 90);
-                v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                v.widgets.active.bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                v.widgets.open.weak_bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                v.widgets.open.bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                // Square corners so adjacent entries look like one
-                // continuous strip rather than rounded chips.
-                v.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
-                v.widgets.active.corner_radius = egui::CornerRadius::ZERO;
-                v.widgets.open.corner_radius = egui::CornerRadius::ZERO;
-                ui.menu_button(t!("editor.menu.file"), |ui| {
-                    // Submenu min width keeps label and shortcut
-                    // text from crowding even when the localised
-                    // label runs longer than English. Applied at
-                    // every top-level submenu below; nested submenus
-                    // (Open Recent, New from Preset) get their own
-                    // smaller `set_min_width` since their entries
-                    // tend to be shorter.
-                    ui.set_min_width(320.0);
-                    if ui
-                        .add(
-                            egui::Button::new(t!("editor.menu.new_project"))
-                                .shortcut_text("Ctrl+N"),
-                        )
-                        .clicked()
-                    {
-                        self.start_new_project();
-                        ui.close_menu();
-                    }
-                    let mut macro_to_load: Option<String> = None;
-                    ui.menu_button(t!("editor.menu.new_from_preset"), |ui| {
-                        ui.set_min_width(220.0);
-                        for (name, _json) in crate::macros::BUILTIN_MACROS {
-                            if ui.button(*name).clicked() {
-                                macro_to_load = Some((*name).to_string());
-                                ui.close_menu();
-                            }
+                egui::menu::bar(ui, |ui| {
+                    // `menu::bar` resets spacing/button_padding on its
+                    // internal Ui — these overrides have to live INSIDE
+                    // the closure to survive that reset.
+                    //
+                    // Asymmetric top/bottom: button_padding.y = 5 puts
+                    // 5 px above and 5 px below the text inside each
+                    // entry's rect (so hover highlights cover both
+                    // bands). The extra ~1.7 px of bottom margin lives
+                    // on the panel itself (above) — totals 5 above,
+                    // ~6.7 below.
+                    //
+                    // Symmetric left/right at 7.78 px: the hover rect
+                    // fully owns the padding on both sides, adjacent
+                    // entries butt edge-to-edge with no panel-fill
+                    // strip between them.
+                    ui.style_mut().spacing.button_padding = egui::vec2(7.78, 5.0);
+                    ui.style_mut().spacing.item_spacing.x = 0.0;
+                    let v = &mut ui.style_mut().visuals;
+                    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(60, 70, 90);
+                    v.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 70, 90);
+                    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(80, 105, 145);
+                    v.widgets.active.bg_fill = egui::Color32::from_rgb(80, 105, 145);
+                    v.widgets.open.weak_bg_fill = egui::Color32::from_rgb(80, 105, 145);
+                    v.widgets.open.bg_fill = egui::Color32::from_rgb(80, 105, 145);
+                    // Square corners so adjacent entries look like one
+                    // continuous strip rather than rounded chips.
+                    v.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
+                    v.widgets.active.corner_radius = egui::CornerRadius::ZERO;
+                    v.widgets.open.corner_radius = egui::CornerRadius::ZERO;
+                    ui.menu_button(t!("editor.menu.file"), |ui| {
+                        // Submenu min width keeps label and shortcut
+                        // text from crowding even when the localised
+                        // label runs longer than English. Applied at
+                        // every top-level submenu below; nested submenus
+                        // (Open Recent, New from Preset) get their own
+                        // smaller `set_min_width` since their entries
+                        // tend to be shorter.
+                        ui.set_min_width(320.0);
+                        if ui
+                            .add(
+                                egui::Button::new(t!("editor.menu.new_project"))
+                                    .shortcut_text("Ctrl+N"),
+                            )
+                            .clicked()
+                        {
+                            self.start_new_project();
+                            ui.close_menu();
                         }
-                    });
-                    if let Some(name) = macro_to_load {
-                        self.start_load_macro(&name);
-                    }
-                    ui.separator();
-                    if ui
-                        .add(
-                            egui::Button::new(t!("editor.menu.open"))
-                                .shortcut_text("Ctrl+O"),
-                        )
-                        .clicked()
-                    {
-                        self.open_file_dialog_async();
-                        ui.close_menu();
-                    }
-                    let mut recent_pick: Option<std::path::PathBuf> = None;
-                    let recent_empty = self.settings.recent_files.is_empty();
-                    ui.add_enabled_ui(!recent_empty, |ui| {
-                        ui.menu_button(t!("editor.menu.open_recent"), |ui| {
-                            ui.set_min_width(280.0);
-                            for p in self.settings.recent_files.iter() {
-                                let label = p
-                                    .file_name()
-                                    .map(|s| s.to_string_lossy().into_owned())
-                                    .unwrap_or_else(|| p.display().to_string());
-                                let parent = p
-                                    .parent()
-                                    .map(|s| s.display().to_string())
-                                    .unwrap_or_default();
-                                let response = ui.button(&label).on_hover_text(&parent);
-                                if response.clicked() {
-                                    recent_pick = Some(p.clone());
+                        let mut macro_to_load: Option<String> = None;
+                        ui.menu_button(t!("editor.menu.new_from_preset"), |ui| {
+                            ui.set_min_width(220.0);
+                            for (name, _json) in crate::macros::BUILTIN_MACROS {
+                                if ui.button(*name).clicked() {
+                                    macro_to_load = Some((*name).to_string());
                                     ui.close_menu();
                                 }
                             }
-                            ui.separator();
-                            if ui.button(t!("editor.menu.clear_recent")).clicked() {
-                                self.settings.recent_files.clear();
-                                self.settings.save();
-                                ui.close_menu();
-                            }
                         });
+                        if let Some(name) = macro_to_load {
+                            self.start_load_macro(&name);
+                        }
+                        ui.separator();
+                        if ui
+                            .add(egui::Button::new(t!("editor.menu.open")).shortcut_text("Ctrl+O"))
+                            .clicked()
+                        {
+                            self.open_file_dialog_async();
+                            ui.close_menu();
+                        }
+                        let mut recent_pick: Option<std::path::PathBuf> = None;
+                        let recent_empty = self.settings.recent_files.is_empty();
+                        ui.add_enabled_ui(!recent_empty, |ui| {
+                            ui.menu_button(t!("editor.menu.open_recent"), |ui| {
+                                ui.set_min_width(280.0);
+                                for p in self.settings.recent_files.iter() {
+                                    let label = p
+                                        .file_name()
+                                        .map(|s| s.to_string_lossy().into_owned())
+                                        .unwrap_or_else(|| p.display().to_string());
+                                    let parent = p
+                                        .parent()
+                                        .map(|s| s.display().to_string())
+                                        .unwrap_or_default();
+                                    let response = ui.button(&label).on_hover_text(&parent);
+                                    if response.clicked() {
+                                        recent_pick = Some(p.clone());
+                                        ui.close_menu();
+                                    }
+                                }
+                                ui.separator();
+                                if ui.button(t!("editor.menu.clear_recent")).clicked() {
+                                    self.settings.recent_files.clear();
+                                    self.settings.save();
+                                    ui.close_menu();
+                                }
+                            });
+                        });
+                        if let Some(p) = recent_pick {
+                            self.start_open_path(p);
+                        }
+                        ui.separator();
+                        let in_project = self.has_project();
+                        if ui
+                            .add_enabled(
+                                in_project,
+                                egui::Button::new(t!("editor.menu.save_project"))
+                                    .shortcut_text("Ctrl+S"),
+                            )
+                            .clicked()
+                        {
+                            self.save_or_save_as();
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                in_project,
+                                egui::Button::new(t!("editor.menu.save_project_as"))
+                                    .shortcut_text("Ctrl+Shift+S"),
+                            )
+                            .clicked()
+                        {
+                            self.save_as();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(t!("editor.menu.exit")).clicked() {
+                            // Route through the dirty-check path; don't slam the
+                            // window shut on unsaved work.
+                            self.request_close();
+                            ui.close_menu();
+                        }
                     });
-                    if let Some(p) = recent_pick {
-                        self.start_open_path(p);
-                    }
-                    ui.separator();
-                    let in_project = self.has_project();
-                    if ui
-                        .add_enabled(
-                            in_project,
-                            egui::Button::new(t!("editor.menu.save_project"))
-                                .shortcut_text("Ctrl+S"),
-                        )
-                        .clicked()
-                    {
-                        self.save_or_save_as();
-                        ui.close_menu();
-                    }
-                    if ui
-                        .add_enabled(
-                            in_project,
-                            egui::Button::new(t!("editor.menu.save_project_as"))
-                                .shortcut_text("Ctrl+Shift+S"),
-                        )
-                        .clicked()
-                    {
-                        self.save_as();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button(t!("editor.menu.exit")).clicked() {
-                        // Route through the dirty-check path; don't slam the
-                        // window shut on unsaved work.
-                        self.request_close();
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button(t!("editor.menu.edit"), |ui| {
-                    ui.set_min_width(320.0);
-                    let undo_label = if self.history.can_undo() {
-                        format!("{} ({})", t!("editor.menu.undo"), self.history.undo_depth())
-                    } else {
-                        t!("editor.menu.undo").to_string()
-                    };
-                    if ui
-                        .add_enabled(
-                            self.history.can_undo(),
-                            egui::Button::new(undo_label).shortcut_text("Ctrl+Z"),
-                        )
-                        .clicked()
-                    {
-                        self.undo();
-                        ui.close_menu();
-                    }
-                    let redo_label = if self.history.can_redo() {
-                        format!("{} ({})", t!("editor.menu.redo"), self.history.redo_depth())
-                    } else {
-                        t!("editor.menu.redo").to_string()
-                    };
-                    if ui
-                        .add_enabled(
-                            self.history.can_redo(),
-                            egui::Button::new(redo_label).shortcut_text("Ctrl+Shift+Z"),
-                        )
-                        .clicked()
-                    {
-                        self.redo();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    // Auto Layout — disabled when there's no
-                    // project (nothing to lay out).
-                    if ui
-                        .add_enabled(
-                            self.has_project(),
-                            egui::Button::new(t!("editor.menu.auto_layout")),
-                        )
-                        .clicked()
-                    {
-                        self.auto_layout_selection();
-                        ui.close_menu();
-                    }
-                    ui.separator();
-                    if ui.button(t!("editor.menu.preferences")).clicked() {
-                        self.dialog.show_settings = true;
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button("View", |ui| {
-                    ui.set_min_width(220.0);
-                    let has_proj = self.has_project();
-                    if ui
-                        .add_enabled(
-                            has_proj,
-                            egui::SelectableLabel::new(
-                                has_proj && self.active_layout == Layout::Standard,
-                                "Node Graph",
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.set_active_layout(Layout::Standard);
-                        ui.close_menu();
-                    }
-                    if ui
-                        .add_enabled(
-                            has_proj,
-                            egui::SelectableLabel::new(
-                                has_proj && self.active_layout == Layout::Sculpt3D,
-                                "3D Sculpt",
-                            ),
-                        )
-                        .clicked()
-                    {
-                        self.set_active_layout(Layout::Sculpt3D);
-                        ui.close_menu();
-                    }
-                });
-                ui.menu_button(t!("editor.menu.help"), |ui| {
-                    ui.set_min_width(280.0);
-                    if ui.button(t!("editor.app.about")).clicked() {
-                        self.dialog.show_about = true;
-                        ui.close_menu();
-                    }
+                    ui.menu_button(t!("editor.menu.edit"), |ui| {
+                        ui.set_min_width(320.0);
+                        let undo_label = if self.history.can_undo() {
+                            format!("{} ({})", t!("editor.menu.undo"), self.history.undo_depth())
+                        } else {
+                            t!("editor.menu.undo").to_string()
+                        };
+                        if ui
+                            .add_enabled(
+                                self.history.can_undo(),
+                                egui::Button::new(undo_label).shortcut_text("Ctrl+Z"),
+                            )
+                            .clicked()
+                        {
+                            self.undo();
+                            ui.close_menu();
+                        }
+                        let redo_label = if self.history.can_redo() {
+                            format!("{} ({})", t!("editor.menu.redo"), self.history.redo_depth())
+                        } else {
+                            t!("editor.menu.redo").to_string()
+                        };
+                        if ui
+                            .add_enabled(
+                                self.history.can_redo(),
+                                egui::Button::new(redo_label).shortcut_text("Ctrl+Shift+Z"),
+                            )
+                            .clicked()
+                        {
+                            self.redo();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        // Auto Layout — disabled when there's no
+                        // project (nothing to lay out).
+                        if ui
+                            .add_enabled(
+                                self.has_project(),
+                                egui::Button::new(t!("editor.menu.auto_layout")),
+                            )
+                            .clicked()
+                        {
+                            self.auto_layout_selection();
+                            ui.close_menu();
+                        }
+                        ui.separator();
+                        if ui.button(t!("editor.menu.preferences")).clicked() {
+                            self.dialog.show_settings = true;
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button("View", |ui| {
+                        ui.set_min_width(220.0);
+                        let has_proj = self.has_project();
+                        if ui
+                            .add_enabled(
+                                has_proj,
+                                egui::SelectableLabel::new(
+                                    has_proj && self.active_layout == Layout::Standard,
+                                    "Node Graph",
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.set_active_layout(Layout::Standard);
+                            ui.close_menu();
+                        }
+                        if ui
+                            .add_enabled(
+                                has_proj,
+                                egui::SelectableLabel::new(
+                                    has_proj && self.active_layout == Layout::Sculpt3D,
+                                    "3D Sculpt",
+                                ),
+                            )
+                            .clicked()
+                        {
+                            self.set_active_layout(Layout::Sculpt3D);
+                            ui.close_menu();
+                        }
+                    });
+                    ui.menu_button(t!("editor.menu.help"), |ui| {
+                        ui.set_min_width(280.0);
+                        if ui.button(t!("editor.app.about")).clicked() {
+                            self.dialog.show_about = true;
+                            ui.close_menu();
+                        }
+                    });
                 });
             });
-        });
 
         egui::TopBottomPanel::bottom("status_bar").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -4430,8 +4478,7 @@ impl BarEditorApp {
                         // Delete nodes inline (don't go through
                         // delete_selected_node, which would push another
                         // undo and split the action).
-                        let to_delete: Vec<NodeId> =
-                            self.selected_nodes.iter().copied().collect();
+                        let to_delete: Vec<NodeId> = self.selected_nodes.iter().copied().collect();
                         for node_id in &to_delete {
                             let _ = self.graph.remove_node(*node_id);
                             self.node_visuals.remove(node_id);
@@ -4479,9 +4526,7 @@ impl BarEditorApp {
                 // affects only this modal type, not other confirms.
                 if affirm && dialog.dont_ask_again {
                     if let Some(key) = dialog.suppression_key.as_ref() {
-                        self.settings
-                            .suppressed_confirmations
-                            .insert(key.clone());
+                        self.settings.suppressed_confirmations.insert(key.clone());
                         self.settings.save();
                     }
                 }
@@ -4526,21 +4571,25 @@ impl BarEditorApp {
                     } else {
                         ui.label("Pick the file that holds this project's map configuration:");
                         ui.add_space(4.0);
-                        egui::ScrollArea::vertical().max_height(280.0).show(ui, |ui| {
-                            for (abs, archive) in &sorted {
-                                let label_text = if is_text_file(archive) {
-                                    archive.clone()
-                                } else {
-                                    format!("{archive} (binary — won't open in text editor)")
-                                };
-                                if ui.button(label_text).on_hover_text(abs).clicked() {
-                                    chosen = Some((abs.clone(), archive.clone()));
+                        egui::ScrollArea::vertical()
+                            .max_height(280.0)
+                            .show(ui, |ui| {
+                                for (abs, archive) in &sorted {
+                                    let label_text = if is_text_file(archive) {
+                                        archive.clone()
+                                    } else {
+                                        format!("{archive} (binary — won't open in text editor)")
+                                    };
+                                    if ui.button(label_text).on_hover_text(abs).clicked() {
+                                        chosen = Some((abs.clone(), archive.clone()));
+                                    }
                                 }
-                            }
-                        });
+                            });
                     }
                     ui.add_space(8.0);
-                    if self.map_info_file.is_some() && ui.button("Clear current selection").clicked() {
+                    if self.map_info_file.is_some()
+                        && ui.button("Clear current selection").clicked()
+                    {
                         cleared = true;
                     }
                 });
@@ -4613,8 +4662,7 @@ impl BarEditorApp {
                 match std::fs::write(&editor.abs_path, &editor.content) {
                     Ok(()) => {
                         editor.is_dirty = false;
-                        self.dialog.status_message =
-                            Some(format!("Saved {}", editor.archive_path));
+                        self.dialog.status_message = Some(format!("Saved {}", editor.archive_path));
                     }
                     Err(e) => {
                         self.dialog.status_message = Some(format!("Save failed: {e}"));
@@ -4750,9 +4798,8 @@ impl BarEditorApp {
                         self.run_validation();
                         if bar_project::has_errors(&self.validation_findings) {
                             self.dialog.show_validation_panel = true;
-                            self.dialog.status_message = Some(
-                                "Test in BAR: fix validation errors first.".to_string(),
-                            );
+                            self.dialog.status_message =
+                                Some("Test in BAR: fix validation errors first.".to_string());
                         } else {
                             self.test_in_bar_requested = true;
                         }
@@ -4783,9 +4830,8 @@ impl BarEditorApp {
                         painter.rect_filled(insp_rect, 5.0, bg);
                         paint_inspector_icon(&painter, insp_rect, egui::Color32::WHITE);
                     }
-                    let insp_resp = insp_resp.on_hover_text(
-                        "2D Inspector — top-down map view, place start positions",
-                    );
+                    let insp_resp = insp_resp
+                        .on_hover_text("2D Inspector — top-down map view, place start positions");
                     if insp_resp.clicked() {
                         self.dialog.show_inspector = !self.dialog.show_inspector;
                     }
@@ -4795,8 +4841,7 @@ impl BarEditorApp {
                     // Info button (pencil icon, opens raw lua) stays for
                     // power users; this is the friendly path.
                     ui.add_space(4.0);
-                    let (mi_rect, mi_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    let (mi_rect, mi_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
                     if ui.is_rect_visible(mi_rect) {
                         let bg = if mi_resp.is_pointer_button_down_on() {
                             tokens::BTN_MAPSET_PRESS
@@ -4820,8 +4865,7 @@ impl BarEditorApp {
                     // box-authoring is a spatial task that wants the full
                     // inspector canvas, not a side-panel form.
                     ui.add_space(4.0);
-                    let (sb_rect, sb_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    let (sb_rect, sb_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
                     if ui.is_rect_visible(sb_rect) {
                         let bg = if sb_resp.is_pointer_button_down_on() {
                             tokens::BTN_SPAWNS_PRESS
@@ -4854,10 +4898,7 @@ impl BarEditorApp {
             let galley = painter.layout_no_wrap(msg.clone(), font.clone(), text_color);
             let size = galley.size() + pad * 2.0;
             // Bottom-center, lifted 30 px above the status bar.
-            let center = egui::pos2(
-                screen.center().x,
-                screen.bottom() - size.y / 2.0 - 50.0,
-            );
+            let center = egui::pos2(screen.center().x, screen.bottom() - size.y / 2.0 - 50.0);
             let rect = egui::Rect::from_center_size(center, size);
             painter.rect_filled(rect, 6.0, egui::Color32::from_black_alpha(210));
             painter.rect_stroke(
@@ -4929,23 +4970,18 @@ impl BarEditorApp {
                 // IO nodes drop at their tag size so the ghost
                 // matches; other node types use the generic 150×60
                 // preview rect.
-                let is_io_input = matches!(
-                    drag.kind,
-                    PaletteKind::Node(NodeType::SubgraphInput)
-                );
-                let is_io_output = matches!(
-                    drag.kind,
-                    PaletteKind::Node(NodeType::SubgraphOutput)
-                );
+                let is_io_input = matches!(drag.kind, PaletteKind::Node(NodeType::SubgraphInput));
+                let is_io_output = matches!(drag.kind, PaletteKind::Node(NodeType::SubgraphOutput));
                 let is_io = is_io_input || is_io_output;
                 let ghost_size = if is_io {
                     IO_NODE_SIZE
                 } else {
                     egui::vec2(150.0, 60.0)
                 };
-                let ghost_rect = egui::Rect::from_min_size(pos + egui::vec2(10.0, 10.0), ghost_size);
-                let is_over_canvas = self.canvas_rect_last.is_positive()
-                    && self.canvas_rect_last.contains(pos);
+                let ghost_rect =
+                    egui::Rect::from_min_size(pos + egui::vec2(10.0, 10.0), ghost_size);
+                let is_over_canvas =
+                    self.canvas_rect_last.is_positive() && self.canvas_rect_last.contains(pos);
                 let border_col = if is_over_canvas {
                     egui::Color32::from_rgba_unmultiplied(100, 200, 100, 220)
                 } else {
@@ -4958,23 +4994,16 @@ impl BarEditorApp {
                     let h = ghost_rect.height();
                     let scale = h / IO_REF_H;
                     let chevron_w = h * 0.30;
-                    let body_radius =
-                        (h / 6.0).min(ghost_rect.width() / 4.0);
+                    let body_radius = (h / 6.0).min(ghost_rect.width() / 4.0);
                     let inner_pad = 6.0 * scale;
                     let icon_size = 48.0 * scale;
                     let icon_text_gap = 8.0 * scale;
                     let top_text_size = 18.0 * scale;
                     let bottom_text_size = 15.0 * scale;
                     let mid_y = ghost_rect.center().y;
-                    let body_color = egui::Color32::from_rgba_unmultiplied(
-                        0x2F, 0x39, 0x45, 220,
-                    );
-                    let outline_pts = build_io_outline(
-                        ghost_rect,
-                        chevron_w,
-                        body_radius,
-                        is_io_input,
-                    );
+                    let body_color = egui::Color32::from_rgba_unmultiplied(0x2F, 0x39, 0x45, 220);
+                    let outline_pts =
+                        build_io_outline(ghost_rect, chevron_w, body_radius, is_io_input);
                     painter.add(egui::Shape::convex_polygon(
                         outline_pts,
                         body_color,
@@ -4982,10 +5011,7 @@ impl BarEditorApp {
                     ));
                     let icon_rect = if is_io_input {
                         egui::Rect::from_min_size(
-                            egui::pos2(
-                                ghost_rect.left() + inner_pad,
-                                mid_y - icon_size / 2.0,
-                            ),
+                            egui::pos2(ghost_rect.left() + inner_pad, mid_y - icon_size / 2.0),
                             egui::vec2(icon_size, icon_size),
                         )
                     } else {
@@ -5041,13 +5067,16 @@ impl BarEditorApp {
                     );
                     let title_color = match &drag.kind {
                         PaletteKind::Node(t) => node_type_color(t),
-                        PaletteKind::Macro { .. } => {
-                            egui::Color32::from_rgb(180, 90, 200)
-                        }
+                        PaletteKind::Macro { .. } => egui::Color32::from_rgb(180, 90, 200),
                     };
                     painter.rect_filled(
                         title_rect,
-                        egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 },
+                        egui::CornerRadius {
+                            nw: 4,
+                            ne: 4,
+                            sw: 0,
+                            se: 0,
+                        },
                         title_color,
                     );
                     painter.text(
@@ -5078,9 +5107,7 @@ impl BarEditorApp {
         if released && self.palette_drag.is_some() {
             if let Some(drag) = self.palette_drag.take() {
                 if let Some(pos) = ctx.pointer_latest_pos() {
-                    if self.canvas_rect_last.is_positive()
-                        && self.canvas_rect_last.contains(pos)
-                    {
+                    if self.canvas_rect_last.is_positive() && self.canvas_rect_last.contains(pos) {
                         // Convert screen position → graph-space (accounts for canvas pan)
                         let graph_pos = pos - self.canvas_offset;
                         let drop_at = egui::pos2(graph_pos.x, graph_pos.y);
@@ -5098,7 +5125,6 @@ impl BarEditorApp {
             }
         }
     }
-
 }
 
 /// Minimum distance from a point to a polyline (segment-by-segment).
@@ -5147,7 +5173,6 @@ pub(crate) fn cubic_bezier(
     let y = uuu * p0.y + 3.0 * uu * t * p1.y + 3.0 * u * tt * p2.y + ttt * p3.y;
     egui::pos2(x, y)
 }
-
 
 /// Labelled drag-value for an f32 with bounds + speed. Returns true when
 /// the value changed (so callers can mark the project dirty in one place).
@@ -5202,9 +5227,9 @@ fn worst_severity(a: bar_project::Severity, b: bar_project::Severity) -> bar_pro
 
 pub(crate) fn severity_color(sev: bar_project::Severity) -> egui::Color32 {
     match sev {
-        bar_project::Severity::Error   => tokens::SEVERITY_ERROR,
+        bar_project::Severity::Error => tokens::SEVERITY_ERROR,
         bar_project::Severity::Warning => tokens::SEVERITY_WARN,
-        bar_project::Severity::Info    => tokens::SEVERITY_INFO,
+        bar_project::Severity::Info => tokens::SEVERITY_INFO,
     }
 }
 
@@ -5243,7 +5268,11 @@ pub(crate) fn drag_f32(
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui
-                .add(egui::DragValue::new(value).range(lo..=hi).speed(speed as f64))
+                .add(
+                    egui::DragValue::new(value)
+                        .range(lo..=hi)
+                        .speed(speed as f64),
+                )
                 .changed()
             {
                 changed = true;
@@ -5333,12 +5362,7 @@ pub(crate) fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) ->
 ///
 /// All values in the heightmap are normalized [0, 1]; we clamp after
 /// modification to keep them in range.
-pub(crate) fn apply_brush_dab(
-    hm: &mut bar_data::Heightmap,
-    cx: f32,
-    cy: f32,
-    brush: &BrushState,
-) {
+pub(crate) fn apply_brush_dab(hm: &mut bar_data::Heightmap, cx: f32, cy: f32, brush: &BrushState) {
     let w = hm.width() as i32;
     let h = hm.height() as i32;
     let radius = brush.radius_px.max(1.0);
@@ -5425,9 +5449,7 @@ pub(crate) fn apply_brush_dab(
 /// Read a 16-bit grayscale PNG into a Heightmap. Inverse of
 /// `save_heightmap_as_png16`. Used to restore sculpt overlays at
 /// project load time.
-fn load_heightmap_from_png16(
-    path: &std::path::Path,
-) -> Result<bar_data::Heightmap, String> {
+fn load_heightmap_from_png16(path: &std::path::Path) -> Result<bar_data::Heightmap, String> {
     let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let gray = img.to_luma16();
     let (w, h) = gray.dimensions();
@@ -5479,9 +5501,7 @@ fn save_heightmap_as_png16_biased(
 }
 
 /// Load a biased 16-bit grayscale PNG back to a signed height-delta.
-fn load_heightmap_from_png16_biased(
-    path: &std::path::Path,
-) -> Result<bar_data::Heightmap, String> {
+fn load_heightmap_from_png16_biased(path: &std::path::Path) -> Result<bar_data::Heightmap, String> {
     let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let gray = img.to_luma16();
     let (w, h) = gray.dimensions();
@@ -5511,9 +5531,7 @@ fn save_color_buffer_as_png(
 }
 
 /// Load a `ColorBuffer` from an RGBA PNG.
-fn load_color_buffer_from_png(
-    path: &std::path::Path,
-) -> Result<bar_data::ColorBuffer, String> {
+fn load_color_buffer_from_png(path: &std::path::Path) -> Result<bar_data::ColorBuffer, String> {
     let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
     let rgba = img.to_rgba8();
     let (w, h) = rgba.dimensions();
@@ -5552,11 +5570,7 @@ pub(crate) fn heightmap_to_color_image(
                 // Underwater — depth-darkened blue.
                 let depth = (waterline_norm - n) / waterline_norm.max(0.001);
                 let dim = (1.0 - depth * 0.6).clamp(0.3, 1.0);
-                egui::Color32::from_rgb(
-                    (40.0 * dim) as u8,
-                    (90.0 * dim) as u8,
-                    (160.0 * dim) as u8,
-                )
+                egui::Color32::from_rgb((40.0 * dim) as u8, (90.0 * dim) as u8, (160.0 * dim) as u8)
             } else {
                 // Above water — gray with a subtle warm tint as elevation rises.
                 let above = if waterline_norm >= 0.0 {
@@ -5571,7 +5585,10 @@ pub(crate) fn heightmap_to_color_image(
             pixels.push(pixel);
         }
     }
-    egui::ColorImage { size: [w, h], pixels }
+    egui::ColorImage {
+        size: [w, h],
+        pixels,
+    }
 }
 
 // Icon painting functions moved to panels/icons.rs; re-exported above.
@@ -5621,13 +5638,7 @@ fn stamp_color_dab_in_buffer(
 /// Stamp a value (metal density / quantised type id) into a live
 /// `Heightmap` cache. Mirror of `stamp_color_dab_in_buffer` for the
 /// metal/type brush path.
-fn stamp_value_dab_in_heightmap(
-    hm: &mut bar_data::Heightmap,
-    u: f32,
-    v: f32,
-    ru: f32,
-    value: f32,
-) {
+fn stamp_value_dab_in_heightmap(hm: &mut bar_data::Heightmap, u: f32, v: f32, ru: f32, value: f32) {
     let w = hm.width() as f32;
     let h = hm.height() as f32;
     let map_dim = w.max(h);
@@ -5717,12 +5728,11 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::MaskBlur
         | NodeType::MaskApply => tokens::NODE_CAT_MASK,
 
-        NodeType::Bundler
-        | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
+        NodeType::Bundler | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
 
-        NodeType::SmfImport
-        | NodeType::SmtImport
-        | NodeType::PassThrough => tokens::NODE_CAT_SOURCE,
+        NodeType::SmfImport | NodeType::SmtImport | NodeType::PassThrough => {
+            tokens::NODE_CAT_SOURCE
+        }
 
         NodeType::Preview => tokens::NODE_CAT_PREVIEW,
         // Distinct dark teal — boundary markers, not generators/filters/combiners.
@@ -5733,13 +5743,13 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
 pub(crate) fn port_kind_color(kind: &PortKind) -> egui::Color32 {
     match kind {
         PortKind::Heightmap => tokens::PORT_HEIGHTMAP,
-        PortKind::Mask      => tokens::PORT_MASK,
-        PortKind::Color     => tokens::PORT_COLOR,
-        PortKind::Scalar    => tokens::PORT_SCALAR,
-        PortKind::File      => tokens::PORT_FILE,
-        PortKind::FileList  => tokens::PORT_FILE_LIST,
-        PortKind::Control   => tokens::PORT_CONTROL,
-        PortKind::Density   => tokens::PORT_DENSITY,
+        PortKind::Mask => tokens::PORT_MASK,
+        PortKind::Color => tokens::PORT_COLOR,
+        PortKind::Scalar => tokens::PORT_SCALAR,
+        PortKind::File => tokens::PORT_FILE,
+        PortKind::FileList => tokens::PORT_FILE_LIST,
+        PortKind::Control => tokens::PORT_CONTROL,
+        PortKind::Density => tokens::PORT_DENSITY,
     }
 }
 
@@ -5871,7 +5881,11 @@ pub(crate) fn parse_passthrough_files(s: &str) -> Vec<(String, String)> {
             let mut parts = line.splitn(2, '|');
             let abs = parts.next()?.trim().to_string();
             let rel = parts.next()?.trim().to_string();
-            if abs.is_empty() { None } else { Some((abs, rel)) }
+            if abs.is_empty() {
+                None
+            } else {
+                Some((abs, rel))
+            }
         })
         .collect()
 }
@@ -5893,11 +5907,7 @@ const PROJECT_RELATIVE_PREFIX: &str = "bar://";
 /// Build the project-relative form of an asset's path under `<stem>.assets/`.
 /// `bundle_subdir` is "maps" or "" — it's the subfolder under .assets/ where
 /// this kind of asset lives.
-fn project_relative_for(
-    bundle_subdir: &str,
-    file_name: &str,
-    project_stem: &str,
-) -> String {
+fn project_relative_for(bundle_subdir: &str, file_name: &str, project_stem: &str) -> String {
     let assets = format!("{project_stem}.assets");
     if bundle_subdir.is_empty() {
         format!("{PROJECT_RELATIVE_PREFIX}{assets}/{file_name}")
@@ -5952,9 +5962,8 @@ fn pack_path_param(
         .map_err(|e| format!("Cannot create assets dir {}: {e}", dest_dir.display()))?;
     let dest = dest_dir.join(&file_name);
     if !dest.exists() || !files_equal(&src, &dest) {
-        std::fs::copy(&src, &dest).map_err(|e| {
-            format!("Failed to copy {} → {}: {e}", src.display(), dest.display())
-        })?;
+        std::fs::copy(&src, &dest)
+            .map_err(|e| format!("Failed to copy {} → {}: {e}", src.display(), dest.display()))?;
     }
     let stem = project_dir
         .file_name() // dir name doesn't help; we need project stem
@@ -6199,13 +6208,16 @@ pub(crate) fn draw_passthrough_body(
     }
 
     // Group files by parent directory (preserving stable order via BTreeMap)
-    let mut dirs: std::collections::BTreeMap<String, Vec<String>> = std::collections::BTreeMap::new();
+    let mut dirs: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
     for (_, rel) in files {
         let path = std::path::Path::new(rel.as_str());
-        let dir = path.parent()
+        let dir = path
+            .parent()
             .map(|d| d.to_string_lossy().replace('\\', "/"))
             .unwrap_or_default();
-        let name = path.file_name()
+        let name = path
+            .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| rel.clone());
         dirs.entry(dir).or_default().push(name);
@@ -6214,7 +6226,13 @@ pub(crate) fn draw_passthrough_body(
     let mut y = body_top;
     'outer: for (dir, names) in &dirs {
         if y + line_height > body_bottom {
-            p.text(egui::pos2(body_left, y), egui::Align2::LEFT_TOP, "…", egui::FontId::monospace(10.0), text_color);
+            p.text(
+                egui::pos2(body_left, y),
+                egui::Align2::LEFT_TOP,
+                "…",
+                egui::FontId::monospace(10.0),
+                text_color,
+            );
             break;
         }
         if !dir.is_empty() {
@@ -6227,10 +6245,20 @@ pub(crate) fn draw_passthrough_body(
             );
             y += line_height;
         }
-        let indent = if dir.is_empty() { body_left } else { body_left + 8.0 };
+        let indent = if dir.is_empty() {
+            body_left
+        } else {
+            body_left + 8.0
+        };
         for name in names {
             if y + line_height > body_bottom {
-                p.text(egui::pos2(indent, y), egui::Align2::LEFT_TOP, "…", egui::FontId::monospace(10.0), text_color);
+                p.text(
+                    egui::pos2(indent, y),
+                    egui::Align2::LEFT_TOP,
+                    "…",
+                    egui::FontId::monospace(10.0),
+                    text_color,
+                );
                 break 'outer;
             }
             p.text(
@@ -6281,7 +6309,10 @@ mod brush_tests {
         assert!(center > 0.5, "expected center > 0.5, got {center}");
         // Outside the radius, untouched.
         let far = hm.get(0, 0).unwrap();
-        assert!((far - 0.5).abs() < 1e-6, "far pixel should be unchanged: {far}");
+        assert!(
+            (far - 0.5).abs() < 1e-6,
+            "far pixel should be unchanged: {far}"
+        );
     }
 
     #[test]
@@ -6374,10 +6405,7 @@ mod brush_tests {
             for y in 0..8u32 {
                 let a = hm.get(x, y).unwrap();
                 let b = loaded.get(x, y).unwrap();
-                assert!(
-                    (a - b).abs() < tol,
-                    "({x},{y}): saved={a}, loaded={b}"
-                );
+                assert!((a - b).abs() < tol, "({x},{y}): saved={a}, loaded={b}");
             }
         }
     }
@@ -6461,13 +6489,20 @@ mod session_reset_tests {
         let mut app = dirtied_app();
         app.reset_project();
         assert!(!app.history.can_undo(), "history must be cleared");
-        assert!(matches!(app.paint.brush.tool, BrushTool::Raise),
-            "brush tool defaults to Raise");
-        assert!(matches!(app.paint.brush.target, BrushTarget::Heightmap),
-            "brush target defaults to Heightmap");
+        assert!(
+            matches!(app.paint.brush.tool, BrushTool::Raise),
+            "brush tool defaults to Raise"
+        );
+        assert!(
+            matches!(app.paint.brush.target, BrushTarget::Heightmap),
+            "brush target defaults to Heightmap"
+        );
         assert!(!app.paint.brush_stroking);
-        assert_eq!(app.canvas_offset, egui::Vec2::ZERO,
-            "canvas pan offset must reset to zero");
+        assert_eq!(
+            app.canvas_offset,
+            egui::Vec2::ZERO,
+            "canvas pan offset must reset to zero"
+        );
         assert!(!app.dialog.show_validation_panel);
         assert!(matches!(app.validation_filter, ValidationFilter::All));
         assert!(!app.dialog.show_inspector);
@@ -6490,18 +6525,27 @@ mod session_reset_tests {
         // History from the previous project is gone. The macro drop
         // pushes exactly one new undo entry (so the user can undo
         // their first action), so depth is 1, not the pre-reset value.
-        assert!(app.history.undo_depth() < prior_depth.saturating_add(1) + 1,
-            "history must not accumulate the previous project's snapshots");
-        assert_eq!(app.history.undo_depth(), 1,
-            "after start_with_macro, history holds only the macro-drop snapshot");
+        assert!(
+            app.history.undo_depth() < prior_depth.saturating_add(1) + 1,
+            "history must not accumulate the previous project's snapshots"
+        );
+        assert_eq!(
+            app.history.undo_depth(),
+            1,
+            "after start_with_macro, history holds only the macro-drop snapshot"
+        );
         assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
         assert_eq!(app.canvas_offset, egui::Vec2::ZERO);
         assert!(!app.dialog.show_validation_panel);
         // Project-data state populated.
-        assert!(!app.graph.nodes().is_empty(),
-            "macro should have dropped nodes onto the graph");
-        assert!(app.is_dirty,
-            "starting from a macro is a non-empty diff against the empty default");
+        assert!(
+            !app.graph.nodes().is_empty(),
+            "macro should have dropped nodes onto the graph"
+        );
+        assert!(
+            app.is_dirty,
+            "starting from a macro is a non-empty diff against the empty default"
+        );
     }
 
     #[test]

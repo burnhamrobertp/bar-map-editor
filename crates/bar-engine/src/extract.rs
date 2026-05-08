@@ -62,9 +62,8 @@ pub fn extract_sd7_to_work_dir(archive: &Path) -> Result<WorkDirScan> {
             .unwrap_or(true);
 
     if should_extract {
-        std::fs::create_dir_all(&work_dir).with_context(|| {
-            format!("Failed to create work directory: {}", work_dir.display())
-        })?;
+        std::fs::create_dir_all(&work_dir)
+            .with_context(|| format!("Failed to create work directory: {}", work_dir.display()))?;
         sevenz_rust::decompress_file(archive, &work_dir)
             .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
     }
@@ -124,7 +123,8 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
     // header's range. Many maps allocate generous header headroom but
     // specify the working range in lua, so failing to honour the override
     // produces flat previews that don't match in-game appearance.
-    let (tile_grid, map_dims, header_range) = smf_abs.as_ref()
+    let (tile_grid, map_dims, header_range) = smf_abs
+        .as_ref()
         .and_then(|abs| {
             let file = std::fs::File::open(abs).ok()?;
             let smf = bar_data::SmfMap::read(&mut std::io::BufReader::new(file)).ok()?;
@@ -173,10 +173,7 @@ fn scan_dir_recursive(
         if abs.is_dir() {
             scan_dir_recursive(root, &abs, smf_abs, smf_rel, smt_abs, smt_rel, pass)?;
         } else {
-            let rel = abs
-                .strip_prefix(root)
-                .unwrap_or(&abs)
-                .to_path_buf();
+            let rel = abs.strip_prefix(root).unwrap_or(&abs).to_path_buf();
             let ext = abs
                 .extension()
                 .and_then(|e| e.to_str())

@@ -9,11 +9,7 @@ use eframe::egui;
 
 use crate::app::BarEditorApp;
 
-pub fn draw(
-    app: &mut BarEditorApp,
-    ctx: &egui::Context,
-    _frame: &mut eframe::Frame,
-) {
+pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
     app.draw_node_palette_panel(ctx);
     app.draw_standard_central_panel(ctx);
 }

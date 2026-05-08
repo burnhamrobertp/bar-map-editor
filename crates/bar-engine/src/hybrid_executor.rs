@@ -84,7 +84,8 @@ impl NodeExecutor for HybridExecutor {
         }
 
         // Delegate everything else to CPU
-        self.cpu_fallback.execute(node_type, params, inputs, width, height)
+        self.cpu_fallback
+            .execute(node_type, params, inputs, width, height)
     }
 }
 
@@ -139,16 +140,16 @@ impl HybridExecutor {
         let iterations = get_uint(params, "iterations", 50_000);
         let flow_params = FlowErosionParams {
             // Scale droplet count → flow steps (different order of magnitude)
-            iterations:        (iterations / 1_000).clamp(5, 200),
-            rain_rate:         0.012,
-            evaporation_rate:  get_float(params, "evaporation_rate", 0.015),
-            sediment_capacity: get_float(params, "capacity_factor",  1.0),
-            erosion_rate:      get_float(params, "erosion_rate",     0.3),
-            deposition_rate:   get_float(params, "deposition_rate",  0.3),
-            min_tilt:          0.01,
-            gravity:           9.8,
-            dt:                0.02,
-            pipe_length:       1.0,
+            iterations: (iterations / 1_000).clamp(5, 200),
+            rain_rate: 0.012,
+            evaporation_rate: get_float(params, "evaporation_rate", 0.015),
+            sediment_capacity: get_float(params, "capacity_factor", 1.0),
+            erosion_rate: get_float(params, "erosion_rate", 0.3),
+            deposition_rate: get_float(params, "deposition_rate", 0.3),
+            min_tilt: 0.01,
+            gravity: 9.8,
+            dt: 0.02,
+            pipe_length: 1.0,
         };
 
         let result = self
@@ -276,7 +277,7 @@ mod tests {
     #[test]
     fn test_gpu_thresholds() {
         // GPU noise should kick in at or above 128×128
-        assert!(GPU_NOISE_THRESHOLD >= 64,  "GPU noise threshold too low");
+        assert!(GPU_NOISE_THRESHOLD >= 64, "GPU noise threshold too low");
         assert!(GPU_NOISE_THRESHOLD <= 512, "GPU noise threshold too high");
 
         // Erosion/blur should have a higher threshold than noise
