@@ -28,19 +28,27 @@ impl NodeExecutor for CpuExecutor {
         match node_type {
             // --- Generators ---
             NodeType::PerlinNoise => {
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = generate_noise(NoiseType::Perlin, params, width, height)?;
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::SimplexNoise => {
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = generate_noise(NoiseType::Simplex, params, width, height)?;
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::WorleyNoise => {
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = generate_noise(NoiseType::Worley, params, width, height)?;
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::RidgedNoise => {
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = generate_noise(NoiseType::Ridged, params, width, height)?;
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Constant => {
@@ -54,29 +62,43 @@ impl NodeExecutor for CpuExecutor {
             // --- Filters ---
             NodeType::Blur => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let radius = get_float(params, "radius", 1.0);
                 let hm = apply_blur(&input, radius);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Clamp => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let min_val = get_float(params, "min", 0.0);
                 let max_val = get_float(params, "max", 1.0);
                 let hm = apply_clamp(&input, min_val, max_val);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Invert => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = apply_invert(&input);
+                let hm = apply_modulation(&input, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Terrace | NodeType::Sharpen => {
+                // Placeholder until the underlying transform is implemented.
+                // Ports are kept minimal (input + output) so users don't wire
+                // modulators to a no-op.
                 let input = get_input_heightmap(inputs, "input")?;
                 outputs.insert("output".to_string(), PortValue::Heightmap(input));
             }
             NodeType::Curve => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = apply_curve(&input, params);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Preview => {
@@ -122,6 +144,8 @@ impl NodeExecutor for CpuExecutor {
             // --- Erosion ---
             NodeType::HydraulicErosion => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let params_e = HydraulicErosionParams {
                     num_droplets: get_uint(params, "iterations", 50_000),
                     inertia: get_float(params, "inertia", 0.05),
@@ -137,10 +161,13 @@ impl NodeExecutor for CpuExecutor {
                 };
                 let hm = hydraulic_erosion(&input, &params_e)
                     .map_err(|e| EvalError::Compute(e.to_string()))?;
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::ThermalErosion => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let params_e = ThermalErosionParams {
                     iterations: get_uint(params, "iterations", 50),
                     talus_angle: get_float(params, "talus_angle", 0.004),
@@ -148,123 +175,148 @@ impl NodeExecutor for CpuExecutor {
                 };
                 let hm = thermal_erosion(&input, &params_e)
                     .map_err(|e| EvalError::Compute(e.to_string()))?;
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
             // --- Combiners ---
+            // Mask gates the combine result: lerp(a, combined, mask).
+            // Equivalent to "where mask=0 the operation has no effect."
             NodeType::Blend => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
-                let factor = get_float(params, "factor", 0.5);
-                let hm = blend_heightmaps(&a, &b, factor);
+                let factor = get_float(params, "factor", 0.5).clamp(0.0, 1.0);
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
+                let blended = blend_heightmaps(&a, &b, factor);
+                // Control scales blend strength toward `b`, mask gates the
+                // result back toward `a`. Both lerp from `a` toward `blended`.
+                let hm = apply_modulation(&a, blended, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Add => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = combine_heightmaps(&a, &b, |va, vb| (va + vb).min(1.0));
+                let hm = apply_modulation(&a, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Subtract => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = combine_heightmaps(&a, &b, |va, vb| (va - vb).max(0.0));
+                let hm = apply_modulation(&a, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Multiply => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = combine_heightmaps(&a, &b, |va, vb| va * vb);
+                let hm = apply_modulation(&a, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Max => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = combine_heightmaps(&a, &b, |va, vb| va.max(vb));
+                let hm = apply_modulation(&a, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Min => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = combine_heightmaps(&a, &b, |va, vb| va.min(vb));
+                let hm = apply_modulation(&a, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
             // --- Texture/Splat ---
             NodeType::SlopeMap => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = compute_slope_map(&input);
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::HeightSelect => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let low = get_float(params, "low", 0.3);
                 let high = get_float(params, "high", 0.7);
                 let falloff = get_float(params, "falloff", 0.1);
                 let hm = compute_height_select(&input, low, high, falloff);
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::SplatMap => {
-                let slope = inputs.get("slope").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
-                let band0 = inputs.get("band0").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
-                let band1 = inputs.get("band1").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
-                let band2 = inputs.get("band2").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
+                let slope = get_optional_heightmap(inputs, "slope");
+                let band0 = get_optional_heightmap(inputs, "band0");
+                let band1 = get_optional_heightmap(inputs, "band1");
+                let band2 = get_optional_heightmap(inputs, "band2");
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = compose_splat_map(slope.as_ref(), band0.as_ref(), band1.as_ref(), band2.as_ref(), width, height);
+                let hm = scale_by_field(hm, ctrl.as_ref());
+                let hm = scale_by_field(hm, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
             NodeType::AutoTexture => {
                 let input = get_input_heightmap(inputs, "input")?;
-                let slope = inputs.get("slope").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
+                let slope = get_optional_heightmap(inputs, "slope");
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let color = generate_auto_texture(&input, slope.as_ref(), params);
+                // Neutral = transparent black so masked regions don't paint
+                // opaque gray over downstream composite layers.
+                let color = apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
             // --- Map Layer Generators ---
             NodeType::NormalMap => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let strength = get_float(params, "strength", 1.0);
                 let color = generate_normal_map(&input, strength);
+                // Neutral normal = flat surface [0.5, 0.5, 1.0, 1.0] in tangent space
+                let color = apply_color_modulation([0.5, 0.5, 1.0, 1.0], color, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
             NodeType::GrassMap => {
                 let input = get_input_heightmap(inputs, "input")?;
-                let slope = inputs.get("slope").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
+                let slope = get_optional_heightmap(inputs, "slope");
+                let density = get_optional_heightmap(inputs, "density");
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = generate_grass_map(&input, slope.as_ref(), params);
+                let hm = scale_by_field(hm, density.as_ref());
+                let hm = scale_by_field(hm, ctrl.as_ref());
+                let hm = scale_by_field(hm, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::SpecularMap => {
                 let input = get_input_heightmap(inputs, "input")?;
-                let slope = inputs.get("slope").and_then(|v| match v {
-                    PortValue::Heightmap(h) => Some(h.clone()),
-                    _ => None,
-                });
+                let slope = get_optional_heightmap(inputs, "slope");
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = generate_specular_map(&input, slope.as_ref(), params);
+                let hm = scale_by_field(hm, ctrl.as_ref());
+                let hm = scale_by_field(hm, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
             // --- Mask ---
             NodeType::Mask => {
                 let input = get_input_heightmap(inputs, "input")?;
-                outputs.insert("mask".to_string(), PortValue::Mask(input));
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let hm = scale_by_field(input, ctrl.as_ref());
+                outputs.insert("mask".to_string(), PortValue::Mask(hm));
             }
 
             NodeType::PaintedHeightmap => {
@@ -276,14 +328,18 @@ impl NodeExecutor for CpuExecutor {
             }
 
             NodeType::Sculpt => {
-                let mut hm = get_input_heightmap(inputs, "input")?;
+                let input = get_input_heightmap(inputs, "input")?;
+                let mask = get_optional_heightmap(inputs, "mask");
                 let data_str = get_string(params, "data", "");
+                let mut sculpted = input.clone();
                 if !data_str.is_empty() {
                     let src_res = get_uint(params, "resolution", 256).max(1);
                     let scale = get_float(params, "scale", 0.5);
                     let pixels = hex_decode_mask(data_str);
-                    apply_sculpt_delta(&mut hm, &pixels, src_res, scale);
+                    apply_sculpt_delta(&mut sculpted, &pixels, src_res, scale);
                 }
+                // Mask confines sculpt delta to specific areas (mask=0: original, mask=1: sculpted)
+                let hm = apply_modulation(&input, sculpted, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::PaintedTexture => {
@@ -301,9 +357,27 @@ impl NodeExecutor for CpuExecutor {
             // --- Mask Operations ---
             NodeType::MaskThreshold => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let threshold = get_float(params, "threshold", 0.5);
                 let smoothness = get_float(params, "smoothness", 0.0);
-                let hm = apply_mask_threshold(&input, threshold, smoothness);
+                let hm = if let Some(c) = &ctrl {
+                    // Control shifts the threshold spatially (WM: higher control = threshold moves up)
+                    let data: Vec<f32> = input.data().iter()
+                        .zip(c.data())
+                        .map(|(&v, &cv)| {
+                            let t = (threshold + cv - 0.5).clamp(0.0, 1.0);
+                            if smoothness <= 0.001 {
+                                if v >= t { 1.0 } else { 0.0 }
+                            } else {
+                                let s = ((v - t) / smoothness + 0.5).clamp(0.0, 1.0);
+                                s * s * (3.0 - 2.0 * s)
+                            }
+                        })
+                        .collect();
+                    Heightmap::frbar_data(input.width(), input.height(), data).unwrap()
+                } else {
+                    apply_mask_threshold(&input, threshold, smoothness)
+                };
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::MaskInvert => {
@@ -313,8 +387,10 @@ impl NodeExecutor for CpuExecutor {
             }
             NodeType::MaskBlur => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let radius = get_float(params, "radius", 2.0);
                 let hm = apply_blur(&input, radius);
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::MaskApply => {
@@ -335,40 +411,56 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Voronoi => {
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = generate_voronoi(params, width, height);
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Gradient => {
+                let ctrl = get_optional_heightmap(inputs, "control");
                 let hm = generate_gradient(params, width, height);
+                let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
             // --- Additional Filters ---
             NodeType::SimpleTransform => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let scale = get_float(params, "scale", 1.0);
                 let offset = get_float(params, "offset", 0.0);
                 let invert = get_bool(params, "invert", false);
                 let hm = apply_simple_transform(&input, scale, offset, invert);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Normalize => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let hm = apply_normalize(&input);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::BiasGain => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let bias = get_float(params, "bias", 0.5);
                 let gain = get_float(params, "gain", 0.5);
                 let hm = apply_bias_gain(&input, bias, gain);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Displacement => {
                 let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
                 let displacement = get_input_heightmap(inputs, "displacement")?;
                 let strength = get_float(params, "strength", 0.1);
                 let hm = apply_displacement(&input, &displacement, strength);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
@@ -632,6 +724,119 @@ fn combine_heightmaps(a: &Heightmap, b: &Heightmap, op: impl Fn(f32, f32) -> f32
     }
 
     Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+// ── Modulation helpers ────────────────────────────────────────────────────────
+// All three port types (Control, Density, Mask) arrive as PortValue::Heightmap
+// or PortValue::Mask -- the graph routes by port name, not kind. These helpers
+// are the single implementation point for WM-compatible modulation semantics.
+//
+// Every helper assumes its inputs are at the eval-graph resolution. The graph
+// pipeline normalizes generators / FileInput to (width, height), so callers
+// should never feed mismatched buffers; the debug_assert_eq! guards catch any
+// regression that would otherwise panic inside Heightmap::frbar_data.
+
+/// Optional heightmap input -- None if the port is unconnected or mistyped.
+fn get_optional_heightmap(inputs: &HashMap<String, PortValue>, name: &str) -> Option<Heightmap> {
+    match inputs.get(name) {
+        Some(PortValue::Heightmap(hm)) | Some(PortValue::Mask(hm)) => Some(hm.clone()),
+        _ => None,
+    }
+}
+
+/// Multiply every pixel by an optional scale field, in place.
+/// Returns `effect` unchanged when `field` is None.
+fn scale_by_field(mut effect: Heightmap, field: Option<&Heightmap>) -> Heightmap {
+    let Some(f) = field else { return effect; };
+    debug_assert_eq!(effect.width(), f.width(), "scale_by_field: width mismatch");
+    debug_assert_eq!(effect.height(), f.height(), "scale_by_field: height mismatch");
+    for (e, &s) in effect.data_mut().iter_mut().zip(f.data()) {
+        *e *= s.clamp(0.0, 1.0);
+    }
+    effect
+}
+
+/// Apply optional control and mask to a filter node (one with a passthrough `input`).
+///
+/// WM semantics:
+///   - Control modulates effect strength: `lerp(input, effect, control)`
+///   - Mask gates where the effect applies:  `lerp(input, effect, mask)`
+///   - Both together multiply the weights in a single pass
+///
+/// Mutates `effect` in place; returns it untouched when both ports are unconnected.
+fn apply_modulation(
+    input: &Heightmap,
+    mut effect: Heightmap,
+    control: Option<&Heightmap>,
+    mask: Option<&Heightmap>,
+) -> Heightmap {
+    if control.is_none() && mask.is_none() {
+        return effect;
+    }
+    debug_assert_eq!(input.width(), effect.width(), "apply_modulation: input/effect width");
+    debug_assert_eq!(input.height(), effect.height(), "apply_modulation: input/effect height");
+    if let Some(c) = control {
+        debug_assert_eq!(input.width(), c.width(), "apply_modulation: control width");
+        debug_assert_eq!(input.height(), c.height(), "apply_modulation: control height");
+    }
+    if let Some(m) = mask {
+        debug_assert_eq!(input.width(), m.width(), "apply_modulation: mask width");
+        debug_assert_eq!(input.height(), m.height(), "apply_modulation: mask height");
+    }
+    let in_d = input.data();
+    let ef_d = effect.data_mut();
+    match (control, mask) {
+        (Some(c), Some(m)) => {
+            let cd = c.data();
+            let md = m.data();
+            for i in 0..in_d.len() {
+                let t = (cd[i].clamp(0.0, 1.0) * md[i].clamp(0.0, 1.0)).clamp(0.0, 1.0);
+                ef_d[i] = in_d[i] + (ef_d[i] - in_d[i]) * t;
+            }
+        }
+        (Some(w), None) | (None, Some(w)) => {
+            let wd = w.data();
+            for i in 0..in_d.len() {
+                let t = wd[i].clamp(0.0, 1.0);
+                ef_d[i] = in_d[i] + (ef_d[i] - in_d[i]) * t;
+            }
+        }
+        (None, None) => unreachable!(),
+    }
+    effect
+}
+
+/// Apply optional control and mask to a Color output.
+/// Blends each pixel from `neutral` toward `effect` by `control * mask`.
+/// Returns `effect` unchanged when both are None; otherwise mutates in place.
+fn apply_color_modulation(
+    neutral: [f32; 4],
+    mut effect: ColorBuffer,
+    control: Option<&Heightmap>,
+    mask: Option<&Heightmap>,
+) -> ColorBuffer {
+    if control.is_none() && mask.is_none() {
+        return effect;
+    }
+    if let Some(c) = control {
+        debug_assert_eq!(effect.width(), c.width(), "apply_color_modulation: control width");
+        debug_assert_eq!(effect.height(), c.height(), "apply_color_modulation: control height");
+    }
+    if let Some(m) = mask {
+        debug_assert_eq!(effect.width(), m.width(), "apply_color_modulation: mask width");
+        debug_assert_eq!(effect.height(), m.height(), "apply_color_modulation: mask height");
+    }
+    let ctrl_d = control.map(Heightmap::data);
+    let mask_d = mask.map(Heightmap::data);
+    for (i, pixel) in effect.data_mut().chunks_exact_mut(4).enumerate() {
+        let cv = ctrl_d.map_or(1.0, |d| d[i].clamp(0.0, 1.0));
+        let mv = mask_d.map_or(1.0, |d| d[i].clamp(0.0, 1.0));
+        let t = cv * mv;
+        for ch in 0..4 {
+            pixel[ch] = neutral[ch] + (pixel[ch] - neutral[ch]) * t;
+        }
+    }
+    effect
 }
 
 /// Gaussian blur approximation using separable box blur (3 passes).
@@ -2081,6 +2286,115 @@ mod tests {
                 assert!((hm.get(0, 3).unwrap() - 0.8).abs() < 0.01);
             }
             _ => panic!("Expected heightmap"),
+        }
+    }
+
+    // ── Modulation helpers ────────────────────────────────────────────────────
+
+    fn const_hm(w: u32, h: u32, v: f32) -> Heightmap {
+        Heightmap::frbar_data(w, h, vec![v; (w as usize) * (h as usize)]).unwrap()
+    }
+
+    #[test]
+    fn scale_by_field_none_is_identity() {
+        let effect = const_hm(4, 4, 0.7);
+        let out = scale_by_field(effect.clone(), None);
+        assert_eq!(out.data(), effect.data());
+    }
+
+    #[test]
+    fn scale_by_field_clamps_and_multiplies_per_pixel() {
+        // Field values outside [0, 1] are clamped before multiply, so the
+        // result never exceeds the effect.
+        let effect = const_hm(2, 2, 0.6);
+        let mut field = const_hm(2, 2, 0.0);
+        field.data_mut().copy_from_slice(&[0.0, 0.5, 1.0, 2.0]);
+        let out = scale_by_field(effect, Some(&field));
+        assert!((out.data()[0] - 0.0).abs() < 1e-6);
+        assert!((out.data()[1] - 0.30).abs() < 1e-6);
+        assert!((out.data()[2] - 0.60).abs() < 1e-6);
+        assert!((out.data()[3] - 0.60).abs() < 1e-6); // 2.0 -> clamp(1.0)
+    }
+
+    #[test]
+    fn apply_modulation_no_inputs_returns_effect_untouched() {
+        let input = const_hm(2, 2, 0.0);
+        let effect = const_hm(2, 2, 0.9);
+        let out = apply_modulation(&input, effect.clone(), None, None);
+        assert_eq!(out.data(), effect.data());
+    }
+
+    #[test]
+    fn apply_modulation_mask_zero_falls_back_to_input() {
+        // Where mask is 0, the output must equal `input`. Where mask is 1,
+        // the output must equal `effect`. Halfway lerps to the midpoint.
+        let input = const_hm(2, 2, 0.0);
+        let effect = const_hm(2, 2, 1.0);
+        let mut mask = const_hm(2, 2, 0.0);
+        mask.data_mut().copy_from_slice(&[0.0, 0.5, 1.0, 1.0]);
+        let out = apply_modulation(&input, effect, None, Some(&mask));
+        assert!((out.data()[0] - 0.0).abs() < 1e-6);
+        assert!((out.data()[1] - 0.5).abs() < 1e-6);
+        assert!((out.data()[2] - 1.0).abs() < 1e-6);
+        assert!((out.data()[3] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn apply_modulation_control_and_mask_multiply() {
+        // Both fields collapse to a single weight = clamp(c)*clamp(m).
+        let input = const_hm(1, 1, 0.0);
+        let effect = const_hm(1, 1, 1.0);
+        let ctrl = const_hm(1, 1, 0.5);
+        let mask = const_hm(1, 1, 0.4);
+        let out = apply_modulation(&input, effect, Some(&ctrl), Some(&mask));
+        // 0 + (1 - 0) * (0.5 * 0.4) = 0.2
+        assert!((out.data()[0] - 0.2).abs() < 1e-6);
+    }
+
+    #[test]
+    fn add_node_honours_mask() {
+        // Add with mask=0 should leave `a` untouched everywhere.
+        let executor = CpuExecutor;
+        let a = const_hm(2, 2, 0.3);
+        let b = const_hm(2, 2, 0.4);
+        let mask = const_hm(2, 2, 0.0);
+        let inputs = HashMap::from([
+            ("a".to_string(), PortValue::Heightmap(a)),
+            ("b".to_string(), PortValue::Heightmap(b)),
+            ("mask".to_string(), PortValue::Mask(mask)),
+        ]);
+        let result = executor
+            .execute(&NodeType::Add, &HashMap::new(), &inputs, 2, 2)
+            .unwrap();
+        let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
+            panic!("expected heightmap")
+        };
+        for &v in hm.data() {
+            assert!((v - 0.3).abs() < 1e-6, "mask=0 should keep `a`, got {v}");
+        }
+    }
+
+    #[test]
+    fn blend_node_uses_apply_modulation_helper() {
+        // factor=1, mask=0 -> output equals `a` (mask gates the blend back to a).
+        let executor = CpuExecutor;
+        let a = const_hm(2, 2, 0.1);
+        let b = const_hm(2, 2, 0.9);
+        let mask = const_hm(2, 2, 0.0);
+        let params = HashMap::from([("factor".to_string(), ParamValue::Float(1.0))]);
+        let inputs = HashMap::from([
+            ("a".to_string(), PortValue::Heightmap(a)),
+            ("b".to_string(), PortValue::Heightmap(b)),
+            ("mask".to_string(), PortValue::Mask(mask)),
+        ]);
+        let result = executor
+            .execute(&NodeType::Blend, &params, &inputs, 2, 2)
+            .unwrap();
+        let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
+            panic!("expected heightmap")
+        };
+        for &v in hm.data() {
+            assert!((v - 0.1).abs() < 1e-6, "blend with mask=0 should keep `a`, got {v}");
         }
     }
 }
