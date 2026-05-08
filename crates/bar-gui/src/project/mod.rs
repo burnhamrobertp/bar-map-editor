@@ -5,8 +5,10 @@
 //! `autosave`, `sculpt_sidecar` modules per the architecture refactor
 //! plan.
 
+pub(crate) mod autosave;
 pub(crate) mod lifecycle;
 pub(crate) mod path;
+pub(crate) mod persistence;
 pub(crate) mod sculpt_sidecar;
 pub(crate) mod state;
 
