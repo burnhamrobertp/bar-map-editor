@@ -57,11 +57,9 @@ struct CameraUniform {
 @group(2) @binding(0) var reflection_texture: texture_2d<f32>;
 @group(2) @binding(1) var reflection_sampler: sampler;
 
-/// Heightmap for GPU vertex displacement.
-/// Format: R32Float, dimensions match the source Heightmap. Sampled with
-/// linear filtering so bilinear-interpolated heights reach every vertex.
-@group(3) @binding(0) var heightmap_tex: texture_2d<f32>;
-@group(3) @binding(1) var heightmap_sam: sampler;
+/// Heightmap for GPU vertex displacement. Shares group 3 with water_normal (declared in
+/// water.wgsl at bindings 0/1). Format: R32Float, non-filterable -- use textureLoad.
+@group(3) @binding(2) var heightmap_tex: texture_2d<f32>;
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -101,7 +99,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // Terrain surface: GPU displacement.
     // Flat-grid positions are in [-0.5, 0.5]^2; scale to world space via extents.
     let uv = in.uv;
-    let h = textureSampleLevel(heightmap_tex, heightmap_sam, uv, 0.0).r;
+    let dim_i = vec2<i32>(textureDimensions(heightmap_tex));
+    let dim_f = vec2<f32>(dim_i);
+    let tc = clamp(vec2<i32>(uv * dim_f), vec2<i32>(0), dim_i - vec2<i32>(1));
+    let h = textureLoad(heightmap_tex, tc, 0).r;
     let world_x = in.position.x * (2.0 * camera.x_extent);
     let world_z = in.position.z * (2.0 * camera.z_extent);
     let world_y = h * camera.height_scale;
@@ -111,16 +112,18 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.world_position = world_pos;
     out.uv = uv;
 
-    // Surface normal via central differences in heightmap UV space.
-    let dim = vec2<f32>(textureDimensions(heightmap_tex));
-    let texel = vec2<f32>(1.0) / dim;
-    let h_xp = textureSampleLevel(heightmap_tex, heightmap_sam, uv + vec2<f32>(texel.x, 0.0), 0.0).r;
-    let h_xn = textureSampleLevel(heightmap_tex, heightmap_sam, uv - vec2<f32>(texel.x, 0.0), 0.0).r;
-    let h_zp = textureSampleLevel(heightmap_tex, heightmap_sam, uv + vec2<f32>(0.0, texel.y), 0.0).r;
-    let h_zn = textureSampleLevel(heightmap_tex, heightmap_sam, uv - vec2<f32>(0.0, texel.y), 0.0).r;
+    // Surface normal via central differences in heightmap texel space.
+    let tc_xp = clamp(tc + vec2<i32>(1, 0), vec2<i32>(0), dim_i - vec2<i32>(1));
+    let tc_xn = clamp(tc + vec2<i32>(-1, 0), vec2<i32>(0), dim_i - vec2<i32>(1));
+    let tc_zp = clamp(tc + vec2<i32>(0, 1), vec2<i32>(0), dim_i - vec2<i32>(1));
+    let tc_zn = clamp(tc + vec2<i32>(0, -1), vec2<i32>(0), dim_i - vec2<i32>(1));
+    let h_xp = textureLoad(heightmap_tex, tc_xp, 0).r;
+    let h_xn = textureLoad(heightmap_tex, tc_xn, 0).r;
+    let h_zp = textureLoad(heightmap_tex, tc_zp, 0).r;
+    let h_zn = textureLoad(heightmap_tex, tc_zn, 0).r;
     // World-space step between adjacent heightmap texels.
-    let world_dx = (2.0 * camera.x_extent) / dim.x;
-    let world_dz = (2.0 * camera.z_extent) / dim.y;
+    let world_dx = (2.0 * camera.x_extent) / dim_f.x;
+    let world_dz = (2.0 * camera.z_extent) / dim_f.y;
     let dy_dx = (h_xp - h_xn) * camera.height_scale / (2.0 * world_dx);
     let dy_dz = (h_zp - h_zn) * camera.height_scale / (2.0 * world_dz);
     out.normal = normalize(vec3<f32>(-dy_dx, 1.0, -dy_dz));

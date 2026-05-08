@@ -131,21 +131,14 @@ pub struct TerrainRenderer {
     reflection_sampler: wgpu::Sampler,
     reflection_bind_group: wgpu::BindGroup,
     reflection_bind_group_dummy: wgpu::BindGroup,
-    // Water normal map resources -- held alive to prevent GPU resource drops;
-    // not yet bound to the pipeline (deferred until shore-wave shader work).
-    #[allow(dead_code)]
-    water_normal_bind_group_layout: wgpu::BindGroupLayout,
-    #[allow(dead_code)]
-    water_normal_bind_group: wgpu::BindGroup,
+    // ── Group 3: water_normal (bindings 0,1) + heightmap (binding 2) ─────────
     #[allow(dead_code)]
     water_normal_texture: wgpu::Texture,
-    #[allow(dead_code)]
     water_normal_sampler: wgpu::Sampler,
-    // ── Group 3: heightmap ──────────────────────────────────────────────────
+    water_normal_view: wgpu::TextureView,
     heightmap_bind_group_layout: wgpu::BindGroupLayout,
     heightmap_bind_group: wgpu::BindGroup,
     heightmap_texture: wgpu::Texture,
-    heightmap_sampler: wgpu::Sampler,
     // ── Geometry ────────────────────────────────────────────────────────────
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
@@ -199,8 +192,7 @@ fn make_water_normal_map(size: u32) -> Vec<u8> {
     data
 }
 
-/// Create a 1x1 R32Float texture with value `v`. Used for default metalmap/typemap
-/// and the initial heightmap (all-zero terrain before any eval completes).
+/// Create a 1x1 R32Float texture with value `v`. Used for the default heightmap.
 fn make_default_r32float(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, v: f32) -> wgpu::Texture {
     let data = v.to_ne_bytes();
     device.create_texture_with_data(
@@ -212,6 +204,27 @@ fn make_default_r32float(device: &wgpu::Device, queue: &wgpu::Queue, label: &str
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R32Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &data,
+    )
+}
+
+/// Create a 1x1 R8Unorm texture with value `v` (0.0..1.0). Used for default
+/// metalmap / typemap textures. R8Unorm is universally filterable.
+fn make_default_r8unorm(device: &wgpu::Device, queue: &wgpu::Queue, label: &str, v: f32) -> wgpu::Texture {
+    let data = [(v.clamp(0.0, 1.0) * 255.0).round() as u8];
+    device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         },
@@ -326,38 +339,14 @@ impl TerrainRenderer {
                 ],
             });
 
-        // Group 3: water normal map
-        let water_normal_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("water_normal_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            multisampled: false,
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-            });
-
-        // Group 4: heightmap for vertex displacement
+        // Group 3: water_normal map (bindings 0-1, filterable) + heightmap (binding 2, non-filterable).
         let heightmap_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("heightmap_bind_group_layout"),
+                label: Some("group3_bind_group_layout"),
                 entries: &[
                     wgpu::BindGroupLayoutEntry {
                         binding: 0,
-                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
@@ -367,8 +356,18 @@ impl TerrainRenderer {
                     },
                     wgpu::BindGroupLayoutEntry {
                         binding: 1,
-                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -542,8 +541,8 @@ impl TerrainRenderer {
             wgpu::util::TextureDataOrder::LayerMajor,
             &white,
         );
-        let metalmap_texture = make_default_r32float(device, queue, "metalmap_default", 0.0);
-        let typemap_texture  = make_default_r32float(device, queue, "typemap_default",  0.0);
+        let metalmap_texture = make_default_r8unorm(device, queue, "metalmap_default", 0.0);
+        let typemap_texture  = make_default_r8unorm(device, queue, "typemap_default",  0.0);
 
         let texture_bind_group = {
             let av = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -630,34 +629,18 @@ impl TerrainRenderer {
         );
         let water_normal_view =
             water_normal_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let water_normal_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("water_normal_bind_group"),
-            layout: &water_normal_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&water_normal_view) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&water_normal_sampler) },
-            ],
-        });
-
         // Default 1x1 heightmap (zero height) until update_heightmap is called.
-        let heightmap_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("heightmap_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
-            ..Default::default()
-        });
+        // Group 3 bind group combines water_normal (0,1) and heightmap (2).
         let heightmap_texture = make_default_r32float(device, queue, "heightmap_default", 0.0);
         let heightmap_bind_group = {
             let hv = heightmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("heightmap_bind_group"),
+                label: Some("group3_bind_group"),
                 layout: &heightmap_bind_group_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&hv) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&heightmap_sampler) },
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&water_normal_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&water_normal_sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&hv) },
                 ],
             })
         };
@@ -678,14 +661,12 @@ impl TerrainRenderer {
             reflection_sampler,
             reflection_bind_group,
             reflection_bind_group_dummy,
-            water_normal_bind_group_layout,
-            water_normal_bind_group,
             water_normal_texture,
             water_normal_sampler,
+            water_normal_view,
             heightmap_bind_group_layout,
             heightmap_bind_group,
             heightmap_texture,
-            heightmap_sampler,
             vertex_buffer: None,
             index_buffer: None,
             num_indices: 0,
@@ -804,11 +785,12 @@ impl TerrainRenderer {
             );
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             self.heightmap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("heightmap_bind_group"),
+                label: Some("group3_bind_group"),
                 layout: &self.heightmap_bind_group_layout,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
-                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.heightmap_sampler) },
+                    wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&self.water_normal_view) },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.water_normal_sampler) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&view) },
                 ],
             });
             self.heightmap_texture = tex;
@@ -931,8 +913,10 @@ impl TerrainRenderer {
 
     /// Replace the metalmap texture from a `Heightmap` (values 0..1).
     pub fn update_metalmap(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, hm: &Heightmap) {
-        let data: Vec<f32> = (0..hm.height())
-            .flat_map(|y| (0..hm.width()).map(move |x| hm.get(x, y).unwrap_or(0.0)))
+        let data: Vec<u8> = (0..hm.height())
+            .flat_map(|y| (0..hm.width()).map(move |x| {
+                (hm.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8
+            }))
             .collect();
         self.metalmap_texture = device.create_texture_with_data(
             queue,
@@ -942,12 +926,12 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
+                format: wgpu::TextureFormat::R8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
-            bytemuck::cast_slice(&data),
+            &data,
         );
         self.rebuild_material_bind_group(device);
     }
@@ -965,6 +949,9 @@ impl TerrainRenderer {
         if w == 0 || h == 0 {
             return;
         }
+        let bytes: Vec<u8> = data.iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect();
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.metalmap_texture,
@@ -972,10 +959,10 @@ impl TerrainRenderer {
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(data),
+            &bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(w * 4),
+                bytes_per_row: Some(w),
                 rows_per_image: Some(h),
             },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
@@ -984,8 +971,10 @@ impl TerrainRenderer {
 
     /// Replace the typemap texture from a `Heightmap` (values 0..1).
     pub fn update_typemap(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, hm: &Heightmap) {
-        let data: Vec<f32> = (0..hm.height())
-            .flat_map(|y| (0..hm.width()).map(move |x| hm.get(x, y).unwrap_or(0.0)))
+        let data: Vec<u8> = (0..hm.height())
+            .flat_map(|y| (0..hm.width()).map(move |x| {
+                (hm.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0) * 255.0).round() as u8
+            }))
             .collect();
         self.typemap_texture = device.create_texture_with_data(
             queue,
@@ -995,12 +984,12 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::R32Float,
+                format: wgpu::TextureFormat::R8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
-            bytemuck::cast_slice(&data),
+            &data,
         );
         self.rebuild_material_bind_group(device);
     }
@@ -1018,6 +1007,9 @@ impl TerrainRenderer {
         if w == 0 || h == 0 {
             return;
         }
+        let bytes: Vec<u8> = data.iter()
+            .map(|&v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect();
         queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.typemap_texture,
@@ -1025,10 +1017,10 @@ impl TerrainRenderer {
                 origin: wgpu::Origin3d { x, y, z: 0 },
                 aspect: wgpu::TextureAspect::All,
             },
-            bytemuck::cast_slice(data),
+            &bytes,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(w * 4),
+                bytes_per_row: Some(w),
                 rows_per_image: Some(h),
             },
             wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
