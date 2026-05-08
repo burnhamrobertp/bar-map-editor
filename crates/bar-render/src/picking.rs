@@ -60,16 +60,27 @@ pub fn pick_terrain(
         return None;
     }
 
-    // March along the ray. The mesh is bounded; once we leave the
-    // bounding box on the far side, we know we missed.
-    let max_dist = (far - near).length();
-    let steps = 256usize;
-    let step_len = max_dist / steps as f32;
+    // Clip the march to the terrain AABB so the step size is proportional
+    // to the terrain, not the far plane distance. Without this, a far plane
+    // of 1000 and only 256 steps gives ~4 world-unit steps that skip over
+    // terrain that spans ±0.5 in XZ.
+    let (t_min, t_max) = aabb_intersect(near, dir, x_extent, z_extent, height_scale);
+    if t_min >= t_max {
+        return None;
+    }
+    let march_start = t_min.max(0.0);
+    let march_end = t_max;
 
-    let mut prev_t = 0.0_f32;
+    let steps = 256usize;
+    let step_len = (march_end - march_start) / steps as f32;
+    if step_len <= 0.0 {
+        return None;
+    }
+
+    let mut prev_t = march_start;
     let mut prev_dy = ray_y_above_terrain(near, dir, prev_t, heightmap, x_extent, z_extent, height_scale);
     for i in 1..=steps {
-        let t = step_len * i as f32;
+        let t = march_start + step_len * i as f32;
         let dy = ray_y_above_terrain(near, dir, t, heightmap, x_extent, z_extent, height_scale);
         // Sign-change in dy ⇒ we crossed the surface between prev_t and t.
         // (dy is "ray.y - terrain.y"; positive = above, negative = below.)
@@ -101,6 +112,35 @@ pub fn pick_terrain(
         prev_dy = dy;
     }
     None
+}
+
+/// Slab-method ray-AABB intersection for the terrain bounding box.
+/// Returns `(t_min, t_max)` along the ray; caller should check `t_min < t_max`.
+fn aabb_intersect(origin: Vec3, dir: Vec3, x_extent: f32, z_extent: f32, height_scale: f32) -> (f32, f32) {
+    let aabb_min = Vec3::new(-x_extent, -height_scale * 0.1, -z_extent);
+    let aabb_max = Vec3::new( x_extent,  height_scale * 1.1,  z_extent);
+
+    let mut t_min = f32::NEG_INFINITY;
+    let mut t_max = f32::INFINITY;
+
+    for axis in 0..3 {
+        let o = origin[axis];
+        let d = dir[axis];
+        let lo = aabb_min[axis];
+        let hi = aabb_max[axis];
+        if d.abs() < 1e-8 {
+            if o < lo || o > hi {
+                return (1.0, 0.0); // miss
+            }
+        } else {
+            let t1 = (lo - o) / d;
+            let t2 = (hi - o) / d;
+            let (ta, tb) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
+            t_min = t_min.max(ta);
+            t_max = t_max.min(tb);
+        }
+    }
+    (t_min, t_max)
 }
 
 /// Returns `Some(ray_y - terrain_y)` for the ray's position at parameter
