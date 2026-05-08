@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use eframe::egui;
 use bar_graph::{
-    NodeId, NodeType, ParamValue, PortId,
+    NodeId, NodeType, ParamValue, PortId, PortPlacement,
 };
 
 use crate::app::*;
@@ -518,18 +518,12 @@ impl BarEditorApp {
     ) -> Option<egui::Pos2> {
         let node = self.graph.get_node(node_id)?;
         let visual = self.node_visuals.get(&node_id)?;
-        let port_index = node
-            .outputs
-            .iter()
-            .position(|p| p.name == port_name)?;
-        let port_y = node_port_y(
-            &node.node_type,
-            visual.position.y,
-            visual.size.y,
-            port_index,
-        ) + offset.y;
-        let port_x = visual.position.x + offset.x + visual.size.x;
-        Some(egui::pos2(port_x, port_y))
+        let port_index = node.outputs.iter().position(|p| p.name == port_name)?;
+        let node_rect = egui::Rect::from_min_size(
+            egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
+            visual.size,
+        );
+        Some(node_port_pos(&node.node_type, node_rect, PortPlacement::Right, port_index))
     }
 
     /// Count input ports across `ids` that have no incoming
@@ -784,13 +778,6 @@ impl BarEditorApp {
         }
         self.is_dirty = true;
     }
-    /// Welcome panel — see `crate::panels::welcome`. The actual
-    /// implementation lives there as a free function so other
-    /// layouts can call it without going through `BarEditorApp`.
-    pub(crate) fn draw_welcome_panel(&mut self, ui: &mut egui::Ui) {
-        crate::panels::welcome::draw(self, ui);
-    }
-
     /// Layout-only computation of every collapsed subgraph's rect and
     /// the screen-space position of each of its external port handles.
     /// Called BEFORE wire rendering so the wire pass can reroute
@@ -1376,16 +1363,6 @@ impl BarEditorApp {
     }
 
     pub(crate) fn draw_node_graph(&mut self, ui: &mut egui::Ui) {
-        // Welcome overlay: if there's nothing in the graph and no
-        // project is loaded, replace the empty canvas with a panel
-        // that surfaces presets prominently — same destination as
-        // File → New from Preset, but reachable in one click from
-        // the "what do I do now" startup state.
-        if self.graph.nodes().is_empty() && self.project_path.is_none() {
-            self.draw_welcome_panel(ui);
-            return;
-        }
-
         // Tab bar — clean up first so we don't render tabs for
         // sub-graphs / nodes that no longer exist. The tab strip
         // draws its own baseline separator that the active tab
@@ -1717,51 +1694,61 @@ impl BarEditorApp {
             } else {
                 self.node_visuals.get(&conn.from.node_id).and_then(|visual| {
                     let node = self.graph.get_node(conn.from.node_id)?;
-                    let out_idx = node
-                        .outputs
-                        .iter()
-                        .position(|p| p.name == conn.from.port_name)?;
-                    let port_y = node_port_y(
-                        &node.node_type,
-                        visual.position.y,
-                        visual.size.y,
-                        out_idx,
+                    let out_idx = node.outputs.iter().position(|p| p.name == conn.from.port_name)?;
+                    let node_rect = egui::Rect::from_min_size(
+                        egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
+                        visual.size,
                     );
-                    Some(egui::pos2(
-                        visual.position.x + visual.size.x + offset.x,
-                        port_y + offset.y,
-                    ))
+                    Some(node_port_pos(&node.node_type, node_rect, PortPlacement::Right, out_idx))
                 })
             };
-            let to_pos: Option<egui::Pos2> = if to_hidden {
-                subgraph_handles
-                    .get(&(conn.to.node_id, conn.to.port_name.clone()))
-                    .copied()
+            // to_pos and to_placement computed together so control-point
+            // axis can reflect which edge the input port sits on.
+            let (to_pos, to_placement): (Option<egui::Pos2>, PortPlacement) = if to_hidden {
+                (
+                    subgraph_handles
+                        .get(&(conn.to.node_id, conn.to.port_name.clone()))
+                        .copied(),
+                    PortPlacement::Left,
+                )
             } else {
-                self.node_visuals.get(&conn.to.node_id).and_then(|visual| {
+                let result = self.node_visuals.get(&conn.to.node_id).and_then(|visual| {
                     let node = self.graph.get_node(conn.to.node_id)?;
-                    let in_idx = node
-                        .inputs
-                        .iter()
-                        .position(|p| p.name == conn.to.port_name)?;
-                    let port_y = node_port_y(
-                        &node.node_type,
-                        visual.position.y,
-                        visual.size.y,
-                        in_idx,
+                    let port = node.inputs.iter().find(|p| p.name == conn.to.port_name)?;
+                    let placement = PortPlacement::for_input(port.kind);
+                    let side_idx = if matches!(placement, PortPlacement::Left) {
+                        node.inputs
+                            .iter()
+                            .filter(|p| matches!(PortPlacement::for_input(p.kind), PortPlacement::Left))
+                            .position(|p| p.name == conn.to.port_name)?
+                    } else {
+                        0
+                    };
+                    let node_rect = egui::Rect::from_min_size(
+                        egui::pos2(visual.position.x + offset.x, visual.position.y + offset.y),
+                        visual.size,
                     );
-                    Some(egui::pos2(
-                        visual.position.x + offset.x,
-                        port_y + offset.y,
-                    ))
-                })
+                    let pos = node_port_pos(&node.node_type, node_rect, placement, side_idx);
+                    Some((pos, placement))
+                });
+                match result {
+                    Some((pos, pl)) => (Some(pos), pl),
+                    None => (None, PortPlacement::Left),
+                }
             };
             let (Some(from_pos), Some(to_pos)) = (from_pos, to_pos) else {
                 continue;
             };
-            let ctrl_offset = (to_pos.x - from_pos.x).abs() * 0.4;
-            let ctrl1 = egui::pos2(from_pos.x + ctrl_offset, from_pos.y);
-            let ctrl2 = egui::pos2(to_pos.x - ctrl_offset, to_pos.y);
+            let to_axis = match to_placement {
+                PortPlacement::Left   => egui::vec2(-1.0,  0.0),
+                PortPlacement::Right  => egui::vec2( 1.0,  0.0),
+                PortPlacement::Top(_) => egui::vec2( 0.0, -1.0),
+                PortPlacement::Bottom => egui::vec2( 0.0,  1.0),
+            };
+            let dist = (from_pos - to_pos).length().max(40.0);
+            let strength = 0.4 * dist;
+            let ctrl1 = from_pos + egui::vec2(1.0, 0.0) * strength;
+            let ctrl2 = to_pos   + to_axis * strength;
             let points: Vec<egui::Pos2> = (0..=20)
                 .map(|i| {
                     let t = i as f32 / 20.0;
@@ -1838,9 +1825,12 @@ impl BarEditorApp {
         if let Some(ref drag) = self.drag_connection {
             if let Some(pointer_pos) = ui.ctx().pointer_latest_pos() {
                 let from = drag.from_pos;
-                let ctrl_offset = (pointer_pos.x - from.x).abs() * 0.4;
-                let ctrl1 = egui::pos2(from.x + ctrl_offset, from.y);
-                let ctrl2 = egui::pos2(pointer_pos.x - ctrl_offset, pointer_pos.y);
+                let dist = (pointer_pos - from).length().max(40.0);
+                let strength = 0.4 * dist;
+                // Outputs always emit rightward, so the source-end tangent is +X.
+                let ctrl1 = egui::pos2(from.x + strength, from.y);
+                let to_dir = (from - pointer_pos).normalized();
+                let ctrl2 = pointer_pos + to_dir * strength;
 
                 let points: Vec<egui::Pos2> = (0..=20)
                     .map(|i| {
@@ -1941,7 +1931,11 @@ impl BarEditorApp {
             let is_io_input = matches!(node_type, NodeType::SubgraphInput);
             let is_io_output = matches!(node_type, NodeType::SubgraphOutput);
             let is_io = is_io_input || is_io_output;
-            let n_ports = node_inputs.len().max(node_outputs.len());
+            let left_input_count = node_inputs
+                .iter()
+                .filter(|p| matches!(PortPlacement::for_input(p.kind), PortPlacement::Left))
+                .count();
+            let n_ports = left_input_count.max(node_outputs.len());
             let (node_min_h, node_min_w) = if is_io {
                 (28.0_f32, 90.0_f32)
             } else {
@@ -2086,9 +2080,12 @@ impl BarEditorApp {
                     egui::StrokeKind::Outside,
                 );
 
-                // Node title bar
-                let title_rect =
-                    egui::Rect::from_min_size(node_rect.min, egui::vec2(node_rect.width(), ns.title_h));
+                // Node title bar -- inset by TITLE_Y_OFFSET so the top-port
+                // circles (centered on node_rect.min.y) don't overlap the text.
+                let title_rect = egui::Rect::from_min_size(
+                    egui::pos2(node_rect.min.x, node_rect.min.y + TITLE_Y_OFFSET),
+                    egui::vec2(node_rect.width(), ns.title_h),
+                );
                 let title_color = node_type_color(&node_type);
                 painter.rect_filled(title_rect, ns.title_rounding, title_color);
                 painter.text(
@@ -2109,6 +2106,7 @@ impl BarEditorApp {
             // and the connection-start fire simultaneously.
             let port_radius = 5.0;
             let hit_size = egui::vec2(14.0, 14.0);
+            let mut left_port_idx = 0_usize;
             for (i, input) in node_inputs.iter().enumerate() {
                 // SubgraphInput's input is the EXTERNAL side, only ever
                 // reached from outside the subgraph (via the collapsed
@@ -2116,13 +2114,11 @@ impl BarEditorApp {
                 if is_io_input {
                     continue;
                 }
-                let port_y = node_port_y(
-                    &node_type,
-                    node_rect.min.y,
-                    node_rect.height(),
-                    i,
-                );
-                let port_pos = egui::pos2(node_rect.min.x, port_y);
+                let placement = PortPlacement::for_input(input.kind);
+                let port_pos = node_port_pos(&node_type, node_rect, placement, left_port_idx);
+                if matches!(placement, PortPlacement::Left) {
+                    left_port_idx += 1;
+                }
                 let port_color = port_kind_color(&input.kind);
                 let hit_rect = egui::Rect::from_center_size(port_pos, hit_size);
                 let port_resp = ui.interact(
@@ -2140,16 +2136,20 @@ impl BarEditorApp {
                         egui::Stroke::new(1.0, egui::Color32::from_rgb(0x1F, 0x29, 0x33)),
                     );
                 }
-                // IO nodes show one centred label on the pill, not
-                // per-port labels; suppress the per-port text for them.
                 if !is_io {
-                    painter.text(
-                        egui::pos2(port_pos.x + 10.0, port_pos.y),
-                        egui::Align2::LEFT_CENTER,
-                        &input.label,
-                        egui::FontId::proportional(10.0),
-                        egui::Color32::LIGHT_GRAY,
-                    );
+                    if matches!(placement, PortPlacement::Left) {
+                        painter.text(
+                            egui::pos2(port_pos.x + 10.0, port_pos.y),
+                            egui::Align2::LEFT_CENTER,
+                            &input.label,
+                            egui::FontId::proportional(10.0),
+                            egui::Color32::LIGHT_GRAY,
+                        );
+                    } else {
+                        // Top / Bottom ports skip the inline label to keep the
+                        // node body uncluttered; surface the name as a tooltip.
+                        port_resp.clone().on_hover_text(&input.label);
+                    }
                 }
                 // End an in-flight connection when the user releases
                 // primary while their cursor is over this input's
@@ -2219,13 +2219,7 @@ impl BarEditorApp {
                 if is_io_output {
                     continue;
                 }
-                let port_y = node_port_y(
-                    &node_type,
-                    node_rect.min.y,
-                    node_rect.height(),
-                    i,
-                );
-                let port_pos = egui::pos2(node_rect.max.x, port_y);
+                let port_pos = node_port_pos(&node_type, node_rect, PortPlacement::Right, i);
                 let port_color = port_kind_color(&output.kind);
                 let hit_rect = egui::Rect::from_center_size(port_pos, hit_size);
                 let port_resp = ui.interact(
@@ -2253,7 +2247,7 @@ impl BarEditorApp {
                     connection_start = Some(DragConnection {
                         from_node: *node_id,
                         from_port: output.name.clone(),
-                        from_pos: port_pos,
+                        from_pos:  port_pos,
                     });
                 }
             }
@@ -2726,7 +2720,7 @@ impl BarEditorApp {
                     connection_start = Some(DragConnection {
                         from_node: *nid,
                         from_port: pname.clone(),
-                        from_pos: handle,
+                        from_pos:  handle,
                     });
                 }
             }

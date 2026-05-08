@@ -9,6 +9,7 @@
 use eframe::egui;
 
 use crate::app::{BarEditorApp, Layout};
+use crate::panels;
 
 /// Render the panels that compose the user's currently active
 /// layout. Calls pre-frame work and the persistent shell chrome
@@ -21,6 +22,14 @@ pub fn draw_active(
 ) {
     app.pre_frame_work(ctx, frame);
     app.draw_shell(ctx, frame);
+
+    if !app.has_project() {
+        egui::CentralPanel::default().show(ctx, |ui| {
+            panels::welcome::draw(app, ui);
+        });
+        return;
+    }
+
     match app.active_layout() {
         Layout::Standard => super::standard::draw(app, ctx, frame),
         Layout::Sculpt3D => super::sculpt3d::draw(app, ctx, frame),

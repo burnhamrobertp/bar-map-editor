@@ -1,5 +1,5 @@
 use eframe::egui;
-use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId, PortKind};
+use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId, PortKind, PortPlacement};
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -20,10 +20,13 @@ pub(crate) use crate::panels::icons::{
 
 // Welcome-panel template list lives in `panels::welcome` now.
 
-/// Port layout constants — shared between rendering and wire drawing.
-/// Title bar is 20 px; ports start 10 px below it; each row is 20 px.
-pub(crate) const PORT_Y_BASE: f32 = 30.0;
-pub(crate) const PORT_Y_STEP: f32 = 20.0;
+/// Port layout constants -- shared between rendering and wire drawing.
+/// Title bar is 20 px, inset 8 px from the top edge; ports stack below it.
+pub(crate) const PORT_Y_BASE:    f32 = 38.0;
+pub(crate) const PORT_Y_STEP:    f32 = 20.0;
+pub(crate) const TITLE_Y_OFFSET: f32 =  8.0;
+pub(crate) const TOP_PORT_INSET: f32 = 28.0;
+pub(crate) const TOP_PORT_STEP:  f32 = 22.0;
 
 /// Default visual size for `SubgraphInput` / `SubgraphOutput` nodes.
 /// All other dimensions (chevron width, corner radius, icon size,
@@ -37,26 +40,43 @@ pub(crate) const IO_NODE_SIZE: egui::Vec2 = egui::vec2(160.0, 52.0);
 /// lock-step.
 pub(crate) const IO_REF_H: f32 = 52.0;
 
-/// Y-coordinate of a node's port anchor in the same coordinate space
-/// as `NodeVisual::position`. For regular nodes this is the standard
-/// `PORT_Y_BASE + index * PORT_Y_STEP` stack; for `SubgraphInput` /
-/// `SubgraphOutput` the pill renders without a title bar so the port
-/// sits at the vertical centre of the visual rect instead. Three
-/// call sites use this — port rendering, wire-from, wire-to — so a
-/// shared helper keeps them in lockstep.
-pub(crate) fn node_port_y(
+/// Screen position of a node port. Replaces the old scalar `node_port_y`.
+/// For IO nodes the port is always centered on the appropriate edge
+/// regardless of placement or index. For regular nodes the position
+/// depends on the placement kind:
+///   Left / Right -- stacked at PORT_Y_BASE + side_index * PORT_Y_STEP
+///   Top(slot)    -- fixed X slot on the top edge (centered vertically)
+///   Bottom       -- centered on the bottom edge
+pub(crate) fn node_port_pos(
     node_type: &NodeType,
-    position_y: f32,
-    size_y: f32,
-    port_index: usize,
-) -> f32 {
-    if matches!(
-        node_type,
-        NodeType::SubgraphInput | NodeType::SubgraphOutput
-    ) {
-        position_y + size_y / 2.0
-    } else {
-        position_y + PORT_Y_BASE + port_index as f32 * PORT_Y_STEP
+    node_rect: egui::Rect,
+    placement: PortPlacement,
+    side_index: usize,
+) -> egui::Pos2 {
+    if matches!(node_type, NodeType::SubgraphInput | NodeType::SubgraphOutput) {
+        let x = match placement {
+            PortPlacement::Right => node_rect.max.x,
+            _ => node_rect.min.x,
+        };
+        return egui::pos2(x, node_rect.center().y);
+    }
+    match placement {
+        PortPlacement::Left => egui::pos2(
+            node_rect.min.x,
+            node_rect.min.y + PORT_Y_BASE + side_index as f32 * PORT_Y_STEP,
+        ),
+        PortPlacement::Right => egui::pos2(
+            node_rect.max.x,
+            node_rect.min.y + PORT_Y_BASE + side_index as f32 * PORT_Y_STEP,
+        ),
+        PortPlacement::Top(slot) => egui::pos2(
+            node_rect.min.x + TOP_PORT_INSET + slot as f32 * TOP_PORT_STEP,
+            node_rect.min.y,
+        ),
+        PortPlacement::Bottom => egui::pos2(
+            node_rect.center().x,
+            node_rect.max.y,
+        ),
     }
 }
 
@@ -336,12 +356,13 @@ pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32
     )
 }
 
-/// State for an in-progress connection drag.
+/// State for an in-progress connection drag. Outputs always emit from a
+/// Right placement, so the wire's tangent at the source end is always +X.
 #[derive(Clone, Debug)]
 pub(crate) struct DragConnection {
     pub from_node: NodeId,
     pub from_port: String,
-    pub from_pos: egui::Pos2,
+    pub from_pos:  egui::Pos2,
 }
 
 /// State for the inline text editor inside the PassThrough properties panel.
@@ -2202,14 +2223,15 @@ impl BarEditorApp {
         self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
     }
 
-    /// True when the inspector is in Sculpt mode AND the inspector
-    /// window is open, a sculpt has already been started, or the
-    /// Sculpt3D layout is active (which is always a sculpting surface).
+    /// True when the viewport's primary mouse button should sculpt rather
+    /// than orbit. The Sculpt3D layout is unconditionally a sculpting
+    /// surface; otherwise requires the inspector to be open in Sculpt mode.
     pub fn is_sculpt_input_active(&self) -> bool {
+        if self.active_layout == Layout::Sculpt3D {
+            return true;
+        }
         self.paint.inspector_mode == InspectorMode::Sculpt
-            && (self.dialog.show_inspector
-                || self.paint.sculpt.dirty
-                || self.active_layout == Layout::Sculpt3D)
+            && (self.dialog.show_inspector || self.paint.sculpt.dirty)
     }
 
     /// Which data layer the brush currently writes to. The 3D viewport
@@ -4209,21 +4231,28 @@ impl BarEditorApp {
                 });
                 ui.menu_button("View", |ui| {
                     ui.set_min_width(220.0);
+                    let has_proj = self.has_project();
                     if ui
-                        .add(egui::SelectableLabel::new(
-                            self.active_layout == Layout::Standard,
-                            "Node Graph",
-                        ))
+                        .add_enabled(
+                            has_proj,
+                            egui::SelectableLabel::new(
+                                has_proj && self.active_layout == Layout::Standard,
+                                "Node Graph",
+                            ),
+                        )
                         .clicked()
                     {
                         self.set_active_layout(Layout::Standard);
                         ui.close_menu();
                     }
                     if ui
-                        .add(egui::SelectableLabel::new(
-                            self.active_layout == Layout::Sculpt3D,
-                            "3D Sculpt",
-                        ))
+                        .add_enabled(
+                            has_proj,
+                            egui::SelectableLabel::new(
+                                has_proj && self.active_layout == Layout::Sculpt3D,
+                                "3D Sculpt",
+                            ),
+                        )
                         .clicked()
                     {
                         self.set_active_layout(Layout::Sculpt3D);
@@ -5709,6 +5738,8 @@ pub(crate) fn port_kind_color(kind: &PortKind) -> egui::Color32 {
         PortKind::Scalar    => tokens::PORT_SCALAR,
         PortKind::File      => tokens::PORT_FILE,
         PortKind::FileList  => tokens::PORT_FILE_LIST,
+        PortKind::Control   => tokens::PORT_CONTROL,
+        PortKind::Density   => tokens::PORT_DENSITY,
     }
 }
 

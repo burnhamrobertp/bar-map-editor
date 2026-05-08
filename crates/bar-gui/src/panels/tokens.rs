@@ -15,6 +15,8 @@ pub const PORT_COLOR:     Color32 = Color32::from_rgb(180, 100, 220);
 pub const PORT_SCALAR:    Color32 = Color32::from_rgb(150, 150, 200);
 pub const PORT_FILE:      Color32 = Color32::from_rgb(200, 160, 80);
 pub const PORT_FILE_LIST: Color32 = Color32::from_rgb(180, 140, 60);
+pub const PORT_CONTROL:   Color32 = Color32::from_rgb(90, 170, 230);
+pub const PORT_DENSITY:   Color32 = Color32::from_rgb(230, 130, 200);
 
 // ── Node category title-bar colours ─────────────────────────────────────────
 
