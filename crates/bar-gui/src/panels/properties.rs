@@ -244,7 +244,7 @@ impl BarEditorApp {
                 // Mirror the previous draw_properties node path: set
                 // selected_node so the existing render code finds
                 // the node's data.
-                self.selected_node = Some(*id);
+                self.selection.node = Some(*id);
                 self.draw_properties(ui);
             }
             PropsTarget::Group(gid) => {
@@ -258,11 +258,11 @@ impl BarEditorApp {
         // Group selection takes priority over node selection (they're
         // mutually exclusive by invariant, but checking the group
         // first gives a clear ownership story).
-        if let Some(gid) = self.selected_group {
+        if let Some(gid) = self.selection.group {
             self.draw_group_properties(ui, gid);
             return;
         }
-        if let Some(node_id) = self.selected_node {
+        if let Some(node_id) = self.selection.node {
             // Extract node data upfront so we don't hold a borrow on self.graph
             // while also needing to mutate other fields (e.g. passthrough_edit).
             let node_data = self
@@ -555,7 +555,7 @@ impl BarEditorApp {
 
                 ui.separator();
             } else {
-                self.selected_node = None;
+                self.selection.node = None;
                 ui.label("Select a node to edit properties.");
             }
         } else {
@@ -677,7 +677,7 @@ impl BarEditorApp {
         let snapshot = match self.groups.get(&gid) {
             Some(g) => g.clone(),
             None => {
-                self.selected_group = None;
+                self.selection.group = None;
                 return;
             }
         };
@@ -857,7 +857,7 @@ impl BarEditorApp {
             if is_subgraph {
                 self.delete_subgraph_with_contents(gid);
             } else {
-                self.pending_group_delete = Some(gid);
+                self.selection.pending_group_delete = Some(gid);
             }
         }
 

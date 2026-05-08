@@ -135,7 +135,7 @@ impl BarEditorApp {
                 egui::pos2(max.x + margin, max.y + margin),
             );
             let tint = group_color(group.color_idx);
-            let is_selected = self.selected_group == Some(*gid);
+            let is_selected = self.selection.group == Some(*gid);
             // Translucent body so wires + nodes drawn after this still
             // read clearly.
             painter.rect_filled(
@@ -228,7 +228,7 @@ impl BarEditorApp {
         // external connections stay put would produce 3000-px wires
         // across the canvas. The selection case keeps the existing
         // "anchor at the target's current top-left" behaviour.
-        let layout_everything = self.selected_group.is_none() && self.selected_nodes.is_empty();
+        let layout_everything = self.selection.group.is_none() && self.selection.nodes.is_empty();
 
         self.push_undo("Auto Layout");
 
@@ -370,8 +370,8 @@ impl BarEditorApp {
                 let candidates: std::collections::HashSet<NodeId> =
                     group.member_ids.iter().copied().collect();
                 let mut units: Vec<LayoutUnit> = Vec::new();
-                if !self.selected_nodes.is_empty() {
-                    for &nid in &self.selected_nodes {
+                if !self.selection.nodes.is_empty() {
+                    for &nid in &self.selection.nodes {
                         if candidates.contains(&nid) {
                             units.push(LayoutUnit::Node(nid));
                         }
@@ -386,7 +386,7 @@ impl BarEditorApp {
         }
 
         // 1. Subgraph alone is selected → just that group.
-        if let Some(gid) = self.selected_group {
+        if let Some(gid) = self.selection.group {
             if let Some(group) = self.groups.get(&gid) {
                 if group.is_subgraph {
                     return vec![LayoutUnit::Subgraph {
@@ -397,14 +397,14 @@ impl BarEditorApp {
         }
 
         // 2. Individual node selection.
-        if !self.selected_nodes.is_empty() {
+        if !self.selection.nodes.is_empty() {
             // For nodes that are members of collapsed subgraphs,
             // collapse to the subgraph unit. Other nodes go in
             // individually.
             let mut units: Vec<LayoutUnit> = Vec::new();
             let mut emitted_groups: std::collections::HashSet<u64> =
                 std::collections::HashSet::new();
-            for &nid in &self.selected_nodes {
+            for &nid in &self.selection.nodes {
                 if let Some(gid) = self.node_to_group.get(&nid).copied() {
                     if let Some(group) = self.groups.get(&gid) {
                         if group.is_subgraph && group.collapsed {
@@ -936,7 +936,7 @@ impl BarEditorApp {
             );
             // Border last so the header doesn't cover it (matches
             // node + group rendering).
-            let is_selected = self.selected_group == Some(*gid);
+            let is_selected = self.selection.group == Some(*gid);
             let stroke = if is_selected {
                 egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 160, 255))
             } else {
@@ -1617,8 +1617,8 @@ impl BarEditorApp {
                 }
 
                 if !additive {
-                    self.selected_nodes.clear();
-                    self.selected_node = None;
+                    self.selection.nodes.clear();
+                    self.selection.node = None;
                 }
                 // Single-group-selection model: if the marquee hit
                 // exactly one group, that's the active group; if it
@@ -1627,23 +1627,23 @@ impl BarEditorApp {
                 // every hit group's members are added to the node
                 // selection so subsequent operations (move, delete)
                 // act on the whole chunk.
-                self.selected_group = match group_hits.len() {
+                self.selection.group = match group_hits.len() {
                     1 => Some(group_hits[0]),
                     _ => None,
                 };
                 for gid in &group_hits {
                     if let Some(group) = self.groups.get(gid) {
                         for id in &group.member_ids {
-                            self.selected_nodes.insert(*id);
+                            self.selection.nodes.insert(*id);
                             hits.push(*id);
                         }
                     }
                 }
                 for id in &hits {
-                    self.selected_nodes.insert(*id);
+                    self.selection.nodes.insert(*id);
                 }
-                if self.selected_node.is_none() {
-                    self.selected_node = hits.first().copied();
+                if self.selection.node.is_none() {
+                    self.selection.node = hits.first().copied();
                 }
                 self.marquee_start = None;
             }
@@ -1731,7 +1731,7 @@ impl BarEditorApp {
                     if is_sub {
                         self.delete_subgraph_with_contents(gid);
                     } else {
-                        self.pending_group_delete = Some(gid);
+                        self.selection.pending_group_delete = Some(gid);
                     }
                     ui.close_menu();
                 }
@@ -1911,14 +1911,15 @@ impl BarEditorApp {
         if let Some((from, to)) = wire_to_delete {
             self.push_undo("Delete connection");
             self.graph.disconnect(&from, &to);
-            self.selected_connection = None;
+            self.selection.connection = None;
         }
 
         // Stroke pass — the selected wire renders thicker + brighter
         // so the user can see what they've targeted before deleting.
         for ((from, to), points) in &wire_polylines {
             let is_selected = self
-                .selected_connection
+                .selection
+                .connection
                 .as_ref()
                 .map(|(sf, st)| sf == from && st == to)
                 .unwrap_or(false);
@@ -2066,8 +2067,8 @@ impl BarEditorApp {
             // get a smaller floor than regular nodes — the user can
             // shrink them below the 60-px default if they want to
             // pack a subgraph tightly.
-            let is_primary = self.selected_node == Some(*node_id);
-            let is_selected = is_primary || self.selected_nodes.contains(node_id);
+            let is_primary = self.selection.node == Some(*node_id);
+            let is_selected = is_primary || self.selection.nodes.contains(node_id);
             let is_io_input = matches!(node_type, NodeType::SubgraphInput);
             let is_io_output = matches!(node_type, NodeType::SubgraphOutput);
             let is_io = is_io_input || is_io_output;
@@ -2612,8 +2613,8 @@ impl BarEditorApp {
             let mut auto_layout_requested = false;
             // Snapshot the set so the menu closure can iterate without
             // re-borrowing `self`.
-            let multi: Vec<NodeId> = self.selected_nodes.iter().copied().collect();
-            let multi_active = multi.len() > 1 && self.selected_nodes.contains(&this_id);
+            let multi: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
+            let multi_active = multi.len() > 1 && self.selection.nodes.contains(&this_id);
             // Pre-compute the unwired-input count so the menu item
             // can render disabled when there's nothing to wire.
             let auto_wire_pool: Vec<NodeId> = if multi_active {
@@ -2708,7 +2709,7 @@ impl BarEditorApp {
                 // their existing selection, treat the click as
                 // "select just this node" so Auto Layout acts on it
                 // alone rather than on a stale selection.
-                if !self.selected_nodes.contains(&this_id) {
+                if !self.selection.nodes.contains(&this_id) {
                     self.select_only_node(this_id);
                 }
                 self.auto_layout_selection();
@@ -2825,8 +2826,8 @@ impl BarEditorApp {
             // — same shortcut as Photoshop / Figma / Blender.
             if node_response.dragged() && !any_resize {
                 let delta = node_response.drag_delta();
-                if self.selected_nodes.contains(node_id) && self.selected_nodes.len() > 1 {
-                    let to_move: Vec<NodeId> = self.selected_nodes.iter().copied().collect();
+                if self.selection.nodes.contains(node_id) && self.selection.nodes.len() > 1 {
+                    let to_move: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
                     for id in to_move {
                         if let Some(visual) = self.node_visuals.get_mut(&id) {
                             visual.position += delta;
@@ -2843,8 +2844,8 @@ impl BarEditorApp {
             // selected nodes whose centres landed in its rect.
             if node_response.drag_stopped() {
                 let drop_targets: Vec<NodeId> =
-                    if self.selected_nodes.contains(node_id) && self.selected_nodes.len() > 1 {
-                        self.selected_nodes.iter().copied().collect()
+                    if self.selection.nodes.contains(node_id) && self.selection.nodes.len() > 1 {
+                        self.selection.nodes.iter().copied().collect()
                     } else {
                         vec![*node_id]
                     };

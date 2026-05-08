@@ -865,7 +865,11 @@ pub struct DialogState {
 pub struct BarEditorApp {
     pub(crate) graph: GraphEngine,
     pub(crate) node_visuals: HashMap<NodeId, NodeVisual>,
-    pub(crate) selected_node: Option<NodeId>,
+    /// Canvas selection: primary node, multi-selection, group,
+    /// connection, and any group queued for deletion. See
+    /// `editor::SelectionState`. (`selected_node` from the old layout
+    /// is now `selection.node`.)
+    pub(crate) selection: crate::editor::SelectionState,
     pub(crate) drag_connection: Option<DragConnection>,
     pub(crate) canvas_offset: egui::Vec2,
     /// Map metadata: dimensions, height range, MapSettings,
@@ -910,16 +914,9 @@ pub struct BarEditorApp {
     /// one session so undo/redo can refer back to deleted groups
     /// without confusion. Resets to the highest seen id + 1 at load.
     pub(crate) next_group_id: u64,
-    /// Multi-selection of nodes. `selected_node` is the *primary* of
-    /// this set — the one whose properties show in the side panel.
-    /// Ctrl+click on a node toggles its membership without disturbing
-    /// the rest. Plain click clears the set and sets a single primary.
-    /// Always coherent with `selected_node`: `selected_node` ⊆ `selected_nodes`.
-    pub(crate) selected_nodes: std::collections::HashSet<NodeId>,
-    /// Selected group, if any. A node selection and a group selection
-    /// are mutually exclusive — picking one clears the other so the
-    /// properties panel always knows which thing it's editing.
-    pub(crate) selected_group: Option<u64>,
+    // selected_nodes / selected_group / pending_group_delete /
+    // selected_connection moved to `self.selection`
+    // (see `editor::SelectionState`).
     /// Cached on-screen rect of each group's title bar from the most
     /// recent render. Used by hit-testing to detect title-bar clicks
     /// for selection and drag.
@@ -933,19 +930,11 @@ pub struct BarEditorApp {
     /// contextual Properties popup uses this to know "the cursor is
     /// over collapsed group N" and drive the hover gate against it.
     pub(crate) collapsed_subgraph_rects: HashMap<u64, egui::Rect>,
-    /// Pending confirmation dialog for "delete group" — stores which
-    /// group is up for deletion until the user picks Members-too /
-    /// Group-only / Cancel.
-    pub(crate) pending_group_delete: Option<u64>,
     /// Anchor point of an in-progress marquee selection. Set when the
     /// user starts a primary-button drag on empty canvas; cleared on
     /// drag-stopped. While set, a translucent rectangle is drawn from
     /// the anchor to the current pointer position.
     pub(crate) marquee_start: Option<egui::Pos2>,
-    /// Currently selected wire (`from_port`, `to_port`). Mutually
-    /// exclusive with node and group selections — the user is editing
-    /// one thing at a time. Pressing Delete removes the connection.
-    pub(crate) selected_connection: Option<(PortId, PortId)>,
     /// Open canvas tabs. Index 0 is always `CanvasView::Main` and
     /// can't be closed. Other entries open in response to specific
     /// user actions (double-click a SubGraph, double-click a Sculpt
@@ -1001,7 +990,7 @@ impl Default for BarEditorApp {
         Self {
             graph: GraphEngine::new(),
             node_visuals: HashMap::new(),
-            selected_node: None,
+            selection: crate::editor::SelectionState::default(),
             drag_connection: None,
             canvas_offset: egui::Vec2::ZERO,
             map: crate::editor::MapState {
@@ -1020,14 +1009,10 @@ impl Default for BarEditorApp {
             groups: HashMap::new(),
             node_to_group: HashMap::new(),
             next_group_id: 1,
-            selected_nodes: std::collections::HashSet::new(),
-            selected_group: None,
             group_header_rects: HashMap::new(),
             group_body_rects: HashMap::new(),
             collapsed_subgraph_rects: HashMap::new(),
-            pending_group_delete: None,
             marquee_start: None,
-            selected_connection: None,
             tabs: vec![CanvasView::Main],
             active_tab: 0,
             last_active_tab: 0,
@@ -1476,14 +1461,14 @@ impl BarEditorApp {
         self.dialog.file_editor = None;
         self.dialog.confirm_dialog = None;
         self.dialog.pending_action = None;
-        self.pending_group_delete = None;
+        self.selection.pending_group_delete = None;
 
         // Selection / drag state — selections from the previous
         // graph would point at NodeIds that no longer exist.
-        self.selected_node = None;
-        self.selected_nodes.clear();
-        self.selected_group = None;
-        self.selected_connection = None;
+        self.selection.node = None;
+        self.selection.nodes.clear();
+        self.selection.group = None;
+        self.selection.connection = None;
         self.drag_connection = None;
         self.marquee_start = None;
         self.map.dragging_spawn = None;
@@ -2025,8 +2010,8 @@ impl BarEditorApp {
             .map(|g| g.member_ids.iter().copied().collect())
             .unwrap_or_default();
         self.dissolve_group(gid);
-        if self.selected_group == Some(gid) {
-            self.selected_group = None;
+        if self.selection.group == Some(gid) {
+            self.selection.group = None;
         }
         for nid in &members {
             let _ = self.graph.remove_node(*nid);
@@ -2045,9 +2030,9 @@ impl BarEditorApp {
         // Snapshot the IDs to delete: the primary plus everything else
         // in the multi-selection set. (The set always includes the
         // primary by invariant.)
-        let to_delete: Vec<NodeId> = if !self.selected_nodes.is_empty() {
-            self.selected_nodes.iter().copied().collect()
-        } else if let Some(id) = self.selected_node {
+        let to_delete: Vec<NodeId> = if !self.selection.nodes.is_empty() {
+            self.selection.nodes.iter().copied().collect()
+        } else if let Some(id) = self.selection.node {
             vec![id]
         } else {
             return;
@@ -3681,9 +3666,9 @@ impl BarEditorApp {
         // to the next frame because we may still be rendering the
         // welcome panel or the menu — `canvas_rect_last` won't be
         // valid until `draw_node_graph` runs at least once.
-        self.selected_nodes.clear();
-        self.selected_node = None;
-        self.selected_group = None;
+        self.selection.nodes.clear();
+        self.selection.node = None;
+        self.selection.group = None;
         self.props.active = None;
         self.pending_auto_layout_all = true;
 
@@ -3760,7 +3745,7 @@ impl BarEditorApp {
                 size: default_size,
             },
         );
-        self.selected_node = Some(id);
+        self.selection.node = Some(id);
         // If the user is viewing a subgraph tab when they drop a
         // node, the drop goes INTO that subgraph: add it to the
         // group's member set so `hidden_nodes_this_frame` (which
@@ -3792,37 +3777,37 @@ impl BarEditorApp {
     /// other kind of selection (group, connection) — they share the
     /// side properties panel; the user is editing one thing at a time.
     pub(crate) fn select_only_node(&mut self, id: NodeId) {
-        self.selected_nodes.clear();
-        self.selected_nodes.insert(id);
-        self.selected_node = Some(id);
-        self.selected_group = None;
-        self.selected_connection = None;
+        self.selection.nodes.clear();
+        self.selection.nodes.insert(id);
+        self.selection.node = Some(id);
+        self.selection.group = None;
+        self.selection.connection = None;
     }
 
     /// Toggle a node's membership in the multi-selection set. Updates
     /// the primary so it always points at *some* member of the set
     /// (or None if the set ended up empty).
     pub(crate) fn toggle_select_node(&mut self, id: NodeId) {
-        if self.selected_nodes.contains(&id) {
-            self.selected_nodes.remove(&id);
-            if self.selected_node == Some(id) {
-                self.selected_node = self.selected_nodes.iter().next().copied();
+        if self.selection.nodes.contains(&id) {
+            self.selection.nodes.remove(&id);
+            if self.selection.node == Some(id) {
+                self.selection.node = self.selection.nodes.iter().next().copied();
             }
         } else {
-            self.selected_nodes.insert(id);
-            self.selected_node = Some(id);
+            self.selection.nodes.insert(id);
+            self.selection.node = Some(id);
         }
-        self.selected_group = None;
-        self.selected_connection = None;
+        self.selection.group = None;
+        self.selection.connection = None;
     }
 
     /// Drop every selection (clicking empty canvas, opening a new
     /// project, etc.).
     pub(crate) fn clear_selection(&mut self) {
-        self.selected_nodes.clear();
-        self.selected_node = None;
-        self.selected_group = None;
-        self.selected_connection = None;
+        self.selection.nodes.clear();
+        self.selection.node = None;
+        self.selection.group = None;
+        self.selection.connection = None;
         // Also drop any open / pending Properties panel — its target
         // is no longer interesting.
         self.dialog.pending_props_open = None;
@@ -3831,18 +3816,18 @@ impl BarEditorApp {
 
     /// Select a group as the active editing target.
     pub(crate) fn select_group(&mut self, group_id: u64) {
-        self.selected_node = None;
-        self.selected_nodes.clear();
-        self.selected_group = Some(group_id);
-        self.selected_connection = None;
+        self.selection.node = None;
+        self.selection.nodes.clear();
+        self.selection.group = Some(group_id);
+        self.selection.connection = None;
     }
 
     /// Select a single wire as the active editing target.
     pub(crate) fn select_connection(&mut self, from: PortId, to: PortId) {
-        self.selected_node = None;
-        self.selected_nodes.clear();
-        self.selected_group = None;
-        self.selected_connection = Some((from, to));
+        self.selection.node = None;
+        self.selection.nodes.clear();
+        self.selection.group = None;
+        self.selection.connection = Some((from, to));
     }
 }
 
@@ -4031,11 +4016,11 @@ impl BarEditorApp {
             // wants the wire gone; a group-selected user wants the
             // group gone. The selection helpers keep these mutually
             // exclusive so we never have to disambiguate.
-            if let Some((from, to)) = self.selected_connection.clone() {
+            if let Some((from, to)) = self.selection.connection.clone() {
                 self.push_undo("Delete connection");
                 self.graph.disconnect(&from, &to);
-                self.selected_connection = None;
-            } else if let Some(gid) = self.selected_group {
+                self.selection.connection = None;
+            } else if let Some(gid) = self.selection.group {
                 let is_subgraph = self
                     .groups
                     .get(&gid)
@@ -4052,16 +4037,16 @@ impl BarEditorApp {
                 } else {
                     // Visual groups still get the modal: they wrap
                     // arbitrary nodes the user might want to keep.
-                    self.pending_group_delete = Some(gid);
+                    self.selection.pending_group_delete = Some(gid);
                 }
-            } else if self.selected_node.is_some() {
+            } else if self.selection.node.is_some() {
                 // Only ask for confirmation when the user is about to
                 // tear down something with wires attached. Lone /
                 // recently-dropped nodes vanish straight away — the
                 // modal-on-every-Delete pattern was annoying.
-                let selection: Vec<NodeId> = if !self.selected_nodes.is_empty() {
-                    self.selected_nodes.iter().copied().collect()
-                } else if let Some(id) = self.selected_node {
+                let selection: Vec<NodeId> = if !self.selection.nodes.is_empty() {
+                    self.selection.nodes.iter().copied().collect()
+                } else if let Some(id) = self.selection.node {
                     vec![id]
                 } else {
                     Vec::new()
@@ -4371,7 +4356,7 @@ impl BarEditorApp {
                 ui.separator();
                 if let Some(ref msg) = self.dialog.status_message {
                     ui.colored_label(tokens::PORT_HEIGHTMAP, msg);
-                } else if let Some(id) = self.selected_node {
+                } else if let Some(id) = self.selection.node {
                     ui.label(format!("Selected: {:?}", id));
                 } else {
                     ui.label("No selection");
@@ -4446,7 +4431,7 @@ impl BarEditorApp {
         }
 
         // ── Modal: group delete (three-way: keep nodes / delete all / cancel) ─
-        if let Some(gid) = self.pending_group_delete {
+        if let Some(gid) = self.selection.pending_group_delete {
             let label = self
                 .groups
                 .get(&gid)
@@ -4486,13 +4471,13 @@ impl BarEditorApp {
                     });
                 });
             if let Some(choice) = decision {
-                self.pending_group_delete = None;
+                self.selection.pending_group_delete = None;
                 match choice {
                     GroupDeleteChoice::GroupOnly => {
                         self.push_undo("Dissolve group");
                         self.dissolve_group(gid);
-                        if self.selected_group == Some(gid) {
-                            self.selected_group = None;
+                        if self.selection.group == Some(gid) {
+                            self.selection.group = None;
                         }
                     }
                     GroupDeleteChoice::GroupAndMembers => {
@@ -4508,15 +4493,15 @@ impl BarEditorApp {
                             .map(|g| g.member_ids.iter().copied().collect())
                             .unwrap_or_default();
                         self.dissolve_group(gid);
-                        if self.selected_group == Some(gid) {
-                            self.selected_group = None;
+                        if self.selection.group == Some(gid) {
+                            self.selection.group = None;
                         }
-                        self.selected_nodes = members.iter().copied().collect();
-                        self.selected_node = members.first().copied();
+                        self.selection.nodes = members.iter().copied().collect();
+                        self.selection.node = members.first().copied();
                         // Delete nodes inline (don't go through
                         // delete_selected_node, which would push another
                         // undo and split the action).
-                        let to_delete: Vec<NodeId> = self.selected_nodes.iter().copied().collect();
+                        let to_delete: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
                         for node_id in &to_delete {
                             let _ = self.graph.remove_node(*node_id);
                             self.node_visuals.remove(node_id);
