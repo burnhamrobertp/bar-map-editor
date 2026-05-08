@@ -58,6 +58,11 @@ impl ColorBuffer {
         &self.data
     }
 
+    /// Mutable access to the raw RGBA float data.
+    pub fn data_mut(&mut self) -> &mut [f32] {
+        &mut self.data
+    }
+
     /// Get pixel RGBA at (x, y).
     pub fn get(&self, x: u32, y: u32) -> Option<[f32; 4]> {
         if x >= self.width || y >= self.height {

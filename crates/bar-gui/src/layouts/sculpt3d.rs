@@ -57,8 +57,9 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
 
             // Brush sliders.
             ui.add(
-                egui::Slider::new(&mut app.paint.brush.radius_px, 2.0..=256.0)
+                egui::Slider::new(&mut app.paint.brush.radius_px, 0.5..=96.0)
                     .text("Radius")
+                    .logarithmic(true)
                     .clamping(egui::SliderClamping::Always),
             );
             ui.add(

@@ -133,6 +133,11 @@ struct Session {
     /// session_id so any in-flight result is rejected. A debug override
     /// for cases where the gating logic is suspected of being stuck.
     force_refresh_requested: bool,
+    /// Last brush target for which the Sculpt3D viewport applied a layer
+    /// visualization. When the target changes to Metal/Typemap we push the
+    /// tinted overlay immediately (rather than waiting for the first stroke)
+    /// so the view does not shift unexpectedly mid-session.
+    last_viz_target: Option<bar_gui::BrushTarget>,
 }
 
 impl Session {
@@ -164,6 +169,7 @@ impl Session {
             session_id,
             started_at: Instant::now(),
             force_refresh_requested: false,
+            last_viz_target: None,
         }
     }
 }
@@ -855,6 +861,41 @@ impl eframe::App for AppWrapper {
         // unclaimed by bar-gui so we can fill it here with the 3D viewport.
         // `session` is already in scope from the guard above.
         if self.app.active_layout() == bar_gui::Layout::Sculpt3D {
+            // When the user switches to Metal or Typemap, apply the layer
+            // visualization immediately so the view does not shift on first stroke.
+            let cur_target = self.app.active_brush_target();
+            if session.last_viz_target.as_ref() != Some(&cur_target) {
+                match cur_target {
+                    bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
+                        let cache = match cur_target {
+                            bar_gui::BrushTarget::Metalmap => self.app.inspector_metalmap_clone(),
+                            _ => self.app.inspector_typemap_clone(),
+                        };
+                        if let (Some(ref gpu), Some(hm)) = (&self.gpu_context, cache) {
+                            let visual = Self::visualise_layer(&hm, cur_target);
+                            if let Some(ref mut renderer) = session.terrain_renderer {
+                                renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
+                                let elapsed = session.started_at.elapsed().as_secs_f32();
+                                let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                                renderer.render(&gpu.device, &gpu.queue, &session.camera, frame_borrow.as_ref());
+                            }
+                        }
+                    }
+                    bar_gui::BrushTarget::Heightmap | bar_gui::BrushTarget::Color => {
+                        // Switching back to height/color: restore normal terrain albedo.
+                        if let (Some(ref gpu), Some(cb)) = (&self.gpu_context, self.app.inspector_color_buffer_clone()) {
+                            if let Some(ref mut renderer) = session.terrain_renderer {
+                                renderer.update_albedo(&gpu.device, &gpu.queue, &cb);
+                                let elapsed = session.started_at.elapsed().as_secs_f32();
+                                let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                                renderer.render(&gpu.device, &gpu.queue, &session.camera, frame_borrow.as_ref());
+                            }
+                        }
+                    }
+                }
+                session.last_viz_target = Some(cur_target);
+            }
+
             egui::CentralPanel::default().show(ctx, |ui| {
                 Self::draw_viewport_on(
                     session,
@@ -1035,10 +1076,12 @@ impl AppWrapper {
         app: &mut bar_gui::BarEditorApp,
     ) {
         let Some(pointer) = ctx.pointer_latest_pos() else {
+            tracing::debug!("sculpt: no pointer pos");
             return;
         };
         let rect = response.rect;
         if !rect.contains(pointer) {
+            tracing::debug!("sculpt: pointer outside rect ({:?} not in {:?})", pointer, rect);
             return;
         }
         let cursor_uv = (
@@ -1047,9 +1090,11 @@ impl AppWrapper {
         );
         let aspect = rect.width().max(1.0) / rect.height().max(1.0);
         let Some(hm) = app.inspector_heightmap_ref() else {
+            tracing::debug!("sculpt: no inspector heightmap");
             return;
         };
         let Some(renderer) = session.terrain_renderer.as_ref() else {
+            tracing::debug!("sculpt: no terrain renderer");
             return;
         };
         let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
@@ -1063,8 +1108,10 @@ impl AppWrapper {
             height_scale,
         );
         let Some(p) = pick else {
+            tracing::debug!("sculpt: pick_terrain miss (uv={:?}, extents={:?})", cursor_uv, (x_extent, z_extent, height_scale));
             return;
         };
+        tracing::debug!("sculpt: dab at hm=({:.1},{:.1})", p.hm_x, p.hm_y);
         let stroke_starting = !response.dragged_by(eframe::egui::PointerButton::Primary)
             || response.drag_started_by(eframe::egui::PointerButton::Primary);
         // Dispatch the dab to the active brush target. Heightmap →
@@ -1237,21 +1284,22 @@ impl AppWrapper {
     ) {
         use eframe::egui;
 
-        ui.horizontal(|ui| {
-            ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Right-aligned debug refresh: forces both progressive
-                // passes to re-spawn even if the graph revision hasn't
-                // changed, so the user can override stuck preview state
-                // while we hunt down the root cause.
-                let resp = ui
-                    .small_button("\u{27F3}")
-                    .on_hover_text(bar_gui::i18n::t("editor.viewport_3d.force_refresh"));
-                if resp.clicked() {
-                    session.force_refresh_requested = true;
-                }
+        let is_sculpt_layout = app.active_layout() == bar_gui::Layout::Sculpt3D;
+        if is_sculpt_layout {
+            ui.small(bar_gui::i18n::t("editor.viewport_3d.sculpt_controls_hint"));
+        } else {
+            ui.horizontal(|ui| {
+                ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let resp = ui
+                        .small_button("\u{27F3}")
+                        .on_hover_text(bar_gui::i18n::t("editor.viewport_3d.force_refresh"));
+                    if resp.clicked() {
+                        session.force_refresh_requested = true;
+                    }
+                });
             });
-        });
+        }
         ui.separator();
 
         let available_size = ui.available_size();
@@ -1312,9 +1360,18 @@ impl AppWrapper {
 
             Self::handle_camera_input_on(session, gpu_context, render_state, &response, ctx, app);
         } else {
+            // No texture yet -- initial render in progress. Show a centered
+            // spinner sized to the context: large in the dedicated sculpt
+            // workspace, medium in the floating preview window.
+            let spinner_size = if is_sculpt_layout { 80.0 } else { 48.0 };
             ui.centered_and_justified(|ui| {
-                ui.label("Rendering…");
+                ui.add(
+                    egui::Spinner::new()
+                        .size(spinner_size)
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 200, 80, 220)),
+                );
             });
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 
@@ -1374,7 +1431,6 @@ impl AppWrapper {
 
         if response.dragged_by(eframe::egui::PointerButton::Primary) {
             if sculpt_active {
-                // Sculpt: hijack the primary drag to apply the brush.
                 Self::apply_sculpt_dab_at_cursor(session, gpu_context, response, ctx, app);
             } else {
                 let delta = response.drag_delta();
@@ -1385,6 +1441,14 @@ impl AppWrapper {
         if sculpt_active && response.drag_stopped_by(eframe::egui::PointerButton::Primary) {
             app.end_brush_stroke();
         }
+
+        // RMB always orbits regardless of sculpt mode.
+        if response.dragged_by(eframe::egui::PointerButton::Secondary) {
+            let delta = response.drag_delta();
+            session.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+            camera_changed = true;
+        }
+
         // The cursor ring is purely visual — flag a render so the
         // shader picks up the new uniform even when nothing else
         // changed this frame.
