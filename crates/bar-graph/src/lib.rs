@@ -25,4 +25,4 @@ pub use eval::{
 };
 pub use node::{Node, NodeId, NodeType, ParamValue};
 pub use param_spec::{param_specs, validate_node_params, ParamError, ParamKind, ParamSpec};
-pub use port::{FileRef, Port, PortCardinality, PortId, PortKind, PortValue};
+pub use port::{FileRef, Port, PortCardinality, PortId, PortKind, PortPlacement, PortValue};

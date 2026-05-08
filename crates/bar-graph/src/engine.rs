@@ -227,17 +227,16 @@ impl GraphEngine {
 }
 
 /// Check if two port kinds are compatible for connection.
-/// Same kind always matches. Heightmap ↔ Mask are interchangeable (both f32 buffers).
+/// Same kind always matches. Heightmap, Mask, Control, and Density are all f32
+/// spatial-field buffers and are freely interchangeable.
 fn port_kinds_compatible(from: crate::port::PortKind, to: crate::port::PortKind) -> bool {
     use crate::port::PortKind;
     if from == to {
         return true;
     }
-    // Heightmap and Mask are both f32 buffers, interchangeable
-    matches!(
-        (from, to),
-        (PortKind::Heightmap, PortKind::Mask) | (PortKind::Mask, PortKind::Heightmap)
-    )
+    let is_f32_field =
+        |k: PortKind| matches!(k, PortKind::Heightmap | PortKind::Mask | PortKind::Control | PortKind::Density);
+    is_f32_field(from) && is_f32_field(to)
 }
 
 #[cfg(test)]
@@ -450,5 +449,35 @@ mod tests {
         n.sync_subgraph_io_kind();
         assert_eq!(n.inputs, before_inputs);
         assert_eq!(n.outputs, before_outputs);
+    }
+
+    #[test]
+    fn port_kinds_compatible_f32_field_set() {
+        use crate::port::PortKind;
+        // Same kind always compatible
+        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Heightmap));
+        assert!(port_kinds_compatible(PortKind::Color, PortKind::Color));
+        // All f32-field variants interchangeable
+        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Mask));
+        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Control));
+        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Density));
+        assert!(port_kinds_compatible(PortKind::Mask, PortKind::Control));
+        assert!(port_kinds_compatible(PortKind::Control, PortKind::Density));
+        assert!(port_kinds_compatible(PortKind::Density, PortKind::Mask));
+        // Rejections
+        assert!(!port_kinds_compatible(PortKind::Color, PortKind::Control));
+        assert!(!port_kinds_compatible(PortKind::Color, PortKind::Heightmap));
+        assert!(!port_kinds_compatible(PortKind::Scalar, PortKind::Heightmap));
+        assert!(!port_kinds_compatible(PortKind::File, PortKind::Mask));
+    }
+
+    #[test]
+    fn port_placement_for_input() {
+        use crate::port::{PortKind, PortPlacement};
+        assert_eq!(PortPlacement::for_input(PortKind::Control), PortPlacement::Top(0));
+        assert_eq!(PortPlacement::for_input(PortKind::Density), PortPlacement::Top(1));
+        assert_eq!(PortPlacement::for_input(PortKind::Mask), PortPlacement::Bottom);
+        assert_eq!(PortPlacement::for_input(PortKind::Heightmap), PortPlacement::Left);
+        assert_eq!(PortPlacement::for_input(PortKind::Color), PortPlacement::Left);
     }
 }
