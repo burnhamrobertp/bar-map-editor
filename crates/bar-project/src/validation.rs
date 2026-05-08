@@ -13,7 +13,7 @@
 //! "no errors" (warnings are advisory).
 
 use crate::recipe::MapSettings;
-use bar_graph::{GraphEngine, NodeId, NodeType, ParamValue};
+use bar_graph::{GraphEngine, NodeId, NodeType, ParamValue, PortPlacement};
 use std::collections::{HashMap, HashSet};
 
 /// Severity of a validation finding. Errors block export; warnings and
@@ -817,6 +817,16 @@ fn check_disconnected_filter_inputs(graph: &GraphEngine, out: &mut Vec<Finding>)
             continue;
         }
         for port in &node.inputs {
+            // Control / Density / Mask inputs are optional modulators;
+            // leaving them unconnected is normal operation. MaskApply is
+            // the exception -- its mask is the primary input, not an
+            // optional modulator.
+            let is_modulator = !matches!(PortPlacement::for_input(port.kind), PortPlacement::Left);
+            let is_required_mask = matches!(node.node_type, NodeType::MaskApply)
+                && port.name == "mask";
+            if is_modulator && !is_required_mask {
+                continue;
+            }
             if !connected_inputs.contains(&(*id, port.name.clone())) {
                 warned.push((node.label.clone(), port.label.clone()));
             }
