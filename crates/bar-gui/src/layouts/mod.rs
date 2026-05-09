@@ -31,4 +31,5 @@
 
 pub mod dispatch;
 pub mod sculpt3d;
+pub mod shell;
 pub mod standard;
