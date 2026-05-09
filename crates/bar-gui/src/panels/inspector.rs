@@ -13,7 +13,7 @@ use crate::app::{
 };
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog_show_inspector() {
+    if !app.dialog.show_inspector {
         return;
     }
 
@@ -34,7 +34,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         }
     }
 
-    let mut open = app.dialog_show_inspector();
+    let mut open = app.dialog.show_inspector;
     let mut to_remove: Option<usize> = None;
     let mut new_drag: Option<usize> = None;
     let mut spawn_to_add: Option<[u32; 2]> = None;
@@ -344,7 +344,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             });
         });
 
-    app.set_dialog_show_inspector(open);
+    app.dialog.show_inspector = open;
     if let Some(idx) = to_remove {
         app.map_settings_mut().start_positions.remove(idx);
         if app.dragging_spawn() == Some(idx) {

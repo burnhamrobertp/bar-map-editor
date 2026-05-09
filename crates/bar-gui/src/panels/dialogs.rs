@@ -12,10 +12,10 @@ use crate::settings::Settings;
 /// Render the Preferences modal when the user has opened it.
 /// No-op when `dialog.show_settings` is false.
 pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog_show_settings() {
+    if !app.dialog.show_settings {
         return;
     }
-    let mut open = app.dialog_show_settings();
+    let mut open = app.dialog.show_settings;
     let mut changed = false;
     egui::Window::new("Preferences")
         .open(&mut open)
@@ -26,7 +26,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.heading("Auto-save");
             let mut autosave_enabled = app.settings().autosave_enabled;
             if ui.checkbox(&mut autosave_enabled, "Enabled").changed() {
-                app.settings_mut().autosave_enabled = autosave_enabled;
+                app.settings.autosave_enabled = autosave_enabled;
                 changed = true;
             }
             ui.horizontal(|ui| {
@@ -36,7 +36,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                     .add(egui::Slider::new(&mut secs, 30..=600).suffix(" s"))
                     .changed()
                 {
-                    app.settings_mut().autosave_interval_secs = secs.max(30) as u64;
+                    app.settings.autosave_interval_secs = secs.max(30) as u64;
                     changed = true;
                 }
             });
@@ -61,7 +61,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                     ui.weak(format!("  • {}", crate::app::confirm_key_display_name(k)));
                 }
                 if ui.button("Clear suppressed confirmations").clicked() {
-                    app.settings_mut().suppressed_confirmations.clear();
+                    app.settings.suppressed_confirmations.clear();
                     changed = true;
                 }
             }
@@ -73,7 +73,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                 .checkbox(&mut restore, "Reopen the last project on launch")
                 .changed()
             {
-                app.settings_mut().restore_last_project = restore;
+                app.settings.restore_last_project = restore;
                 changed = true;
             }
 
@@ -82,7 +82,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                 ui.weak(format!("Saved to: {}", p.display()));
             }
         });
-    app.set_dialog_show_settings(open);
+    app.dialog.show_settings = open;
     if changed {
         app.settings().save();
     }
@@ -90,10 +90,10 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
 
 /// Render the About modal when the user has opened it.
 pub(crate) fn draw_about(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog_show_about() {
+    if !app.dialog.show_about {
         return;
     }
-    let mut open = app.dialog_show_about();
+    let mut open = app.dialog.show_about;
     egui::Window::new("About BAR - Map Editor")
         .open(&mut open)
         .resizable(false)
@@ -110,5 +110,5 @@ pub(crate) fn draw_about(app: &mut BarEditorApp, ctx: &egui::Context) {
                 "https://github.com/burnhamrobertp/bar-editor",
             );
         });
-    app.set_dialog_show_about(open);
+    app.dialog.show_about = open;
 }

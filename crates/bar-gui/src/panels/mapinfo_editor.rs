@@ -176,10 +176,10 @@ fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) -> bool {
 }
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog_show_mapinfo_editor() {
+    if !app.dialog.show_mapinfo_editor {
         return;
     }
-    let mut open = app.dialog_show_mapinfo_editor();
+    let mut open = app.dialog.show_mapinfo_editor;
     let mut dirty = false;
     egui::Window::new(t!("editor.map_settings.title"))
         .open(&mut open)
@@ -190,7 +190,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             // Validation findings index — used to decorate tabs
             // and outline individual fields the validators
             // flagged.
-            let findings_index = FieldFindings::from(app.validation_findings());
+            let findings_index = FieldFindings::from(app.validation.findings());
 
             // Tab strip.
             let accent = ui.visuals().selection.bg_fill;
@@ -467,7 +467,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                     }
                 });
         });
-    app.set_dialog_show_mapinfo_editor(open);
+    app.dialog.show_mapinfo_editor = open;
     if dirty {
         app.mark_dirty();
     }

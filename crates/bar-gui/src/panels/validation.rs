@@ -52,8 +52,8 @@ pub(crate) fn draw_summary(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
             }
             if header.clicked() {
-                app.set_validation_filter(ValidationFilter::All);
-                app.set_dialog_show_validation_panel(true);
+                app.validation.set_filter(ValidationFilter::All);
+                app.dialog.show_validation_panel = true;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let (rect, _) = ui.allocate_exact_size(
@@ -72,7 +72,7 @@ pub(crate) fn draw_summary(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                     }
                     if resp.clicked() {
                         app.run_validation();
-                        app.refresh_validation_fingerprint();
+                        app.validation.last_fingerprint = app.validation_inputs_fingerprint();
                     }
                 }
             });
@@ -131,8 +131,8 @@ pub(crate) fn draw_summary(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             }
         }
         if let Some(f) = clicked_filter {
-            app.set_validation_filter(f);
-            app.set_dialog_show_validation_panel(true);
+            app.validation.set_filter(f);
+            app.dialog.show_validation_panel = true;
         }
 
         if errors + warnings + infos == 0 {
@@ -152,10 +152,10 @@ pub(crate) fn draw_summary(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 /// findings list. Closes via the window's own X (or by toggling
 /// `dialog.show_validation_panel`).
 pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog_show_validation_panel() {
+    if !app.dialog.show_validation_panel {
         return;
     }
-    let mut open = app.dialog_show_validation_panel();
+    let mut open = app.dialog.show_validation_panel;
     egui::Window::new(t!("editor.validation.window_title"))
         .open(&mut open)
         .resizable(true)
@@ -163,7 +163,7 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
         .default_size([520.0, 360.0])
         .default_pos(ctx.screen_rect().center() - egui::vec2(260.0, 180.0))
         .show(ctx, |ui| {
-            let findings = app.validation_findings();
+            let findings = app.validation.findings();
             let errors = findings
                 .iter()
                 .filter(|f| f.severity == bar_project::Severity::Error)
@@ -189,7 +189,7 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
             // and a 2-px underline so the tab metaphor reads
             // visually, not just by selection state.
             ui.horizontal(|ui| {
-                let mut active_filter = app.validation_filter();
+                let mut active_filter = app.validation.filter();
                 let mut tab = |ui: &mut egui::Ui,
                                variant: ValidationFilter,
                                text: String,
@@ -242,7 +242,7 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
                     t!("editor.validation.tab_info", n = infos),
                     blue,
                 );
-                app.set_validation_filter(active_filter);
+                app.validation.set_filter(active_filter);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .small_button("\u{27F3}")
@@ -264,9 +264,9 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
                 .show(ui, |ui| {
-                    let active = app.validation_filter();
+                    let active = app.validation.filter();
                     let mut shown = 0usize;
-                    for f in app.validation_findings().iter().filter(|f| match active {
+                    for f in app.validation.findings().iter().filter(|f| match active {
                         ValidationFilter::All => true,
                         ValidationFilter::Error => f.severity == bar_project::Severity::Error,
                         ValidationFilter::Warning => f.severity == bar_project::Severity::Warning,
@@ -292,5 +292,5 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
                     }
                 });
         });
-    app.set_dialog_show_validation_panel(open);
+    app.dialog.show_validation_panel = open;
 }

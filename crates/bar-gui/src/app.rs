@@ -350,57 +350,6 @@ impl BarEditorApp {
         &self.settings
     }
 
-    /// Mutable access to user settings — used by the Preferences
-    /// panel. Callers who change a setting should call
-    /// `self.settings().save()` to persist; the dialog panel does
-    /// this once after every changed-pass.
-    pub(crate) fn settings_mut(&mut self) -> &mut Settings {
-        &mut self.settings
-    }
-
-    // Dialog accessors for the panel module. `dialog` is a
-    // `pub(crate)` field but accessing it across modules costs a
-    // few extra characters; these methods keep panel call sites
-    // tidy and let `app.rs` retain control over the invariant
-    // (today: just a plain bool, but a future "dialog stack"
-    // refactor lands cleanly behind these accessors).
-    pub(crate) fn dialog_show_settings(&self) -> bool {
-        self.dialog.show_settings
-    }
-    pub(crate) fn set_dialog_show_settings(&mut self, open: bool) {
-        self.dialog.show_settings = open;
-    }
-    pub(crate) fn dialog_show_about(&self) -> bool {
-        self.dialog.show_about
-    }
-    pub(crate) fn set_dialog_show_about(&mut self, open: bool) {
-        self.dialog.show_about = open;
-    }
-    pub(crate) fn dialog_show_validation_panel(&self) -> bool {
-        self.dialog.show_validation_panel
-    }
-    pub(crate) fn set_dialog_show_validation_panel(&mut self, open: bool) {
-        self.dialog.show_validation_panel = open;
-    }
-
-    // Validation accessors used by `panels::validation`. The
-    // findings vec is read-only from the panel side; the filter is
-    // mutable because clicking a tab updates it. `validation_last_
-    // fingerprint` is bumped after a manual refresh so the
-    // continuous-validation gate doesn't immediately re-run.
-    pub(crate) fn validation_findings(&self) -> &[bar_project::Finding] {
-        self.validation.findings()
-    }
-    pub(crate) fn validation_filter(&self) -> ValidationFilter {
-        self.validation.filter()
-    }
-    pub(crate) fn set_validation_filter(&mut self, f: ValidationFilter) {
-        self.validation.set_filter(f);
-    }
-    pub(crate) fn refresh_validation_fingerprint(&mut self) {
-        self.validation.last_fingerprint = self.validation_inputs_fingerprint();
-    }
-
     /// True when the user is currently looking at a subgraph tab —
     /// the palette uses this to gate the "SubGraph IO" group so
     /// `SubgraphInput`/`SubgraphOutput` can't be dropped at the
@@ -417,25 +366,6 @@ impl BarEditorApp {
     /// handler.
     pub(crate) fn set_palette_drag(&mut self, drag: PaletteDrag) {
         self.palette_drag = Some(drag);
-    }
-
-    // ── Accessors for `panels::*` ─────────────────────────────────────
-    // These bridge the panels module's `&mut BarEditorApp` view to
-    // the private fields it needs to read/write. Each is a thin
-    // wrapper; they exist so panels stay in their own module
-    // without `pub` leaking out to the whole crate API.
-
-    pub(crate) fn dialog_show_inspector(&self) -> bool {
-        self.dialog.show_inspector
-    }
-    pub(crate) fn set_dialog_show_inspector(&mut self, open: bool) {
-        self.dialog.show_inspector = open;
-    }
-    pub(crate) fn dialog_show_mapinfo_editor(&self) -> bool {
-        self.dialog.show_mapinfo_editor
-    }
-    pub(crate) fn set_dialog_show_mapinfo_editor(&mut self, open: bool) {
-        self.dialog.show_mapinfo_editor = open;
     }
 
     /// Mutable access to the recipe-identity meta block — the
