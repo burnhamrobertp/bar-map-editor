@@ -123,3 +123,101 @@ impl ValidationState {
         self.last_fingerprint = ValidationFingerprint::sentinel_initial();
     }
 }
+
+use crate::app::BarEditorApp;
+
+impl BarEditorApp {
+    /// Re-run project validation and stash the findings for the panel.
+    /// True iff the current cached validation has any blocking
+    /// errors. Cheap — just scans the cached findings list.
+    pub fn validation_has_errors(&self) -> bool {
+        bar_project::has_errors(&self.validation.findings)
+    }
+
+    /// Count cached findings by severity for the sidebar display.
+    pub fn validation_counts(&self) -> (usize, usize, usize) {
+        let mut errors = 0;
+        let mut warnings = 0;
+        let mut infos = 0;
+        for f in &self.validation.findings {
+            match f.severity {
+                bar_project::Severity::Error => errors += 1,
+                bar_project::Severity::Warning => warnings += 1,
+                bar_project::Severity::Info => infos += 1,
+            }
+        }
+        (errors, warnings, infos)
+    }
+
+    /// Re-run validation iff any input that feeds it has changed since
+    /// the last run. Runs at the top of every frame so the sidebar
+    /// counts and the export gate are always in sync with the editor
+    /// state — no manual click needed.
+
+    pub(crate) fn refresh_validation_if_dirty(&mut self) {
+        let fp = self.validation_inputs_fingerprint();
+        if fp != self.validation.last_fingerprint {
+            self.run_validation();
+            self.validation.last_fingerprint = fp;
+        }
+    }
+
+    /// Compact fingerprint of every input `validate_project` reads.
+    /// Used to decide whether the cached findings are still valid.
+    /// Cheap: small struct, cheap to compare.
+    pub(crate) fn validation_inputs_fingerprint(&self) -> ValidationFingerprint {
+        ValidationFingerprint {
+            graph_revision: self.graph.revision(),
+            map_width: self.map.width,
+            map_height: self.map.height,
+            min_h_bits: self.map.settings.min_height.to_bits(),
+            max_h_bits: self.map.settings.max_height.to_bits(),
+            n_spawns: self.map.settings.start_positions.len(),
+        }
+    }
+
+    /// Compact "Validation" summary in the left sidebar: live error /
+    /// warning / info counts plus a Details button that opens the
+    /// findings panel. Replaces the "Nodes: N / Connections: N"
+    /// stats that used to live in the status bar — the per-severity
+    /// counts are far more actionable.
+    ///
+    /// Validation itself runs at the top of every frame from
+    /// `update`'s `refresh_validation_if_dirty`; this method just
+    /// reads the cached findings.
+    /// Sidebar validation summary - see `crate::panels::validation`.
+    pub(crate) fn draw_validation_summary(&mut self, ui: &mut egui::Ui) {
+        crate::panels::validation::draw_summary(self, ui);
+    }
+
+    /// Validation gate for the export flow. Runs validation, then:
+    /// - if there are errors, opens the panel and refuses to start
+    ///   the export (returns `false`);
+    /// - otherwise, the caller is cleared to set `run_requested` /
+    ///   `run_bundler_node` (returns `true`).
+    pub(crate) fn validate_before_export(&mut self, action_label: &str) -> bool {
+        self.run_validation();
+        if self.validation_has_errors() {
+            self.dialog.show_validation_panel = true;
+            self.dialog.status_message =
+                Some(format!("{action_label}: fix validation errors first."));
+            false
+        } else {
+            true
+        }
+    }
+
+    pub(crate) fn run_validation(&mut self) {
+        // We construct a temporary MapSettings with current min/max
+        // height so the validator sees what the project will export
+        // with. Other fields use defaults — full structured-mapinfo
+        // editing comes in M1.1.
+        let settings = bar_project::MapSettings {
+            min_height: self.map.min_height,
+            max_height: self.map.max_height,
+            ..Default::default()
+        };
+        self.validation.findings =
+            bar_project::validate_project(&self.graph, &settings, self.map.width, self.map.height);
+    }
+}
