@@ -1,9 +1,12 @@
 //! Brush + paint logic.
 //!
-//! `brush_math` holds the pure dab-application functions (no
-//! `BarEditorApp` dependency, fully unit-testable). The brush state
-//! struct (`BrushState`) and live paint caches (`PaintSession`) still
-//! live in `crate::app` for now -- they migrate during Stage 2 of the
-//! architecture refactor.
+//! - `session` -- the `PaintSession` sub-state struct (brush, sculpt
+//!   layers, live paint caches), plus the brush-mode and target
+//!   enums it composes.
+//! - `brush_math` -- pure dab-application functions (no `BarEditorApp`
+//!   dependency, fully unit-testable).
 
 pub(crate) mod brush_math;
+pub(crate) mod session;
+
+pub use session::{BrushState, BrushTarget, BrushTool, InspectorMode, PaintSession, SculptState};
