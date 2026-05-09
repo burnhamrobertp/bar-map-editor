@@ -152,8 +152,7 @@ impl BarEditorApp {
     /// Re-run validation iff any input that feeds it has changed since
     /// the last run. Runs at the top of every frame so the sidebar
     /// counts and the export gate are always in sync with the editor
-    /// state — no manual click needed.
-
+    /// state -- no manual click needed.
     pub(crate) fn refresh_validation_if_dirty(&mut self) {
         let fp = self.validation_inputs_fingerprint();
         if fp != self.validation.last_fingerprint {

@@ -56,87 +56,122 @@ reason.
 
 ```
 crates/bar-gui/src/
-  app.rs              # BarEditorApp + Default + frame work + cross-cutting
-                      # orchestration (reset_session_state, brush funnel,
-                      # eframe::App impl). Distributed `impl BarEditorApp`
-                      # blocks in panel/editor/project files attach the rest.
+  app.rs              # BarEditorApp + Default + a few orchestration
+                      # methods. Most logic lives in distributed `impl
+                      # BarEditorApp` blocks across the modules below.
+                      # Target size: ~800 lines (the struct + new() +
+                      # cross-cutting glue).
   lib.rs              # Module list and public re-exports.
   state.rs            # Small shared types (e.g. SubgraphPortRuntime).
+  dialog.rs           # DialogState + ConfirmDialog + PendingAction +
+                      # FileEditor + PassthroughEdit + UnsavedDecision +
+                      # GroupDeleteChoice and friends.
 
   editor/             # Canvas-side editor concerns.
     mod.rs
-    canvas.rs         # CanvasState + tab/viewport/drag-connection methods.
-    selection.rs      # SelectionState.
-    visuals.rs        # VisualsState + group runtime + group color allocator.
-    props_panel.rs    # PropsPanelState + hover gate + outside-click close.
-    validation.rs     # ValidationState + run/refresh + counts + severity.
-    preview.rs        # PreviewState + take_run_*, set/get export status,
-                      # cache_key composer.
-    map.rs            # MapState + dimension/height accessors.
+    canvas.rs         # CanvasState + CanvasView + DragConnection +
+                      # tab/viewport/drag-connection methods.
+    selection.rs      # SelectionState + select_only_node /
+                      # toggle_select_node / clear_selection /
+                      # select_group / select_connection.
+    visuals.rs        # VisualsState + group runtime + group color
+                      # allocator + recompute_all_subgraph_io.
+    props_panel.rs    # PropsPanelState + PropsTarget +
+                      # PendingPropsOpen + hover-gate constants.
+    validation.rs     # ValidationState + ValidationFilter +
+                      # MapInfoTab + ValidationFingerprint +
+                      # validation_has_errors / counts /
+                      # refresh_if_dirty / run_validation /
+                      # validate_before_export.
+    preview.rs        # PreviewState + ExportStatus + take_run_*,
+                      # set/get export status.
+    map.rs            # MapState + RecipeMeta + SmfLightingSnapshot +
+                      # dimension/height accessors.
 
   project/            # Project lifecycle.
     mod.rs            # Re-exports.
     state.rs          # ProjectState struct + small accessors.
-    lifecycle.rs      # do_new_project / start_open_path / dispatch_open /
-                      # apply_project / open_map_as_project /
-                      # finish_open_map / start_with_macro /
-                      # reset_session_state.
+    lifecycle.rs      # do_new_project / start_open_path /
+                      # dispatch_open / apply_project /
+                      # open_map_as_project / finish_open_map /
+                      # start_with_macro / reset_session_state.
     persistence.rs    # build_project / pack_assets_for_save /
                       # resolve_relative_paths.
     autosave.rs       # autosave_now + gate.
-    sculpt_sidecar.rs # pack/unpack sculpt record + sculpt_export_snapshot.
-    path.rs           # Path helpers (resolve, project-relative, packing,
-                      # files_equal).
+    sculpt_sidecar.rs # pack/unpack sculpt record +
+                      # sculpt_export_snapshot.
+    path.rs           # Path helpers (resolve, project-relative,
+                      # packing, files_equal).
 
   io/                 # External I/O integration.
     mod.rs            # is_text_file extension check.
-    png.rs            # Heightmap / color-buffer PNG load + save.
-    dialogs.rs        # ParentWindow wrapper + make_dialog +
-                      # open_file_dialog_async.
+    png.rs            # Heightmap / color-buffer PNG load + save +
+                      # heightmap_to_color_image (inspector backdrop).
+    dialogs.rs        # ParentWindow + make_dialog +
+                      # open_file_dialog_async + make_path_dialog.
 
   paint/              # Brush + paint state and math.
-    mod.rs            # PaintSession (re-exported for back-compat).
-    brush_math.rs     # Pure brush dab math + tests.
+    mod.rs
+    session.rs        # PaintSession + BrushState + BrushTool +
+                      # BrushTarget + InspectorMode + SculptState +
+                      # invalidate_on_graph_reset.
+    brush.rs          # apply_brush_at_heightmap / apply_color_brush /
+                      # apply_metal_brush / apply_type_brush /
+                      # end_brush_stroke (cross-state brush flow).
+    brush_math.rs     # Pure dab math + tests.
 
   panels/             # Stateless renderers.
     mod.rs
     canvas/           # Replaces the former panels/node_canvas.rs.
-      mod.rs          # Public draw entry point + shared NodeStyle.
+      mod.rs          # Public draw entry + shared NodeStyle.
       render.rs       # Node bodies, ports, wires, group frames,
                       # collapsed-subgraph blocks.
-      groups.rs       # Group create/dissolve, hit-test, collapsed-subgraph
-                      # layout + draw.
-      layout.rs       # Auto-layout + auto-wire.
+      groups.rs       # Group create/dissolve/hit-test, collapsed
+                      # subgraph layout + draw, instantiate_macro,
+                      # add_node_at.
+      layout.rs       # Auto-layout + auto-wire + LayoutUnit +
+                      # barycentric_key.
       tabs.rs         # Tab strip + open/close/activate.
+      style.rs        # node_type_color / port_kind_color /
+                      # build_io_outline / polyline_distance /
+                      # cubic_bezier (visual style helpers).
+      passthrough.rs  # PathTree + build_path_tree + draw_path_tree +
+                      # draw_passthrough_body.
     properties/       # Replaces the former panels/properties.rs.
       mod.rs          # tick_props_panel, dispatcher, common widgets.
-      sculpt.rs       # Sculpt body.
-      painted_heightmap.rs
-      painted_texture.rs
-      pass_through.rs
-      group.rs        # Group properties body.
+      sculpt.rs / painted_heightmap.rs / painted_texture.rs /
+      pass_through.rs / group.rs   # Per-NodeType property bodies.
     inspector.rs      # 2D inspector window.
-    mapinfo_editor.rs # Structured Map Info modal.
+    mapinfo_editor.rs # Structured Map Info modal + FieldFindings +
+                      # severity_color + drag/edit field helpers.
     validation.rs     # Sidebar summary + floating details window.
     palette.rs        # Node palette + drag-into-canvas.
     welcome.rs        # Empty-graph welcome screen.
     dialogs.rs        # Settings, About modals.
-    tokens.rs         # Semantic colour constants (single source of truth).
+    tokens.rs         # Semantic colour constants.
     icons.rs          # Toolbar / canvas icon paint functions.
 
   layouts/            # Panel composers.
     mod.rs
     dispatch.rs       # draw_active(app, ctx, frame).
+    shell.rs          # pre_frame_work + draw_shell (top menu bar,
+                      # status bar, action bar, modal dialogs, toasts,
+                      # keyboard shortcuts) -- shared chrome.
     standard.rs       # The default editor layout.
+    sculpt3d.rs       # Sculpt-focused layout.
 
   i18n.rs             # t!() + catalogue init from embedded language/.
   macros.rs           # Built-in graph macros / preset loader.
   settings.rs         # Settings struct + load/save.
-  undo.rs             # UndoHistory + Snapshot + bounded ring.
+  undo.rs             # UndoHistory + Snapshot + the snapshot/
+                      # push_undo/restore_snapshot/undo/redo methods.
 ```
 
 `BarEditorApp` is the single owner. Panels are stateless. Layouts
-compose panels. Sub-state structs cluster fields by concern.
+compose panels. Sub-state structs cluster fields by concern, and the
+methods that operate on each cluster live next to it via distributed
+`impl BarEditorApp` blocks (the same pattern used by `panels/canvas/`
+and `panels/properties/`).
 
 ## Where does this go?
 

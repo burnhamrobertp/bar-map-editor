@@ -197,77 +197,37 @@ pub enum Layout {
 
 pub(crate) use crate::editor::RecipeMeta;
 
-/// Main application state for the BAR - Map Editor GUI.
+/// Main application state for the BAR - Map Editor GUI. Field
+/// ownership is grouped by concern; each sub-state lives in its own
+/// module (see the field doc comments for the module path).
 pub struct BarEditorApp {
     pub(crate) graph: GraphEngine,
-    /// Visual presentation: node positions, groups, group/node
-    /// reverse index, monotonic group id allocator, and per-frame
-    /// hit-test rect caches. See `editor::VisualsState`.
     pub visuals: crate::editor::VisualsState,
-    /// Canvas selection: primary node, multi-selection, group,
-    /// connection, and any group queued for deletion. See
-    /// `editor::SelectionState`. (`selected_node` from the old layout
-    /// is now `selection.node`.)
     pub selection: crate::editor::SelectionState,
-    /// Canvas viewport + interaction: pan offset, open tabs, marquee
-    /// anchor, in-progress drag connection. See `editor::CanvasState`.
     pub canvas: crate::editor::CanvasState,
-    /// Map metadata: dimensions, height range, MapSettings,
-    /// RecipeMeta identity, and the spawn-marker drag pointer. See
-    /// `editor::MapState`.
     pub map: crate::editor::MapState,
-    /// Undo/redo history.
     pub(crate) history: UndoHistory,
-    /// Project lifecycle state: file path, dirty flag, autosave timer,
-    /// SD7 extraction handoff, file-dialog poll receiver, inline file
-    /// editor state, graph-reset pulse, and map-info file pointer.
-    /// See `project::ProjectState`.
     pub project: crate::project::ProjectState,
-    /// Raw window + display handles of the editor's main window. Used to
-    /// parent native file dialogs so they belong to (and return focus
-    /// to) the editor instead of whatever window the OS happens to
-    /// consider foreground at the moment the dialog spawns. `bar-app`
-    /// populates this each frame from `eframe::Frame`.
+    /// Raw window + display handles of the editor's main window. Used
+    /// to parent native file dialogs so they belong to the editor
+    /// instead of whichever window happens to be foreground at the
+    /// moment the dialog spawns. `bar-app` populates this each frame
+    /// from `eframe::Frame`.
     pub(crate) parent_window_handles: Option<(
         raw_window_handle::RawWindowHandle,
         raw_window_handle::RawDisplayHandle,
     )>,
-    /// Preview / export concern: viewport open flag, driving node, and
-    /// the one-frame "run" / "test in BAR" / "run this bundler" pulses
-    /// that `bar-app` polls each frame. See `editor::PreviewState`.
     pub preview: crate::editor::PreviewState,
-    /// Modal / popup / transient-feedback flags. See `DialogState`.
     pub dialog: DialogState,
-    /// Cached list of validation findings displayed in the panel. Built
-    /// Validation cache: findings list, severity filter, mapinfo-modal
-    /// tab, and the input fingerprint that gates re-validation. See
-    /// `editor::ValidationState`.
     pub validation: crate::editor::ValidationState,
-    // groups, node_to_group, next_group_id, group_header_rects,
-    // group_body_rects, and collapsed_subgraph_rects moved to
-    // `self.visuals` (see `editor::VisualsState`).
-    // selected_nodes / selected_group / pending_group_delete /
-    // selected_connection moved to `self.selection`
-    // (see `editor::SelectionState`).
-    // marquee_start, tabs, active_tab, last_active_tab,
-    // canvas_rect_last, and pending_auto_layout_all moved to
-    // `self.canvas` (see `editor::CanvasState`).
-    /// Floating properties popup state: target binding and last-known
-    /// on-screen rect. See `editor::PropsPanelState`.
     pub props: crate::editor::PropsPanelState,
-    /// Brush, sculpt-lock, and per-layer paint caches. See
-    /// `PaintSession`.
     pub paint: PaintSession,
-    /// In-flight drag from the node palette (set when pointer starts dragging an item,
-    /// cleared on pointer release — either creating a node or cancelling).
+    /// In-flight drag from the node palette (set when pointer starts
+    /// dragging an item, cleared on pointer release).
     pub(crate) palette_drag: Option<PaletteDrag>,
-    /// Persistent user preferences (recent files, autosave config, vertical
-    /// exaggeration, etc.).
     pub(crate) settings: Settings,
-    // last_autosave_at and map_info_file moved to `self.project`.
-    /// Active top-level UI layout (`Layout::Standard` today). Pure
-    /// UI/UX concern; switching layouts never migrates data. Loaded
-    /// from settings on launch, persisted via `set_active_layout`.
+    /// Active top-level UI layout. Loaded from settings on launch,
+    /// persisted via `set_active_layout`.
     pub(crate) active_layout: Layout,
 }
 
