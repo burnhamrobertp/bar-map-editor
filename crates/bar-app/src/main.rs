@@ -666,7 +666,7 @@ impl eframe::App for AppWrapper {
                     if !result.is_low_res {
                         self.app.set_inspector_heightmap(heightmap.clone());
                         if let Some(ref tex) = result.texture {
-                            self.app.set_inspector_color_buffer(tex.clone());
+                            self.app.paint.color_buffer = Some(tex.clone());
                         }
                     }
                     session.last_water_y = result.water_y;
@@ -890,13 +890,13 @@ impl eframe::App for AppWrapper {
         if self.app.active_layout() == bar_gui::Layout::Sculpt3D {
             // When the user switches to Metal or Typemap, apply the layer
             // visualization immediately so the view does not shift on first stroke.
-            let cur_target = self.app.active_brush_target();
+            let cur_target = self.app.paint.brush.target;
             if session.last_viz_target.as_ref() != Some(&cur_target) {
                 match cur_target {
                     bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
                         let cache = match cur_target {
-                            bar_gui::BrushTarget::Metalmap => self.app.inspector_metalmap_clone(),
-                            _ => self.app.inspector_typemap_clone(),
+                            bar_gui::BrushTarget::Metalmap => self.app.paint.metalmap.clone(),
+                            _ => self.app.paint.typemap.clone(),
                         };
                         if let (Some(ref gpu), Some(hm)) = (&self.gpu_context, cache) {
                             let visual = Self::visualise_layer(&hm, cur_target);
@@ -917,7 +917,7 @@ impl eframe::App for AppWrapper {
                     bar_gui::BrushTarget::Heightmap | bar_gui::BrushTarget::Color => {
                         // Switching back to height/color: restore normal terrain albedo.
                         if let (Some(ref gpu), Some(cb)) =
-                            (&self.gpu_context, self.app.inspector_color_buffer_clone())
+                            (&self.gpu_context, self.app.paint.color_buffer.clone())
                         {
                             if let Some(ref mut renderer) = session.terrain_renderer {
                                 renderer.update_albedo(&gpu.device, &gpu.queue, &cb);
@@ -1135,7 +1135,7 @@ impl AppWrapper {
             (pointer.y - rect.top()) / rect.height().max(1.0),
         );
         let aspect = rect.width().max(1.0) / rect.height().max(1.0);
-        let Some(hm) = app.inspector_heightmap_ref() else {
+        let Some(hm) = app.paint.heightmap.as_ref() else {
             tracing::debug!("sculpt: no inspector heightmap");
             return;
         };
@@ -1168,7 +1168,7 @@ impl AppWrapper {
         // mutate the inspector's heightmap + record onto a Sculpt
         // node; Color → write into a PaintedTexture grid; Metalmap /
         // Typemap remain TODO (see docs/3d-painting-plan.md).
-        let changed = match app.active_brush_target() {
+        let changed = match app.paint.brush.target {
             bar_gui::BrushTarget::Heightmap => {
                 app.apply_brush_at_heightmap(p.hm_x, p.hm_y, stroke_starting)
             }
@@ -1184,17 +1184,15 @@ impl AppWrapper {
         if !changed {
             return;
         }
-        let target = app.active_brush_target();
+        let target = app.paint.brush.target;
         match target {
             bar_gui::BrushTarget::Heightmap => {
                 // Heightmap stroke: the inspector heightmap was mutated in-place.
                 // Upload only the dirty rectangle around the brush footprint so
                 // the GPU sees the change without rebuilding the mesh.
-                if let (Some(ref gpu), Some(updated)) =
-                    (gpu_context, app.inspector_heightmap_clone())
-                {
+                if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.heightmap.clone()) {
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        let br = app.brush_radius_px().ceil() as i32 + 1;
+                        let br = app.paint.brush.radius_px.ceil() as i32 + 1;
                         let hm_w = updated.width() as i32;
                         let hm_h = updated.height() as i32;
                         let x0 = ((p.hm_x as i32) - br).max(0) as u32;
@@ -1230,7 +1228,7 @@ impl AppWrapper {
                 // differ from heightmap, so a region upload would need a coordinate
                 // remap — full upload is simpler and fast enough at these sizes).
                 if let (Some(ref gpu), Some(updated)) =
-                    (gpu_context, app.inspector_color_buffer_clone())
+                    (gpu_context, app.paint.color_buffer.clone())
                 {
                     if let Some(ref mut renderer) = session.terrain_renderer {
                         renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
@@ -1252,8 +1250,8 @@ impl AppWrapper {
                 // sees the stamp immediately. Purely visualisation -- the
                 // authoritative metalmap / typemap value flows through the graph.
                 let cache = match target {
-                    bar_gui::BrushTarget::Metalmap => app.inspector_metalmap_clone(),
-                    bar_gui::BrushTarget::Typemap => app.inspector_typemap_clone(),
+                    bar_gui::BrushTarget::Metalmap => app.paint.metalmap.clone(),
+                    bar_gui::BrushTarget::Typemap => app.paint.typemap.clone(),
                     _ => None,
                 };
                 if let (Some(ref gpu), Some(hm)) = (gpu_context, cache) {
@@ -1454,7 +1452,7 @@ impl AppWrapper {
         let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
         let cursor_world = if sculpt_active {
             cursor_uv.and_then(|uv| {
-                let hm = app.inspector_heightmap_ref()?;
+                let hm = app.paint.heightmap.as_ref()?;
                 let renderer = session.terrain_renderer.as_ref()?;
                 let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
                 let pick = pick_terrain(
@@ -1471,7 +1469,7 @@ impl AppWrapper {
                 // so radius_px → radius_world is just the per-pixel
                 // world step times the brush radius.
                 let world_per_px = (2.0 * x_extent) / hm.width().max(1) as f32;
-                let radius_world = app.brush_radius_px() * world_per_px;
+                let radius_world = app.paint.brush.radius_px * world_per_px;
                 Some((pick.world.x, pick.world.z, radius_world))
             })
         } else {

@@ -69,6 +69,11 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("smoothness", ParamValue::Float(0.0)),
         ],
         NodeType::MaskBlur => vec![("radius", ParamValue::Float(2.0))],
+        NodeType::BiasGain => vec![
+            ("bias", ParamValue::Float(0.5)),
+            ("gain", ParamValue::Float(0.5)),
+        ],
+        NodeType::Displacement => vec![("strength", ParamValue::Float(0.1))],
         NodeType::NormalMap => vec![("strength", ParamValue::Float(1.0))],
         NodeType::GrassMap => vec![
             ("min_height", ParamValue::Float(0.15)),

@@ -191,6 +191,21 @@ impl Node {
         self.dirty = false;
     }
 
+    /// Directly set both port kinds on a SubgraphInput / SubgraphOutput
+    /// node. Used when the kind is inferred from a live connection (whose
+    /// label may not round-trip through PortKind::parse_name).
+    pub fn set_io_port_kind(&mut self, kind: crate::port::PortKind) {
+        if !matches!(
+            self.node_type,
+            NodeType::SubgraphInput | NodeType::SubgraphOutput
+        ) {
+            return;
+        }
+        for p in self.inputs.iter_mut().chain(self.outputs.iter_mut()) {
+            p.kind = kind;
+        }
+    }
+
     /// Synchronise both ports of a SubgraphInput / SubgraphOutput
     /// node with the current `kind` param. Both sides flip together
     /// so the boundary stays type-consistent. No-op for any other

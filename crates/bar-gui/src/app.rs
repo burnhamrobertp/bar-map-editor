@@ -811,57 +811,6 @@ impl BarEditorApp {
         self.paint.brush.radius_px
     }
 
-    /// Read-only access to the current inspector heightmap. Used by the
-    /// 3D viewport for ray-cast picking against the surface the user
-    /// actually sees.
-    pub fn inspector_heightmap_ref(&self) -> Option<&bar_data::Heightmap> {
-        self.paint.heightmap.as_ref()
-    }
-
-    /// Returns a fresh clone of the current inspector heightmap so the
-    /// caller can re-upload it to the 3D mesh without holding a borrow
-    /// on `self`. Cheap-ish: `Heightmap` is just a `Vec<f32>` clone.
-    pub fn inspector_heightmap_clone(&self) -> Option<bar_data::Heightmap> {
-        self.paint.heightmap.clone()
-    }
-
-    /// Set the live colour-buffer cache. Called by `bar-app` whenever
-    /// a fresh eval result arrives so the brush has a base layer to
-    /// stamp on top of. Replaces the cache wholesale; in-flight
-    /// brush state is kept (the user's stroke composes with the new
-    /// upstream output the next time their brush moves).
-    pub fn set_inspector_color_buffer(&mut self, cb: bar_data::ColorBuffer) {
-        self.paint.color_buffer = Some(cb);
-    }
-
-    /// Live metalmap cache setter. Same shape as
-    /// `set_inspector_color_buffer` for the metalmap brush target.
-    pub fn set_inspector_metalmap(&mut self, hm: bar_data::Heightmap) {
-        self.paint.metalmap = Some(hm);
-    }
-
-    /// Live typemap cache setter.
-    pub fn set_inspector_typemap(&mut self, hm: bar_data::Heightmap) {
-        self.paint.typemap = Some(hm);
-    }
-
-    /// Clone of the live colour-buffer cache. None when no eval
-    /// has produced one yet — the brush is then a no-op until the
-    /// graph yields a base layer to overlay onto.
-    pub fn inspector_color_buffer_clone(&self) -> Option<bar_data::ColorBuffer> {
-        self.paint.color_buffer.clone()
-    }
-
-    /// Clone of the live metalmap cache.
-    pub fn inspector_metalmap_clone(&self) -> Option<bar_data::Heightmap> {
-        self.paint.metalmap.clone()
-    }
-
-    /// Clone of the live typemap cache.
-    pub fn inspector_typemap_clone(&self) -> Option<bar_data::Heightmap> {
-        self.paint.typemap.clone()
-    }
-
     /// Node palette - see `crate::panels::palette`.
     pub(crate) fn draw_node_palette(&mut self, ui: &mut egui::Ui) {
         crate::panels::palette::draw(self, ui);

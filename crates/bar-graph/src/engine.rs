@@ -104,8 +104,14 @@ impl GraphEngine {
             .find(|p| p.name == to.port_name)
             .ok_or_else(|| GraphError::PortNotFound(to.clone()))?;
 
-        // Validate port kinds are compatible
-        if !port_kinds_compatible(source_port.kind, dest_port.kind) {
+        // Validate port kinds are compatible. SubgraphInput / SubgraphOutput
+        // boundary nodes accept any kind on their "value" port — the kind is
+        // auto-inferred from the connection after the fact.
+        let to_is_io_value = matches!(
+            to_node.node_type,
+            crate::node::NodeType::SubgraphInput | crate::node::NodeType::SubgraphOutput
+        ) && to.port_name == "value";
+        if !to_is_io_value && !source_port.kind.compatible_with(dest_port.kind) {
             return Err(GraphError::IncompatiblePorts);
         }
 
@@ -232,23 +238,82 @@ impl GraphEngine {
             .map(|(&id, _)| id)
             .collect()
     }
-}
 
-/// Check if two port kinds are compatible for connection.
-/// Same kind always matches. Heightmap, Mask, Control, and Density are all f32
-/// spatial-field buffers and are freely interchangeable.
-fn port_kinds_compatible(from: crate::port::PortKind, to: crate::port::PortKind) -> bool {
-    use crate::port::PortKind;
-    if from == to {
-        return true;
+    /// Hash of the subgraph upstream of `root` (inclusive). Only nodes and
+    /// connections reachable by following inputs backwards from `root` are
+    /// included; nodes elsewhere in the graph don't affect the result.
+    ///
+    /// This lets the preview cache key stay stable when the user adds,
+    /// deletes, or edits nodes that have no path to the preview target.
+    pub fn upstream_content_hash(&self, root: NodeId) -> u64 {
+        use crate::node::ParamValue;
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // BFS backwards from root
+        let mut visited: std::collections::HashSet<NodeId> = std::collections::HashSet::new();
+        let mut stack = vec![root];
+        while let Some(id) = stack.pop() {
+            if visited.insert(id) {
+                for conn in &self.connections {
+                    if conn.to.node_id == id && !visited.contains(&conn.from.node_id) {
+                        stack.push(conn.from.node_id);
+                    }
+                }
+            }
+        }
+
+        let mut h = DefaultHasher::new();
+
+        // Hash nodes in deterministic order
+        let mut node_ids: Vec<NodeId> = visited.iter().copied().collect();
+        node_ids.sort_by_key(|n| n.0);
+        for nid in &node_ids {
+            nid.0.hash(&mut h);
+            if let Some(node) = self.nodes.get(nid) {
+                node.node_type.hash(&mut h);
+                let mut params: Vec<_> = node.params.iter().collect();
+                params.sort_by_key(|(k, _)| k.as_str());
+                for (k, v) in params {
+                    k.hash(&mut h);
+                    match v {
+                        ParamValue::Float(f) => f.to_bits().hash(&mut h),
+                        ParamValue::Int(i) => i.hash(&mut h),
+                        ParamValue::UInt(u) => u.hash(&mut h),
+                        ParamValue::Bool(b) => b.hash(&mut h),
+                        ParamValue::String(s) => s.hash(&mut h),
+                        ParamValue::Vec2([a, b]) => {
+                            a.to_bits().hash(&mut h);
+                            b.to_bits().hash(&mut h);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Hash connections between upstream nodes
+        let mut conns: Vec<_> = self
+            .connections
+            .iter()
+            .filter(|c| visited.contains(&c.from.node_id) && visited.contains(&c.to.node_id))
+            .collect();
+        conns.sort_by_key(|c| {
+            (
+                c.from.node_id.0,
+                c.from.port_name.as_str(),
+                c.to.node_id.0,
+                c.to.port_name.as_str(),
+            )
+        });
+        for c in conns {
+            c.from.node_id.0.hash(&mut h);
+            c.from.port_name.hash(&mut h);
+            c.to.node_id.0.hash(&mut h);
+            c.to.port_name.hash(&mut h);
+        }
+
+        h.finish()
     }
-    let is_f32_field = |k: PortKind| {
-        matches!(
-            k,
-            PortKind::Heightmap | PortKind::Mask | PortKind::Control | PortKind::Density
-        )
-    };
-    is_f32_field(from) && is_f32_field(to)
 }
 
 #[cfg(test)]
@@ -491,32 +556,20 @@ mod tests {
     fn port_kinds_compatible_f32_field_set() {
         use crate::port::PortKind;
         // Same kind always compatible
-        assert!(port_kinds_compatible(
-            PortKind::Heightmap,
-            PortKind::Heightmap
-        ));
-        assert!(port_kinds_compatible(PortKind::Color, PortKind::Color));
+        assert!(PortKind::Heightmap.compatible_with(PortKind::Heightmap));
+        assert!(PortKind::Color.compatible_with(PortKind::Color));
         // All f32-field variants interchangeable
-        assert!(port_kinds_compatible(PortKind::Heightmap, PortKind::Mask));
-        assert!(port_kinds_compatible(
-            PortKind::Heightmap,
-            PortKind::Control
-        ));
-        assert!(port_kinds_compatible(
-            PortKind::Heightmap,
-            PortKind::Density
-        ));
-        assert!(port_kinds_compatible(PortKind::Mask, PortKind::Control));
-        assert!(port_kinds_compatible(PortKind::Control, PortKind::Density));
-        assert!(port_kinds_compatible(PortKind::Density, PortKind::Mask));
+        assert!(PortKind::Heightmap.compatible_with(PortKind::Mask));
+        assert!(PortKind::Heightmap.compatible_with(PortKind::Control));
+        assert!(PortKind::Heightmap.compatible_with(PortKind::Density));
+        assert!(PortKind::Mask.compatible_with(PortKind::Control));
+        assert!(PortKind::Control.compatible_with(PortKind::Density));
+        assert!(PortKind::Density.compatible_with(PortKind::Mask));
         // Rejections
-        assert!(!port_kinds_compatible(PortKind::Color, PortKind::Control));
-        assert!(!port_kinds_compatible(PortKind::Color, PortKind::Heightmap));
-        assert!(!port_kinds_compatible(
-            PortKind::Scalar,
-            PortKind::Heightmap
-        ));
-        assert!(!port_kinds_compatible(PortKind::File, PortKind::Mask));
+        assert!(!PortKind::Color.compatible_with(PortKind::Control));
+        assert!(!PortKind::Color.compatible_with(PortKind::Heightmap));
+        assert!(!PortKind::Scalar.compatible_with(PortKind::Heightmap));
+        assert!(!PortKind::File.compatible_with(PortKind::Mask));
     }
 
     #[test]

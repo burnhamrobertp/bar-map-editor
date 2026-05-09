@@ -29,6 +29,23 @@ pub enum PortKind {
 }
 
 impl PortKind {
+    /// Whether `self` (as an output / from-side) can feed into `other` (as an
+    /// input / to-side). Heightmap, Mask, Control, and Density are all f32
+    /// spatial fields and are freely interchangeable; every other kind only
+    /// matches itself.
+    pub fn compatible_with(self, other: PortKind) -> bool {
+        if self == other {
+            return true;
+        }
+        let is_f32_field = |k: PortKind| {
+            matches!(
+                k,
+                PortKind::Heightmap | PortKind::Mask | PortKind::Control | PortKind::Density
+            )
+        };
+        is_f32_field(self) && is_f32_field(other)
+    }
+
     /// Parse from the human-readable name used in `param_choices`
     /// (e.g. SubgraphInput's `kind` param). Returns `None` for
     /// unknown strings rather than panicking.
