@@ -27,7 +27,9 @@ use crate::panels::tokens;
 
 pub(crate) mod groups;
 pub(crate) mod layout;
+pub(crate) mod passthrough;
 pub(crate) mod render;
+pub(crate) mod style;
 pub(crate) mod tabs;
 
 /// Return type of `draw_collapsed_subgraphs`: bounding rects keyed by

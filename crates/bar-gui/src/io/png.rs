@@ -12,6 +12,7 @@
 //!   overlay layer).
 
 use bar_data::{ColorBuffer, Heightmap};
+use eframe::egui;
 
 /// Read a 16-bit grayscale PNG into a Heightmap. Inverse of
 /// `save_heightmap_as_png16`. Used to restore sculpt overlays at
@@ -116,6 +117,46 @@ pub(crate) fn load_color_buffer_from_png(path: &std::path::Path) -> Result<Color
         })
         .collect();
     ColorBuffer::frbar_data(w, h, data).map_err(|e| e.to_string())
+}
+
+/// Render a heightmap into an egui `ColorImage` for the 2D inspector.
+/// Underwater pixels (n < waterline_norm) are tinted blue with depth
+/// darkening; above-water pixels go from dark grey (low) to a warm
+/// near-white (high) so the user can read terrain shape at a glance.
+pub(crate) fn heightmap_to_color_image(hm: &Heightmap, min_h: f32, max_h: f32) -> egui::ColorImage {
+    let w = hm.width() as usize;
+    let h = hm.height() as usize;
+    let span = (max_h - min_h).max(1.0);
+    let waterline_norm = if min_h < 0.0 {
+        (-min_h / span).clamp(0.0, 1.0)
+    } else {
+        -1.0
+    };
+    let mut pixels = Vec::with_capacity(w * h);
+    for y in 0..h {
+        for x in 0..w {
+            let n = hm.get(x as u32, y as u32).unwrap_or(0.0).clamp(0.0, 1.0);
+            let pixel = if waterline_norm >= 0.0 && n < waterline_norm {
+                let depth = (waterline_norm - n) / waterline_norm.max(0.001);
+                let dim = (1.0 - depth * 0.6).clamp(0.3, 1.0);
+                egui::Color32::from_rgb((40.0 * dim) as u8, (90.0 * dim) as u8, (160.0 * dim) as u8)
+            } else {
+                let above = if waterline_norm >= 0.0 {
+                    (n - waterline_norm) / (1.0 - waterline_norm).max(0.001)
+                } else {
+                    n
+                };
+                let v = (above * 220.0 + 35.0) as u8;
+                let warm = (above * 25.0) as u8;
+                egui::Color32::from_rgb(v.saturating_add(warm), v, v.saturating_sub(warm / 2))
+            };
+            pixels.push(pixel);
+        }
+    }
+    egui::ColorImage {
+        size: [w, h],
+        pixels,
+    }
 }
 
 #[cfg(test)]

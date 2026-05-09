@@ -8,12 +8,172 @@
 //! outlined border at the worst severity touching them.
 
 use eframe::egui;
+use std::collections::HashMap;
 
-use crate::app::{
-    color_rgb, drag_f32, drag_u32, edit_optional_string, outline_finding, severity_color,
-    BarEditorApp, FieldFindings, MapInfoTab,
-};
+use crate::app::{BarEditorApp, MapInfoTab};
+use crate::panels::tokens;
 use crate::t;
+
+/// Map-Settings validation findings keyed by (tab_id, field_id).
+/// `tab_id` matches the lowercase form of `MapInfoTab` variants; `field_id`
+/// matches the names tagged onto findings in `bar-project::validation`.
+pub(crate) struct FieldFindings {
+    by_field: HashMap<(String, String), bar_project::Severity>,
+    by_tab: HashMap<String, bar_project::Severity>,
+}
+
+impl FieldFindings {
+    pub(crate) fn from(findings: &[bar_project::Finding]) -> Self {
+        let mut by_field: HashMap<(String, String), bar_project::Severity> = HashMap::new();
+        let mut by_tab: HashMap<String, bar_project::Severity> = HashMap::new();
+        for f in findings {
+            let cat = f.category.clone();
+            by_tab
+                .entry(cat.clone())
+                .and_modify(|s| *s = worst_severity(*s, f.severity))
+                .or_insert(f.severity);
+            if let Some(field) = f.field.as_deref() {
+                by_field
+                    .entry((cat, field.to_string()))
+                    .and_modify(|s| *s = worst_severity(*s, f.severity))
+                    .or_insert(f.severity);
+            }
+        }
+        Self { by_field, by_tab }
+    }
+
+    pub(crate) fn tab(&self, tab: &str) -> Option<bar_project::Severity> {
+        self.by_tab.get(tab).copied()
+    }
+
+    pub(crate) fn field(&self, tab: &str, field: &str) -> Option<bar_project::Severity> {
+        self.by_field
+            .get(&(tab.to_string(), field.to_string()))
+            .copied()
+    }
+}
+
+fn worst_severity(a: bar_project::Severity, b: bar_project::Severity) -> bar_project::Severity {
+    use bar_project::Severity::*;
+    match (a, b) {
+        (Error, _) | (_, Error) => Error,
+        (Warning, _) | (_, Warning) => Warning,
+        _ => Info,
+    }
+}
+
+pub(crate) fn severity_color(sev: bar_project::Severity) -> egui::Color32 {
+    match sev {
+        bar_project::Severity::Error => tokens::SEVERITY_ERROR,
+        bar_project::Severity::Warning => tokens::SEVERITY_WARN,
+        bar_project::Severity::Info => tokens::SEVERITY_INFO,
+    }
+}
+
+/// Wrap a row in a thin coloured outline whose colour matches the
+/// finding's severity. No-op when `sev` is `None`.
+fn outline_finding<R>(
+    ui: &mut egui::Ui,
+    sev: Option<bar_project::Severity>,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    match sev {
+        Some(s) => {
+            let color = severity_color(s);
+            egui::Frame::default()
+                .stroke(egui::Stroke::new(1.0, color))
+                .corner_radius(2.0)
+                .inner_margin(egui::Margin::symmetric(2, 1))
+                .show(ui, body)
+                .inner
+        }
+        None => body(ui),
+    }
+}
+
+fn drag_f32(ui: &mut egui::Ui, label: &str, value: &mut f32, lo: f32, hi: f32, speed: f32) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(
+                    egui::DragValue::new(value)
+                        .range(lo..=hi)
+                        .speed(speed as f64),
+                )
+                .changed()
+            {
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+fn drag_u32(ui: &mut egui::Ui, label: &str, value: &mut u32, lo: u32, hi: u32) -> bool {
+    let mut changed = false;
+    let mut v = *value as i64;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .add(egui::DragValue::new(&mut v).range((lo as i64)..=(hi as i64)))
+                .changed()
+            {
+                *value = v.max(0) as u32;
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
+/// Empty-string -> `None` so the bundler-side fallback kicks in. The
+/// placeholder hint communicates what that fallback will be.
+fn edit_optional_string(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut Option<String>,
+    placeholder: &str,
+) -> bool {
+    let mut changed = false;
+    let mut buf = value.clone().unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let edit = egui::TextEdit::singleline(&mut buf)
+                .desired_width(220.0)
+                .hint_text(placeholder);
+            if ui.add(edit).changed() {
+                let trimmed = buf.trim();
+                let new_value = if trimmed.is_empty() {
+                    None
+                } else {
+                    Some(buf.clone())
+                };
+                if &new_value != value {
+                    *value = new_value;
+                    changed = true;
+                }
+            }
+        });
+    });
+    changed
+}
+
+fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.color_edit_button_rgb(value).changed() {
+                changed = true;
+            }
+        });
+    });
+    changed
+}
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog_show_mapinfo_editor() {

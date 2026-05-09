@@ -9,6 +9,26 @@
 //! foreground when the dialog spawns.
 
 use crate::app::BarEditorApp;
+use bar_graph::NodeType;
+
+/// Build a file-picker dialog appropriate for the given node type's
+/// `path` param. The dialog is parented to the editor window when a
+/// handle has been pushed via `BarEditorApp::set_parent_window_handles`.
+pub(crate) fn make_path_dialog(app: &BarEditorApp, node_type: &NodeType) -> rfd::FileDialog {
+    let base = app.make_dialog();
+    match node_type {
+        NodeType::SmfImport => base
+            .set_title("Select .smf Map File")
+            .add_filter("Spring Map File", &["smf"]),
+        NodeType::SmtImport => base
+            .set_title("Select .smt Tile File")
+            .add_filter("Spring Map Tiles", &["smt"]),
+        NodeType::FileInput => base
+            .set_title("Select Image File")
+            .add_filter("Image", &["png", "tiff", "tif", "jpg", "jpeg"]),
+        _ => base.set_title("Select File"),
+    }
+}
 
 /// Owned wrapper that re-implements `HasWindowHandle` +
 /// `HasDisplayHandle` for previously captured raw handles. Lets us
