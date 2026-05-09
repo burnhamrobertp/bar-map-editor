@@ -529,3 +529,123 @@ impl BarEditorApp {
         connections_made
     }
 }
+
+/// Sort key for barycentric ordering inside an auto-layout column.
+/// A unit whose sources have already been placed in earlier columns
+/// gets a key equal to the mean of those source Y positions; a unit
+/// with no in-target sources falls back to its current canvas Y so
+/// the user's manual order is preserved for unconnected units.
+pub(crate) fn barycentric_key(
+    idx: usize,
+    incoming: &[Vec<usize>],
+    sizes: &[egui::Vec2],
+    placed_top_y: &std::collections::HashMap<usize, f32>,
+    units: &[LayoutUnit],
+    app: &BarEditorApp,
+) -> f32 {
+    let preds = &incoming[idx];
+    let mut placed_centres: Vec<f32> = Vec::new();
+    for &p in preds {
+        if let Some(top) = placed_top_y.get(&p) {
+            placed_centres.push(top + sizes[p].y * 0.5);
+        }
+    }
+    if placed_centres.is_empty() {
+        units[idx].current_top_left(app).y
+    } else {
+        placed_centres.iter().sum::<f32>() / placed_centres.len() as f32
+    }
+}
+
+/// One target of the Auto Layout pass. Either a standalone graph
+/// node (movable on its own) or a subgraph (treated as one rigid
+/// unit -- the whole block moves and members keep their relative
+/// positions).
+pub(crate) enum LayoutUnit {
+    Node(NodeId),
+    Subgraph { members: Vec<NodeId> },
+}
+
+impl LayoutUnit {
+    pub(crate) fn representative_id(&self) -> NodeId {
+        match self {
+            LayoutUnit::Node(id) => *id,
+            LayoutUnit::Subgraph { members } => members
+                .iter()
+                .min_by_key(|n| n.0)
+                .copied()
+                .expect("subgraph must have at least one member"),
+        }
+    }
+
+    pub(crate) fn member_ids(&self) -> Vec<NodeId> {
+        match self {
+            LayoutUnit::Node(id) => vec![*id],
+            LayoutUnit::Subgraph { members } => members.clone(),
+        }
+    }
+
+    pub(crate) fn current_top_left(&self, app: &BarEditorApp) -> egui::Pos2 {
+        match self {
+            LayoutUnit::Node(id) => app
+                .visuals
+                .node_visuals
+                .get(id)
+                .map(|v| v.position)
+                .unwrap_or(egui::pos2(0.0, 0.0)),
+            LayoutUnit::Subgraph { members } => members
+                .iter()
+                .filter_map(|m| app.visuals.node_visuals.get(m))
+                .map(|v| v.position)
+                .reduce(|a, b| egui::pos2(a.x.min(b.x), a.y.min(b.y)))
+                .unwrap_or(egui::pos2(0.0, 0.0)),
+        }
+    }
+
+    pub(crate) fn bounding_size(&self, app: &BarEditorApp) -> egui::Vec2 {
+        match self {
+            LayoutUnit::Node(id) => app
+                .visuals
+                .node_visuals
+                .get(id)
+                .map(|v| v.size)
+                .unwrap_or(egui::vec2(150.0, 80.0)),
+            LayoutUnit::Subgraph { members } => {
+                let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
+                let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+                for m in members {
+                    if let Some(v) = app.visuals.node_visuals.get(m) {
+                        let p0 = v.position;
+                        let p1 = egui::pos2(p0.x + v.size.x, p0.y + v.size.y);
+                        min.x = min.x.min(p0.x);
+                        min.y = min.y.min(p0.y);
+                        max.x = max.x.max(p1.x);
+                        max.y = max.y.max(p1.y);
+                    }
+                }
+                if min.x.is_finite() {
+                    egui::vec2(max.x - min.x, max.y - min.y)
+                } else {
+                    egui::vec2(180.0, 100.0)
+                }
+            }
+        }
+    }
+
+    pub(crate) fn translate(&self, app: &mut BarEditorApp, delta: egui::Vec2) {
+        match self {
+            LayoutUnit::Node(id) => {
+                if let Some(v) = app.visuals.node_visuals.get_mut(id) {
+                    v.position += delta;
+                }
+            }
+            LayoutUnit::Subgraph { members } => {
+                for m in members {
+                    if let Some(v) = app.visuals.node_visuals.get_mut(m) {
+                        v.position += delta;
+                    }
+                }
+            }
+        }
+    }
+}

@@ -3,8 +3,8 @@ use eframe::egui;
 use std::collections::HashMap;
 
 use crate::settings::Settings;
-use crate::state::{EditorState, NodeVisual};
-use crate::undo::{Snapshot, UndoHistory};
+use crate::state::NodeVisual;
+use crate::undo::UndoHistory;
 
 // Re-export icon painters so that `use crate::app::*` in panel modules keeps
 // finding them after they moved to panels/icons.rs.
@@ -104,145 +104,6 @@ pub(crate) enum GroupOp {
     AddTo(NodeId, u64),
     AddManyTo(Vec<NodeId>, u64),
     RemoveFrom(NodeId),
-}
-
-/// Sort key for barycentric ordering inside an auto-layout column.
-/// A unit whose sources have already been placed in earlier columns
-/// gets a key equal to the mean of those source Y positions
-/// (centred on its `y_center` to align by mid-row, not top-edge);
-/// a unit with no in-target sources falls back to its current
-/// canvas Y so the user's manual "this row before that row" hint is
-/// preserved for unconnected units.
-pub(crate) fn barycentric_key(
-    idx: usize,
-    incoming: &[Vec<usize>],
-    sizes: &[egui::Vec2],
-    placed_top_y: &std::collections::HashMap<usize, f32>,
-    units: &[LayoutUnit],
-    app: &BarEditorApp,
-) -> f32 {
-    let preds = &incoming[idx];
-    let mut placed_centres: Vec<f32> = Vec::new();
-    for &p in preds {
-        if let Some(top) = placed_top_y.get(&p) {
-            placed_centres.push(top + sizes[p].y * 0.5);
-        }
-    }
-    if placed_centres.is_empty() {
-        units[idx].current_top_left(app).y
-    } else {
-        placed_centres.iter().sum::<f32>() / placed_centres.len() as f32
-    }
-}
-
-/// One target of the Auto Layout pass. Either a standalone graph
-/// node (movable on its own) or a subgraph (treated as one rigid
-/// unit — the whole block moves and members keep their relative
-/// positions).
-pub(crate) enum LayoutUnit {
-    Node(NodeId),
-    Subgraph { members: Vec<NodeId> },
-}
-
-impl LayoutUnit {
-    /// Stable identifier for use as a HashMap key during depth
-    /// computation. For a standalone node it's the node itself; for
-    /// a subgraph it's the smallest member id (subgraphs always
-    /// have ≥1 member by construction).
-    pub(crate) fn representative_id(&self) -> NodeId {
-        match self {
-            LayoutUnit::Node(id) => *id,
-            LayoutUnit::Subgraph { members } => members
-                .iter()
-                .min_by_key(|n| n.0)
-                .copied()
-                .expect("subgraph must have at least one member"),
-        }
-    }
-
-    /// Every NodeId associated with this unit. For a standalone
-    /// node, just itself; for a subgraph, all members. Used to map
-    /// NodeId → unit during depth computation.
-    pub(crate) fn member_ids(&self) -> Vec<NodeId> {
-        match self {
-            LayoutUnit::Node(id) => vec![*id],
-            LayoutUnit::Subgraph { members } => members.clone(),
-        }
-    }
-
-    /// Top-left corner of the unit's current bounding rect on the
-    /// canvas. For a standalone node this is its visual.position;
-    /// for a subgraph it's the min over member positions.
-    pub(crate) fn current_top_left(&self, app: &BarEditorApp) -> egui::Pos2 {
-        match self {
-            LayoutUnit::Node(id) => app
-                .visuals
-                .node_visuals
-                .get(id)
-                .map(|v| v.position)
-                .unwrap_or(egui::pos2(0.0, 0.0)),
-            LayoutUnit::Subgraph { members } => members
-                .iter()
-                .filter_map(|m| app.visuals.node_visuals.get(m))
-                .map(|v| v.position)
-                .reduce(|a, b| egui::pos2(a.x.min(b.x), a.y.min(b.y)))
-                .unwrap_or(egui::pos2(0.0, 0.0)),
-        }
-    }
-
-    /// Width × height of the unit's current bounding box, in canvas
-    /// pixels. Drives auto-layout's "no overlap" guarantee — column
-    /// widths and row stacks are sized off this rather than a fixed
-    /// pitch that could let a tall node bleed into its neighbour.
-    pub(crate) fn bounding_size(&self, app: &BarEditorApp) -> egui::Vec2 {
-        match self {
-            LayoutUnit::Node(id) => app
-                .visuals
-                .node_visuals
-                .get(id)
-                .map(|v| v.size)
-                .unwrap_or(egui::vec2(150.0, 80.0)),
-            LayoutUnit::Subgraph { members } => {
-                let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
-                let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
-                for m in members {
-                    if let Some(v) = app.visuals.node_visuals.get(m) {
-                        let p0 = v.position;
-                        let p1 = egui::pos2(p0.x + v.size.x, p0.y + v.size.y);
-                        min.x = min.x.min(p0.x);
-                        min.y = min.y.min(p0.y);
-                        max.x = max.x.max(p1.x);
-                        max.y = max.y.max(p1.y);
-                    }
-                }
-                if min.x.is_finite() {
-                    egui::vec2(max.x - min.x, max.y - min.y)
-                } else {
-                    egui::vec2(180.0, 100.0)
-                }
-            }
-        }
-    }
-
-    /// Translate the unit's nodes by `delta`. For a standalone node
-    /// this moves just it; for a subgraph every member shifts by
-    /// the same delta so internal layout is preserved.
-    pub(crate) fn translate(&self, app: &mut BarEditorApp, delta: egui::Vec2) {
-        match self {
-            LayoutUnit::Node(id) => {
-                if let Some(v) = app.visuals.node_visuals.get_mut(id) {
-                    v.position += delta;
-                }
-            }
-            LayoutUnit::Subgraph { members } => {
-                for m in members {
-                    if let Some(v) = app.visuals.node_visuals.get_mut(m) {
-                        v.position += delta;
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// Fixed palette of subtle tints for group rectangles. Members store
@@ -1070,64 +931,6 @@ impl BarEditorApp {
     /// Clone of the live typemap cache.
     pub fn inspector_typemap_clone(&self) -> Option<bar_data::Heightmap> {
         self.paint.typemap.clone()
-    }
-
-    /// Capture the entire undoable editor state.
-    pub(crate) fn snapshot(&self, description: &str) -> Snapshot {
-        Snapshot {
-            state: EditorState {
-                graph: self.graph.clone(),
-                node_visuals: self.visuals.node_visuals.clone(),
-                groups: self.visuals.groups.clone(),
-                node_to_group: self.visuals.node_to_group.clone(),
-                next_group_id: self.visuals.next_group_id,
-            },
-            description: description.to_string(),
-        }
-    }
-
-    /// Push the current state onto the undo stack before a mutation.
-    /// Pair every user-visible mutation with one of these calls; the
-    /// pairing is what lets undo restore "the state before X happened".
-    pub(crate) fn push_undo(&mut self, description: &str) {
-        let snap = self.snapshot(description);
-        self.history.push(snap);
-        self.project.is_dirty = true;
-    }
-
-    /// Swap the editor's state with a captured snapshot. Resets
-    /// transient UI state (selections, the preview-open hint when its
-    /// target node is gone) so the user doesn't see stale highlights
-    /// pointing at deleted things.
-    pub(crate) fn restore_snapshot(&mut self, snap: Snapshot) {
-        self.graph = snap.state.graph;
-        self.visuals.node_visuals = snap.state.node_visuals;
-        self.visuals.groups = snap.state.groups;
-        self.visuals.node_to_group = snap.state.node_to_group;
-        self.visuals.next_group_id = snap.state.next_group_id;
-        self.clear_selection();
-        if let Some(pn) = self.preview.node {
-            if self.graph.get_node(pn).is_none() {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
-        }
-    }
-
-    /// Perform undo.
-    pub fn undo(&mut self) {
-        let current = self.snapshot("current");
-        if let Some(prev) = self.history.undo(current) {
-            self.restore_snapshot(prev);
-        }
-    }
-
-    /// Perform redo.
-    pub fn redo(&mut self) {
-        let current = self.snapshot("current");
-        if let Some(next) = self.history.redo(current) {
-            self.restore_snapshot(next);
-        }
     }
 
     // `build_project`, `save_project`, `resolve_relative_paths`, and
