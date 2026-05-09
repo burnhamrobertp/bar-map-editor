@@ -447,3 +447,97 @@ impl BarEditorApp {
         (rects, handle_positions, conn_start, conn_end)
     }
 }
+
+use bar_graph::{Node, NodeType};
+
+use crate::app::IO_NODE_SIZE;
+use crate::editor::{CanvasView, PropsTarget};
+use crate::state::NodeVisual;
+
+impl BarEditorApp {
+    pub(crate) fn instantiate_macro(&mut self, macro_name: &str, pos: egui::Pos2) {
+        let Some(template) = crate::macros::parse(macro_name) else {
+            self.dialog.status_message = Some(format!("Macro '{macro_name}' not found"));
+            return;
+        };
+        self.push_undo(&format!("Drop macro '{}'", template.name));
+        // Compute the numbered wrapper label BEFORE instantiation so
+        // we don't double-count nodes about to be added.
+        let numbered_label = self.next_label_for(&template.name);
+        let mut inst = match crate::macros::instantiate(&template, &mut self.graph, pos) {
+            Ok(i) => i,
+            Err(e) => {
+                self.dialog.status_message =
+                    Some(format!("Macro '{macro_name}' failed to instantiate: {e}"));
+                return;
+            }
+        };
+        inst.group.label = numbered_label;
+        for (id, visual) in inst.visuals {
+            self.visuals.node_visuals.insert(id, visual);
+        }
+        let gid = self.visuals.alloc_group_id();
+        for nid in &inst.member_ids {
+            self.visuals.node_to_group.insert(*nid, gid);
+        }
+        self.visuals.groups.insert(gid, inst.group);
+        self.select_group(gid);
+        // Same direct-open as `add_node_at` — drop a macro, see its
+        // properties immediately so you can tweak the parameters
+        // without a separate click + hover.
+        self.props.active = Some(PropsTarget::Group(gid));
+        self.dialog.pending_props_open = None;
+        self.project.is_dirty = true;
+        self.dialog.status_message = Some(format!("Dropped '{}' onto the canvas.", template.name));
+    }
+
+    pub(crate) fn add_node_at(&mut self, node_type: NodeType, label: &str, pos: egui::Pos2) {
+        self.push_undo("Add node");
+        let numbered = self.next_label_for(label);
+        let node = Node::new(NodeId(0), node_type.clone(), numbered);
+        let id = self.graph.add_node(node);
+        // A freshly-dropped node is "what the user wants to look at"
+        // — open the contextual properties panel immediately
+        // without waiting for the hover gate. Skipping the gate is
+        // intentional: there's no ambiguity here (no "did they
+        // mean to drag instead?"), the node is the click result.
+        self.props.active = Some(PropsTarget::Node(id));
+        self.dialog.pending_props_open = None;
+        let default_size = match node_type {
+            NodeType::PassThrough => egui::vec2(180.0, 200.0),
+            NodeType::Bundler => egui::vec2(210.0, 240.0),
+            NodeType::SubgraphInput | NodeType::SubgraphOutput => IO_NODE_SIZE,
+            _ => egui::vec2(150.0, 80.0),
+        };
+        self.visuals.node_visuals.insert(
+            id,
+            NodeVisual {
+                position: pos,
+                size: default_size,
+            },
+        );
+        self.selection.node = Some(id);
+        // If the user is viewing a subgraph tab when they drop a
+        // node, the drop goes INTO that subgraph: add it to the
+        // group's member set so `hidden_nodes_this_frame` (which
+        // hides everything outside the active subgraph in the
+        // subgraph view) doesn't immediately hide it. Without this,
+        // the new node lives at the top level of the graph and
+        // becomes invisible the moment it's dropped — properties
+        // panel opens on a node the user can't see.
+        if let Some(CanvasView::SubGraph(scope)) =
+            self.canvas.tabs.get(self.canvas.active_tab).cloned()
+        {
+            if let Some(group) = self.visuals.groups.get_mut(&scope) {
+                group.member_ids.insert(id);
+                self.visuals.node_to_group.insert(id, scope);
+            }
+        }
+        // Auto-open the 3D preview when a Bundler is created so the user
+        // immediately sees the viewport associated with this export node.
+        if node_type == NodeType::Bundler {
+            self.preview.open = true;
+            self.preview.node = Some(id);
+        }
+    }
+}
