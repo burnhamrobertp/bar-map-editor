@@ -6,9 +6,31 @@
 //! tests during palette drag), and the in-progress marquee /
 //! drag-connection state.
 
+use bar_graph::NodeId;
 use eframe::egui;
 
-use crate::app::{CanvasView, DragConnection};
+/// One tab in the canvas-area tab bar. The user can keep multiple
+/// editing contexts open and switch between them. Tabs are
+/// session-scoped state; they don't persist through save/load.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CanvasView {
+    /// The whole graph. Always present, can't be closed.
+    Main,
+    /// Edit-in-isolation view of one sub-graph's contents -- the
+    /// previous "confined edit mode" lifted into a tab so the user
+    /// can keep the Main tab open alongside.
+    SubGraph(u64),
+}
+
+/// In-progress port drag for wire creation. Output ports always emit
+/// from a Right placement, so the wire's tangent at the source end is
+/// always +X.
+#[derive(Clone, Debug)]
+pub struct DragConnection {
+    pub from_node: NodeId,
+    pub from_port: String,
+    pub from_pos: egui::Pos2,
+}
 
 /// Grouped canvas viewport + interaction state. See module docs.
 #[derive(Debug, Clone)]

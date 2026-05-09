@@ -9,7 +9,29 @@
 
 use bar_graph::NodeId;
 
-use crate::app::ExportStatus;
+/// Live export busy state. `bar-app` updates this each frame so the
+/// GUI can render busy state on the bundle buttons (and gate clicks).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportStatus {
+    #[default]
+    Idle,
+    /// "Run all" pressed; every Bundler is exporting.
+    All,
+    /// One specific Bundler is exporting; others remain idle.
+    One(NodeId),
+}
+
+impl ExportStatus {
+    /// True when any export is currently running.
+    pub fn is_running(self) -> bool {
+        !matches!(self, ExportStatus::Idle)
+    }
+
+    /// True when the export currently running affects this node.
+    pub fn affects(self, id: NodeId) -> bool {
+        matches!(self, ExportStatus::All) || matches!(self, ExportStatus::One(n) if n == id)
+    }
+}
 
 /// Grouped editor preview / export state. See module docs.
 #[derive(Default, Debug, Clone)]

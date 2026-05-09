@@ -15,10 +15,14 @@ pub(crate) mod selection;
 pub(crate) mod validation;
 pub(crate) mod visuals;
 
-pub(crate) use canvas::CanvasState;
-pub(crate) use map::MapState;
+pub(crate) use canvas::{CanvasState, CanvasView, DragConnection};
+pub use map::SmfLightingSnapshot;
+pub(crate) use map::{MapState, RecipeMeta};
+pub use preview::ExportStatus;
 pub(crate) use preview::PreviewState;
-pub(crate) use props_panel::PropsPanelState;
+pub(crate) use props_panel::{
+    PendingPropsOpen, PropsPanelState, PropsTarget, PROPS_OPEN_DELAY_MS, PROPS_OPEN_MOVE_TOLERANCE,
+};
 pub(crate) use selection::SelectionState;
-pub(crate) use validation::{ValidationFingerprint, ValidationState};
+pub(crate) use validation::{MapInfoTab, ValidationFilter, ValidationFingerprint, ValidationState};
 pub(crate) use visuals::VisualsState;

@@ -10,7 +10,37 @@
 
 use bar_project::MapSettings;
 
-use crate::app::RecipeMeta;
+/// Plain-data snapshot of SMF ground-shading inputs (lighting +
+/// water-absorption). Returned by `BarEditorApp::smf_lighting` and
+/// consumed by `bar-app` to populate the renderer's per-frame
+/// `SmfLighting`. Lives in `bar-gui` so callers can read it without
+/// pulling in `bar-render` as a transitive dep.
+#[derive(Clone, Copy, Debug)]
+pub struct SmfLightingSnapshot {
+    pub sun_dir: [f32; 3],
+    pub ground_ambient: [f32; 3],
+    pub ground_diffuse: [f32; 3],
+    pub ground_specular: [f32; 3],
+    pub specular_exponent: f32,
+    pub water_absorb: [f32; 3],
+    pub water_base: [f32; 3],
+    pub water_min: [f32; 3],
+}
+
+/// Recipe identity block: the values that show up in the Map Info /
+/// About dialog and end up in the `.barproj` recipe header.
+#[derive(Default, Clone, Debug)]
+pub struct RecipeMeta {
+    /// Optional shortname (`mapinfo.shortname`). When `None` the
+    /// bundler falls back to the project name.
+    pub shortname: Option<String>,
+    /// Free-form description (`mapinfo.description`). Empty string is allowed.
+    pub description: String,
+    /// Optional author. When `None` the bundler falls back to `"bar-editor"`.
+    pub author: Option<String>,
+    /// Optional map version. When `None` the bundler falls back to `"1.0"`.
+    pub version: Option<String>,
+}
 
 /// Project map metadata + UI shadow state. See module docs.
 #[derive(Default, Debug, Clone)]

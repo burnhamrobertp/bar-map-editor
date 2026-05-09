@@ -4,6 +4,7 @@
 //! Provides the node graph editor, property panels, and viewport integration.
 
 pub mod app;
+pub(crate) mod dialog;
 pub mod editor;
 pub mod i18n;
 pub mod io;

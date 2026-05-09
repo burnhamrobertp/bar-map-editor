@@ -1,7 +1,6 @@
 use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId, PortKind, PortPlacement};
 use eframe::egui;
 use std::collections::HashMap;
-use std::time::Instant;
 
 use crate::settings::Settings;
 use crate::state::{EditorState, NodeVisual};
@@ -97,45 +96,7 @@ pub(crate) fn parse_subgraph_binding(
 /// One-shot context-menu action carried out after the menu closes,
 /// since the menu closure can't borrow `self` mutably while iterating
 /// `self.visuals.groups`.
-/// One tab in the canvas-area tab bar. The user can keep multiple
-/// editing contexts open and switch between them — much faster than
-/// "exit confined mode, scroll to the relevant region, double-click
-/// back in". Tabs are session-scoped state; they don't persist
-/// through save/load.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum CanvasView {
-    /// The whole graph. Always present, can't be closed.
-    Main,
-    /// Edit-in-isolation view of one sub-graph's contents — the
-    /// previous "confined edit mode" lifted into a tab so the user
-    /// can keep the Main tab open alongside.
-    SubGraph(u64),
-}
-
-/// Active filter tab in the validation details window.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ValidationFilter {
-    All,
-    Error,
-    Warning,
-    Info,
-}
-
-/// Active section in the Map Settings modal — replaces the per-section
-/// CollapsingHeaders so only one section's controls are on screen at a
-/// time, switched via a tab strip across the top.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MapInfoTab {
-    Identity,
-    Dimensions,
-    Physics,
-    Atmosphere,
-    Lighting,
-    Water,
-}
-
-// `ValidationFingerprint` lives in `crate::editor::validation`.
-pub(crate) use crate::editor::ValidationFingerprint;
+pub(crate) use crate::editor::{CanvasView, MapInfoTab, ValidationFilter, ValidationFingerprint};
 
 pub(crate) enum GroupOp {
     CreateWith(NodeId),
@@ -284,17 +245,6 @@ impl LayoutUnit {
     }
 }
 
-/// Outcome of the "delete group" confirmation modal.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum GroupDeleteChoice {
-    /// Dissolve the group; member nodes stay where they are.
-    GroupOnly,
-    /// Dissolve the group AND delete its member nodes from the graph.
-    GroupAndMembers,
-    /// Close the dialog without changing anything.
-    Cancel,
-}
-
 /// Fixed palette of subtle tints for group rectangles. Members store
 /// an index into this so the colour serialises as a single u8.
 pub(crate) const GROUP_PALETTE: &[(u8, u8, u8)] = &[
@@ -321,37 +271,12 @@ pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32
     egui::Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
 }
 
-/// State for an in-progress connection drag. Outputs always emit from a
-/// Right placement, so the wire's tangent at the source end is always +X.
-#[derive(Clone, Debug)]
-pub struct DragConnection {
-    pub from_node: NodeId,
-    pub from_port: String,
-    pub from_pos: egui::Pos2,
-}
-
-/// State for the inline text editor inside the PassThrough properties panel.
-#[derive(Debug, Clone)]
-pub struct PassthroughEdit {
-    pub node_id: NodeId,
-    pub abs_path: String,
-    pub archive_path: String,
-    pub content: String,
-    pub is_dirty: bool,
-}
-
-/// Floating in-app text editor — used by the Edit Map Info button and any
-/// future "open this file" action. Lives outside the side panels so it can
-/// be resized and scrolled freely.
-#[derive(Debug, Clone)]
-pub struct FileEditor {
-    /// Absolute path on disk; what we read from and write back to.
-    pub(crate) abs_path: String,
-    /// Bundle-relative path (forward slashes) for display.
-    pub(crate) archive_path: String,
-    pub(crate) content: String,
-    pub(crate) is_dirty: bool,
-}
+pub(crate) use crate::dialog::{
+    confirm_key_display_name, ConfirmAction, ConfirmDialog, DialogState, FileEditor,
+    GroupDeleteChoice, PassthroughEdit, PendingAction, UnsavedDecision,
+    CONFIRM_KEY_DELETE_CONNECTED_NODE,
+};
+pub(crate) use crate::editor::DragConnection;
 
 /// What kind of palette item is being dragged. Regular node types
 /// drop as a single node; macros drop as a SubGraph block plus a
@@ -376,163 +301,13 @@ pub use crate::paint::{
     BrushState, BrushTarget, BrushTool, InspectorMode, PaintSession, SculptState,
 };
 
-/// Plain-data snapshot of SMF ground-shading inputs (lighting +
-/// water-absorption). Returned by `BarEditorApp::smf_lighting` and
-/// consumed by `bar-app` to populate the renderer's per-frame
-/// `SmfLighting`. Lives in `bar-gui` so callers can read it without
-/// pulling in `bar-render` as a transitive dep.
-#[derive(Clone, Copy, Debug)]
-pub struct SmfLightingSnapshot {
-    pub sun_dir: [f32; 3],
-    pub ground_ambient: [f32; 3],
-    pub ground_diffuse: [f32; 3],
-    pub ground_specular: [f32; 3],
-    pub specular_exponent: f32,
-    pub water_absorb: [f32; 3],
-    pub water_base: [f32; 3],
-    pub water_min: [f32; 3],
-}
+pub use crate::editor::SmfLightingSnapshot;
 
-/// Action waiting on the user's response to an unsaved-changes confirmation.
-/// Once the dialog resolves, the chosen action is performed (after Save when
-/// the user picks Save, or directly when they pick Discard).
-#[derive(Clone, Debug)]
-pub enum PendingAction {
-    /// The OS or the user asked to close the window.
-    Close,
-    /// The user clicked New Project (Ctrl+N or menu).
-    NewProject,
-    /// The user picked an Open target (file path) and we need to load it after
-    /// resolving the unsaved-changes prompt.
-    OpenPath(std::path::PathBuf),
-    /// The user picked a built-in macro from the File menu.
-    LoadMacro { name: String },
-}
+pub(crate) use crate::editor::{
+    PendingPropsOpen, PropsTarget, PROPS_OPEN_DELAY_MS, PROPS_OPEN_MOVE_TOLERANCE,
+};
 
-/// Generic yes/no/cancel modal state.
-#[derive(Clone, Debug)]
-pub struct ConfirmDialog {
-    pub(crate) title: String,
-    pub(crate) message: String,
-    /// Action label for the affirmative button (e.g. "Delete", "Discard").
-    pub(crate) affirm_label: String,
-    /// What the affirmative button should trigger.
-    pub(crate) on_affirm: ConfirmAction,
-    /// When `Some`, render a "Don't ask again" checkbox; ticking it
-    /// while affirming adds this key to `settings.suppressed_
-    /// confirmations` so the matching modal type stops appearing.
-    /// Suppression is per-key — flipping the toggle on the
-    /// delete-node modal only affects the delete-node modal, not
-    /// other confirms. Cleared via Preferences.
-    pub(crate) suppression_key: Option<String>,
-    /// Live state of the "Don't ask again" checkbox.
-    pub(crate) dont_ask_again: bool,
-}
-
-/// What the contextual Properties panel is currently editing. Each
-/// variant resolves to a screen-space rect at render time so the
-/// panel can anchor itself relative to the target.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PropsTarget {
-    Node(NodeId),
-    Group(u64),
-}
-
-impl PropsTarget {
-    /// Stable per-target value used to seed the popup's egui Id so
-    /// switching between targets doesn't reuse the same window
-    /// state (which would carry over scroll position etc.).
-    pub(crate) fn id_hash(&self) -> u64 {
-        match self {
-            PropsTarget::Node(n) => n.0,
-            PropsTarget::Group(g) => g ^ 0xA5A5_A5A5_A5A5_A5A5,
-        }
-    }
-}
-
-/// In-flight gate for opening the contextual Properties panel. The
-/// user clicks a node, the click-position and time get captured
-/// here, and `update_pending_props_open` checks each frame whether
-/// the cursor has held still on the target long enough to actually
-/// pop the panel open. Drags / motion / new clicks elsewhere clear
-/// the pending state without ever opening anything.
-#[derive(Clone, Debug)]
-pub struct PendingPropsOpen {
-    pub target: PropsTarget,
-    pub armed_at: Instant,
-    pub armed_pos: egui::Pos2,
-}
-
-/// Delay between releasing a click on a target and the contextual
-/// Properties panel opening. Tuned to feel "intentional, not
-/// trigger-happy" — instant feels like a flicker, anything over
-/// ~150 ms feels sluggish.
-pub(crate) const PROPS_OPEN_DELAY_MS: u64 = 100;
-/// Maximum cursor drift, in screen pixels, allowed during the
-/// post-click hover before the gate resets. Anything beyond this is
-/// treated as the user moving on.
-pub(crate) const PROPS_OPEN_MOVE_TOLERANCE: f32 = 4.0;
-
-/// Suppression keys for the confirmation modals that support
-/// "Don't ask again". One per modal type — extending: add a new
-/// const here, set it on the dialog when opening, give it a
-/// display name in `confirm_key_display_name`, and the
-/// preferences "clear" button picks it up automatically.
-pub(crate) const CONFIRM_KEY_DELETE_CONNECTED_NODE: &str = "delete_connected_node";
-
-/// Friendly label for one of the confirmation keys, used by the
-/// preferences panel. Falls back to the raw key for any keys not
-/// listed (so adding a new modal still shows up sensibly even if
-/// the developer forgets to update this).
-pub(crate) fn confirm_key_display_name(key: &str) -> String {
-    match key {
-        CONFIRM_KEY_DELETE_CONNECTED_NODE => "Delete a node that has wires connected".to_string(),
-        other => other.to_string(),
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) enum ConfirmAction {
-    /// Delete the selected node (already captured in app state).
-    DeleteSelected,
-}
-
-/// Result of the unsaved-changes modal.
-#[derive(Clone, Copy, Debug)]
-pub(crate) enum UnsavedDecision {
-    Save,
-    Discard,
-    Cancel,
-}
-
-/// Current export status, supplied each frame by `bar-app` so the GUI can
-/// render busy state on the bundle buttons.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ExportStatus {
-    /// No export in flight.
-    #[default]
-    Idle,
-    /// Export running for all bundlers in the graph (toolbar click).
-    All,
-    /// Export running for a single bundler.
-    One(NodeId),
-}
-
-impl ExportStatus {
-    /// True if any export is currently in flight.
-    pub fn is_running(self) -> bool {
-        !matches!(self, ExportStatus::Idle)
-    }
-
-    /// True if the bundler with `id` should render in busy state.
-    pub fn affects(self, id: NodeId) -> bool {
-        matches!(self, ExportStatus::All) || matches!(self, ExportStatus::One(x) if x == id)
-    }
-}
-
-/// In-memory sculpt data — the live accumulator for brush strokes
-/// across all four layers. Written by brush operations; read by
-/// `pack_sculpt_record` at save time and by the renderer for live
+pub use crate::editor::ExportStatus;
 
 /// Top-level UI composition the user sees. Each variant maps to
 /// one file in `crate::layouts::*` that decides which panels are
@@ -560,76 +335,7 @@ pub enum Layout {
     Sculpt3D,
 }
 
-/// Identity fields the bundler reads when generating `mapinfo.lua`
-/// — name, shortname, description, author, version. These mirror
-/// the same-named fields on `Recipe`. Keeping them in one struct
-/// rather than five loose fields on `BarEditorApp` makes the
-/// "this is a single source of truth that the recipe is built
-/// from" relationship explicit, and shrinks `apply_project` /
-/// `build_project` / `reset_project` accordingly.
-#[derive(Default, Clone, Debug)]
-pub struct RecipeMeta {
-    /// Optional shortname (`mapinfo.shortname`). When `None` the
-    /// bundler falls back to the project name (the long display
-    /// name). Lets a long display name like "Kolmog Estuary 1v1"
-    /// coexist with a tighter id like `kolmog_1v1`.
-    pub shortname: Option<String>,
-    /// Free-form description (`mapinfo.description`). Empty string
-    /// is allowed.
-    pub description: String,
-    /// Optional author. When `None` the bundler falls back to
-    /// `"bar-editor"`.
-    pub author: Option<String>,
-    /// Optional map version string (`"3"`, `"playtest-2"`). When
-    /// `None` the bundler falls back to `"1.0"`.
-    pub version: Option<String>,
-}
-
-/// Modal / popup / transient-feedback UI state, grouped here so the
-/// god-object on top doesn't have to mention every individual flag.
-/// Anything that's "is some dialog or transient overlay currently
-/// visible / queued?" lives here. Things that are *targets* of a
-/// dialog (e.g. `active_props`) or that *configure* a panel's
-/// content (e.g. `validation_filter`, `mapinfo_tab`) stay on
-/// `BarEditorApp` because their lifetimes extend past the dialog.
-#[derive(Default)]
-pub struct DialogState {
-    /// Whether the validation panel window is open.
-    pub show_validation_panel: bool,
-    /// Whether the 2D inspector window is open.
-    pub show_inspector: bool,
-    /// Whether the structured Map Info editor window is open.
-    pub show_mapinfo_editor: bool,
-    /// Whether the Preferences window is open.
-    pub show_settings: bool,
-    /// Whether the About dialog is open.
-    pub show_about: bool,
-    /// True while the "pick which file is the map info" picker
-    /// modal is open.
-    pub show_map_info_picker: bool,
-    /// True for one frame after the user accepts an unsaved-changes
-    /// close so `bar-app` can let the window actually close.
-    pub allow_close: bool,
-    /// Generic confirm-dialog state (delete confirmation, etc.).
-    pub(crate) confirm_dialog: Option<ConfirmDialog>,
-    /// Pending action that's blocked on the unsaved-changes confirm
-    /// dialog. `Some` means a modal is currently open.
-    pub(crate) pending_action: Option<PendingAction>,
-    /// In-app floating text editor (Edit Map Info / future "open
-    /// file" triggers). `None` when no editor is open.
-    pub(crate) file_editor: Option<FileEditor>,
-    /// Transient toast message shown over the canvas
-    /// (e.g. "Autosaved 2s ago"). `(message, until_instant)`.
-    pub toast: Option<(String, Instant)>,
-    /// Status bar message — replaces toast for non-time-bound
-    /// feedback (last save path, error from a failed load, etc.).
-    pub status_message: Option<String>,
-    /// In-flight click waiting on the 100 ms post-click hover gate
-    /// before the contextual properties panel pops open. Cleared
-    /// by any pointer movement away from the target, by a drag
-    /// start, or once the gate elapses (whichever comes first).
-    pub pending_props_open: Option<PendingPropsOpen>,
-}
+pub(crate) use crate::editor::RecipeMeta;
 
 /// Main application state for the BAR - Map Editor GUI.
 pub struct BarEditorApp {

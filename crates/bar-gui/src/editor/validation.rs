@@ -11,7 +11,27 @@
 //! tab in the Map Info modal -- both are session-scoped UI state that
 //! resets across project boundaries.
 
-use crate::app::{MapInfoTab, ValidationFilter};
+/// Active filter tab in the validation details window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ValidationFilter {
+    All,
+    Error,
+    Warning,
+    Info,
+}
+
+/// Active section in the Map Settings modal -- replaces the
+/// per-section CollapsingHeaders so only one section's controls are
+/// on screen at a time, switched via a tab strip across the top.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MapInfoTab {
+    Identity,
+    Dimensions,
+    Physics,
+    Atmosphere,
+    Lighting,
+    Water,
+}
 
 /// Snapshot of every input `validate_project` reads, in a form cheap
 /// to compare. The editor recomputes this every frame; whenever it
