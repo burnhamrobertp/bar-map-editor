@@ -216,7 +216,7 @@ fn collect_engines(engine_root: &Path) -> Vec<BarEngineVersion> {
             Some((mtime, BarEngineVersion { label, exe }))
         })
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|v| std::cmp::Reverse(v.0));
     found.into_iter().map(|(_, v)| v).collect()
 }
 
@@ -250,7 +250,7 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
             ))
         })
         .collect();
-    found.sort_by(|a, b| b.0.cmp(&a.0));
+    found.sort_by_key(|v| std::cmp::Reverse(v.0));
     found.into_iter().map(|(_, v)| v).collect()
 }
 

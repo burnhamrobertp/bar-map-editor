@@ -245,8 +245,8 @@ fn build_recipe(
     // character=rugged` only sets the string and the noise renders
     // with the type's default frequency/octaves/etc.
     let user_overrides: std::collections::HashSet<&str> = knobs
-        .iter()
-        .filter_map(|(name, _)| {
+        .keys()
+        .filter_map(|name| {
             // Strip prefixes for macro_params bound to specific noise
             // nodes — we just need the inner-node param name.
             template
