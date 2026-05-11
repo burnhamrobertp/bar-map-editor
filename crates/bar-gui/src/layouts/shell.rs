@@ -13,8 +13,8 @@ use std::time::Instant;
 use crate::app::{
     paint_bar_icon, paint_busy_dot, paint_export_icon, paint_inspector_icon, paint_map_info_icon,
     paint_mapinfo_form_icon, paint_startbox_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
-    ExportStatus, GroupDeleteChoice, InspectorMode, Layout, PendingAction, UnsavedDecision,
-    CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab, PendingAction,
+    UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::io::is_text_file;
 use crate::panels::tokens;
@@ -508,7 +508,8 @@ impl BarEditorApp {
                     .on_hover_text(t!("editor.status.open_map_settings"))
                     .clicked()
                 {
-                    self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
+                    self.dialog.show_mapinfo_editor = true;
+                    self.set_mapinfo_tab(MapInfoTab::Dimensions);
                 }
                 ui.separator();
                 if let Some(ref msg) = self.dialog.status_message {

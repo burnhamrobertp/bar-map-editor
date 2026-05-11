@@ -288,6 +288,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                             let dim_finding = dim_finding_w.or(dim_finding_d);
                             outline_finding(ui, dim_finding, |ui| {
                                 ui.horizontal(|ui| {
+                                    ui.label(t!("editor.map_settings.map_size_label"));
                                     let mut wv = (*w).saturating_sub(1) / 64;
                                     if ui
                                         .add_sized(

@@ -73,6 +73,7 @@
     },
     "map_settings": {
       "title": "Map settings",
+      "map_size_label": "Map Size",
       "tab": {
         "identity": "Identity",
         "dimensions": "Dimensions",
