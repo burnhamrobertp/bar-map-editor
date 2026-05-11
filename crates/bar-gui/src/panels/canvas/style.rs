@@ -89,6 +89,9 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::HeightSelect
         | NodeType::SplatMap
         | NodeType::AutoTexture
+        | NodeType::RockSoil
+        | NodeType::Vegetation
+        | NodeType::TextureOverlay
         | NodeType::NormalMap
         | NodeType::GrassMap
         | NodeType::SpecularMap => tokens::NODE_CAT_TEXTURE,
