@@ -103,6 +103,25 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // darkening. 0 disables AO; 1.0 keeps the full effect.
             ("ao_strength", ParamValue::Float(1.0)),
         ],
+        NodeType::RockSoil => vec![
+            ("rock_color", ParamValue::String("807870".to_string())),
+            ("soil_color", ParamValue::String("8B6914".to_string())),
+            ("slope_threshold", ParamValue::Float(0.4)),
+            ("slope_blend", ParamValue::Float(0.3)),
+            ("ao_strength", ParamValue::Float(0.8)),
+        ],
+        NodeType::Vegetation => vec![
+            ("vegetation_color", ParamValue::String("4A7020".to_string())),
+            ("dry_color", ParamValue::String("8B7355".to_string())),
+            ("altitude_max", ParamValue::Float(0.6)),
+            ("slope_cutoff", ParamValue::Float(0.5)),
+            ("slope_blend", ParamValue::Float(0.2)),
+            ("ao_strength", ParamValue::Float(0.6)),
+        ],
+        NodeType::TextureOverlay => vec![
+            ("blend_mode", ParamValue::String("over".to_string())),
+            ("opacity", ParamValue::Float(1.0)),
+        ],
         NodeType::SpecularMap => vec![
             ("rock_specular", ParamValue::Float(0.6)),
             ("flat_specular", ParamValue::Float(0.2)),
@@ -231,6 +250,7 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "tundra",
             "lunar",
         ]),
+        (NodeType::TextureOverlay, "blend_mode") => Some(&["over", "multiply", "screen", "add"]),
         (NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise, "character") => {
             Some(&[
                 "rolling_hills",

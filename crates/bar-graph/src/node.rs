@@ -43,6 +43,15 @@ pub enum NodeType {
     /// steep slopes. Exposes slope/AO/rock-colour controls; the
     /// gradient palette itself is built-in for now.
     AutoTexture,
+    /// Slope-driven two-tone colorizer: soil on flat terrain, rock on steep.
+    /// Smoothstep transition across a configurable threshold band.
+    RockSoil,
+    /// Altitude+slope colorizer with alpha-encoded vegetation coverage.
+    /// Green below altitude_max + slope_cutoff; fades to dry/bare above either.
+    Vegetation,
+    /// Porter-Duff compositor for Color layers. Blends overlay on top of base
+    /// using an optional distribution heightmap (falls back to overlay alpha).
+    TextureOverlay,
 
     // Map layers
     NormalMap,
@@ -354,6 +363,30 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("slope", "Slope Map", PortKind::Heightmap),
                 Port::new("control", "Control", PortKind::Control),
                 Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::RockSoil => (
+            vec![
+                Port::new("input", "Heightmap", PortKind::Heightmap),
+                Port::new("slope", "Slope Map", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::Vegetation => (
+            vec![
+                Port::new("input", "Heightmap", PortKind::Heightmap),
+                Port::new("slope", "Slope Map", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::TextureOverlay => (
+            vec![
+                Port::new("base", "Base", PortKind::Color),
+                Port::new("overlay", "Overlay", PortKind::Color),
+                Port::new("distribution", "Distribution", PortKind::Heightmap),
             ],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),
