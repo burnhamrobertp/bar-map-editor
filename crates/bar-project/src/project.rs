@@ -14,25 +14,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::recipe::Recipe;
 
-/// Project-level sculpt overlays. Stored as sidecar files next to the
-/// .barproj. Merged on top of graph eval output at export time.
-/// All fields are bar:// paths; None means no sculpt data for that layer.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct SculptRecord {
-    /// 16-bit grayscale PNG, biased: 32768 == 0 delta, range maps to [-1, +1].
-    #[serde(default)]
-    pub height: Option<String>,
-    /// 16-bit grayscale PNG: paint value [0..1]; separate alpha channel
-    /// implies no-paint where 0.
-    #[serde(default)]
-    pub metal: Option<String>,
-    #[serde(default)]
-    pub type_map: Option<String>,
-    /// RGBA PNG: rgb = painted colour, alpha = paint coverage mask.
-    #[serde(default)]
-    pub texture: Option<String>,
-}
-
 /// A complete project file — recipe + editor layout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -41,9 +22,6 @@ pub struct Project {
     /// Editor layout state (node positions, etc.).
     #[serde(default)]
     pub layout: EditorLayout,
-    /// Project-level sculpt overlays applied on top of graph output at export.
-    #[serde(default)]
-    pub sculpt: SculptRecord,
 }
 
 /// Editor visual state that isn't part of the pipeline logic.
@@ -198,7 +176,6 @@ impl Project {
         Self {
             recipe,
             layout: EditorLayout::default(),
-            sculpt: SculptRecord::default(),
         }
     }
 

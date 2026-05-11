@@ -8,8 +8,8 @@
 use eframe::egui;
 
 use crate::app::{
-    apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp, BrushTarget,
-    BrushTool, InspectorMode,
+    apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp, BrushTool,
+    InspectorMode,
 };
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
@@ -77,66 +77,14 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             // Brush controls (only shown in Sculpt mode).
             if app.paint().inspector_mode == InspectorMode::Sculpt {
                 ui.horizontal(|ui| {
-                    ui.label("Target");
-                    let current_target = app.paint().brush.target;
-                    for target in [
-                        BrushTarget::Heightmap,
-                        BrushTarget::Color,
-                        BrushTarget::Metalmap,
-                        BrushTarget::Typemap,
-                    ] {
-                        let enabled = target.is_available();
-                        let resp = ui.add_enabled(
-                            enabled,
-                            egui::SelectableLabel::new(current_target == target, target.label()),
-                        );
-                        if !enabled {
-                            resp.clone()
-                                .on_disabled_hover_text("Coming soon - see docs/3d-painting-plan.md");
-                        }
-                        if enabled && resp.clicked() {
-                            app.paint_mut().brush.target = target;
+                    let current_tool = app.paint().brush.tool;
+                    for tool in [BrushTool::Raise, BrushTool::Lower, BrushTool::Smooth, BrushTool::Flatten] {
+                        let resp = ui.add(egui::SelectableLabel::new(current_tool == tool, tool.label()));
+                        if resp.clicked() {
+                            app.paint_mut().brush.tool = tool;
                         }
                     }
                 });
-                if app.paint().brush.target == BrushTarget::Color {
-                    ui.horizontal(|ui| {
-                        ui.label("Brush colour");
-                        let rgb = app.paint().brush.color_rgb;
-                        let mut c = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                        if ui.color_edit_button_srgba(&mut c).changed() {
-                            app.paint_mut().brush.color_rgb = [c.r(), c.g(), c.b()];
-                        }
-                    });
-                }
-                if matches!(
-                    app.paint().brush.target,
-                    BrushTarget::Metalmap | BrushTarget::Typemap
-                ) {
-                    let label = match app.paint().brush.target {
-                        BrushTarget::Metalmap => "Density",
-                        BrushTarget::Typemap => "Type id (x255)",
-                        _ => "Value",
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(label);
-                        ui.add(
-                            egui::Slider::new(&mut app.paint_mut().brush.paint_value, 0.0..=1.0)
-                                .clamping(egui::SliderClamping::Always),
-                        );
-                    });
-                }
-                if app.paint().brush.target == BrushTarget::Heightmap {
-                    ui.horizontal(|ui| {
-                        let current_tool = app.paint().brush.tool;
-                        for tool in [BrushTool::Raise, BrushTool::Lower, BrushTool::Smooth, BrushTool::Flatten] {
-                            let resp = ui.add(egui::SelectableLabel::new(current_tool == tool, tool.label()));
-                            if resp.clicked() {
-                                app.paint_mut().brush.tool = tool;
-                            }
-                        }
-                    });
-                }
                 ui.horizontal(|ui| {
                     ui.label("Radius");
                     ui.add(
@@ -321,18 +269,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         .map(|hm| format!("{}x{} px", hm.width(), hm.height()))
                         .unwrap_or_else(|| "(no preview)".to_string());
                     ui.weak(format!("Heightmap: {h_label}"));
-                    if app.paint().sculpt.dirty {
-                        ui.label(
-                            egui::RichText::new("- sculpted")
-                                .color(egui::Color32::from_rgb(255, 200, 80)),
-                        );
-                    }
                     if ui.button("Reset to graph output").clicked() {
                         let p = app.paint_mut();
                         p.heightmap = None;
                         p.texture = None;
                         p.texture_rev = p.heightmap_rev;
-                        p.sculpt = Default::default();
                     }
                     let can_save = app.paint().heightmap.is_some();
                     ui.add_enabled_ui(can_save, |ui| {
@@ -403,7 +344,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 apply_brush_dab(hm, hx, hy, &p.brush);
             }
             p.heightmap_rev = p.heightmap_rev.wrapping_add(1);
-            p.sculpt.dirty = true;
         }
         app.mark_dirty();
     }

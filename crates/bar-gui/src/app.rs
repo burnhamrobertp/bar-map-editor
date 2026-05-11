@@ -157,9 +157,7 @@ pub(crate) struct PaletteDrag {
     pub label: String,
 }
 
-pub use crate::paint::{
-    BrushState, BrushTarget, BrushTool, InspectorMode, PaintSession, SculptState,
-};
+pub use crate::paint::{BrushState, BrushTool, InspectorMode, PaintSession};
 
 pub use crate::editor::SmfLightingSnapshot;
 
@@ -745,9 +743,6 @@ impl BarEditorApp {
     /// edits and ignore the incoming heightmap. Cleared by starting a
     /// new project.
     pub fn set_inspector_heightmap(&mut self, hm: bar_data::Heightmap) {
-        if self.paint.sculpt.dirty {
-            return;
-        }
         self.paint.heightmap = Some(hm);
         self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
     }
@@ -759,14 +754,7 @@ impl BarEditorApp {
         if self.active_layout == Layout::Sculpt3D {
             return true;
         }
-        self.paint.inspector_mode == InspectorMode::Sculpt
-            && (self.dialog.show_inspector || self.paint.sculpt.dirty)
-    }
-
-    /// Which data layer the brush currently writes to. The 3D viewport
-    /// uses this to dispatch dabs to the right paint pipeline.
-    pub fn active_brush_target(&self) -> BrushTarget {
-        self.paint.brush.target
+        self.paint.inspector_mode == InspectorMode::Sculpt && self.dialog.show_inspector
     }
 
     /// Current brush radius in heightmap pixels. The 3D viewport

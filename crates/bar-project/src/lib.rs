@@ -18,7 +18,7 @@ pub mod validation;
 
 pub use project::{
     EditorLayout, MacroParamSpec, NodeGroup, NodeSize, PersistedCanvasView, Position, Project,
-    SculptRecord, SubgraphPort,
+    SubgraphPort,
 };
 pub use recipe::{
     AtmosphereSettings, DetailTexture, LightingSettings, MapSettings, OutputConfig, Recipe,

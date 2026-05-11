@@ -133,11 +133,6 @@ struct Session {
     /// session_id so any in-flight result is rejected. A debug override
     /// for cases where the gating logic is suspected of being stuck.
     force_refresh_requested: bool,
-    /// Last brush target for which the Sculpt3D viewport applied a layer
-    /// visualization. When the target changes to Metal/Typemap we push the
-    /// tinted overlay immediately (rather than waiting for the first stroke)
-    /// so the view does not shift unexpectedly mid-session.
-    last_viz_target: Option<bar_gui::BrushTarget>,
 }
 
 impl Session {
@@ -166,7 +161,6 @@ impl Session {
             session_id,
             started_at: Instant::now(),
             force_refresh_requested: false,
-            last_viz_target: None,
         }
     }
 }
@@ -494,7 +488,6 @@ impl eframe::App for AppWrapper {
                 Ok(Some(output_dir)) => {
                     let graph = self.app.graph().clone();
                     let recipe = self.app.recipe_for_export();
-                    let sculpt_snapshot = self.app.sculpt_export_snapshot();
                     let (w, h) = self.app.map.dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
@@ -506,15 +499,12 @@ impl eframe::App for AppWrapper {
                         let msg = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                             Ok(outputs) => {
                                 let filter = run_filter_label.as_deref();
-                                let sculpt_ref =
-                                    sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
                                 match bar_engine::execute_bundlers(
                                     &graph,
                                     &outputs,
                                     &recipe,
                                     &output_dir,
                                     filter,
-                                    sculpt_ref,
                                 ) {
                                     Ok(results) if !results.is_empty() => {
                                         format!(
@@ -902,55 +892,6 @@ impl eframe::App for AppWrapper {
         // unclaimed by bar-gui so we can fill it here with the 3D viewport.
         // `session` is already in scope from the guard above.
         if self.app.active_layout() == bar_gui::Layout::Sculpt3D {
-            // When the user switches to Metal or Typemap, apply the layer
-            // visualization immediately so the view does not shift on first stroke.
-            let cur_target = self.app.paint.brush.target;
-            if session.last_viz_target.as_ref() != Some(&cur_target) {
-                match cur_target {
-                    bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
-                        let cache = match cur_target {
-                            bar_gui::BrushTarget::Metalmap => self.app.paint.metalmap.clone(),
-                            _ => self.app.paint.typemap.clone(),
-                        };
-                        if let (Some(ref gpu), Some(hm)) = (&self.gpu_context, cache) {
-                            let visual = Self::visualise_layer(&hm, cur_target);
-                            if let Some(ref mut renderer) = session.terrain_renderer {
-                                renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
-                                let elapsed = session.started_at.elapsed().as_secs_f32();
-                                let frame_borrow =
-                                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                                renderer.render(
-                                    &gpu.device,
-                                    &gpu.queue,
-                                    &session.camera,
-                                    frame_borrow.as_ref(),
-                                );
-                            }
-                        }
-                    }
-                    bar_gui::BrushTarget::Heightmap | bar_gui::BrushTarget::Color => {
-                        // Switching back to height/color: restore normal terrain albedo.
-                        if let (Some(ref gpu), Some(cb)) =
-                            (&self.gpu_context, self.app.paint.color_buffer.clone())
-                        {
-                            if let Some(ref mut renderer) = session.terrain_renderer {
-                                renderer.update_albedo(&gpu.device, &gpu.queue, &cb);
-                                let elapsed = session.started_at.elapsed().as_secs_f32();
-                                let frame_borrow =
-                                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                                renderer.render(
-                                    &gpu.device,
-                                    &gpu.queue,
-                                    &session.camera,
-                                    frame_borrow.as_ref(),
-                                );
-                            }
-                        }
-                    }
-                }
-                session.last_viz_target = Some(cur_target);
-            }
-
             egui::CentralPanel::default().show(ctx, |ui| {
                 Self::draw_viewport_on(
                     session,
@@ -1031,7 +972,6 @@ impl AppWrapper {
 
         let graph = self.app.graph().clone();
         let recipe = self.app.recipe_for_export();
-        let sculpt_snapshot = self.app.sculpt_export_snapshot();
         let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
         let (tx, rx) = mpsc::channel::<Result<std::path::PathBuf, String>>();
@@ -1042,10 +982,7 @@ impl AppWrapper {
         std::thread::spawn(move || {
             let result = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                 Ok(outputs) => {
-                    let sculpt_ref = sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
-                    match bar_engine::execute_bundlers(
-                        &graph, &outputs, &recipe, &temp_dir, None, sculpt_ref,
-                    ) {
+                    match bar_engine::execute_bundlers(&graph, &outputs, &recipe, &temp_dir, None) {
                         Ok(results) => {
                             // Pick the first SD7 produced. Bundlers can
                             // emit several, but for "Test in BAR" we
@@ -1180,160 +1117,88 @@ impl AppWrapper {
         tracing::debug!("sculpt: dab at hm=({:.1},{:.1})", p.hm_x, p.hm_y);
         let stroke_starting = !response.dragged_by(eframe::egui::PointerButton::Primary)
             || response.drag_started_by(eframe::egui::PointerButton::Primary);
-        // Dispatch the dab to the active brush target. Heightmap →
-        // mutate the inspector's heightmap + record onto a Sculpt
-        // node; Color → write into a PaintedTexture grid; Metalmap /
-        // Typemap remain TODO (see docs/3d-painting-plan.md).
-        let changed = match app.paint.brush.target {
-            bar_gui::BrushTarget::Heightmap => {
-                app.apply_brush_at_heightmap(p.hm_x, p.hm_y, stroke_starting)
+
+        // Snapshot the selected node's id and type before mutably borrowing app.
+        let selected_node: Option<(bar_graph::NodeId, bar_graph::NodeType)> = app
+            .paint
+            .selected_sculpt_layer
+            .and_then(|id| app.graph().get_node(id).map(|n| (id, n.node_type.clone())));
+
+        let changed = if let Some((node_id, ref node_type)) = selected_node {
+            let paintable = matches!(
+                node_type,
+                bar_graph::NodeType::PaintedHeightmap
+                    | bar_graph::NodeType::PaintedTexture
+                    | bar_graph::NodeType::Sculpt
+            );
+            if paintable {
+                if matches!(node_type, bar_graph::NodeType::PaintedTexture) {
+                    app.apply_color_brush_to_sculpt_layer(node_id, p.hm_x, p.hm_y)
+                } else {
+                    app.apply_brush_to_sculpt_layer(node_id, p.hm_x, p.hm_y, stroke_starting)
+                }
+            } else {
+                false
             }
-            bar_gui::BrushTarget::Color => app.apply_color_brush_at_heightmap(p.hm_x, p.hm_y),
-            bar_gui::BrushTarget::Metalmap => app.apply_metal_brush_at_heightmap(p.hm_x, p.hm_y),
-            bar_gui::BrushTarget::Typemap => app.apply_type_brush_at_heightmap(p.hm_x, p.hm_y),
+        } else {
+            false
         };
-        // Color and other-target paints don't mutate the heightmap, so
-        // the renderer's mesh stays put — only the texture (which the
-        // graph re-evaluates when PaintedTexture's data param changes,
-        // bumping the preview cache key) updates. The heightmap-only
-        // branch below re-uploads the mesh when sculpting.
+
         if !changed {
             return;
         }
-        let target = app.paint.brush.target;
-        match target {
-            bar_gui::BrushTarget::Heightmap => {
-                // Heightmap stroke: the inspector heightmap was mutated in-place.
-                // Upload only the dirty rectangle around the brush footprint so
-                // the GPU sees the change without rebuilding the mesh.
-                if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.heightmap.clone()) {
-                    if let Some(ref mut renderer) = session.terrain_renderer {
-                        let br = app.paint.brush.radius_px.ceil() as i32 + 1;
-                        let hm_w = updated.width() as i32;
-                        let hm_h = updated.height() as i32;
-                        let x0 = ((p.hm_x as i32) - br).max(0) as u32;
-                        let y0 = ((p.hm_y as i32) - br).max(0) as u32;
-                        let x1 = ((p.hm_x as i32) + br + 1).min(hm_w) as u32;
-                        let y1 = ((p.hm_y as i32) + br + 1).min(hm_h) as u32;
-                        let rw = x1 - x0;
-                        let rh = y1 - y0;
-                        if rw > 0 && rh > 0 {
-                            let hm_ref = &updated;
-                            let data: Vec<f32> = (y0..y1)
-                                .flat_map(|y| {
-                                    (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0))
-                                })
-                                .collect();
-                            renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
-                        }
-                        let elapsed = session.started_at.elapsed().as_secs_f32();
-                        let frame_borrow =
-                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                        renderer.render(
-                            &gpu.device,
-                            &gpu.queue,
-                            &session.camera,
-                            frame_borrow.as_ref(),
-                        );
-                    }
-                }
-            }
-            bar_gui::BrushTarget::Color => {
-                // Colour stroke: inspector colour-buffer was stamped with the dab.
-                // Re-upload the full albedo texture (colour buffer dimensions may
-                // differ from heightmap, so a region upload would need a coordinate
-                // remap — full upload is simpler and fast enough at these sizes).
-                if let (Some(ref gpu), Some(updated)) =
-                    (gpu_context, app.paint.color_buffer.clone())
-                {
-                    if let Some(ref mut renderer) = session.terrain_renderer {
-                        renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
-                        let elapsed = session.started_at.elapsed().as_secs_f32();
-                        let frame_borrow =
-                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                        renderer.render(
-                            &gpu.device,
-                            &gpu.queue,
-                            &session.camera,
-                            frame_borrow.as_ref(),
-                        );
-                    }
-                }
-            }
-            bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
-                // Metal / type strokes: synthesise a tinted preview colour buffer
-                // from the inspector cache and upload it as the albedo so the user
-                // sees the stamp immediately. Purely visualisation -- the
-                // authoritative metalmap / typemap value flows through the graph.
-                let cache = match target {
-                    bar_gui::BrushTarget::Metalmap => app.paint.metalmap.clone(),
-                    bar_gui::BrushTarget::Typemap => app.paint.typemap.clone(),
-                    _ => None,
-                };
-                if let (Some(ref gpu), Some(hm)) = (gpu_context, cache) {
-                    let visual = Self::visualise_layer(&hm, target);
-                    if let Some(ref mut renderer) = session.terrain_renderer {
-                        renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
-                        let elapsed = session.started_at.elapsed().as_secs_f32();
-                        let frame_borrow =
-                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
-                        renderer.render(
-                            &gpu.device,
-                            &gpu.queue,
-                            &session.camera,
-                            frame_borrow.as_ref(),
-                        );
-                    }
-                }
-            }
-        }
-    }
 
-    /// Synthesise a visualisation colour buffer for the metalmap /
-    /// typemap brush targets so the user can see what they've painted
-    /// without exporting. Metal: red density gradient. Type: discrete
-    /// colour palette per quantised type id (mod 8).
-    fn visualise_layer(
-        hm: &bar_data::Heightmap,
-        target: bar_gui::BrushTarget,
-    ) -> bar_data::ColorBuffer {
-        let w = hm.width();
-        let h = hm.height();
-        let mut cb = bar_data::ColorBuffer::new(w, h).unwrap();
-        let palette: [[f32; 3]; 8] = [
-            [0.30, 0.45, 0.30],
-            [0.65, 0.55, 0.30],
-            [0.50, 0.30, 0.30],
-            [0.30, 0.40, 0.55],
-            [0.55, 0.55, 0.55],
-            [0.65, 0.40, 0.55],
-            [0.40, 0.55, 0.55],
-            [0.55, 0.30, 0.30],
-        ];
-        for y in 0..h {
-            for x in 0..w {
-                let v = hm.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
-                let rgba = match target {
-                    bar_gui::BrushTarget::Metalmap => {
-                        // Background = dim grey; metal = orange-red
-                        // gradient by density. Easy to read on top of
-                        // the actual terrain.
-                        let r = 0.20 + v * 0.75;
-                        let g = 0.18 + v * 0.10;
-                        let b = 0.18 + v * 0.05;
-                        [r, g, b, 1.0]
+        let is_color = selected_node
+            .as_ref()
+            .map(|(_, nt)| matches!(nt, bar_graph::NodeType::PaintedTexture))
+            .unwrap_or(false);
+
+        if is_color {
+            // Colour stroke: re-upload the full albedo texture.
+            if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.color_buffer.clone()) {
+                if let Some(ref mut renderer) = session.terrain_renderer {
+                    renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
+                    let elapsed = session.started_at.elapsed().as_secs_f32();
+                    let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                    renderer.render(
+                        &gpu.device,
+                        &gpu.queue,
+                        &session.camera,
+                        frame_borrow.as_ref(),
+                    );
+                }
+            }
+        } else {
+            // Heightmap stroke: upload only the dirty rectangle around the brush.
+            if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.heightmap.clone()) {
+                if let Some(ref mut renderer) = session.terrain_renderer {
+                    let br = app.paint.brush.radius_px.ceil() as i32 + 1;
+                    let hm_w = updated.width() as i32;
+                    let hm_h = updated.height() as i32;
+                    let x0 = ((p.hm_x as i32) - br).max(0) as u32;
+                    let y0 = ((p.hm_y as i32) - br).max(0) as u32;
+                    let x1 = ((p.hm_x as i32) + br + 1).min(hm_w) as u32;
+                    let y1 = ((p.hm_y as i32) + br + 1).min(hm_h) as u32;
+                    let rw = x1 - x0;
+                    let rh = y1 - y0;
+                    if rw > 0 && rh > 0 {
+                        let hm_ref = &updated;
+                        let data: Vec<f32> = (y0..y1)
+                            .flat_map(|y| (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0)))
+                            .collect();
+                        renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
                     }
-                    bar_gui::BrushTarget::Typemap => {
-                        let idx = (v * 7.0).round().clamp(0.0, 7.0) as usize;
-                        let c = palette[idx];
-                        [c[0], c[1], c[2], 1.0]
-                    }
-                    _ => [v, v, v, 1.0],
-                };
-                cb.set(x, y, rgba);
+                    let elapsed = session.started_at.elapsed().as_secs_f32();
+                    let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                    renderer.render(
+                        &gpu.device,
+                        &gpu.queue,
+                        &session.camera,
+                        frame_borrow.as_ref(),
+                    );
+                }
             }
         }
-        cb
     }
 
     /// Draw the 3D viewport panel contents.
@@ -1505,7 +1370,11 @@ impl AppWrapper {
             }
         }
         if sculpt_active && response.drag_stopped_by(eframe::egui::PointerButton::Primary) {
-            app.end_brush_stroke();
+            if let Some(node_id) = app.paint.selected_sculpt_layer {
+                app.end_brush_stroke_on_layer(node_id);
+            } else {
+                app.end_brush_stroke();
+            }
         }
 
         // RMB always orbits regardless of sculpt mode.

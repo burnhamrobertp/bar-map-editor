@@ -1,78 +1,104 @@
-//! Brush dab application that touches multiple sub-states.
+//! Brush dab application onto sculpt-layer nodes.
 //!
-//! These methods live on `BarEditorApp` because each dab touches
-//! `paint` (live cache + sculpt overlay), `project` (mark dirty), and
-//! sometimes the brush state itself (Flatten target). The pure dab-
-//! application math is in `super::brush_math`; this file wires it
-//! into the editor's per-stroke flow.
+//! These methods live on `BarEditorApp` because each dab touches both the
+//! `paint` live cache and the graph. The pure math lives in
+//! `super::brush_math`; this file wires it into the editor's per-stroke flow.
 
-use crate::app::BarEditorApp;
-use crate::paint::brush_math::{
-    apply_brush_dab, stamp_color_dab_in_buffer, stamp_value_dab_in_heightmap,
-};
-use crate::paint::BrushTool;
+use bar_graph::{NodeId, ParamValue};
+
+use crate::app::{mask_hex_encode, BarEditorApp};
+use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer};
+use crate::paint::{BrushTool, LivePaintBuffer};
+
+/// Native resolution of a PaintedTexture canvas (matches executor.rs constant).
+const PAINTED_TEXTURE_RES: u32 = 256;
 
 impl BarEditorApp {
-    /// Apply the current brush at heightmap pixel coordinates. Call
-    /// this once per dab. Setting `stroke_starting = true` captures
-    /// the Flatten target at stroke start. Returns true iff the
-    /// heightmap actually changed.
+    /// Apply the height brush to `node_id` (a `PaintedHeightmap` or `Sculpt`
+    /// node) at heightmap-pixel coordinates.
     ///
-    /// Two effects per dab:
-    /// 1. `sculpt.height_delta` is updated for persistent save/export.
-    /// 2. The inspector heightmap is mutated in-place for instant feedback.
-    pub fn apply_brush_at_heightmap(&mut self, hx: f32, hy: f32, stroke_starting: bool) -> bool {
-        let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
+    /// Initialises the node's live buffer on the first call of a stroke.
+    /// Mutates `paint.heightmap` in parallel for instant 3D viewport feedback.
+    /// Returns true iff any data changed.
+    pub fn apply_brush_to_sculpt_layer(
+        &mut self,
+        node_id: NodeId,
+        hx: f32,
+        hy: f32,
+        stroke_starting: bool,
+    ) -> bool {
+        let (map_w, map_h) = match self.paint.heightmap.as_ref() {
             Some(hm) => (hm.width() as f32, hm.height() as f32),
             None => return false,
         };
-        let dim_w = hm_w as u32;
-        let dim_h = hm_h as u32;
+
+        // Capture flatten target at stroke start.
         if stroke_starting && self.paint.brush.tool == BrushTool::Flatten {
-            let hm = self.paint.heightmap.as_ref().unwrap();
-            let ix = (hx.round() as i32).clamp(0, hm.width() as i32 - 1) as u32;
-            let iy = (hy.round() as i32).clamp(0, hm.height() as i32 - 1) as u32;
-            self.paint.brush.flatten_target = hm.get(ix, iy);
+            if let Some(hm) = self.paint.heightmap.as_ref() {
+                let ix = (hx.round() as i32).clamp(0, hm.width() as i32 - 1) as u32;
+                let iy = (hy.round() as i32).clamp(0, hm.height() as i32 - 1) as u32;
+                self.paint.brush.flatten_target = hm.get(ix, iy);
+            }
         }
-        // Write to the persistent sculpt height delta.
-        if self.paint.sculpt.height_delta.is_none() {
-            self.paint.sculpt.height_delta = bar_data::Heightmap::new(dim_w, dim_h).ok();
+
+        // Determine node resolution.
+        let node_res = match self.graph.get_node(node_id) {
+            Some(n) => match n.params.get("resolution") {
+                Some(ParamValue::UInt(r)) => *r,
+                _ => 256,
+            },
+            None => return false,
+        };
+
+        // Initialise live buffer from the node's current data param.
+        if !self.paint.live_paint.contains_key(&node_id) {
+            let pixels = match self.graph.get_node(node_id) {
+                Some(n) => match n.params.get("data") {
+                    Some(ParamValue::String(s)) => hex_decode_bytes(s),
+                    _ => vec![],
+                },
+                None => return false,
+            };
+            let expected = (node_res * node_res) as usize;
+            let mut f32_data = vec![0.0f32; expected];
+            for (i, &b) in pixels.iter().take(expected).enumerate() {
+                f32_data[i] = b as f32 / 255.0;
+            }
+            let live_hm = bar_data::Heightmap::frbar_data(node_res, node_res, f32_data)
+                .unwrap_or_else(|_| bar_data::Heightmap::new(node_res, node_res).unwrap());
+            self.paint
+                .live_paint
+                .insert(node_id, LivePaintBuffer::Height(live_hm));
         }
-        if let Some(ref mut delta) = self.paint.sculpt.height_delta {
-            apply_brush_dab(delta, hx, hy, &self.paint.brush);
+
+        // Scale coordinates and radius from map resolution to node resolution.
+        let scale_x = node_res as f32 / map_w;
+        let scale_y = node_res as f32 / map_h;
+        let mut scaled_brush = self.paint.brush.clone();
+        scaled_brush.radius_px *= scale_x;
+        let scaled_hx = hx * scale_x;
+        let scaled_hy = hy * scale_y;
+
+        if let Some(LivePaintBuffer::Height(live_hm)) = self.paint.live_paint.get_mut(&node_id) {
+            apply_brush_dab(live_hm, scaled_hx, scaled_hy, &scaled_brush);
         }
-        // Mutate the inspector heightmap for instant visual feedback.
+
+        // Mutate the inspector heightmap for instant 3D viewport feedback.
         if let Some(hm) = self.paint.heightmap.as_mut() {
             apply_brush_dab(hm, hx, hy, &self.paint.brush);
             self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
         }
-        self.paint.sculpt.dirty = true;
+
         self.paint.brush_stroking = true;
         self.project.is_dirty = true;
         true
     }
 
-    /// Mark the end of a 3D-viewport sculpt stroke. Pairs with
-    /// `apply_brush_at_heightmap`. Releases the per-stroke Flatten
-    /// target so the next stroke captures a fresh one.
-    pub fn end_brush_stroke(&mut self) {
-        self.paint.brush_stroking = false;
-        self.paint.brush.flatten_target = None;
-    }
-
-    /// Paint one colour brush dab at heightmap-pixel coordinates.
-    /// Routes to a `TextureSculpt` overlay node inserted between the
-    /// existing `Bundler.texture` source and the Bundler. The dab is
-    /// recorded as a normalised-space entry in the node's `dabs`
-    /// param; on next eval the executor reads the upstream Color,
-    /// replays every recorded dab on top, and outputs the composite.
-    /// Upstream texture pipelines (AutoTexture, imported, painted)
-    /// flow through unchanged — the brush is purely additive overlay
-    /// in the same shape as the heightmap `Sculpt` node.
+    /// Apply the color brush to `node_id` (a `PaintedTexture` node) at
+    /// heightmap-pixel coordinates.
     ///
-    /// Returns true iff a dab was recorded. False when no upstream
-    /// texture exists yet (the user needs to wire one in first).
-    pub fn apply_color_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
+    /// Mutates `paint.color_buffer` for instant viewport feedback.
+    pub fn apply_color_brush_to_sculpt_layer(&mut self, node_id: NodeId, hx: f32, hy: f32) -> bool {
         let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
             Some(hm) => (hm.width(), hm.height()),
             None => return false,
@@ -82,89 +108,138 @@ impl BarEditorApp {
         let v = (hy / hm_h as f32).clamp(0.0, 1.0);
         let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
         let [r, g, b] = self.paint.brush.color_rgb;
-        // Write to the persistent sculpt texture overlay.
-        if self.paint.sculpt.texture_overlay.is_none() {
-            self.paint.sculpt.texture_overlay = bar_data::ColorBuffer::new(hm_w, hm_h).ok();
+
+        // Initialise live color buffer from node's current data param.
+        if !self.paint.live_paint.contains_key(&node_id) {
+            let pixels = match self.graph.get_node(node_id) {
+                Some(n) => match n.params.get("data") {
+                    Some(ParamValue::String(s)) => hex_decode_bytes(s),
+                    _ => vec![],
+                },
+                None => return false,
+            };
+            let res = PAINTED_TEXTURE_RES as usize;
+            let expected = res * res * 3;
+            let mut cb =
+                bar_data::ColorBuffer::new(PAINTED_TEXTURE_RES, PAINTED_TEXTURE_RES).unwrap();
+            if pixels.len() == expected {
+                for py in 0..res {
+                    for px in 0..res {
+                        let idx = (py * res + px) * 3;
+                        cb.set(
+                            px as u32,
+                            py as u32,
+                            [
+                                pixels[idx] as f32 / 255.0,
+                                pixels[idx + 1] as f32 / 255.0,
+                                pixels[idx + 2] as f32 / 255.0,
+                                1.0,
+                            ],
+                        );
+                    }
+                }
+            }
+            self.paint
+                .live_paint
+                .insert(node_id, LivePaintBuffer::Color(cb));
         }
-        if let Some(ref mut cb) = self.paint.sculpt.texture_overlay {
-            stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
+
+        // Apply dab to the live color buffer at native texture resolution.
+        if let Some(LivePaintBuffer::Color(live_cb)) = self.paint.live_paint.get_mut(&node_id) {
+            stamp_color_dab_in_buffer(live_cb, u, v, ru, [r, g, b]);
         }
-        // Mirror into the live cache for instant viewport feedback.
+
+        // Mirror into the live color_buffer cache for instant viewport feedback.
         if let Some(ref mut cb) = self.paint.color_buffer {
             stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
         }
-        self.paint.sculpt.dirty = true;
+
+        self.paint.brush_stroking = true;
         self.project.is_dirty = true;
         true
     }
 
-    /// Paint one metalmap dab into the sculpt metal overlay.
-    pub fn apply_metal_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
-        let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
-            Some(hm) => (hm.width(), hm.height()),
-            None => return false,
+    /// Encode the live paint buffer for `node_id` and write it to the node's
+    /// `data` param. Pushes an undo snapshot and marks the node dirty so the
+    /// preview re-evaluates. Removes the buffer from `live_paint`.
+    pub fn flush_live_paint(&mut self, node_id: NodeId) {
+        let Some(buffer) = self.paint.live_paint.remove(&node_id) else {
+            return;
         };
-        let map_dim = (hm_w.max(hm_h) as f32).max(1.0);
-        let u = (hx / hm_w as f32).clamp(0.0, 1.0);
-        let v = (hy / hm_h as f32).clamp(0.0, 1.0);
-        let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
-        let value = self.paint.brush.paint_value.clamp(0.0, 1.0);
-        if self.paint.sculpt.metal_overlay.is_none() {
-            self.paint.sculpt.metal_overlay = bar_data::Heightmap::new(hm_w, hm_h).ok();
+        let data_hex = match buffer {
+            LivePaintBuffer::Height(hm) => {
+                let res = hm.width();
+                let hm_ref = &hm;
+                let pixels: Vec<u8> = (0..res)
+                    .flat_map(|y| {
+                        (0..res).map(move |x| {
+                            let v = hm_ref.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+                            (v * 255.0).round() as u8
+                        })
+                    })
+                    .collect();
+                mask_hex_encode(&pixels)
+            }
+            LivePaintBuffer::Color(cb) => {
+                let res = cb.width();
+                let cb_ref = &cb;
+                let pixels: Vec<u8> = (0..res)
+                    .flat_map(|y| {
+                        (0..res).flat_map(move |x| {
+                            let rgba = cb_ref.get(x, y).unwrap_or([0.0; 4]);
+                            [
+                                (rgba[0] * 255.0).round() as u8,
+                                (rgba[1] * 255.0).round() as u8,
+                                (rgba[2] * 255.0).round() as u8,
+                            ]
+                        })
+                    })
+                    .collect();
+                mask_hex_encode(&pixels)
+            }
+        };
+        self.push_undo("Paint layer");
+        if let Some(node) = self.graph.get_node_mut(node_id) {
+            node.params
+                .insert("data".to_string(), ParamValue::String(data_hex));
+            node.mark_dirty();
         }
-        if self.paint.sculpt.metal_alpha.is_none() {
-            self.paint.sculpt.metal_alpha = bar_data::Heightmap::new(hm_w, hm_h).ok();
-        }
-        if let Some(ref mut hm) = self.paint.sculpt.metal_overlay {
-            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
-        }
-        if let Some(ref mut hm) = self.paint.sculpt.metal_alpha {
-            stamp_value_dab_in_heightmap(hm, u, v, ru, 1.0);
-        }
-        // Mirror into the live metalmap cache for instant feedback.
-        if self.paint.metalmap.is_none() {
-            self.paint.metalmap = bar_data::Heightmap::new(hm_w, hm_h).ok();
-        }
-        if let Some(ref mut hm) = self.paint.metalmap {
-            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
-        }
-        self.paint.sculpt.dirty = true;
-        self.project.is_dirty = true;
-        true
     }
 
-    /// Paint one typemap dab into the sculpt type overlay.
-    pub fn apply_type_brush_at_heightmap(&mut self, hx: f32, hy: f32) -> bool {
-        let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
-            Some(hm) => (hm.width(), hm.height()),
-            None => return false,
-        };
-        let map_dim = (hm_w.max(hm_h) as f32).max(1.0);
-        let u = (hx / hm_w as f32).clamp(0.0, 1.0);
-        let v = (hy / hm_h as f32).clamp(0.0, 1.0);
-        let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
-        let value = self.paint.brush.paint_value.clamp(0.0, 1.0);
-        if self.paint.sculpt.type_overlay.is_none() {
-            self.paint.sculpt.type_overlay = bar_data::Heightmap::new(hm_w, hm_h).ok();
-        }
-        if self.paint.sculpt.type_alpha.is_none() {
-            self.paint.sculpt.type_alpha = bar_data::Heightmap::new(hm_w, hm_h).ok();
-        }
-        if let Some(ref mut hm) = self.paint.sculpt.type_overlay {
-            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
-        }
-        if let Some(ref mut hm) = self.paint.sculpt.type_alpha {
-            stamp_value_dab_in_heightmap(hm, u, v, ru, 1.0);
-        }
-        // Mirror into the live typemap cache for instant feedback.
-        if self.paint.typemap.is_none() {
-            self.paint.typemap = bar_data::Heightmap::new(hm_w, hm_h).ok();
-        }
-        if let Some(ref mut hm) = self.paint.typemap {
-            stamp_value_dab_in_heightmap(hm, u, v, ru, value);
-        }
-        self.paint.sculpt.dirty = true;
-        self.project.is_dirty = true;
-        true
+    /// End a 3D viewport sculpt stroke: flush the live buffer to the graph,
+    /// clear the stroke flag, and release the Flatten target.
+    pub fn end_brush_stroke_on_layer(&mut self, node_id: NodeId) {
+        self.flush_live_paint(node_id);
+        self.paint.brush_stroking = false;
+        self.paint.brush.flatten_target = None;
+    }
+
+    /// End a preview-only stroke (2D inspector). Clears stroke flags without
+    /// writing back to node params.
+    pub fn end_brush_stroke(&mut self) {
+        self.paint.brush_stroking = false;
+        self.paint.brush.flatten_target = None;
+    }
+}
+
+/// Decode a hex string produced by `mask_hex_encode` back to raw bytes.
+fn hex_decode_bytes(s: &str) -> Vec<u8> {
+    let s = s.as_bytes();
+    let n = s.len() / 2;
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let hi = nibble(s[i * 2]);
+        let lo = nibble(s[i * 2 + 1]);
+        out.push((hi << 4) | lo);
+    }
+    out
+}
+
+fn nibble(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 0,
     }
 }

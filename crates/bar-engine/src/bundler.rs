@@ -8,7 +8,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use bar_graph::{FileRef, GraphEngine, NodeId, NodeOutputs, NodeType, ParamValue, PortValue};
-use bar_project::SculptRecord;
 
 use crate::recipe::Recipe;
 use crate::targets::{
@@ -40,18 +39,12 @@ pub fn find_bundler_nodes(graph: &GraphEngine) -> Vec<NodeId> {
 }
 
 /// Execute all bundler nodes (or a specific one by label).
-///
-/// `sculpt` is an optional `(record, project_dir)` pair. When present,
-/// `apply_sculpt_record` merges the sculpt layers on top of the graph
-/// output before the codec step. Pass `None` when no sculpt data is
-/// available (e.g. the project was not saved yet).
 pub fn execute_bundlers(
     graph: &GraphEngine,
     outputs: &NodeOutputs,
     recipe: &Recipe,
     output_dir: &Path,
     filter_label: Option<&str>,
-    sculpt: Option<(&SculptRecord, &Path)>,
 ) -> Result<Vec<BundlerResult>> {
     let bundler_ids = find_bundler_nodes(graph);
     let mut results = Vec::new();
@@ -66,7 +59,7 @@ pub fn execute_bundlers(
             }
         }
 
-        let result = execute_single_bundler(graph, outputs, bundler_id, recipe, output_dir, sculpt)
+        let result = execute_single_bundler(graph, outputs, bundler_id, recipe, output_dir)
             .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
 
         results.push(result);
@@ -82,7 +75,6 @@ fn execute_single_bundler(
     bundler_id: NodeId,
     recipe: &Recipe,
     output_dir: &Path,
-    sculpt: Option<(&SculptRecord, &Path)>,
 ) -> Result<BundlerResult> {
     let width = recipe.output.width;
     let height = recipe.output.height;
@@ -108,12 +100,7 @@ fn execute_single_bundler(
     };
 
     // Collect layers from bundler's connected inputs
-    let mut layers = collect_bundler_layers(graph, outputs, bundler_id);
-
-    // Merge project-level sculpt overlays on top of graph output.
-    if let Some((record, project_dir)) = sculpt {
-        apply_sculpt_record(&mut layers, record, project_dir, width, height);
-    }
+    let layers = collect_bundler_layers(graph, outputs, bundler_id);
 
     // Collect file references
     let file_refs = collect_bundler_files(graph, outputs, bundler_id);
@@ -337,181 +324,6 @@ fn collect_bundler_files(
     }
 
     files
-}
-
-/// Merge project-level sculpt overlays on top of the collected layer set.
-///
-/// For height: load the biased 16-bit PNG, convert to f32 delta,
-/// elementwise-add to `layers.heightmap`, clamp to [0, 1]. If no base
-/// heightmap exists, the sculpt height is used as-is (no-nodes workflow).
-/// For metal / type / texture: load value + alpha PNGs, lerp toward the
-/// sculpt value where alpha > 0. Layers with no sculpt data pass through.
-fn apply_sculpt_record(
-    layers: &mut LayerSet,
-    record: &SculptRecord,
-    project_dir: &Path,
-    width: u32,
-    height: u32,
-) {
-    use bar_data::Heightmap;
-
-    if let Some(ref url) = record.height {
-        let abs = resolve_bar_url(url, project_dir);
-        if let Ok(delta) = load_height_delta_png(&abs, width, height) {
-            match layers.heightmap.as_mut() {
-                Some(base) => {
-                    for y in 0..height {
-                        for x in 0..width {
-                            if let (Some(b), Some(d)) = (base.get(x, y), delta.get(x, y)) {
-                                let _ = base.set(x, y, (b + d).clamp(0.0, 1.0));
-                            }
-                        }
-                    }
-                }
-                None => {
-                    layers.heightmap = Some(delta);
-                }
-            }
-        }
-    }
-
-    if let Some(ref url) = record.metal {
-        let abs = resolve_bar_url(url, project_dir);
-        if let Ok(overlay) = load_png_as_heightmap(&abs, width, height) {
-            let base = layers.metalmap.get_or_insert_with(|| {
-                Heightmap::new(width, height).unwrap_or_else(|_| {
-                    Heightmap::frbar_data(width, height, vec![0.0; (width * height) as usize])
-                        .unwrap()
-                })
-            });
-            lerp_heightmap_overlay(base, &overlay);
-        }
-    }
-
-    if let Some(ref url) = record.type_map {
-        let abs = resolve_bar_url(url, project_dir);
-        if let Ok(overlay) = load_png_as_heightmap(&abs, width, height) {
-            let base = layers.typemap.get_or_insert_with(|| {
-                Heightmap::new(width, height).unwrap_or_else(|_| {
-                    Heightmap::frbar_data(width, height, vec![0.0; (width * height) as usize])
-                        .unwrap()
-                })
-            });
-            lerp_heightmap_overlay(base, &overlay);
-        }
-    }
-
-    if let Some(ref url) = record.texture {
-        let abs = resolve_bar_url(url, project_dir);
-        if let Ok(overlay) = load_png_as_color_buffer(&abs, width, height) {
-            let base = layers.texture.get_or_insert_with(|| {
-                bar_data::ColorBuffer::new(width, height)
-                    .unwrap_or_else(|_| bar_data::ColorBuffer::new(1, 1).unwrap())
-            });
-            lerp_color_overlay(base, &overlay);
-        }
-    }
-}
-
-fn resolve_bar_url(url: &str, project_dir: &Path) -> std::path::PathBuf {
-    const PREFIX: &str = "bar://";
-    if let Some(rel) = url.strip_prefix(PREFIX) {
-        project_dir.join(rel)
-    } else {
-        std::path::PathBuf::from(url)
-    }
-}
-
-fn load_height_delta_png(path: &Path, w: u32, h: u32) -> anyhow::Result<bar_data::Heightmap> {
-    let img = image::open(path)?.into_luma16();
-    let (iw, ih) = img.dimensions();
-    let mut data = vec![0.0f32; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let sx = (x as u64 * iw as u64 / w as u64) as u32;
-            let sy = (y as u64 * ih as u64 / h as u64) as u32;
-            let raw = img.get_pixel(sx.min(iw - 1), sy.min(ih - 1)).0[0];
-            // Bias: 32768 = 0.0, range [0, 65535] maps to [-1.0, 1.0].
-            data[(y * w + x) as usize] = (raw as f32 - 32768.0) / 32768.0;
-        }
-    }
-    bar_data::Heightmap::frbar_data(w, h, data).map_err(|e| anyhow::anyhow!(e))
-}
-
-fn load_png_as_heightmap(path: &Path, w: u32, h: u32) -> anyhow::Result<bar_data::Heightmap> {
-    let img = image::open(path)?.into_luma16();
-    let (iw, ih) = img.dimensions();
-    let mut data = vec![0.0f32; (w * h) as usize];
-    for y in 0..h {
-        for x in 0..w {
-            let sx = (x as u64 * iw as u64 / w as u64) as u32;
-            let sy = (y as u64 * ih as u64 / h as u64) as u32;
-            let raw = img.get_pixel(sx.min(iw - 1), sy.min(ih - 1)).0[0];
-            data[(y * w + x) as usize] = raw as f32 / 65535.0;
-        }
-    }
-    bar_data::Heightmap::frbar_data(w, h, data).map_err(|e| anyhow::anyhow!(e))
-}
-
-fn load_png_as_color_buffer(path: &Path, w: u32, h: u32) -> anyhow::Result<bar_data::ColorBuffer> {
-    let img = image::open(path)?.into_rgba8();
-    let (iw, ih) = img.dimensions();
-    let mut cb = bar_data::ColorBuffer::new(w, h)?;
-    for y in 0..h {
-        for x in 0..w {
-            let sx = (x as u64 * iw as u64 / w as u64) as u32;
-            let sy = (y as u64 * ih as u64 / h as u64) as u32;
-            let p = img.get_pixel(sx.min(iw - 1), sy.min(ih - 1));
-            cb.set(
-                x,
-                y,
-                [
-                    p[0] as f32 / 255.0,
-                    p[1] as f32 / 255.0,
-                    p[2] as f32 / 255.0,
-                    p[3] as f32 / 255.0,
-                ],
-            );
-        }
-    }
-    Ok(cb)
-}
-
-fn lerp_heightmap_overlay(base: &mut bar_data::Heightmap, overlay: &bar_data::Heightmap) {
-    let w = base.width().min(overlay.width());
-    let h = base.height().min(overlay.height());
-    for y in 0..h {
-        for x in 0..w {
-            if let (Some(_b), Some(v)) = (base.get(x, y), overlay.get(x, y)) {
-                // Treat the overlay value as both paint value and alpha
-                // (non-zero = fully painted in this simple implementation).
-                if v > 0.0 {
-                    let _ = base.set(x, y, v);
-                }
-            }
-        }
-    }
-}
-
-fn lerp_color_overlay(base: &mut bar_data::ColorBuffer, overlay: &bar_data::ColorBuffer) {
-    let w = base.width().min(overlay.width());
-    let h = base.height().min(overlay.height());
-    for y in 0..h {
-        for x in 0..w {
-            if let (Some(b), Some(o)) = (base.get(x, y), overlay.get(x, y)) {
-                let alpha = o[3];
-                if alpha > 0.0 {
-                    let blended = [
-                        b[0] * (1.0 - alpha) + o[0] * alpha,
-                        b[1] * (1.0 - alpha) + o[1] * alpha,
-                        b[2] * (1.0 - alpha) + o[2] * alpha,
-                        1.0,
-                    ];
-                    base.set(x, y, blended);
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
