@@ -947,13 +947,20 @@ impl BarEditorApp {
                         self.handle_edit_map_info_clicked();
                     }
 
-                    // Test in BAR — export the current project, copy the .sd7
-                    // into BAR's maps directory, open the lobby. The user
-                    // navigates to skirmish from there. Greyed out while an
-                    // export is already running so we don't double-fire.
+                    // Test in BAR -- export and launch directly in the engine.
+                    // When multiple game/engine versions are installed a small
+                    // chevron button appears to the right of the main button
+                    // for picking which version to use.
                     ui.add_space(4.0);
-                    let (bar_rect, bar_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    let has_choice = self.bar_versions.has_choice();
+                    let chevron_w = if has_choice { 14.0 } else { 0.0 };
+                    let group_size = egui::vec2(btn_size.x + chevron_w, btn_size.y);
+                    let (group_rect, _) = ui.allocate_exact_size(group_size, egui::Sense::hover());
+
+                    let bar_rect = egui::Rect::from_min_size(group_rect.min, btn_size);
+                    let bar_resp =
+                        ui.interact(bar_rect, ui.id().with("bar_btn"), egui::Sense::click());
+
                     if ui.is_rect_visible(bar_rect) {
                         let bg = if any_running {
                             tokens::BTN_BAR_BLOCKED
@@ -965,17 +972,23 @@ impl BarEditorApp {
                             tokens::BTN_BAR_NORMAL
                         };
                         let painter = ui.painter_at(bar_rect);
-                        painter.rect_filled(bar_rect, 5.0, bg);
+                        let rounding = if has_choice {
+                            egui::CornerRadius {
+                                nw: 5,
+                                sw: 5,
+                                ne: 0,
+                                se: 0,
+                            }
+                        } else {
+                            egui::CornerRadius::same(5)
+                        };
+                        painter.rect_filled(bar_rect, rounding, bg);
                         paint_bar_icon(&painter, bar_rect, egui::Color32::WHITE);
                     }
                     let bar_resp = bar_resp.on_hover_text(
-                        "Test in BAR — export this project and open it in the BAR lobby",
+                        "Test in BAR — export and launch a skirmish directly in the BAR engine",
                     );
                     if !any_running && bar_resp.clicked() {
-                        // Run validation first; refuse to launch if there
-                        // are blocking errors so the user can't ship a
-                        // broken map to BAR. Warnings are advisory and let
-                        // the launch proceed.
                         self.run_validation();
                         if bar_project::has_errors(&self.validation.findings) {
                             self.dialog.show_validation_panel = true;
@@ -983,6 +996,115 @@ impl BarEditorApp {
                                 Some("Test in BAR: fix validation errors first.".to_string());
                         } else {
                             self.preview.test_in_bar_requested = true;
+                        }
+                    }
+
+                    // Chevron -- only rendered when multiple versions exist.
+                    let popup_id = ui.make_persistent_id("bar_version_picker");
+                    if has_choice {
+                        let chevron_rect = egui::Rect::from_min_size(
+                            egui::pos2(bar_rect.max.x, group_rect.min.y),
+                            egui::vec2(chevron_w, btn_size.y),
+                        );
+                        let chevron_resp = ui.interact(
+                            chevron_rect,
+                            ui.id().with("bar_chevron"),
+                            egui::Sense::click(),
+                        );
+                        if ui.is_rect_visible(chevron_rect) {
+                            let bg = if chevron_resp.is_pointer_button_down_on() {
+                                tokens::BTN_BAR_PRESS
+                            } else if chevron_resp.hovered() {
+                                tokens::BTN_BAR_HOVER
+                            } else {
+                                tokens::BTN_BAR_NORMAL
+                            };
+                            let painter = ui.painter_at(chevron_rect);
+                            let rounding = egui::CornerRadius {
+                                nw: 0,
+                                sw: 0,
+                                ne: 5,
+                                se: 5,
+                            };
+                            painter.rect_filled(chevron_rect, rounding, bg);
+                            // 1px divider
+                            painter.line_segment(
+                                [chevron_rect.left_top(), chevron_rect.left_bottom()],
+                                egui::Stroke::new(1.0, egui::Color32::from_black_alpha(60)),
+                            );
+                            // Down-pointing triangle
+                            let cx = chevron_rect.center().x;
+                            let cy = chevron_rect.center().y;
+                            painter.add(egui::Shape::convex_polygon(
+                                vec![
+                                    egui::pos2(cx - 4.0, cy - 2.0),
+                                    egui::pos2(cx + 4.0, cy - 2.0),
+                                    egui::pos2(cx, cy + 2.5),
+                                ],
+                                egui::Color32::WHITE,
+                                egui::Stroke::NONE,
+                            ));
+                        }
+                        if chevron_resp.clicked() {
+                            ui.memory_mut(|m| m.toggle_popup(popup_id));
+                        }
+                    }
+
+                    // Version picker popover.
+                    if ui.memory(|m| m.is_popup_open(popup_id)) {
+                        let popup_pos = egui::pos2(group_rect.min.x, group_rect.max.y + 4.0);
+                        let area_resp = egui::Area::new(popup_id)
+                            .order(egui::Order::Foreground)
+                            .fixed_pos(popup_pos)
+                            .interactable(true)
+                            .movable(false)
+                            .show(ui.ctx(), |ui| {
+                                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                                    ui.set_min_width(180.0);
+                                    if self.bar_versions.game_labels.len() > 1 {
+                                        ui.label("Game");
+                                        for i in 0..self.bar_versions.game_labels.len() {
+                                            let label = self.bar_versions.game_labels[i].clone();
+                                            ui.radio_value(
+                                                &mut self.bar_versions.selected_game,
+                                                i,
+                                                label,
+                                            );
+                                        }
+                                    }
+                                    if self.bar_versions.game_labels.len() > 1
+                                        && self.bar_versions.engine_labels.len() > 1
+                                    {
+                                        ui.separator();
+                                    }
+                                    if self.bar_versions.engine_labels.len() > 1 {
+                                        ui.label("Engine");
+                                        for i in 0..self.bar_versions.engine_labels.len() {
+                                            let label = self.bar_versions.engine_labels[i].clone();
+                                            ui.radio_value(
+                                                &mut self.bar_versions.selected_engine,
+                                                i,
+                                                label,
+                                            );
+                                        }
+                                    }
+                                });
+                            });
+                        // Close on click outside the popup and outside the
+                        // chevron (clicking the chevron uses toggle_popup).
+                        let outside = ui.input(|i| {
+                            i.pointer.any_click()
+                                && !i
+                                    .pointer
+                                    .interact_pos()
+                                    .is_none_or(|p| area_resp.response.rect.contains(p))
+                                && !i
+                                    .pointer
+                                    .interact_pos()
+                                    .is_none_or(|p| group_rect.contains(p))
+                        });
+                        if outside {
+                            ui.memory_mut(|m| m.close_popup());
                         }
                     }
 

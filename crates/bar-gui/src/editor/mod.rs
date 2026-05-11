@@ -18,8 +18,8 @@ pub(crate) mod visuals;
 pub(crate) use canvas::{CanvasState, CanvasView, DragConnection};
 pub use map::SmfLightingSnapshot;
 pub(crate) use map::{MapState, RecipeMeta};
-pub use preview::ExportStatus;
 pub(crate) use preview::PreviewState;
+pub use preview::{BarVersionState, ExportStatus};
 pub(crate) use props_panel::{
     PendingPropsOpen, PropsPanelState, PropsTarget, PROPS_OPEN_DELAY_MS, PROPS_OPEN_MOVE_TOLERANCE,
 };

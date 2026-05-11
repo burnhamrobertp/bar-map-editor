@@ -242,7 +242,7 @@ fn main() -> Result<()> {
         "BAR - Map Editor",
         options,
         Box::new(move |cc| {
-            let app = bar_gui::BarEditorApp::new(cc);
+            let mut app = bar_gui::BarEditorApp::new(cc);
 
             // Extract wgpu render state from eframe for shared GPU access
             let render_state = cc.wgpu_render_state.clone();
@@ -263,6 +263,16 @@ fn main() -> Result<()> {
             // Start with an empty session (no project loaded yet)
             let initial_session = Session::new(&gpu_context, 0);
 
+            // Detect BAR install once at startup and populate the version
+            // picker labels so the toolbar can show the chevron immediately.
+            let bar_install = bar_install::BarVersions::detect();
+            if let Some(ref versions) = bar_install {
+                app.bar_versions.game_labels =
+                    versions.games.iter().map(|g| g.label.clone()).collect();
+                app.bar_versions.engine_labels =
+                    versions.engines.iter().map(|e| e.label.clone()).collect();
+            }
+
             Ok(Box::new(AppWrapper {
                 app,
                 executor,
@@ -273,6 +283,7 @@ fn main() -> Result<()> {
                 sd7_extract_rx: None,
                 test_in_bar_rx: None,
                 pending_export_dir: None,
+                bar_install,
                 session: Some(initial_session),
                 next_session_id: 1,
                 pending_maximize: default_maximized,
@@ -325,6 +336,9 @@ struct AppWrapper {
     /// context (which bundler, optional filter label) so the export
     /// matches what the user clicked even if state changed mid-flow.
     pending_export_dir: Option<PendingExportDir>,
+    /// Detected BAR install with all available game/engine versions.
+    /// `None` when BAR is not installed on this machine.
+    bar_install: Option<bar_install::BarVersions>,
     // ── Per-project session (replaced atomically on every project switch) ──
     session: Option<Session>,
     next_session_id: u64,
@@ -989,15 +1003,15 @@ impl AppWrapper {
     /// background thread that exports the current project to a temp
     /// directory. The completed SD7 path comes back through
     /// `test_in_bar_rx`; `finish_test_in_bar` then copies it into BAR
-    /// and spawns the lobby.
+    /// and launches the engine directly into a skirmish.
     fn start_test_in_bar(&mut self, ctx: &eframe::egui::Context) {
-        let Some(_install) = bar_install::BarInstall::detect() else {
+        if self.bar_install.is_none() {
             self.app.set_status(
                 "BAR install not found. Install Beyond All Reason or set the path manually."
                     .to_string(),
             );
             return;
-        };
+        }
 
         // Export to a temp directory unique to this run so concurrent
         // tests don't collide.
@@ -1055,19 +1069,21 @@ impl AppWrapper {
         });
     }
 
-    /// Copy the just-built SD7 into BAR's maps directory and spawn the
-    /// lobby. Surfaces the result in the status bar.
+    /// Copy the just-built SD7 into BAR's maps directory and launch the
+    /// engine directly into a skirmish using the versions selected in the
+    /// toolbar picker. Surfaces the result in the status bar.
     fn finish_test_in_bar(&mut self, sd7_path: &std::path::Path) {
-        let Some(install) = bar_install::BarInstall::detect() else {
+        let Some(ref install) = self.bar_install else {
             self.app
                 .set_status("BAR install vanished mid-flight".to_string());
             return;
         };
-        match install.launch_lobby_with_map(sd7_path) {
-            Ok(bar_install::LaunchOutcome::LobbyOpened { map_stem, .. }) => {
-                self.app.set_status(format!(
-                    "BAR opened. In the lobby pick Skirmish → map: {map_stem}"
-                ));
+        let game_idx = self.app.bar_versions.selected_game;
+        let engine_idx = self.app.bar_versions.selected_engine;
+        match install.launch_skirmish(sd7_path, game_idx, engine_idx) {
+            Ok(bar_install::LaunchOutcome::EngineStarted { map_stem }) => {
+                self.app
+                    .set_status(format!("BAR started: skirmish on {map_stem}"));
             }
             Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
         }

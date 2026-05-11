@@ -218,6 +218,10 @@ pub struct BarEditorApp {
         raw_window_handle::RawDisplayHandle,
     )>,
     pub preview: crate::editor::PreviewState,
+    /// Available BAR game/engine versions. Populated by `bar-app` at startup
+    /// once the BAR install is detected. Empty (no picker shown) if BAR is
+    /// not installed or only one version of each is present.
+    pub bar_versions: crate::editor::BarVersionState,
     pub dialog: DialogState,
     pub validation: crate::editor::ValidationState,
     pub props: crate::editor::PropsPanelState,
@@ -242,8 +246,8 @@ impl Default for BarEditorApp {
             selection: crate::editor::SelectionState::default(),
             canvas: crate::editor::CanvasState::default(),
             map: crate::editor::MapState {
-                width: 256,
-                height: 256,
+                width: 513,
+                height: 513,
                 min_height: 0.0,
                 max_height: 800.0,
                 ..Default::default()
@@ -252,6 +256,7 @@ impl Default for BarEditorApp {
             project: crate::project::ProjectState::default(),
             parent_window_handles: None,
             preview: crate::editor::PreviewState::default(),
+            bar_versions: crate::editor::BarVersionState::default(),
             dialog: DialogState::default(),
             validation: crate::editor::ValidationState::default(),
             props: crate::editor::PropsPanelState::default(),

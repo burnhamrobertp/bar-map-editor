@@ -9,6 +9,28 @@
 
 use bar_graph::NodeId;
 
+/// UI state for the BAR version picker (game archive + engine binary).
+/// Populated at startup by `bar-app` once the install is detected.
+/// Indices are safe to use as-is: `launch_skirmish` bounds-checks them.
+#[derive(Debug, Clone, Default)]
+pub struct BarVersionState {
+    /// Display labels for available game archives. `game_labels[0]` is
+    /// always "byar:stable (rapid)"; subsequent entries are local archives.
+    pub game_labels: Vec<String>,
+    /// Display labels for available engine versions, newest first.
+    pub engine_labels: Vec<String>,
+    pub selected_game: usize,
+    pub selected_engine: usize,
+}
+
+impl BarVersionState {
+    /// True when there are multiple game or engine versions to choose from,
+    /// which is when the dropdown chevron is shown on the BAR button.
+    pub fn has_choice(&self) -> bool {
+        self.game_labels.len() > 1 || self.engine_labels.len() > 1
+    }
+}
+
 /// Live export busy state. `bar-app` updates this each frame so the
 /// GUI can render busy state on the bundle buttons (and gate clicks).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
