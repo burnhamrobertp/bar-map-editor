@@ -500,7 +500,11 @@ impl BarEditorApp {
                 // dimensions and the rest of the map metadata live in one
                 // place instead of a separate side dialog.
                 if ui
-                    .small_button(format!("Map: {}×{}", self.map.width, self.map.height))
+                    .small_button(format!(
+                        "Map: {}×{}",
+                        self.map.width.saturating_sub(1) / 64,
+                        self.map.height.saturating_sub(1) / 64,
+                    ))
                     .on_hover_text(t!("editor.status.open_map_settings"))
                     .clicked()
                 {

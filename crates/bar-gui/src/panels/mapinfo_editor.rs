@@ -284,74 +284,46 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let dim_finding_min = findings_index.field("dimensions", "min_height");
                         let dim_finding_max = findings_index.field("dimensions", "max_height");
                         {
-                            // Map sizes are expressed in "BAR squares" (N)
-                            // where pixel_dim = N * 64 + 1. The community
-                            // calls these "8x8", "12x8", etc.; each square
-                            // is 512 elmos so an 8x8 map is 4096x4096 elmos.
                             let (w, h) = app.map_dimensions_mut();
-                            outline_finding(ui, dim_finding_w, |ui| {
+                            let dim_finding = dim_finding_w.or(dim_finding_d);
+                            outline_finding(ui, dim_finding, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(t!("common.width"));
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            let elmos = (*w).saturating_sub(1) as u64 * 512;
-                                            ui.label(
-                                                egui::RichText::new(format!("{elmos} elmos"))
-                                                    .weak()
-                                                    .small(),
-                                            );
-                                            let mut wv = (*w).saturating_sub(1) / 64;
-                                            if ui
-                                                .add(
-                                                    egui::DragValue::new(&mut wv)
-                                                        .range(1u32..=512u32)
-                                                        .speed(1.0),
-                                                )
-                                                .changed()
-                                            {
-                                                *w = wv.max(1) * 64 + 1;
-                                                dirty = true;
-                                            }
-                                        },
-                                    );
-                                });
-                            });
-                            outline_finding(ui, dim_finding_d, |ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(t!("common.depth"));
-                                    ui.with_layout(
-                                        egui::Layout::right_to_left(egui::Align::Center),
-                                        |ui| {
-                                            let elmos = (*h).saturating_sub(1) as u64 * 512;
-                                            ui.label(
-                                                egui::RichText::new(format!("{elmos} elmos"))
-                                                    .weak()
-                                                    .small(),
-                                            );
-                                            let mut hv = (*h).saturating_sub(1) / 64;
-                                            if ui
-                                                .add(
-                                                    egui::DragValue::new(&mut hv)
-                                                        .range(1u32..=512u32)
-                                                        .speed(1.0),
-                                                )
-                                                .changed()
-                                            {
-                                                *h = hv.max(1) * 64 + 1;
-                                                dirty = true;
-                                            }
-                                        },
-                                    );
+                                    let mut wv = (*w).saturating_sub(1) / 64;
+                                    if ui
+                                        .add_sized(
+                                            [30.0, 18.0],
+                                            egui::DragValue::new(&mut wv)
+                                                .range(1u32..=512u32)
+                                                .speed(1.0),
+                                        )
+                                        .changed()
+                                    {
+                                        *w = wv.max(1) * 64 + 1;
+                                        dirty = true;
+                                    }
+                                    ui.label("x");
+                                    let mut hv = (*h).saturating_sub(1) / 64;
+                                    if ui
+                                        .add_sized(
+                                            [30.0, 18.0],
+                                            egui::DragValue::new(&mut hv)
+                                                .range(1u32..=512u32)
+                                                .speed(1.0),
+                                        )
+                                        .changed()
+                                    {
+                                        *h = hv.max(1) * 64 + 1;
+                                        dirty = true;
+                                    }
                                 });
                             });
                         }
                         let (mn, mx) = app.map_height_range_mut();
                         dirty |= outline_finding(ui, dim_finding_min, |ui| {
-                            drag_f32(ui, "Min height (elmos)", mn, -2000.0, 4000.0)
+                            drag_f32(ui, "Min height", mn, -2000.0, 4000.0)
                         });
                         dirty |= outline_finding(ui, dim_finding_max, |ui| {
-                            drag_f32(ui, "Max height (elmos)", mx, -2000.0, 4000.0)
+                            drag_f32(ui, "Max height", mx, -2000.0, 4000.0)
                         });
                     }
                     MapInfoTab::Physics => {

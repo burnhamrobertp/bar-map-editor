@@ -259,7 +259,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         app.map_settings_mut().start_positions.clear();
                         app.mark_dirty();
                     }
-                    ui.weak(format!("Map: {map_w}x{map_h} px / {world_w}x{world_h} elmos"));
                 }
                 InspectorMode::Sculpt => {
                     let h_label = app
