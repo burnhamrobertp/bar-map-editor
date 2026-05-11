@@ -211,8 +211,12 @@ jobs:
           path: artifacts
           merge-multiple: true
 
-      - name: Delete existing release if version already tagged
-        run: gh release delete "v${VERSION}" --yes || true
+      - name: Guard against duplicate tag
+        run: |
+          if gh release view "v${VERSION}" > /dev/null 2>&1; then
+            echo "Release v${VERSION} already exists -- bump Cargo.toml version before merging to master"
+            exit 1
+          fi
 
       - name: Create GitHub Release
         run: |
