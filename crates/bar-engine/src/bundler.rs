@@ -160,7 +160,9 @@ fn execute_single_bundler(
     // Write via codec
     let written = codec.write(&config, &plan, &layers, &staging_dir)?;
 
-    // Copy file references into staging
+    // Copy file references into staging.
+    // mapinfo.lua is special: if the codec already generated one, merge
+    // the original's unknown keys into it rather than overwriting.
     for file_ref in &file_refs {
         let src = Path::new(&file_ref.path);
         let dest = staging_dir.join(&file_ref.bundle_path);
@@ -168,13 +170,35 @@ fn execute_single_bundler(
             std::fs::create_dir_all(parent)?;
         }
         if src.exists() {
-            std::fs::copy(src, &dest).with_context(|| {
-                format!(
-                    "Failed to copy file reference: {} → {}",
-                    src.display(),
-                    dest.display()
-                )
-            })?;
+            let is_mapinfo = file_ref
+                .bundle_path
+                .trim_start_matches("./")
+                .eq_ignore_ascii_case("mapinfo.lua");
+            if is_mapinfo && dest.exists() {
+                match (std::fs::read_to_string(src), std::fs::read_to_string(&dest)) {
+                    (Ok(original), Ok(generated)) => {
+                        let merged =
+                            crate::targets::spring_smf::merge_mapinfo_lua(&generated, &original);
+                        std::fs::write(&dest, merged).with_context(|| {
+                            format!("Failed to write merged mapinfo.lua: {}", dest.display())
+                        })?;
+                    }
+                    _ => {
+                        tracing::warn!(
+                            "[{}] Could not merge mapinfo.lua; keeping editor-generated version",
+                            node.label
+                        );
+                    }
+                }
+            } else {
+                std::fs::copy(src, &dest).with_context(|| {
+                    format!(
+                        "Failed to copy file reference: {} -> {}",
+                        src.display(),
+                        dest.display()
+                    )
+                })?;
+            }
         } else {
             tracing::warn!(
                 "[{}] File reference not found, skipping: {}",

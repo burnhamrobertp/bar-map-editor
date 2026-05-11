@@ -536,6 +536,242 @@ impl SpringSmfCodec {
     }
 }
 
+// ── mapinfo.lua merge ────────────────────────────────────────────────────────
+
+/// Byte offset of the opening `{` in `local mapinfo = { ... }`.
+fn find_mapinfo_open(lua: &str) -> Option<usize> {
+    let header = lua.find("local mapinfo")?;
+    lua[header..].find('{').map(|r| header + r)
+}
+
+/// Byte offset of the closing `}` of the mapinfo table.
+fn find_mapinfo_close(lua: &str) -> usize {
+    let open = match find_mapinfo_open(lua) {
+        Some(p) => p,
+        None => return lua.len(),
+    };
+    let bytes = lua.as_bytes();
+    let mut depth: i32 = 0;
+    let mut in_str = false;
+    let mut str_char = b'"';
+    let mut i = open;
+    while i < bytes.len() {
+        if in_str {
+            if bytes[i] == b'\\' {
+                i += 2;
+                continue;
+            }
+            if bytes[i] == str_char {
+                in_str = false;
+            }
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'"' | b'\'' => {
+                in_str = true;
+                str_char = bytes[i];
+                i += 1;
+            }
+            b'-' if i + 1 < bytes.len() && bytes[i + 1] == b'-' => {
+                i += 2;
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'{' => {
+                depth += 1;
+                i += 1;
+            }
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+    lua.len()
+}
+
+/// Extract `(key, raw_block)` pairs for each top-level assignment in the
+/// mapinfo table. `raw_block` is the verbatim text from the key name up to
+/// and including the trailing comma (or up to the closing `}` for the last
+/// entry), trimmed of surrounding whitespace.
+fn mapinfo_top_level_entries(lua: &str) -> Vec<(String, String)> {
+    let table_open = match find_mapinfo_open(lua) {
+        Some(p) => p,
+        None => return Vec::new(),
+    };
+    // Work inside the outer `{`.
+    let chars: Vec<char> = lua[table_open + 1..].chars().collect();
+    let n = chars.len();
+    let mut i = 0usize;
+    let mut depth: i32 = 0; // 0 = top-level inside mapinfo table
+    let mut entries: Vec<(String, String)> = Vec::new();
+
+    while i < n {
+        // String literal — skip contents to avoid false `{` / `}` matches.
+        if (chars[i] == '"' || chars[i] == '\'') && depth == 0 {
+            let q = chars[i];
+            i += 1;
+            while i < n {
+                if chars[i] == '\\' {
+                    i += 2;
+                    continue;
+                }
+                let done = chars[i] == q;
+                i += 1;
+                if done {
+                    break;
+                }
+            }
+            continue;
+        }
+        // Lua comment — skip to EOL at any depth.
+        if chars[i] == '-' && i + 1 < n && chars[i + 1] == '-' {
+            i += 2;
+            while i < n && chars[i] != '\n' {
+                i += 1;
+            }
+            continue;
+        }
+        match chars[i] {
+            '{' => {
+                depth += 1;
+                i += 1;
+            }
+            '}' if depth > 0 => {
+                depth -= 1;
+                i += 1;
+            }
+            '}' => break, // closing brace of mapinfo table
+            c if depth == 0 && (c.is_alphabetic() || c == '_') => {
+                // Start of a top-level key identifier.
+                let entry_start = i;
+                while i < n && (chars[i].is_alphanumeric() || chars[i] == '_') {
+                    i += 1;
+                }
+                let key: String = chars[entry_start..i].iter().collect();
+                // Skip horizontal whitespace.
+                while i < n && (chars[i] == ' ' || chars[i] == '\t') {
+                    i += 1;
+                }
+                // Must be `=` (not `==`).
+                if i < n && chars[i] == '=' && (i + 1 >= n || chars[i + 1] != '=') {
+                    i += 1; // skip `=`
+                            // Capture value until `,` or `}` at depth 0.
+                    let mut val_depth: i32 = 0;
+                    let mut val_in_str = false;
+                    let mut val_str_char = '"';
+                    loop {
+                        if i >= n {
+                            break;
+                        }
+                        if val_in_str {
+                            if chars[i] == '\\' {
+                                i += 2;
+                                continue;
+                            }
+                            if chars[i] == val_str_char {
+                                val_in_str = false;
+                            }
+                            i += 1;
+                            continue;
+                        }
+                        match chars[i] {
+                            '"' | '\'' => {
+                                val_in_str = true;
+                                val_str_char = chars[i];
+                                i += 1;
+                            }
+                            '-' if i + 1 < n && chars[i + 1] == '-' => {
+                                i += 2;
+                                while i < n && chars[i] != '\n' {
+                                    i += 1;
+                                }
+                            }
+                            '{' => {
+                                val_depth += 1;
+                                i += 1;
+                            }
+                            '}' if val_depth > 0 => {
+                                val_depth -= 1;
+                                i += 1;
+                            }
+                            '}' if val_depth == 0 => {
+                                // Last entry; no trailing comma.
+                                let raw: String = chars[entry_start..i].iter().collect();
+                                entries.push((key, raw.trim().to_string()));
+                                break;
+                            }
+                            ',' if val_depth == 0 => {
+                                let raw: String = chars[entry_start..=i].iter().collect();
+                                entries.push((key, raw.trim().to_string()));
+                                i += 1;
+                                break;
+                            }
+                            _ => {
+                                i += 1;
+                            }
+                        }
+                    }
+                }
+                // If not followed by `=`, just skip past whatever it was.
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    entries
+}
+
+/// Merge two `mapinfo.lua` strings. `generated` is authoritative for all
+/// fields the editor manages (name, mapfile, smf block, teams, etc.).
+/// `original` provides any top-level keys absent from `generated` — e.g.
+/// `depend`, `replace`, or custom game-mod entries — which are appended to
+/// the output verbatim. If `generated` doesn't contain a mapinfo table,
+/// `original` is returned unchanged.
+pub fn merge_mapinfo_lua(generated: &str, original: &str) -> String {
+    if !generated.contains("local mapinfo") {
+        return original.to_string();
+    }
+
+    let gen_keys: std::collections::HashSet<String> = mapinfo_top_level_entries(generated)
+        .into_iter()
+        .map(|(k, _)| k)
+        .collect();
+
+    let extras: Vec<String> = mapinfo_top_level_entries(original)
+        .into_iter()
+        .filter(|(k, _)| !gen_keys.contains(k))
+        .map(|(_, raw)| raw)
+        .collect();
+
+    if extras.is_empty() {
+        return generated.to_string();
+    }
+
+    let close = find_mapinfo_close(generated);
+    let mut result = generated[..close].to_string();
+    if !result.ends_with('\n') {
+        result.push('\n');
+    }
+    for extra in &extras {
+        result.push_str("    ");
+        result.push_str(extra);
+        result.push('\n');
+    }
+    result.push_str(&generated[close..]);
+    result
+}
+
 /// Helper: write a ColorBuffer as PNG.
 fn write_color_png(buffer: &bar_data::ColorBuffer, path: &Path) -> Result<()> {
     let rgba = buffer.to_rgba8();
@@ -779,6 +1015,50 @@ mod tests {
         assert!(lua.contains("description = \"A nice map\""));
         assert!(lua.contains("author      = \"rb\""));
         assert!(lua.contains("version     = \"2\""));
+    }
+
+    #[test]
+    fn merge_preserves_unknown_keys_from_original() {
+        let generated = "local mapinfo = {\n    name = \"foo\",\n    mapfile = \"maps/foo.smf\",\n}\n\nreturn mapinfo\n";
+        let original = "local mapinfo = {\n    name = \"old\",\n    depend = { \"BAR\" },\n    replace = {},\n}\nreturn mapinfo\n";
+        let merged = merge_mapinfo_lua(generated, original);
+        // Editor-managed fields from generated win.
+        assert!(
+            merged.contains("name = \"foo\""),
+            "generated name should win"
+        );
+        assert!(
+            !merged.contains("name = \"old\""),
+            "original name must be dropped"
+        );
+        // Unknown fields from original are preserved.
+        assert!(merged.contains("depend"), "depend should be carried over");
+        assert!(merged.contains("replace"), "replace should be carried over");
+    }
+
+    #[test]
+    fn merge_empty_original_returns_generated() {
+        let generated = "local mapinfo = {\n    name = \"x\",\n}\nreturn mapinfo\n";
+        let merged = merge_mapinfo_lua(generated, "");
+        assert_eq!(merged, generated);
+    }
+
+    #[test]
+    fn merge_empty_generated_returns_original() {
+        let original = "local mapinfo = {\n    name = \"y\",\n}\nreturn mapinfo\n";
+        let merged = merge_mapinfo_lua("", original);
+        assert_eq!(merged, original);
+    }
+
+    #[test]
+    fn merge_no_extras_returns_generated_unchanged() {
+        let generated = "local mapinfo = {\n    name = \"foo\",\n    mapfile = \"maps/foo.smf\",\n}\n\nreturn mapinfo\n";
+        let original = "local mapinfo = {\n    name = \"bar\",\n    mapfile = \"maps/bar.smf\",\n}\nreturn mapinfo\n";
+        let merged = merge_mapinfo_lua(generated, original);
+        assert_eq!(
+            merged, generated,
+            "no extras means generated is returned as-is"
+        );
     }
 
     #[test]
