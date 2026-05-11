@@ -289,32 +289,30 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                             outline_finding(ui, dim_finding, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(t!("editor.map_settings.map_size_label"));
-                                    let mut wv = (*w).saturating_sub(1) / 64;
-                                    if ui
-                                        .add_sized(
-                                            [30.0, 18.0],
-                                            egui::DragValue::new(&mut wv)
-                                                .range(1u32..=512u32)
-                                                .speed(1.0),
-                                        )
-                                        .changed()
-                                    {
-                                        *w = wv.max(1) * 64 + 1;
-                                        dirty = true;
+                                    let wv = (*w).saturating_sub(1) / 64;
+                                    let mut ws = wv.to_string();
+                                    let wr = ui.add_sized(
+                                        [30.0, 18.0],
+                                        egui::TextEdit::singleline(&mut ws),
+                                    );
+                                    if wr.lost_focus() {
+                                        if let Ok(v) = ws.trim().parse::<u32>() {
+                                            *w = v.clamp(1, 512) * 64 + 1;
+                                            dirty = true;
+                                        }
                                     }
                                     ui.label("x");
-                                    let mut hv = (*h).saturating_sub(1) / 64;
-                                    if ui
-                                        .add_sized(
-                                            [30.0, 18.0],
-                                            egui::DragValue::new(&mut hv)
-                                                .range(1u32..=512u32)
-                                                .speed(1.0),
-                                        )
-                                        .changed()
-                                    {
-                                        *h = hv.max(1) * 64 + 1;
-                                        dirty = true;
+                                    let hv = (*h).saturating_sub(1) / 64;
+                                    let mut hs = hv.to_string();
+                                    let hr = ui.add_sized(
+                                        [30.0, 18.0],
+                                        egui::TextEdit::singleline(&mut hs),
+                                    );
+                                    if hr.lost_focus() {
+                                        if let Ok(v) = hs.trim().parse::<u32>() {
+                                            *h = v.clamp(1, 512) * 64 + 1;
+                                            dirty = true;
+                                        }
                                     }
                                 });
                             });
