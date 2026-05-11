@@ -17,6 +17,10 @@ export pipeline, and handles SD7 archive extraction/import. It is used by both
   `HybridExecutor` (dispatches noise, erosion, and blur to GPU via
   `bar-compute` when pixel count exceeds a configurable threshold, falls back to
   CPU otherwise).
+  Key helpers in `executor.rs`: `generate_rock_soil`, `generate_vegetation`,
+  `generate_texture_overlay`, `get_input_color` (reads a `PortValue::Color` input),
+  alongside existing `generate_auto_texture`, `compute_slope_map`, `compute_local_ao`,
+  `apply_color_modulation`, `parse_hex_color_srgb`.
 - Orchestrate the **bundler export pipeline**: after `evaluate_graph`, collect
   the `LayerSet` (heightmap, metalmap, typemap, texture, normalmap, grassmap,
   specular) from the Bundler node's input connections, invoke the matching

@@ -290,6 +290,42 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
+            NodeType::RockSoil => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let slope = get_optional_heightmap(inputs, "slope");
+                let mask = get_optional_heightmap(inputs, "mask");
+                let color = generate_rock_soil(&input, slope.as_ref(), params);
+                let color = apply_color_modulation(
+                    [0.0, 0.0, 0.0, 0.0],
+                    color,
+                    None,
+                    mask.as_ref(),
+                );
+                outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+
+            NodeType::Vegetation => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let slope = get_optional_heightmap(inputs, "slope");
+                let mask = get_optional_heightmap(inputs, "mask");
+                let color = generate_vegetation(&input, slope.as_ref(), params);
+                let color = apply_color_modulation(
+                    [0.0, 0.0, 0.0, 0.0],
+                    color,
+                    None,
+                    mask.as_ref(),
+                );
+                outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+
+            NodeType::TextureOverlay => {
+                let base = get_input_color(inputs, "base")?;
+                let overlay = get_input_color(inputs, "overlay")?;
+                let distribution = get_optional_heightmap(inputs, "distribution");
+                let color = generate_texture_overlay(&base, &overlay, distribution.as_ref(), params);
+                outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+
             // --- Map Layer Generators ---
             NodeType::NormalMap => {
                 let input = get_input_heightmap(inputs, "input")?;
@@ -693,6 +729,19 @@ fn get_input_heightmap(
     match inputs.get(name) {
         Some(PortValue::Heightmap(hm)) => Ok(hm.clone()),
         Some(PortValue::Mask(hm)) => Ok(hm.clone()),
+        _ => Err(EvalError::MissingInput {
+            node: bar_graph::NodeId(0),
+            port: name.to_string(),
+        }),
+    }
+}
+
+fn get_input_color(
+    inputs: &HashMap<String, PortValue>,
+    name: &str,
+) -> Result<ColorBuffer, EvalError> {
+    match inputs.get(name) {
+        Some(PortValue::Color(cb)) => Ok(cb.clone()),
         _ => Err(EvalError::MissingInput {
             node: bar_graph::NodeId(0),
             port: name.to_string(),
@@ -1196,6 +1245,175 @@ fn biome_gradient(name: &str) -> BiomeGradient {
         "lunar" => BIOME_LUNAR,
         _ => BIOME_TEMPERATE,
     }
+}
+
+/// Slope-driven two-tone colorizer. Soil on flat terrain, rock on steep.
+/// Smoothstep transition across [slope_threshold, slope_threshold + slope_blend].
+fn generate_rock_soil(
+    heightmap: &Heightmap,
+    slope_input: Option<&Heightmap>,
+    params: &HashMap<String, ParamValue>,
+) -> ColorBuffer {
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let mut color = ColorBuffer::new(w, h).unwrap();
+
+    let rock_hex = get_string(params, "rock_color", "807870");
+    let soil_hex = get_string(params, "soil_color", "8B6914");
+    let rock_rgb = parse_hex_color_srgb(rock_hex).unwrap_or([0.50, 0.47, 0.44]);
+    let soil_rgb = parse_hex_color_srgb(soil_hex).unwrap_or([0.55, 0.41, 0.08]);
+    let threshold = get_float(params, "slope_threshold", 0.4).clamp(0.0, 1.0);
+    let blend = get_float(params, "slope_blend", 0.3).max(0.001);
+    let ao_strength = get_float(params, "ao_strength", 0.8).clamp(0.0, 1.0);
+
+    let computed_slope = slope_input
+        .is_none()
+        .then(|| compute_slope_map(heightmap));
+    let slope_map = slope_input.unwrap_or_else(|| computed_slope.as_ref().unwrap());
+
+    for y in 0..h {
+        for x in 0..w {
+            let s = slope_map.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+            let t = ((s - threshold) / blend).clamp(0.0, 1.0);
+            // smoothstep
+            let rock_w = t * t * (3.0 - 2.0 * t);
+            let ao = {
+                let raw = compute_local_ao(heightmap, x, y);
+                1.0 - ao_strength * (1.0 - raw)
+            };
+            let r = (soil_rgb[0] + rock_w * (rock_rgb[0] - soil_rgb[0])) * ao;
+            let g = (soil_rgb[1] + rock_w * (rock_rgb[1] - soil_rgb[1])) * ao;
+            let b = (soil_rgb[2] + rock_w * (rock_rgb[2] - soil_rgb[2])) * ao;
+            color.set(x, y, [r, g, b, 1.0]);
+        }
+    }
+    color
+}
+
+/// Altitude+slope colorizer with alpha-encoded vegetation coverage.
+/// Green below altitude_max + slope_cutoff; fades to dry/bare above either.
+fn generate_vegetation(
+    heightmap: &Heightmap,
+    slope_input: Option<&Heightmap>,
+    params: &HashMap<String, ParamValue>,
+) -> ColorBuffer {
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let mut color = ColorBuffer::new(w, h).unwrap();
+
+    let veg_hex = get_string(params, "vegetation_color", "4A7020");
+    let dry_hex = get_string(params, "dry_color", "8B7355");
+    let veg_rgb = parse_hex_color_srgb(veg_hex).unwrap_or([0.29, 0.44, 0.13]);
+    let dry_rgb = parse_hex_color_srgb(dry_hex).unwrap_or([0.55, 0.45, 0.33]);
+    let altitude_max = get_float(params, "altitude_max", 0.6).clamp(0.0, 1.0);
+    let slope_cutoff = get_float(params, "slope_cutoff", 0.5).clamp(0.0, 1.0);
+    let slope_blend = get_float(params, "slope_blend", 0.2).max(0.001);
+    let ao_strength = get_float(params, "ao_strength", 0.6).clamp(0.0, 1.0);
+
+    let computed_slope = slope_input
+        .is_none()
+        .then(|| compute_slope_map(heightmap));
+    let slope_map = slope_input.unwrap_or_else(|| computed_slope.as_ref().unwrap());
+
+    const ALT_BLEND: f32 = 0.1;
+    for y in 0..h {
+        for x in 0..w {
+            let elev = heightmap.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+            let s = slope_map.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
+
+            // alt_factor: 1.0 below altitude_max, fades to 0 over ALT_BLEND band above
+            let alt_t = ((elev - altitude_max) / ALT_BLEND).clamp(0.0, 1.0);
+            let alt_factor = 1.0 - alt_t * alt_t * (3.0 - 2.0 * alt_t);
+
+            // slope_factor: 1.0 below slope_cutoff, fades to 0 over slope_blend above
+            let slp_t = ((s - slope_cutoff) / slope_blend).clamp(0.0, 1.0);
+            let slope_factor = 1.0 - slp_t * slp_t * (3.0 - 2.0 * slp_t);
+
+            let veg_weight = alt_factor * slope_factor;
+            let ao = {
+                let raw = compute_local_ao(heightmap, x, y);
+                1.0 - ao_strength * (1.0 - raw)
+            };
+            let r = (dry_rgb[0] + veg_weight * (veg_rgb[0] - dry_rgb[0])) * ao;
+            let g = (dry_rgb[1] + veg_weight * (veg_rgb[1] - dry_rgb[1])) * ao;
+            let b = (dry_rgb[2] + veg_weight * (veg_rgb[2] - dry_rgb[2])) * ao;
+            color.set(x, y, [r, g, b, veg_weight]);
+        }
+    }
+    color
+}
+
+/// Porter-Duff compositor for Color layers. Blends overlay over base using
+/// `distribution` heightmap as per-pixel weight (falls back to overlay alpha).
+fn generate_texture_overlay(
+    base: &ColorBuffer,
+    overlay: &ColorBuffer,
+    distribution: Option<&Heightmap>,
+    params: &HashMap<String, ParamValue>,
+) -> ColorBuffer {
+    let w = base.width();
+    let h = base.height();
+    let mut out = ColorBuffer::new(w, h).unwrap();
+
+    let blend_mode = get_string(params, "blend_mode", "over");
+    let opacity = get_float(params, "opacity", 1.0).clamp(0.0, 1.0);
+
+    for y in 0..h {
+        for x in 0..w {
+            let b = base.get(x, y).unwrap_or([0.0; 4]);
+            // Sample overlay at the same UV; if sizes differ, nearest neighbour
+            let ov_x = ((x as f32 / w as f32) * overlay.width() as f32) as u32;
+            let ov_y = ((y as f32 / h as f32) * overlay.height() as f32) as u32;
+            let ov = overlay
+                .get(ov_x.min(overlay.width() - 1), ov_y.min(overlay.height() - 1))
+                .unwrap_or([0.0; 4]);
+
+            let dist = if let Some(dm) = distribution {
+                let dm_x = ((x as f32 / w as f32) * dm.width() as f32) as u32;
+                let dm_y = ((y as f32 / h as f32) * dm.height() as f32) as u32;
+                dm.get(dm_x.min(dm.width() - 1), dm_y.min(dm.height() - 1))
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0)
+            } else {
+                ov[3].clamp(0.0, 1.0)
+            };
+            let alpha = (dist * opacity).clamp(0.0, 1.0);
+
+            let (or, og, ob) = (ov[0], ov[1], ov[2]);
+            let (br, bg, bb) = (b[0], b[1], b[2]);
+            let (r, g, ob_) = match blend_mode {
+                "multiply" => (
+                    (br * or * alpha + br * (1.0 - alpha)).clamp(0.0, 1.0),
+                    (bg * og * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0),
+                    (bb * ob * alpha + bb * (1.0 - alpha)).clamp(0.0, 1.0),
+                ),
+                "screen" => {
+                    let sr = 1.0 - (1.0 - br) * (1.0 - or);
+                    let sg = 1.0 - (1.0 - bg) * (1.0 - og);
+                    let sb = 1.0 - (1.0 - bb) * (1.0 - ob);
+                    (
+                        (sr * alpha + br * (1.0 - alpha)).clamp(0.0, 1.0),
+                        (sg * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0),
+                        (sb * alpha + bb * (1.0 - alpha)).clamp(0.0, 1.0),
+                    )
+                }
+                "add" => (
+                    (br + or * alpha).clamp(0.0, 1.0),
+                    (bg + og * alpha).clamp(0.0, 1.0),
+                    (bb + ob * alpha).clamp(0.0, 1.0),
+                ),
+                // "over" and default
+                _ => (
+                    (or * alpha + br * (1.0 - alpha)).clamp(0.0, 1.0),
+                    (og * alpha + bg * (1.0 - alpha)).clamp(0.0, 1.0),
+                    (ob * alpha + bb * (1.0 - alpha)).clamp(0.0, 1.0),
+                ),
+            };
+            let out_a = b[3].max(alpha);
+            out.set(x, y, [r, g, ob_, out_a]);
+        }
+    }
+    out
 }
 
 /// Generate a diffuse texture from a heightmap using elevation-banded
