@@ -48,19 +48,51 @@
       "params": {}
     },
     {
-      "key": "auto_tex",
-      "type": "AutoTexture",
-      "label": "Auto Texture",
-      "params": { "biome": { "String": "tropical" } }
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
+      "params": {
+        "rock_color": { "String": "706858" },
+        "soil_color": { "String": "8B7040" },
+        "slope_threshold": { "Float": 0.35 },
+        "slope_blend": { "Float": 0.3 },
+        "ao_strength": { "Float": 0.8 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Jungle",
+      "params": {
+        "vegetation_color": { "String": "2B6B15" },
+        "dry_color": { "String": "7A6030" },
+        "altitude_max": { "Float": 0.75 },
+        "slope_cutoff": { "Float": 0.5 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.6 }
+      }
+    },
+    {
+      "key": "composite",
+      "type": "TextureOverlay",
+      "label": "Composite",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
     }
   ],
   "connections": [
-    { "from": "shape.output",  "to": "noise.control" },
-    { "from": "noise.output",  "to": "sink.input" },
-    { "from": "sink.output",   "to": "smooth.input" },
-    { "from": "smooth.output", "to": "slope_map.input" },
-    { "from": "smooth.output", "to": "auto_tex.input" },
-    { "from": "slope_map.output", "to": "auto_tex.slope" }
+    { "from": "shape.output",     "to": "noise.control" },
+    { "from": "noise.output",     "to": "sink.input" },
+    { "from": "sink.output",      "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" },
+    { "from": "smooth.output",    "to": "veg.input" },
+    { "from": "slope_map.output", "to": "veg.slope" },
+    { "from": "rock_soil.output", "to": "composite.base" },
+    { "from": "veg.output",       "to": "composite.overlay" }
   ],
   "subgraph": {
     "label": "Archipelago - Sparse",
@@ -69,14 +101,14 @@
     "inputs": [],
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
-      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "auto_tex:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "composite:output" },
       { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    { "name": "island_size",      "label": "Island size",      "kind": "Float", "binding": "noise:frequency", "min": 0.5, "max": 3.0 },
-    { "name": "sea_level",        "label": "Sea level",        "kind": "Float", "binding": "sink:bias",       "min": 0.05,"max": 0.4  },
-    { "name": "coast_smoothness", "label": "Coast smoothness", "kind": "Float", "binding": "smooth:radius",   "min": 0.0, "max": 5.0  },
-    { "name": "seed",             "label": "Seed",             "kind": "UInt",  "binding": "noise:seed" }
+    { "name": "island_size",  "label": "Island size",  "kind": "Float", "binding": "noise:frequency",  "min": 0.5, "max": 3.0 },
+    { "name": "sea_level",    "label": "Sea level",    "kind": "Float", "binding": "sink:bias",        "min": 0.05,"max": 0.4  },
+    { "name": "jungle_cover", "label": "Jungle cover", "kind": "Float", "binding": "veg:altitude_max", "min": 0.3, "max": 0.9  },
+    { "name": "seed",         "label": "Seed",         "kind": "UInt",  "binding": "noise:seed" }
   ]
 }

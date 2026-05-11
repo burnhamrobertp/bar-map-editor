@@ -37,18 +37,24 @@
       "params": {}
     },
     {
-      "key": "auto_tex",
-      "type": "AutoTexture",
-      "label": "Auto Texture",
-      "params": { "biome": { "String": "desert" } }
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Sand and Rock",
+      "params": {
+        "soil_color": { "String": "D4AA64" },
+        "rock_color": { "String": "A07850" },
+        "slope_threshold": { "Float": 0.4 },
+        "slope_blend": { "Float": 0.3 },
+        "ao_strength": { "Float": 0.35 }
+      }
     }
   ],
   "connections": [
-    { "from": "noise.output",    "to": "compress.input" },
-    { "from": "compress.output", "to": "smooth.input" },
-    { "from": "smooth.output",   "to": "slope_map.input" },
-    { "from": "smooth.output",   "to": "auto_tex.input" },
-    { "from": "slope_map.output", "to": "auto_tex.slope" }
+    { "from": "noise.output",     "to": "compress.input" },
+    { "from": "compress.output",  "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" }
   ],
   "subgraph": {
     "label": "Dunes - Rolling",
@@ -57,14 +63,14 @@
     "inputs": [],
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
-      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "auto_tex:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "rock_soil:output" },
       { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    { "name": "dune_size",   "label": "Dune size",   "kind": "Float", "binding": "noise:frequency", "min": 0.8, "max": 4.0 },
-    { "name": "dune_height", "label": "Dune height", "kind": "Float", "binding": "compress:gain",   "min": 0.1, "max": 0.7 },
-    { "name": "smoothness",  "label": "Smoothness",  "kind": "Float", "binding": "smooth:radius",   "min": 1.0, "max": 8.0 },
-    { "name": "seed",        "label": "Seed",        "kind": "UInt",  "binding": "noise:seed" }
+    { "name": "dune_size",   "label": "Dune size",   "kind": "Float",  "binding": "noise:frequency",  "min": 0.8, "max": 4.0 },
+    { "name": "dune_height", "label": "Dune height", "kind": "Float",  "binding": "compress:gain",    "min": 0.1, "max": 0.7 },
+    { "name": "sand_color",  "label": "Sand color",  "kind": "String", "binding": "rock_soil:soil_color" },
+    { "name": "seed",        "label": "Seed",        "kind": "UInt",   "binding": "noise:seed" }
   ]
 }

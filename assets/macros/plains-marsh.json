@@ -37,18 +37,50 @@
       "params": {}
     },
     {
-      "key": "auto_tex",
-      "type": "AutoTexture",
-      "label": "Auto Texture",
-      "params": { "biome": { "String": "tundra" } }
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
+      "params": {
+        "rock_color": { "String": "7A8070" },
+        "soil_color": { "String": "4A5A38" },
+        "slope_threshold": { "Float": 0.6 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.6 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Marsh Vegetation",
+      "params": {
+        "vegetation_color": { "String": "3A6030" },
+        "dry_color": { "String": "6A5838" },
+        "altitude_max": { "Float": 0.92 },
+        "slope_cutoff": { "Float": 0.5 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.5 }
+      }
+    },
+    {
+      "key": "composite",
+      "type": "TextureOverlay",
+      "label": "Composite",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
     }
   ],
   "connections": [
-    { "from": "noise.output",    "to": "compress.input" },
-    { "from": "compress.output", "to": "smooth.input" },
-    { "from": "smooth.output",   "to": "slope_map.input" },
-    { "from": "smooth.output",   "to": "auto_tex.input" },
-    { "from": "slope_map.output", "to": "auto_tex.slope" }
+    { "from": "noise.output",     "to": "compress.input" },
+    { "from": "compress.output",  "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" },
+    { "from": "smooth.output",    "to": "veg.input" },
+    { "from": "slope_map.output", "to": "veg.slope" },
+    { "from": "rock_soil.output", "to": "composite.base" },
+    { "from": "veg.output",       "to": "composite.overlay" }
   ],
   "subgraph": {
     "label": "Plains - Marsh",
@@ -57,14 +89,14 @@
     "inputs": [],
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
-      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "auto_tex:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "composite:output" },
       { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    { "name": "wetness",     "label": "Wetness",     "kind": "Float", "binding": "compress:gain",   "min": 0.05, "max": 0.5  },
-    { "name": "noise_scale", "label": "Noise scale", "kind": "Float", "binding": "noise:frequency", "min": 0.5,  "max": 4.0  },
-    { "name": "smoothing",   "label": "Smoothing",   "kind": "Float", "binding": "smooth:radius",   "min": 0.5,  "max": 6.0  },
-    { "name": "seed",        "label": "Seed",        "kind": "UInt",  "binding": "noise:seed" }
+    { "name": "wetness",      "label": "Wetness",      "kind": "Float", "binding": "compress:gain",            "min": 0.05, "max": 0.5 },
+    { "name": "noise_scale",  "label": "Noise scale",  "kind": "Float", "binding": "noise:frequency",          "min": 0.5,  "max": 4.0 },
+    { "name": "tree_line",    "label": "Vegetation cap","kind": "Float", "binding": "veg:altitude_max",         "min": 0.5,  "max": 1.0 },
+    { "name": "seed",         "label": "Seed",         "kind": "UInt",  "binding": "noise:seed" }
   ]
 }

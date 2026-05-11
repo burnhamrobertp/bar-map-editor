@@ -407,11 +407,6 @@ pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
                 display_name: "Plateaus",
                 json: include_str!("../../../assets/macros/mountain-range-plateaus.json"),
             },
-            MacroEntry {
-                full_name: "Mountain Range - Natural",
-                display_name: "Natural",
-                json: include_str!("../../../assets/macros/mountain-range-natural.json"),
-            },
         ],
     },
     MacroGroup {
@@ -437,11 +432,6 @@ pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
                 display_name: "Marsh",
                 json: include_str!("../../../assets/macros/plains-marsh.json"),
             },
-            MacroEntry {
-                full_name: "Plains - Lush",
-                display_name: "Lush",
-                json: include_str!("../../../assets/macros/plains-lush.json"),
-            },
         ],
     },
     MacroGroup {
@@ -461,11 +451,6 @@ pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
                 full_name: "Archipelago - Sparse",
                 display_name: "Sparse",
                 json: include_str!("../../../assets/macros/archipelago-sparse.json"),
-            },
-            MacroEntry {
-                full_name: "Archipelago - Tropical",
-                display_name: "Tropical",
-                json: include_str!("../../../assets/macros/archipelago-tropical.json"),
             },
         ],
     },
@@ -487,11 +472,6 @@ pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
                 display_name: "Slot",
                 json: include_str!("../../../assets/macros/canyon-slot.json"),
             },
-            MacroEntry {
-                full_name: "Canyon - Badlands",
-                display_name: "Badlands",
-                json: include_str!("../../../assets/macros/canyon-badlands.json"),
-            },
         ],
     },
     MacroGroup {
@@ -511,11 +491,6 @@ pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
                 full_name: "Dunes - Sharp",
                 display_name: "Sharp",
                 json: include_str!("../../../assets/macros/dunes-sharp.json"),
-            },
-            MacroEntry {
-                full_name: "Dunes - Arid",
-                display_name: "Arid",
-                json: include_str!("../../../assets/macros/dunes-arid.json"),
             },
         ],
     },
