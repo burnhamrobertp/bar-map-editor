@@ -460,6 +460,67 @@ fn displacement_runs_with_zero_displacement_is_near_identity() {
     );
 }
 
+#[test]
+fn normalize_maps_range_to_zero_one() {
+    // Input spans 0.2..0.8; after normalize it should span 0.0..1.0.
+    let input = gen(|u, _| 0.2 + u * 0.6);
+    let h = out_hm(
+        &run(NodeType::Normalize, &[], &input_hm("input", input)),
+        "output",
+    );
+    assert_hm_dims(&h);
+    let (mn, mx) = min_max(&h);
+    assert!(
+        mn < 0.01,
+        "min should be near 0.0 after normalize, got {mn}"
+    );
+    assert!(
+        mx > 0.99,
+        "max should be near 1.0 after normalize, got {mx}"
+    );
+}
+
+#[test]
+fn bias_gain_at_neutral_is_identity() {
+    // bias=0.5, gain=0.5 is the identity transform.
+    let input = gen(|u, _| u);
+    let params = &[
+        ("bias", ParamValue::Float(0.5)),
+        ("gain", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(
+            NodeType::BiasGain,
+            params,
+            &input_hm("input", input.clone()),
+        ),
+        "output",
+    );
+    assert_hm_dims(&h);
+    let want = mean(&input);
+    let got = mean(&h);
+    assert!(
+        (want - got).abs() < 0.02,
+        "bias=0.5/gain=0.5 should be near identity: want {want}, got {got}"
+    );
+}
+
+#[test]
+fn bias_gain_high_bias_shifts_midpoint_up() {
+    let input = flat(0.5);
+    let params = &[
+        ("bias", ParamValue::Float(0.8)),
+        ("gain", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(NodeType::BiasGain, params, &input_hm("input", input)),
+        "output",
+    );
+    assert_hm_dims(&h);
+    let m = mean(&h);
+    assert!(m > 0.6, "high bias should push midpoint up, got {m}");
+}
+
 // ── Combiners ───────────────────────────────────────────────────────
 
 #[test]
