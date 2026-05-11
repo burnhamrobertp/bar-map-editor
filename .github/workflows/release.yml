@@ -1,14 +1,13 @@
 name: Release
 
-# Triggered by pushes to `master` (every release commit) and by the
-# manual `workflow_dispatch` button so the pipeline can be exercised
-# from any branch while still in development. No git tags are
-# required — the version comes from `Cargo.toml`'s
-# `[workspace.package].version` plus the GitHub run number, so each
-# successful build produces a uniquely-versioned artifact set.
+# Triggered by pushes to `master` and `release/**` branches, and by the
+# manual `workflow_dispatch` button. Version comes from `Cargo.toml`'s
+# `[workspace.package].version` -- bump that before merging to master to
+# produce a new numbered release. Each push to master creates (or
+# re-creates) the GitHub Release for that version tag.
 on:
   push:
-    branches: [master]
+    branches: [master, "release/**"]
   workflow_dispatch:
 
 env:
@@ -16,37 +15,24 @@ env:
 
 jobs:
   # --------------------------------------------------------------
-  # Resolve the semver string ONCE so every platform job uses the
-  # same value. The base (X.Y.Z) is read from Cargo.toml; the build
-  # suffix is the GitHub run number, which monotonically increases
-  # per workflow invocation. Three flavours are emitted:
-  #
-  #   base       -> "0.1.0"            for tools that demand strict 3-part semver
-  #                                    (NSIS, .app CFBundleShortVersionString)
-  #   semver     -> "0.1.0+build42"    canonical semver with build metadata
-  #   filename   -> "0.1.0-build42"    filesystem-friendly form for artifact names
+  # Resolve the version string ONCE so every platform job uses the
+  # same value. Only the base X.Y.Z from Cargo.toml is used -- no
+  # run-number suffix. Artifact files and the GitHub Release tag all
+  # use this plain semver so the release page stays clean.
   # --------------------------------------------------------------
   version:
     name: Resolve Version
     runs-on: ubuntu-latest
     outputs:
       base: ${{ steps.v.outputs.base }}
-      semver: ${{ steps.v.outputs.semver }}
-      filename: ${{ steps.v.outputs.filename }}
     steps:
       - uses: actions/checkout@v4
       - id: v
         shell: bash
         run: |
-          # Workspace-level version lives under `[workspace.package]`
-          # in the root Cargo.toml; -m1 grabs the first `version =`
-          # which is exactly that.
           BASE=$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"([^"]+)".*/\1/')
-          BUILD=${{ github.run_number }}
           echo "base=${BASE}" >> "$GITHUB_OUTPUT"
-          echo "semver=${BASE}+build${BUILD}" >> "$GITHUB_OUTPUT"
-          echo "filename=${BASE}-build${BUILD}" >> "$GITHUB_OUTPUT"
-          echo "Resolved version: base=${BASE} build=${BUILD}"
+          echo "Resolved version: ${BASE}"
 
   build:
     name: Build (${{ matrix.target }})
@@ -69,9 +55,7 @@ jobs:
             target: aarch64-apple-darwin
             artifact: bar-editor-macos-aarch64
     env:
-      VERSION_BASE: ${{ needs.version.outputs.base }}
-      VERSION_SEMVER: ${{ needs.version.outputs.semver }}
-      VERSION_FILENAME: ${{ needs.version.outputs.filename }}
+      VERSION: ${{ needs.version.outputs.base }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -102,13 +86,13 @@ jobs:
           cp target/${{ matrix.target }}/release/bar-cli dist/
 
           # Portable tarball
-          cd dist && tar czf "../${{ matrix.artifact }}-${VERSION_FILENAME}.tar.gz" * && cd ..
+          cd dist && tar czf "../${{ matrix.artifact }}-${VERSION}.tar.gz" * && cd ..
 
           # AppImage (build-appimage.sh reads $VERSION for naming)
           wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
           chmod +x appimagetool
           export PATH="$PWD:$PATH"
-          VERSION="${VERSION_FILENAME}" ./installer/linux/build-appimage.sh dist .
+          ./installer/linux/build-appimage.sh dist .
 
           # .deb package
           DEB_DIR=deb-pkg
@@ -120,7 +104,7 @@ jobs:
           cp installer/linux/bar-editor.desktop "$DEB_DIR/usr/share/applications/"
           cat > "$DEB_DIR/DEBIAN/control" << EOF
           Package: bar-editor
-          Version: ${VERSION_SEMVER}
+          Version: ${VERSION}
           Section: graphics
           Priority: optional
           Architecture: amd64
@@ -131,7 +115,7 @@ jobs:
            Procedural generation, sculpting, mapinfo editing, validation, and
            SD7 packaging in a single application.
           EOF
-          dpkg-deb --build "$DEB_DIR" "bar-editor_${VERSION_FILENAME}_amd64.deb"
+          dpkg-deb --build "$DEB_DIR" "bar-editor_${VERSION}_amd64.deb"
 
       # --- Windows: NSIS installer + portable zip ---
       - name: Package (Windows)
@@ -143,16 +127,16 @@ jobs:
           Copy-Item target/${{ matrix.target }}/release/bar-cli.exe dist/
 
           # Portable zip
-          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact }}-${env:VERSION_FILENAME}.zip"
+          Compress-Archive -Path dist/* -DestinationPath "${{ matrix.artifact }}-${env:VERSION}.zip"
 
       - name: Build Windows Installer
         if: runner.os == 'Windows'
         uses: joncloud/makensis-action@v4
         with:
           script-file: installer/windows.nsi
-          arguments: /DVERSION=${env:VERSION_BASE}
+          arguments: /DVERSION=${env:VERSION}
         env:
-          VERSION_BASE: ${{ needs.version.outputs.base }}
+          VERSION: ${{ needs.version.outputs.base }}
 
       # --- macOS: portable tarball + .app bundle + .dmg ---
       - name: Package (macOS)
@@ -163,12 +147,9 @@ jobs:
           cp target/${{ matrix.target }}/release/bar-cli dist/
 
           # Portable tarball
-          cd dist && tar czf "../${{ matrix.artifact }}-${VERSION_FILENAME}.tar.gz" * && cd ..
+          cd dist && tar czf "../${{ matrix.artifact }}-${VERSION}.tar.gz" * && cd ..
 
-          # .app bundle. CFBundleShortVersionString must be plain
-          # X.Y.Z, so we use $VERSION_BASE there. Internal app name
-          # is "BAR Map Editor"; CFBundleExecutable matches the
-          # binary name on disk.
+          # .app bundle
           APP_DIR="dist/BAR Map Editor.app/Contents/MacOS"
           mkdir -p "$APP_DIR"
           mkdir -p "dist/BAR Map Editor.app/Contents/Resources"
@@ -183,8 +164,8 @@ jobs:
             <key>CFBundleExecutable</key><string>bar-editor</string>
             <key>CFBundleIdentifier</key><string>com.barmapeditor.app</string>
             <key>CFBundleName</key><string>BAR Map Editor</string>
-            <key>CFBundleVersion</key><string>${VERSION_BASE}</string>
-            <key>CFBundleShortVersionString</key><string>${VERSION_BASE}</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
             <key>LSMinimumSystemVersion</key><string>11.0</string>
             <key>CFBundlePackageType</key><string>APPL</string>
           </dict>
@@ -193,15 +174,11 @@ jobs:
 
           # .dmg packaging the .app + the portable tarball.
           hdiutil create -volname "BAR Map Editor" -srcfolder dist -ov -format UDZO \
-            "${{ matrix.artifact }}-${VERSION_FILENAME}.dmg"
+            "${{ matrix.artifact }}-${VERSION}.dmg"
 
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          # Glob patterns are evaluated against GITHUB_WORKSPACE; the
-          # NSIS OutFile lands wherever makensis was invoked from
-          # (varies between actions versions), so we catch any
-          # `*Setup.exe` anywhere in the tree.
           path: |
             *.tar.gz
             *.zip
@@ -209,3 +186,37 @@ jobs:
             *.deb
             *.dmg
             **/*Setup.exe
+
+  # --------------------------------------------------------------
+  # Create (or update) the GitHub Release for this version tag and
+  # attach all platform artifacts as downloadable assets.
+  # Only runs on master -- release/** builds artifacts but doesn't
+  # publish, so you can iterate on the branch before the final merge.
+  # --------------------------------------------------------------
+  publish:
+    name: Publish GitHub Release
+    needs: [version, build]
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.version.outputs.base }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Delete existing release if version already tagged
+        run: gh release delete "v${VERSION}" --yes || true
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "v${VERSION}" \
+            --title "v${VERSION}" \
+            --generate-notes \
+            artifacts/*
