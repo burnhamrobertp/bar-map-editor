@@ -323,7 +323,12 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
 pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
     matches!(
         (node_type, key),
-        (NodeType::AutoTexture, "rock_color") | (NodeType::PaintedTexture, "brush_color")
+        (NodeType::AutoTexture, "rock_color")
+            | (NodeType::RockSoil, "rock_color")
+            | (NodeType::RockSoil, "soil_color")
+            | (NodeType::Vegetation, "vegetation_color")
+            | (NodeType::Vegetation, "dry_color")
+            | (NodeType::PaintedTexture, "brush_color")
     )
 }
 
