@@ -1,0 +1,104 @@
+{
+  "name": "Plains - Lush",
+  "description": "Rich green plains with dense vegetation cover. Vegetation fills the low rolling terrain; RockSoil handles the sparse rocky ridges. Texture Overlay composites the two layers into a vibrant, grass-heavy result.",
+  "nodes": [
+    {
+      "key": "shape",
+      "type": "Gradient",
+      "label": "Shape",
+      "params": {
+        "direction": { "String": "radial" },
+        "invert": { "Bool": false },
+        "center_x": { "Float": 0.5 },
+        "center_y": { "Float": 0.5 }
+      }
+    },
+    {
+      "key": "rolling",
+      "type": "PerlinNoise",
+      "label": "Rolling",
+      "params": {
+        "character": { "String": "rolling_hills" },
+        "frequency": { "Float": 2.0 },
+        "octaves": { "UInt": 4 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.45 },
+        "seed": { "UInt": 7 }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften",
+      "params": { "radius": { "Float": 2.0 } }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
+      "params": {
+        "rock_color": { "String": "7A6050" },
+        "soil_color": { "String": "9B7B3A" },
+        "slope_threshold": { "Float": 0.6 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.7 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Vegetation",
+      "params": {
+        "vegetation_color": { "String": "4A8020" },
+        "dry_color": { "String": "8B7040" },
+        "altitude_max": { "Float": 0.85 },
+        "slope_cutoff": { "Float": 0.6 },
+        "slope_blend": { "Float": 0.15 },
+        "ao_strength": { "Float": 0.6 }
+      }
+    },
+    {
+      "key": "composite",
+      "type": "TextureOverlay",
+      "label": "Composite",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    }
+  ],
+  "connections": [
+    { "from": "shape.output",     "to": "rolling.control" },
+    { "from": "rolling.output",   "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" },
+    { "from": "smooth.output",    "to": "veg.input" },
+    { "from": "slope_map.output", "to": "veg.slope" },
+    { "from": "rock_soil.output", "to": "composite.base" },
+    { "from": "veg.output",       "to": "composite.overlay" }
+  ],
+  "subgraph": {
+    "label": "Plains - Lush",
+    "color_idx": 1,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "composite:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "rolling_amount",   "label": "Rolling amount",   "kind": "Float", "binding": "rolling:frequency",      "min": 0.5, "max": 4.0 },
+    { "name": "vegetation_cover", "label": "Vegetation cover", "kind": "Float", "binding": "veg:altitude_max",       "min": 0.4, "max": 1.0 },
+    { "name": "vegetation_color", "label": "Vegetation color", "kind": "String", "binding": "veg:vegetation_color" },
+    { "name": "seed",             "label": "Seed",             "kind": "UInt",  "binding": "rolling:seed" }
+  ]
+}

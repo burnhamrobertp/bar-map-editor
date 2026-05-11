@@ -1,0 +1,125 @@
+{
+  "name": "Canyon - Badlands",
+  "description": "Arid red-rock canyons with sparse desert scrub. RockSoil paints the canyon walls and plateau tops in red-orange sandstone and dark brown rock. Vegetation places a thin scrub layer only at the lowest canyon floors where moisture collects.",
+  "nodes": [
+    {
+      "key": "ridges",
+      "type": "RidgedNoise",
+      "label": "Canyon Ridges",
+      "params": {
+        "character": { "String": "ridges" },
+        "frequency": { "Float": 2.0 },
+        "octaves": { "UInt": 5 },
+        "lacunarity": { "Float": 2.2 },
+        "persistence": { "Float": 0.5 },
+        "seed": { "UInt": 41 }
+      }
+    },
+    {
+      "key": "invert_terrain",
+      "type": "Invert",
+      "label": "Plateau / Canyon",
+      "params": {}
+    },
+    {
+      "key": "lift",
+      "type": "BiasGain",
+      "label": "Lift Plateau",
+      "params": {
+        "bias": { "Float": 0.65 },
+        "gain": { "Float": 0.5 }
+      }
+    },
+    {
+      "key": "pre_slope",
+      "type": "SlopeMap",
+      "label": "Wall Steepness",
+      "params": {}
+    },
+    {
+      "key": "inv_slope",
+      "type": "Invert",
+      "label": "Invert Slope",
+      "params": {}
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Adaptive Soften",
+      "params": { "radius": { "Float": 1.0 } }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
+      "params": {
+        "soil_color": { "String": "C0703A" },
+        "rock_color": { "String": "7A4A2A" },
+        "slope_threshold": { "Float": 0.2 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.75 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Desert Scrub",
+      "params": {
+        "vegetation_color": { "String": "2A5010" },
+        "dry_color": { "String": "704020" },
+        "altitude_max": { "Float": 0.1 },
+        "slope_cutoff": { "Float": 0.1 },
+        "slope_blend": { "Float": 0.08 },
+        "ao_strength": { "Float": 0.5 }
+      }
+    },
+    {
+      "key": "composite",
+      "type": "TextureOverlay",
+      "label": "Composite",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    }
+  ],
+  "connections": [
+    { "from": "ridges.output",         "to": "invert_terrain.input" },
+    { "from": "invert_terrain.output", "to": "lift.input" },
+    { "from": "lift.output",           "to": "pre_slope.input" },
+    { "from": "pre_slope.output",      "to": "inv_slope.input" },
+    { "from": "inv_slope.output",      "to": "smooth.control" },
+    { "from": "lift.output",           "to": "smooth.input" },
+    { "from": "smooth.output",         "to": "slope_map.input" },
+    { "from": "smooth.output",         "to": "rock_soil.input" },
+    { "from": "slope_map.output",      "to": "rock_soil.slope" },
+    { "from": "smooth.output",         "to": "veg.input" },
+    { "from": "slope_map.output",      "to": "veg.slope" },
+    { "from": "rock_soil.output",      "to": "composite.base" },
+    { "from": "veg.output",            "to": "composite.overlay" }
+  ],
+  "subgraph": {
+    "label": "Canyon - Badlands",
+    "color_idx": 4,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "composite:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "canyon_density", "label": "Canyon density", "kind": "Float", "binding": "ridges:frequency",          "min": 1.0, "max": 5.0 },
+    { "name": "plateau_height", "label": "Plateau height", "kind": "Float", "binding": "lift:bias",                 "min": 0.4, "max": 0.9 },
+    { "name": "rock_redness",   "label": "Rock redness",   "kind": "String", "binding": "rock_soil:soil_color" },
+    { "name": "scrub_line",     "label": "Scrub line",     "kind": "Float", "binding": "veg:altitude_max",          "min": 0.0, "max": 0.3 },
+    { "name": "seed",           "label": "Seed",           "kind": "UInt",  "binding": "ridges:seed" }
+  ]
+}

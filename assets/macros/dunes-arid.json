@@ -1,0 +1,97 @@
+{
+  "name": "Dunes - Arid",
+  "description": "Sunbaked sand dunes with no vegetation. RockSoil alone drives the texture: gentle AO shading picks out the shadowed crest troughs while the slope-driven rock blend adds subtle darker tones where the dune faces are steepest.",
+  "nodes": [
+    {
+      "key": "base",
+      "type": "PerlinNoise",
+      "label": "Dune Noise",
+      "params": {
+        "character": { "String": "rolling_hills" },
+        "frequency": { "Float": 3.5 },
+        "octaves": { "UInt": 4 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.45 },
+        "seed": { "UInt": 61 }
+      }
+    },
+    {
+      "key": "wind",
+      "type": "SimplexNoise",
+      "label": "Wind Warp",
+      "params": {
+        "frequency": { "Float": 2.0 },
+        "octaves": { "UInt": 2 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.5 },
+        "seed": { "UInt": 83 }
+      }
+    },
+    {
+      "key": "warp",
+      "type": "Displacement",
+      "label": "Windward Warp",
+      "params": { "strength": { "Float": 0.08 } }
+    },
+    {
+      "key": "compress",
+      "type": "BiasGain",
+      "label": "Compress Amplitude",
+      "params": {
+        "bias": { "Float": 0.5 },
+        "gain": { "Float": 0.35 }
+      }
+    },
+    {
+      "key": "smooth",
+      "type": "Blur",
+      "label": "Soften Crests",
+      "params": { "radius": { "Float": 1.5 } }
+    },
+    {
+      "key": "slope_map",
+      "type": "SlopeMap",
+      "label": "Slope Map",
+      "params": {}
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Sand and Rock",
+      "params": {
+        "soil_color": { "String": "D4AA64" },
+        "rock_color": { "String": "A07850" },
+        "slope_threshold": { "Float": 0.45 },
+        "slope_blend": { "Float": 0.3 },
+        "ao_strength": { "Float": 0.4 }
+      }
+    }
+  ],
+  "connections": [
+    { "from": "base.output",      "to": "warp.input" },
+    { "from": "wind.output",      "to": "warp.displacement" },
+    { "from": "warp.output",      "to": "compress.input" },
+    { "from": "compress.output",  "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" }
+  ],
+  "subgraph": {
+    "label": "Dunes - Arid",
+    "color_idx": 5,
+    "collapsed": true,
+    "inputs": [],
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "rock_soil:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "dune_size",    "label": "Dune size",    "kind": "Float", "binding": "base:frequency",           "min": 1.5, "max": 8.0 },
+    { "name": "dune_height",  "label": "Dune height",  "kind": "Float", "binding": "compress:gain",            "min": 0.1, "max": 0.7 },
+    { "name": "sand_color",   "label": "Sand color",   "kind": "String", "binding": "rock_soil:soil_color" },
+    { "name": "rock_color",   "label": "Rock color",   "kind": "String", "binding": "rock_soil:rock_color" },
+    { "name": "seed",         "label": "Seed",         "kind": "UInt",  "binding": "base:seed" }
+  ]
+}
