@@ -21,6 +21,18 @@ export pipeline, and handles SD7 archive extraction/import. It is used by both
   `generate_texture_overlay`, `get_input_color` (reads a `PortValue::Color` input),
   alongside existing `generate_auto_texture`, `compute_slope_map`, `compute_local_ao`,
   `apply_color_modulation`, `parse_hex_color_srgb`.
+  Noise micro-variation helpers (used by RockSoil and Vegetation for FBM detail):
+  `detail_hash(ix, iy) -> f32` (integer-hash deterministic noise),
+  `detail_value_noise(fx, fy) -> f32` (bilinear interpolation over hash grid),
+  `micro_fbm(ux, uy, base_freq) -> f32` (4-octave value-noise FBM, returns [0,1]).
+  RockSoil semantics: slope-driven; alpha = rock_w (0 on flat, 1 on steep) so it
+  composites only over steep terrain on top of an AutoTexture base. detail_strength
+  (default 0.25) controls FBM micro-variation amplitude.
+  Vegetation semantics: altitude+slope driven; alpha = veg_weight (1 on gentle/low,
+  0 on steep/high) so it composites green tinting only on valid vegetation terrain.
+  detail_strength (default 0.2) controls FBM micro-variation amplitude.
+  TextureOverlay: Porter-Duff compositor; blend_mode "over"/"multiply"/"screen"/"add";
+  optional distribution Heightmap overrides per-pixel alpha from overlay.
 - Orchestrate the **bundler export pipeline**: after `evaluate_graph`, collect
   the `LayerSet` (heightmap, metalmap, typemap, texture, normalmap, grassmap,
   specular) from the Bundler node's input connections, invoke the matching
