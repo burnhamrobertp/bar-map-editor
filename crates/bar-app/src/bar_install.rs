@@ -142,20 +142,28 @@ impl BarVersions {
         // StartPosType=2: players click to place on the minimap during the
         // loading screen -- always works even if the map has no defined
         // start positions yet.
+        //
+        // MyPlayerNum + IsHost are required by the engine to initialise
+        // the local player slot; without them the game Lua crashes once
+        // loading finishes.  TeamLeader in every [TEAMn] must be a valid
+        // player number (0 = the host).
         let script = format!(
             "[GAME]\n{{\n\
             \tMapName={map_name};\n\
             \tGameType={game};\n\
             \tStartPosType=2;\n\
             \tGameStartDelay=4;\n\
+            \tMyPlayerNum=0;\n\
+            \tMyPlayerName=MapTester;\n\
+            \tIsHost=1;\n\
             \n\
             \t[ALLYTEAM0]\n\t{{\n\t\tNumAllies=0;\n\t}}\n\
             \t[TEAM0]\n\t{{\n\t\tAllyTeam=0;\n\t\tTeamLeader=0;\n\t}}\n\
-            \t[PLAYER0]\n\t{{\n\t\tName=MapTester;\n\t\tTeam=0;\n\t\tIsFromDemo=0;\n\t}}\n\
+            \t[PLAYER0]\n\t{{\n\t\tName=MapTester;\n\t\tTeam=0;\n\t}}\n\
             \n\
             \t[ALLYTEAM1]\n\t{{\n\t\tNumAllies=0;\n\t}}\n\
-            \t[TEAM1]\n\t{{\n\t\tAllyTeam=1;\n\t\tTeamLeader=1;\n\t}}\n\
-            \t[AI0]\n\t{{\n\t\tShortName=BARb;\n\t\tTeam=1;\n\t\tHost=0;\n\t}}\n\
+            \t[TEAM1]\n\t{{\n\t\tAllyTeam=1;\n\t\tTeamLeader=0;\n\t}}\n\
+            \t[AI0]\n\t{{\n\t\tName=BARb;\n\t\tShortName=BARb;\n\t\tTeam=1;\n\t\tHost=0;\n\t\tIsFromDemo=0;\n\t}}\n\
             }}\n",
             game = game.archive_name,
         );
