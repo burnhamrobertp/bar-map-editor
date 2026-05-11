@@ -24,3 +24,4 @@ pub mod properties;
 pub mod tokens;
 pub mod validation;
 pub mod welcome;
+pub(crate) mod widgets;

@@ -198,11 +198,11 @@ impl BarEditorApp {
             ui.label("Position");
             let mut pos_val = stops[sel_pi].0;
             if ui
-                .add(
-                    egui::DragValue::new(&mut pos_val)
-                        .speed(0.005)
-                        .range(0.0..=1.0),
-                )
+                .add(crate::panels::widgets::ParamSlider::new(
+                    &mut pos_val,
+                    0.0,
+                    1.0,
+                ))
                 .changed()
             {
                 changed.push((format!("pos_{sel_pi}"), ParamValue::Float(pos_val)));

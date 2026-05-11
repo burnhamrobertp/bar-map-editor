@@ -368,10 +368,18 @@ impl BarEditorApp {
                                         ParamValue::Float(v) => {
                                             let mut val = *v;
                                             ui.label(key);
-                                            if ui
-                                                .add(egui::DragValue::new(&mut val).speed(0.01))
-                                                .changed()
+                                            let changed = if let Some((mn, mx)) =
+                                                bar_graph::param_float_range(&node_type, key)
                                             {
+                                                ui.add(crate::panels::widgets::ParamSlider::new(
+                                                    &mut val, mn, mx,
+                                                ))
+                                                .changed()
+                                            } else {
+                                                ui.add(egui::DragValue::new(&mut val).speed(0.01))
+                                                    .changed()
+                                            };
+                                            if changed {
                                                 changed_params
                                                     .push((key.clone(), ParamValue::Float(val)));
                                             }
@@ -380,13 +388,26 @@ impl BarEditorApp {
                                         ParamValue::UInt(v) => {
                                             let mut val = *v as i32;
                                             ui.label(key);
-                                            if ui
-                                                .add(egui::DragValue::new(&mut val).range(1..=20))
-                                                .changed()
+                                            let changed = if let Some((mn, mx)) =
+                                                bar_graph::param_uint_range(&node_type, key)
                                             {
+                                                let mut vf = val as f32;
+                                                let r = ui.add(
+                                                    crate::panels::widgets::ParamSlider::new(
+                                                        &mut vf, mn as f32, mx as f32,
+                                                    )
+                                                    .integer(),
+                                                );
+                                                val = vf as i32;
+                                                r.changed()
+                                            } else {
+                                                ui.add(egui::DragValue::new(&mut val).range(1..=20))
+                                                    .changed()
+                                            };
+                                            if changed {
                                                 changed_params.push((
                                                     key.clone(),
-                                                    ParamValue::UInt(val as u32),
+                                                    ParamValue::UInt(val.max(0) as u32),
                                                 ));
                                             }
                                             ui.end_row();

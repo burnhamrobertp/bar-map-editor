@@ -580,3 +580,80 @@ pub fn biome_defaults(biome: &str) -> BiomeDefaults {
         },
     }
 }
+
+/// Returns the `[min, max]` range for slider display of the given Float
+/// param, or `None` if the param should use a free-form drag-value.
+pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> {
+    use NodeType::*;
+    Some(match (node_type, key) {
+        // Noise
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "frequency") => (0.1, 32.0),
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "lacunarity") => (1.0, 4.0),
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "persistence") => (0.0, 1.0),
+        // Utility
+        (Constant, "value") => (0.0, 1.0),
+        // Filters
+        (Blur | MaskBlur, "radius") => (0.1, 20.0),
+        (Sharpen, "radius") => (0.1, 10.0),
+        (Sharpen, "strength") => (0.0, 4.0),
+        (Clamp, "min") | (Clamp, "max") => (0.0, 1.0),
+        (Terrace, "smoothing") => (0.0, 1.0),
+        (BiasGain, "bias") | (BiasGain, "gain") => (0.0, 1.0),
+        (Displacement, "strength") => (0.0, 1.0),
+        (Blend, "factor") => (0.0, 1.0),
+        (Sculpt, "scale") => (0.0, 1.0),
+        // Erosion
+        (HydraulicErosion, "erosion_rate") | (HydraulicErosion, "deposition_rate") => (0.0, 0.1),
+        (ThermalErosion, "talus_angle") => (0.0, 1.0),
+        // Select/Mask
+        (HeightSelect, "low") | (HeightSelect, "high") => (0.0, 1.0),
+        (HeightSelect, "falloff") => (0.0, 0.5),
+        (MaskThreshold, "threshold") | (MaskThreshold, "smoothness") => (0.0, 1.0),
+        // Texture
+        (AutoTexture, "water_level") => (0.0, 0.5),
+        (AutoTexture, "beach_width") => (0.0, 0.3),
+        (AutoTexture, "snow_height") => (0.5, 1.0),
+        (AutoTexture, "slope_power") => (0.0, 4.0),
+        (AutoTexture, "slope_blend") | (AutoTexture, "ao_strength") => (0.0, 1.0),
+        (RockSoil, "slope_threshold")
+        | (RockSoil, "slope_blend")
+        | (RockSoil, "ao_strength")
+        | (RockSoil, "detail_strength") => (0.0, 1.0),
+        (Vegetation, "altitude_max")
+        | (Vegetation, "slope_cutoff")
+        | (Vegetation, "slope_blend")
+        | (Vegetation, "ao_strength")
+        | (Vegetation, "detail_strength") => (0.0, 1.0),
+        (LayerBlend, "opacity") => (0.0, 1.0),
+        (NormalMap, "strength") => (0.0, 4.0),
+        (GrassMap, "min_height") | (GrassMap, "max_height") | (GrassMap, "max_slope") => (0.0, 1.0),
+        (GrassMap, "density") => (0.0, 2.0),
+        (GrassMap, "falloff") => (0.0, 0.5),
+        (SpecularMap, "rock_specular")
+        | (SpecularMap, "flat_specular")
+        | (SpecularMap, "water_specular")
+        | (SpecularMap, "snow_specular")
+        | (SpecularMap, "water_height")
+        | (SpecularMap, "snow_height") => (0.0, 1.0),
+        // TextureWeightmap indexed slots
+        (TextureWeightmap, k) if k.starts_with("priority_") => (0.0, 16.0),
+        (TextureWeightmap, k) if k.starts_with("exclusion_") => (0.0, 1.0),
+        // ColorRamp stop positions
+        (ColorRamp, k) if k.starts_with("pos_") => (0.0, 1.0),
+        _ => return None,
+    })
+}
+
+/// Returns the `[min, max]` range for slider display of the given UInt
+/// param, or `None` if the param should use a free-form drag-value.
+pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
+    use NodeType::*;
+    Some(match (node_type, key) {
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "octaves") => (1, 12),
+        (Terrace, "step_count") => (2, 32),
+        (ThermalErosion, "iterations") => (10, 1_000),
+        (TextureWeightmap, "layer_count") => (2, 8),
+        (ColorRamp, "stop_count") => (2, 8),
+        _ => return None,
+    })
+}

@@ -91,40 +91,32 @@ fn outline_finding<R>(
     }
 }
 
-fn drag_f32(ui: &mut egui::Ui, label: &str, value: &mut f32, lo: f32, hi: f32, speed: f32) -> bool {
+fn drag_f32(ui: &mut egui::Ui, label: &str, value: &mut f32, lo: f32, hi: f32) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
         ui.label(label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(
-                    egui::DragValue::new(value)
-                        .range(lo..=hi)
-                        .speed(speed as f64),
-                )
-                .changed()
-            {
-                changed = true;
-            }
-        });
+        if ui
+            .add(crate::panels::widgets::ParamSlider::new(value, lo, hi))
+            .changed()
+        {
+            changed = true;
+        }
     });
     changed
 }
 
 fn drag_u32(ui: &mut egui::Ui, label: &str, value: &mut u32, lo: u32, hi: u32) -> bool {
     let mut changed = false;
-    let mut v = *value as i64;
+    let mut vf = *value as f32;
     ui.horizontal(|ui| {
         ui.label(label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .add(egui::DragValue::new(&mut v).range((lo as i64)..=(hi as i64)))
-                .changed()
-            {
-                *value = v.max(0) as u32;
-                changed = true;
-            }
-        });
+        if ui
+            .add(crate::panels::widgets::ParamSlider::new(&mut vf, lo as f32, hi as f32).integer())
+            .changed()
+        {
+            *value = vf as u32;
+            changed = true;
+        }
     });
     changed
 }
@@ -356,10 +348,10 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         }
                         let (mn, mx) = app.map_height_range_mut();
                         dirty |= outline_finding(ui, dim_finding_min, |ui| {
-                            drag_f32(ui, "Min height (elmos)", mn, -2000.0, 4000.0, 1.0)
+                            drag_f32(ui, "Min height (elmos)", mn, -2000.0, 4000.0)
                         });
                         dirty |= outline_finding(ui, dim_finding_max, |ui| {
-                            drag_f32(ui, "Max height (elmos)", mx, -2000.0, 4000.0, 1.0)
+                            drag_f32(ui, "Max height (elmos)", mx, -2000.0, 4000.0)
                         });
                     }
                     MapInfoTab::Physics => {
@@ -371,36 +363,22 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let f_water = findings_index.field("physics", "water_damage");
                         let s = app.map_settings_mut();
                         dirty |= outline_finding(ui, f_grav, |ui| {
-                            drag_f32(ui, "Gravity", &mut s.gravity, 0.0, 1000.0, 1.0)
+                            drag_f32(ui, "Gravity", &mut s.gravity, 0.0, 1000.0)
                         });
                         dirty |= outline_finding(ui, f_hard, |ui| {
                             drag_u32(ui, "Map hardness", &mut s.map_hardness, 0, 1000)
                         });
                         dirty |= outline_finding(ui, f_tide, |ui| {
-                            drag_f32(ui, "Tidal strength", &mut s.tidal_strength, 0.0, 100.0, 0.5)
+                            drag_f32(ui, "Tidal strength", &mut s.tidal_strength, 0.0, 100.0)
                         });
                         dirty |= outline_finding(ui, f_metal, |ui| {
-                            drag_f32(ui, "Max metal", &mut s.max_metal, 0.0, 10.0, 0.05)
+                            drag_f32(ui, "Max metal", &mut s.max_metal, 0.0, 10.0)
                         });
                         dirty |= outline_finding(ui, f_extr, |ui| {
-                            drag_f32(
-                                ui,
-                                "Extractor radius",
-                                &mut s.extractor_radius,
-                                0.0,
-                                500.0,
-                                1.0,
-                            )
+                            drag_f32(ui, "Extractor radius", &mut s.extractor_radius, 0.0, 500.0)
                         });
                         dirty |= outline_finding(ui, f_water, |ui| {
-                            drag_f32(
-                                ui,
-                                "Water damage / sec",
-                                &mut s.water_damage,
-                                0.0,
-                                1000.0,
-                                1.0,
-                            )
+                            drag_f32(ui, "Water damage / sec", &mut s.water_damage, 0.0, 1000.0)
                         });
                         if ui
                             .checkbox(&mut s.deformable, "Deformable terrain")
@@ -423,16 +401,16 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let f_fc = findings_index.field("atmosphere", "fog_color");
                         let atm = &mut app.map_settings_mut().atmosphere;
                         dirty |= outline_finding(ui, f_min, |ui| {
-                            drag_f32(ui, "Min wind", &mut atm.min_wind, 0.0, 200.0, 0.5)
+                            drag_f32(ui, "Min wind", &mut atm.min_wind, 0.0, 200.0)
                         });
                         dirty |= outline_finding(ui, f_max, |ui| {
-                            drag_f32(ui, "Max wind", &mut atm.max_wind, 0.0, 200.0, 0.5)
+                            drag_f32(ui, "Max wind", &mut atm.max_wind, 0.0, 200.0)
                         });
                         dirty |= outline_finding(ui, f_fs, |ui| {
-                            drag_f32(ui, "Fog start (0-1)", &mut atm.fog_start, 0.0, 1.0, 0.01)
+                            drag_f32(ui, "Fog start (0-1)", &mut atm.fog_start, 0.0, 1.0)
                         });
                         dirty |= outline_finding(ui, f_fe, |ui| {
-                            drag_f32(ui, "Fog end (0-1)", &mut atm.fog_end, 0.0, 1.0, 0.01)
+                            drag_f32(ui, "Fog end (0-1)", &mut atm.fog_end, 0.0, 1.0)
                         });
                         dirty |= outline_finding(ui, f_fc, |ui| {
                             color_rgb(ui, "Fog colour", &mut atm.fog_color)
@@ -446,10 +424,10 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let f_se = findings_index.field("lighting", "spec_exponent");
                         let lit = &mut app.map_settings_mut().lighting;
                         dirty |= outline_finding(ui, f_sun, |ui| {
-                            drag_f32(ui, "Sun X", &mut lit.sun_dir[0], -1.0, 1.0, 0.01)
+                            drag_f32(ui, "Sun X", &mut lit.sun_dir[0], -1.0, 1.0)
                         });
-                        dirty |= drag_f32(ui, "Sun Y", &mut lit.sun_dir[1], -1.0, 1.0, 0.01);
-                        dirty |= drag_f32(ui, "Sun Z", &mut lit.sun_dir[2], -1.0, 1.0, 0.01);
+                        dirty |= drag_f32(ui, "Sun Y", &mut lit.sun_dir[1], -1.0, 1.0);
+                        dirty |= drag_f32(ui, "Sun Z", &mut lit.sun_dir[2], -1.0, 1.0);
                         dirty |= outline_finding(ui, f_amb, |ui| {
                             color_rgb(ui, "Ground ambient", &mut lit.ground_ambient)
                         });
@@ -460,14 +438,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                             color_rgb(ui, "Ground specular", &mut lit.ground_specular)
                         });
                         dirty |= outline_finding(ui, f_se, |ui| {
-                            drag_f32(
-                                ui,
-                                "Specular exponent",
-                                &mut lit.spec_exponent,
-                                1.0,
-                                200.0,
-                                0.5,
-                            )
+                            drag_f32(ui, "Specular exponent", &mut lit.spec_exponent, 1.0, 200.0)
                         });
                     }
                     MapInfoTab::Water => {
@@ -475,7 +446,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let f_abs = findings_index.field("water", "absorb");
                         let w = &mut app.map_settings_mut().water;
                         dirty |= outline_finding(ui, f_dmg, |ui| {
-                            drag_f32(ui, "Water damage / sec", &mut w.damage, 0.0, 1000.0, 1.0)
+                            drag_f32(ui, "Water damage / sec", &mut w.damage, 0.0, 1000.0)
                         });
                         dirty |= outline_finding(ui, f_abs, |ui| {
                             color_rgb(ui, "Absorb (per RGB)", &mut w.absorb)
