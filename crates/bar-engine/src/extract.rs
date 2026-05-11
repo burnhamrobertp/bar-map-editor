@@ -181,21 +181,13 @@ fn scan_dir_recursive(
                 .unwrap_or_default();
 
             match ext.as_str() {
-                "smf" => {
-                    if smf_abs.is_none() {
-                        *smf_abs = Some(abs);
-                        *smf_rel = Some(rel);
-                    } else {
-                        pass.push((abs, rel));
-                    }
+                "smf" if smf_abs.is_none() => {
+                    *smf_abs = Some(abs);
+                    *smf_rel = Some(rel);
                 }
-                "smt" => {
-                    if smt_abs.is_none() {
-                        *smt_abs = Some(abs);
-                        *smt_rel = Some(rel);
-                    } else {
-                        pass.push((abs, rel));
-                    }
+                "smt" if smt_abs.is_none() => {
+                    *smt_abs = Some(abs);
+                    *smt_rel = Some(rel);
                 }
                 _ => {
                     pass.push((abs, rel));
