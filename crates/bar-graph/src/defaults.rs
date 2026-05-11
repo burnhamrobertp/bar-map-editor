@@ -73,6 +73,15 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("bias", ParamValue::Float(0.5)),
             ("gain", ParamValue::Float(0.5)),
         ],
+        NodeType::Mirror => vec![("mode", ParamValue::String("mirror_x".to_string()))],
+        NodeType::Terrace => vec![
+            ("step_count", ParamValue::UInt(4)),
+            ("smoothing", ParamValue::Float(0.0)),
+        ],
+        NodeType::Sharpen => vec![
+            ("radius", ParamValue::Float(1.0)),
+            ("strength", ParamValue::Float(1.0)),
+        ],
         NodeType::Displacement => vec![("strength", ParamValue::Float(0.1))],
         NodeType::NormalMap => vec![("strength", ParamValue::Float(1.0))],
         NodeType::GrassMap => vec![
@@ -120,9 +129,33 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("ao_strength", ParamValue::Float(0.6)),
             ("detail_strength", ParamValue::Float(0.2)),
         ],
-        NodeType::TextureOverlay => vec![
+        NodeType::LayerBlend => vec![
             ("blend_mode", ParamValue::String("over".to_string())),
             ("opacity", ParamValue::Float(1.0)),
+        ],
+        NodeType::TextureWeightmap => vec![
+            ("layer_count", ParamValue::UInt(2)),
+            (
+                "priority_type",
+                ParamValue::String("weighted_blend".to_string()),
+            ),
+            // Slot 0 = highest default priority (7), slot 7 = lowest (0).
+            ("priority_0", ParamValue::Float(7.0)),
+            ("exclusion_0", ParamValue::Float(0.0)),
+            ("priority_1", ParamValue::Float(6.0)),
+            ("exclusion_1", ParamValue::Float(0.0)),
+            ("priority_2", ParamValue::Float(5.0)),
+            ("exclusion_2", ParamValue::Float(0.0)),
+            ("priority_3", ParamValue::Float(4.0)),
+            ("exclusion_3", ParamValue::Float(0.0)),
+            ("priority_4", ParamValue::Float(3.0)),
+            ("exclusion_4", ParamValue::Float(0.0)),
+            ("priority_5", ParamValue::Float(2.0)),
+            ("exclusion_5", ParamValue::Float(0.0)),
+            ("priority_6", ParamValue::Float(1.0)),
+            ("exclusion_6", ParamValue::Float(0.0)),
+            ("priority_7", ParamValue::Float(0.0)),
+            ("exclusion_7", ParamValue::Float(0.0)),
         ],
         NodeType::SpecularMap => vec![
             ("rock_specular", ParamValue::Float(0.6)),
@@ -241,6 +274,13 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
 /// be impossible to type.
 pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'static str]> {
     match (node_type, key) {
+        (NodeType::Mirror, "mode") => Some(&[
+            "mirror_x",
+            "mirror_y",
+            "mirror_xy",
+            "rotate_180",
+            "rotate_90_4way",
+        ]),
         (NodeType::Voronoi, "mode") => Some(&["f1", "f2", "f2_f1", "cell"]),
         (NodeType::Gradient, "direction") => Some(&["linear_x", "linear_y", "radial", "angular"]),
         (NodeType::AutoTexture, "biome") => Some(&[
@@ -252,7 +292,8 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "tundra",
             "lunar",
         ]),
-        (NodeType::TextureOverlay, "blend_mode") => Some(&["over", "multiply", "screen", "add"]),
+        (NodeType::LayerBlend, "blend_mode") => Some(&["over", "multiply", "screen", "add"]),
+        (NodeType::TextureWeightmap, "priority_type") => Some(&["weighted_blend", "priority"]),
         (NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise, "character") => {
             Some(&[
                 "rolling_hills",

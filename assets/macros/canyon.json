@@ -86,21 +86,18 @@
       }
     },
     {
-      "key": "rock_comp",
-      "type": "TextureOverlay",
-      "label": "Rock Detail",
+      "key": "tex_blend",
+      "type": "TextureWeightmap",
+      "label": "Texture Blend",
       "params": {
-        "blend_mode": { "String": "over" },
-        "opacity": { "Float": 1.0 }
-      }
-    },
-    {
-      "key": "veg_comp",
-      "type": "TextureOverlay",
-      "label": "Scrub Detail",
-      "params": {
-        "blend_mode": { "String": "over" },
-        "opacity": { "Float": 1.0 }
+        "layer_count": { "UInt": 3 },
+        "priority_type": { "String": "priority" },
+        "priority_0": { "Float": 0.0 },
+        "exclusion_0": { "Float": 0.0 },
+        "priority_1": { "Float": 2.0 },
+        "exclusion_1": { "Float": 1.0 },
+        "priority_2": { "Float": 1.0 },
+        "exclusion_2": { "Float": 1.0 }
       }
     }
   ],
@@ -118,10 +115,9 @@
     { "from": "slope_map.output",      "to": "rock_soil.slope" },
     { "from": "smooth.output",         "to": "veg.input" },
     { "from": "slope_map.output",      "to": "veg.slope" },
-    { "from": "auto_tex.output",       "to": "rock_comp.base" },
-    { "from": "rock_soil.output",      "to": "rock_comp.overlay" },
-    { "from": "rock_comp.output",      "to": "veg_comp.base" },
-    { "from": "veg.output",            "to": "veg_comp.overlay" }
+    { "from": "auto_tex.output",       "to": "tex_blend.texture_0" },
+    { "from": "rock_soil.output",      "to": "tex_blend.texture_1" },
+    { "from": "veg.output",            "to": "tex_blend.texture_2" }
   ],
   "subgraph": {
     "label": "Canyon",
@@ -130,7 +126,7 @@
     "inputs": [],
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
-      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "veg_comp:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "tex_blend:output" },
       { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },

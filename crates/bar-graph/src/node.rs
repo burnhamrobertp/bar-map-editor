@@ -36,7 +36,9 @@ pub enum NodeType {
     // Texture/Splat
     SlopeMap,
     HeightSelect,
-    SplatMap,
+    /// Slope/altitude-driven splat-weight generator. Outputs one band per slope
+    /// zone for use with a Spring SMF typemap.
+    TerrainSplat,
     /// Procedural diffuse texture from a heightmap + slope. Maps
     /// elevation through a biome gradient (water → beach → grass →
     /// forest → dirt → rock → snow) and blends in a rock colour on
@@ -51,7 +53,13 @@ pub enum NodeType {
     Vegetation,
     /// Porter-Duff compositor for Color layers. Blends overlay on top of base
     /// using an optional distribution heightmap (falls back to overlay alpha).
-    TextureOverlay,
+    /// Supports over/multiply/screen/add blend modes.
+    LayerBlend,
+    /// Multi-input texture compositor. Accepts up to 8 texture+weight pairs and
+    /// composites them using either normalized weighted blending or a
+    /// priority/exclusion system where higher-priority layers claim canvas area
+    /// from lower-priority ones. Replaces cascaded TextureOverlay chains.
+    TextureWeightmap,
 
     // Map layers
     NormalMap,
@@ -74,6 +82,10 @@ pub enum NodeType {
     // Utility
     Mask,
     Invert,
+    /// Axis/rotational symmetry filter. Reflects or rotates the canonical half/quadrant
+    /// across the entire map. `mode` selects the symmetry: mirror_x, mirror_y, mirror_xy,
+    /// rotate_180, rotate_90_4way.
+    Mirror,
     Curve,
     /// A hand-painted greyscale heightmap. Resolution is configurable
     /// via the `resolution` param (default 256). Pixel data is stored
@@ -91,13 +103,13 @@ pub enum NodeType {
     Gradient,
 
     // Additional Filters
-    SimpleTransform,
     Normalize,
     BiasGain,
     Displacement,
 
     // Additional Combiners
-    Chooser,
+    /// Selects between two heightmap inputs based on a mask threshold.
+    MaskSelect,
 
     // Bundler/Packaging
     /// Packages graph outputs into a deliverable archive.
@@ -215,6 +227,25 @@ impl Node {
         }
     }
 
+    /// Resize the texture inputs of a `TextureWeightmap` node to `layer_count`
+    /// (clamped to 2..=8). Caller is responsible for disconnecting any
+    /// connections to removed ports before or after calling this.
+    pub fn resize_texture_weightmap_ports(&mut self, layer_count: u32) {
+        if self.node_type != NodeType::TextureWeightmap {
+            return;
+        }
+        let n = (layer_count as usize).clamp(2, 8);
+        self.inputs = (0..n)
+            .map(|i| {
+                Port::new(
+                    format!("texture_{i}"),
+                    format!("Texture {i}"),
+                    PortKind::Color,
+                )
+            })
+            .collect();
+    }
+
     /// Synchronise both ports of a SubgraphInput / SubgraphOutput
     /// node with the current `kind` param. Both sides flip together
     /// so the boundary stays type-consistent. No-op for any other
@@ -268,17 +299,17 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
-        // Passthrough placeholders. These node types don't yet have an
-        // implementation in the executor, so they expose only the input
-        // and output. Adding Control / Mask ports here would let users
-        // wire modulators to a transform that does nothing.
         NodeType::Terrace | NodeType::Sharpen => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
         // Filter with Mask only
-        NodeType::Invert => (
+        NodeType::Invert | NodeType::Mirror => (
             vec![
                 Port::new("input", "Input", PortKind::Heightmap),
                 Port::new("mask", "Mask", PortKind::Mask),
@@ -346,7 +377,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             ],
             vec![Port::new("output", "Mask", PortKind::Heightmap)],
         ),
-        NodeType::SplatMap => (
+        NodeType::TerrainSplat => (
             vec![
                 Port::new("slope", "Slope Map", PortKind::Heightmap),
                 Port::new("band0", "Band 0", PortKind::Heightmap),
@@ -382,11 +413,19 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             ],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),
-        NodeType::TextureOverlay => (
+        NodeType::LayerBlend => (
             vec![
                 Port::new("base", "Base", PortKind::Color),
                 Port::new("overlay", "Overlay", PortKind::Color),
                 Port::new("distribution", "Distribution", PortKind::Heightmap),
+            ],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::TextureWeightmap => (
+            // Default 2 texture inputs; resize_texture_weightmap_ports adjusts at runtime.
+            vec![
+                Port::new("texture_0", "Texture 0", PortKind::Color),
+                Port::new("texture_1", "Texture 1", PortKind::Color),
             ],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),
@@ -503,15 +542,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),
 
-        // --- Additional Filters ---
-        NodeType::SimpleTransform => (
-            vec![
-                Port::new("input", "Input", PortKind::Heightmap),
-                Port::new("control", "Control", PortKind::Control),
-                Port::new("mask", "Mask", PortKind::Mask),
-            ],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
         NodeType::Normalize => (
             vec![
                 Port::new("input", "Input", PortKind::Heightmap),
@@ -538,7 +568,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         ),
 
         // --- Additional Combiners ---
-        NodeType::Chooser => (
+        NodeType::MaskSelect => (
             vec![
                 Port::new("a", "Input A", PortKind::Heightmap),
                 Port::new("b", "Input B", PortKind::Heightmap),

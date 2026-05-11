@@ -70,8 +70,8 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Clamp
         | NodeType::Terrace
         | NodeType::Invert
+        | NodeType::Mirror
         | NodeType::Curve
-        | NodeType::SimpleTransform
         | NodeType::Normalize
         | NodeType::BiasGain
         | NodeType::Displacement
@@ -83,15 +83,16 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Multiply
         | NodeType::Max
         | NodeType::Min
-        | NodeType::Chooser => tokens::NODE_CAT_COMBINER,
+        | NodeType::MaskSelect => tokens::NODE_CAT_COMBINER,
 
         NodeType::SlopeMap
         | NodeType::HeightSelect
-        | NodeType::SplatMap
+        | NodeType::TerrainSplat
         | NodeType::AutoTexture
         | NodeType::RockSoil
         | NodeType::Vegetation
-        | NodeType::TextureOverlay
+        | NodeType::LayerBlend
+        | NodeType::TextureWeightmap
         | NodeType::NormalMap
         | NodeType::GrassMap
         | NodeType::SpecularMap => tokens::NODE_CAT_TEXTURE,

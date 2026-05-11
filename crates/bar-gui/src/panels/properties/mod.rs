@@ -24,6 +24,7 @@ pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
 pub(crate) mod sculpt;
+pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
 
@@ -329,6 +330,9 @@ impl BarEditorApp {
                 } else if node_type == NodeType::Sculpt {
                     ui.separator();
                     self.draw_sculpt_properties(ui, node_id, &node_params);
+                } else if node_type == NodeType::TextureWeightmap {
+                    ui.separator();
+                    self.draw_texture_weightmap_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.

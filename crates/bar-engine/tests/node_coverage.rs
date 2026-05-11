@@ -375,6 +375,34 @@ fn invert_reflects_values_around_half() {
 }
 
 #[test]
+fn mirror_x_makes_left_right_symmetric() {
+    // Left-to-right ramp: value at x mirrors value at (W-1-x).
+    let hm = gen(|u, _| u);
+    let inputs = input_hm("input", hm);
+    let p = &[("mode", ParamValue::String("mirror_x".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    assert_hm_dims(&h);
+    let left = h.get(2, H / 2).unwrap();
+    let right = h.get(W - 1 - 2, H / 2).unwrap();
+    assert!(
+        (left - right).abs() < 1e-4,
+        "mirror_x: left {left} != right {right}"
+    );
+}
+
+#[test]
+fn mirror_y_makes_top_bottom_symmetric() {
+    let hm = gen(|_, v| v);
+    let inputs = input_hm("input", hm);
+    let p = &[("mode", ParamValue::String("mirror_y".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    assert_hm_dims(&h);
+    let top = h.get(W / 2, 2).unwrap();
+    let bot = h.get(W / 2, H - 1 - 2).unwrap();
+    assert!((top - bot).abs() < 1e-4, "mirror_y: top {top} != bot {bot}");
+}
+
+#[test]
 fn curve_runs_and_preserves_dimensions() {
     let hm = gen(|u, _| u);
     let inputs = input_hm("input", hm);
@@ -552,7 +580,7 @@ fn splat_map_blends_three_bands() {
     inputs.insert("band0".to_string(), PortValue::Heightmap(flat(0.1)));
     inputs.insert("band1".to_string(), PortValue::Heightmap(flat(0.5)));
     inputs.insert("band2".to_string(), PortValue::Heightmap(flat(0.9)));
-    let h = out_hm(&run(NodeType::SplatMap, &[], &inputs), "output");
+    let h = out_hm(&run(NodeType::TerrainSplat, &[], &inputs), "output");
     assert_hm_dims(&h);
     let (mn, mx) = min_max(&h);
     assert!(mn >= 0.0 && mx <= 1.0);

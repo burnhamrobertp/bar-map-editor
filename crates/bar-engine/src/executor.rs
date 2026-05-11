@@ -86,12 +86,33 @@ impl NodeExecutor for CpuExecutor {
                 let hm = apply_modulation(&input, hm, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
-            NodeType::Terrace | NodeType::Sharpen => {
-                // Placeholder until the underlying transform is implemented.
-                // Ports are kept minimal (input + output) so users don't wire
-                // modulators to a no-op.
+            NodeType::Mirror => {
                 let input = get_input_heightmap(inputs, "input")?;
-                outputs.insert("output".to_string(), PortValue::Heightmap(input));
+                let mask = get_optional_heightmap(inputs, "mask");
+                let mode = get_string(params, "mode", "mirror_x");
+                let hm = apply_mirror(&input, mode);
+                let hm = apply_modulation(&input, hm, None, mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Terrace => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
+                let step_count = get_uint(params, "step_count", 4).clamp(1, 64);
+                let smoothing = get_float(params, "smoothing", 0.0).clamp(0.0, 1.0);
+                let hm = apply_terrace(&input, step_count, smoothing);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+            NodeType::Sharpen => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let ctrl = get_optional_heightmap(inputs, "control");
+                let mask = get_optional_heightmap(inputs, "mask");
+                let radius = get_float(params, "radius", 1.0).max(0.1);
+                let strength = get_float(params, "strength", 1.0).clamp(0.0, 4.0);
+                let hm = apply_sharpen(&input, radius, strength);
+                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::Curve => {
                 let input = get_input_heightmap(inputs, "input")?;
@@ -253,7 +274,7 @@ impl NodeExecutor for CpuExecutor {
                 let hm = scale_by_field(hm, ctrl.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
-            NodeType::SplatMap => {
+            NodeType::TerrainSplat => {
                 let slope = get_optional_heightmap(inputs, "slope");
                 let band0 = get_optional_heightmap(inputs, "band0");
                 let band1 = get_optional_heightmap(inputs, "band1");
@@ -310,13 +331,110 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
-            NodeType::TextureOverlay => {
+            NodeType::LayerBlend => {
                 let base = get_input_color(inputs, "base")?;
                 let overlay = get_input_color(inputs, "overlay")?;
                 let distribution = get_optional_heightmap(inputs, "distribution");
                 let color =
                     generate_texture_overlay(&base, &overlay, distribution.as_ref(), params);
                 outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+
+            NodeType::TextureWeightmap => {
+                let priority_type = get_string(params, "priority_type", "weighted_blend");
+                let layer_count = get_uint(params, "layer_count", 2).clamp(2, 8) as usize;
+
+                struct Layer {
+                    tex: ColorBuffer,
+                    priority: f32,
+                    exclusion: f32,
+                }
+                let mut layers: Vec<Layer> = Vec::new();
+                for i in 0..layer_count {
+                    let Some(PortValue::Color(tex)) = inputs.get(&format!("texture_{i}")) else {
+                        continue;
+                    };
+                    let priority = get_float(params, &format!("priority_{i}"), (7 - i) as f32);
+                    let exclusion =
+                        get_float(params, &format!("exclusion_{i}"), 0.0).clamp(0.0, 1.0);
+                    layers.push(Layer {
+                        tex: tex.clone(),
+                        priority,
+                        exclusion,
+                    });
+                }
+
+                if layers.is_empty() {
+                    let out = ColorBuffer::new(256, 256).unwrap();
+                    outputs.insert("output".to_string(), PortValue::Color(out));
+                } else {
+                    let w = layers[0].tex.width();
+                    let h = layers[0].tex.height();
+                    let mut out = ColorBuffer::new(w, h).unwrap();
+
+                    match priority_type {
+                        "priority" => {
+                            // Sort highest priority first.
+                            layers.sort_by(|a, b| {
+                                b.priority
+                                    .partial_cmp(&a.priority)
+                                    .unwrap_or(std::cmp::Ordering::Equal)
+                            });
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let mut remaining = 1.0f32;
+                                    let mut r = 0.0f32;
+                                    let mut g = 0.0f32;
+                                    let mut b_out = 0.0f32;
+                                    for layer in &layers {
+                                        if remaining <= 0.001 {
+                                            break;
+                                        }
+                                        let raw_w = sample_color_nn(&layer.tex, x, y, w, h)[3]
+                                            .clamp(0.0, 1.0);
+                                        let contribution =
+                                            (raw_w * remaining).clamp(0.0, remaining);
+                                        let col = sample_color_nn(&layer.tex, x, y, w, h);
+                                        r += col[0] * contribution;
+                                        g += col[1] * contribution;
+                                        b_out += col[2] * contribution;
+                                        remaining -= contribution * layer.exclusion;
+                                        remaining = remaining.max(0.0);
+                                    }
+                                    out.set(x, y, [r, g, b_out, 1.0]);
+                                }
+                            }
+                        }
+                        _ => {
+                            // weighted_blend: normalize all weights at each pixel.
+                            for y in 0..h {
+                                for x in 0..w {
+                                    let weights: Vec<f32> = layers
+                                        .iter()
+                                        .map(|l| {
+                                            sample_color_nn(&l.tex, x, y, w, h)[3].clamp(0.0, 1.0)
+                                        })
+                                        .collect();
+                                    let total: f32 = weights.iter().sum();
+                                    if total < 0.0001 {
+                                        out.set(x, y, [0.0, 0.0, 0.0, 0.0]);
+                                        continue;
+                                    }
+                                    let (mut r, mut g, mut b_out) = (0.0f32, 0.0f32, 0.0f32);
+                                    for (layer, &wt) in layers.iter().zip(weights.iter()) {
+                                        let col = sample_color_nn(&layer.tex, x, y, w, h);
+                                        let norm = wt / total;
+                                        r += col[0] * norm;
+                                        g += col[1] * norm;
+                                        b_out += col[2] * norm;
+                                    }
+                                    out.set(x, y, [r, g, b_out, 1.0]);
+                                }
+                            }
+                        }
+                    }
+                    outputs.insert("output".to_string(), PortValue::Color(out));
+                }
             }
 
             // --- Map Layer Generators ---
@@ -466,18 +584,6 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
-            // --- Additional Filters ---
-            NodeType::SimpleTransform => {
-                let input = get_input_heightmap(inputs, "input")?;
-                let ctrl = get_optional_heightmap(inputs, "control");
-                let mask = get_optional_heightmap(inputs, "mask");
-                let scale = get_float(params, "scale", 1.0);
-                let offset = get_float(params, "offset", 0.0);
-                let invert = get_bool(params, "invert", false);
-                let hm = apply_simple_transform(&input, scale, offset, invert);
-                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
-            }
             NodeType::Normalize => {
                 let input = get_input_heightmap(inputs, "input")?;
                 let ctrl = get_optional_heightmap(inputs, "control");
@@ -508,7 +614,7 @@ impl NodeExecutor for CpuExecutor {
             }
 
             // --- Additional Combiners ---
-            NodeType::Chooser => {
+            NodeType::MaskSelect => {
                 let a = get_input_heightmap(inputs, "a")?;
                 let b = get_input_heightmap(inputs, "b")?;
                 let mask = get_input_heightmap(inputs, "mask")?;
@@ -713,6 +819,15 @@ fn assemble_texture_preview(
         }
     }
     out
+}
+
+/// Sample `tex` at output pixel `(ox, oy)` using nearest-neighbour scaling
+/// to the output dimensions `(ow, oh)`.
+fn sample_color_nn(tex: &ColorBuffer, ox: u32, oy: u32, ow: u32, oh: u32) -> [f32; 4] {
+    let sx = ((ox as f32 / ow as f32) * tex.width() as f32) as u32;
+    let sy = ((oy as f32 / oh as f32) * tex.height() as f32) as u32;
+    tex.get(sx.min(tex.width() - 1), sy.min(tex.height() - 1))
+        .unwrap_or([0.0; 4])
 }
 
 fn get_input_heightmap(
@@ -982,6 +1097,40 @@ fn apply_blur(input: &Heightmap, radius: f32) -> Heightmap {
     Heightmap::frbar_data(w as u32, h as u32, src).unwrap()
 }
 
+fn apply_terrace(input: &Heightmap, step_count: u32, smoothing: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let steps = step_count.max(1) as f32;
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .map(|&v| {
+            let t = v * steps;
+            let lo = t.floor();
+            let frac = t - lo;
+            // Smoothstep within each step band, lerped by `smoothing`.
+            let smooth = frac * frac * (3.0 - 2.0 * frac);
+            let hard = lo / steps;
+            let soft = (lo + smooth) / steps;
+            hard + smoothing * (soft - hard)
+        })
+        .collect();
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+fn apply_sharpen(input: &Heightmap, radius: f32, strength: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let blurred = apply_blur(input, radius);
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .zip(blurred.data().iter())
+        .map(|(&v, &b)| (v + strength * (v - b)).clamp(0.0, 1.0))
+        .collect();
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
 fn apply_clamp(input: &Heightmap, min_val: f32, max_val: f32) -> Heightmap {
     let w = input.width();
     let h = input.height();
@@ -998,6 +1147,56 @@ fn apply_invert(input: &Heightmap) -> Heightmap {
     let h = input.height();
     let data: Vec<f32> = input.data().iter().map(|&v| 1.0 - v).collect();
     Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+fn apply_mirror(input: &Heightmap, mode: &str) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let src = input.data();
+    let mut data = vec![0.0f32; w * h];
+    for py in 0..h {
+        for px in 0..w {
+            let (sx, sy) = match mode {
+                "mirror_x" => {
+                    let sx = if px < w / 2 { px } else { w - 1 - px };
+                    (sx, py)
+                }
+                "mirror_y" => {
+                    let sy = if py < h / 2 { py } else { h - 1 - py };
+                    (px, sy)
+                }
+                "mirror_xy" => {
+                    let sx = if px < w / 2 { px } else { w - 1 - px };
+                    let sy = if py < h / 2 { py } else { h - 1 - py };
+                    (sx, sy)
+                }
+                "rotate_180" => {
+                    // Left half is canonical; right half gets value rotated 180.
+                    if px < w / 2 {
+                        (px, py)
+                    } else {
+                        (w - 1 - px, h - 1 - py)
+                    }
+                }
+                "rotate_90_4way" => {
+                    // Top-left quadrant is canonical. Other quadrants are mapped
+                    // back by 90-degree rotations (assumes a square map).
+                    if px < w / 2 && py < h / 2 {
+                        (px, py)
+                    } else if px >= w / 2 && py < h / 2 {
+                        (py, w - 1 - px)
+                    } else if px < w / 2 {
+                        (h - 1 - py, px)
+                    } else {
+                        (w - 1 - px, h - 1 - py)
+                    }
+                }
+                _ => (px, py),
+            };
+            data[py * w + px] = src[sy * w + sx];
+        }
+    }
+    Heightmap::frbar_data(w as u32, h as u32, data).unwrap()
 }
 
 /// Threshold a heightmap into a binary (or smooth) mask.
@@ -1986,26 +2185,6 @@ fn eval_piecewise_linear(points: &[(f32, f32)], x: f32) -> f32 {
     points[points.len() - 1].1
 }
 
-/// Simple linear transform: output = input * scale + offset, optionally inverted.
-fn apply_simple_transform(input: &Heightmap, scale: f32, offset: f32, invert: bool) -> Heightmap {
-    let w = input.width();
-    let h = input.height();
-    let mut data = vec![0.0f32; (w as usize) * (h as usize)];
-
-    for y in 0..h {
-        for x in 0..w {
-            let mut v = input.get(x, y).unwrap_or(0.0);
-            if invert {
-                v = 1.0 - v;
-            }
-            v = v * scale + offset;
-            data[(y as usize) * (w as usize) + (x as usize)] = v.clamp(0.0, 1.0);
-        }
-    }
-
-    Heightmap::frbar_data(w, h, data).unwrap()
-}
-
 /// Normalize: remap all values to fill the 0..1 range.
 fn apply_normalize(input: &Heightmap) -> Heightmap {
     let w = input.width();
@@ -2130,7 +2309,7 @@ fn apply_displacement(input: &Heightmap, displacement: &Heightmap, strength: f32
     Heightmap::frbar_data(w, h, data).unwrap()
 }
 
-/// Chooser: select between A and B based on a mask (0=A, 1=B, interpolated in between).
+/// MaskSelect: select between A and B based on a mask (0=A, 1=B, interpolated in between).
 fn apply_chooser(a: &Heightmap, b: &Heightmap, mask: &Heightmap) -> Heightmap {
     let w = a.width().min(b.width()).min(mask.width());
     let h = a.height().min(b.height()).min(mask.height());
@@ -2537,29 +2716,6 @@ mod tests {
     }
 
     #[test]
-    fn test_simple_transform() {
-        let executor = CpuExecutor;
-        let data = vec![0.5_f32; 16];
-        let hm = Heightmap::frbar_data(4, 4, data).unwrap();
-        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
-        // scale=2.0, offset=0.1 → 0.5*2.0 + 0.1 = 1.1 → clamped to 1.0
-        let params = HashMap::from([
-            ("scale".to_string(), ParamValue::Float(2.0)),
-            ("offset".to_string(), ParamValue::Float(0.1)),
-        ]);
-
-        let result = executor
-            .execute(&NodeType::SimpleTransform, &params, &inputs, 4, 4)
-            .unwrap();
-        match result.get("output").unwrap() {
-            PortValue::Heightmap(hm) => {
-                assert!((hm.get(0, 0).unwrap() - 1.0).abs() < 0.001);
-            }
-            _ => panic!("Expected heightmap"),
-        }
-    }
-
-    #[test]
     fn test_bias_gain() {
         let executor = CpuExecutor;
         // Uniform ramp
@@ -2604,7 +2760,7 @@ mod tests {
         ]);
 
         let result = executor
-            .execute(&NodeType::Chooser, &HashMap::new(), &inputs, 4, 4)
+            .execute(&NodeType::MaskSelect, &HashMap::new(), &inputs, 4, 4)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
