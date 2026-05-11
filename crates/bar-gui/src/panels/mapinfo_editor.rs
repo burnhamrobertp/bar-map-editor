@@ -289,30 +289,47 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                             outline_finding(ui, dim_finding, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(t!("editor.map_settings.map_size_label"));
+                                    // egui does not store the text itself in
+                                    // memory between frames -- only cursor state.
+                                    // Store the in-progress string in temp data
+                                    // so it survives frame boundaries while the
+                                    // field is focused.
+                                    let wid = egui::Id::new("map_dim_w");
+                                    let hid = egui::Id::new("map_dim_h");
                                     let wv = (*w).saturating_sub(1) / 64;
-                                    let mut ws = wv.to_string();
+                                    let hv = (*h).saturating_sub(1) / 64;
+                                    let mut ws: String = ui
+                                        .data(|d| d.get_temp::<String>(wid))
+                                        .unwrap_or_else(|| wv.to_string());
                                     let wr = ui.add_sized(
                                         [30.0, 18.0],
-                                        egui::TextEdit::singleline(&mut ws),
+                                        egui::TextEdit::singleline(&mut ws).id(wid),
                                     );
+                                    ui.data_mut(|d| d.insert_temp(wid, ws.clone()));
                                     if wr.lost_focus() {
-                                        if let Ok(v) = ws.trim().parse::<u32>() {
-                                            *w = v.clamp(1, 512) * 64 + 1;
-                                            dirty = true;
-                                        }
+                                        let nv = ws.trim().parse::<u32>()
+                                            .map(|v| v.clamp(1, 512))
+                                            .unwrap_or(wv);
+                                        *w = nv * 64 + 1;
+                                        if nv != wv { dirty = true; }
+                                        ui.data_mut(|d| d.insert_temp(wid, nv.to_string()));
                                     }
                                     ui.label("x");
-                                    let hv = (*h).saturating_sub(1) / 64;
-                                    let mut hs = hv.to_string();
+                                    let mut hs: String = ui
+                                        .data(|d| d.get_temp::<String>(hid))
+                                        .unwrap_or_else(|| hv.to_string());
                                     let hr = ui.add_sized(
                                         [30.0, 18.0],
-                                        egui::TextEdit::singleline(&mut hs),
+                                        egui::TextEdit::singleline(&mut hs).id(hid),
                                     );
+                                    ui.data_mut(|d| d.insert_temp(hid, hs.clone()));
                                     if hr.lost_focus() {
-                                        if let Ok(v) = hs.trim().parse::<u32>() {
-                                            *h = v.clamp(1, 512) * 64 + 1;
-                                            dirty = true;
-                                        }
+                                        let nv = hs.trim().parse::<u32>()
+                                            .map(|v| v.clamp(1, 512))
+                                            .unwrap_or(hv);
+                                        *h = nv * 64 + 1;
+                                        if nv != hv { dirty = true; }
+                                        ui.data_mut(|d| d.insert_temp(hid, nv.to_string()));
                                     }
                                 });
                             });
