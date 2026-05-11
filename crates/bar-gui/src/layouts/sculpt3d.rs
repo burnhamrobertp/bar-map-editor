@@ -9,9 +9,10 @@
 //! viewport there after this function returns.
 
 use eframe::egui;
+use eframe::egui::Color32;
 
 use crate::app::{BarEditorApp, BrushTool};
-use crate::panels::canvas::sculpt_layers::{compute_sculpt_layers, SculptLayerGroup};
+use crate::panels::canvas::sculpt_layers::{compute_sculpt_layers, SculptLayerEntry};
 
 /// Draw the Sculpt3D layout.
 pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -25,7 +26,7 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
 }
 
 fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
-    let groups = compute_sculpt_layers(&app.graph);
+    let entries = compute_sculpt_layers(&app.graph);
 
     // --- LAYERS section ---
     ui.add_space(4.0);
@@ -39,12 +40,16 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     });
     ui.separator();
 
-    if groups.is_empty() {
+    if entries.is_empty() {
         ui.weak("Add a Bundler node to enable sculpting.");
     } else {
-        for group in &groups {
-            draw_layer_group(app, ui, group);
-        }
+        egui::ScrollArea::vertical()
+            .max_height(300.0)
+            .show(ui, |ui| {
+                for entry in &entries {
+                    draw_layer_row(app, ui, entry);
+                }
+            });
     }
 
     ui.add_space(8.0);
@@ -59,6 +64,8 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         .selected_sculpt_layer
         .and_then(|id| app.graph.get_node(id))
         .map(|n| n.node_type.clone());
+
+    let has_terrain = app.paint.heightmap.is_some();
 
     match selected_kind {
         Some(bar_graph::NodeType::PaintedHeightmap) | Some(bar_graph::NodeType::Sculpt) => {
@@ -75,6 +82,9 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                     }
                 }
             });
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
+            }
         }
         Some(bar_graph::NodeType::PaintedTexture) => {
             ui.horizontal(|ui| {
@@ -85,6 +95,9 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                     app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
                 }
             });
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
+            }
         }
         _ => {
             ui.weak("Select a paintable layer.");
@@ -116,59 +129,67 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     );
 }
 
-fn draw_layer_group(app: &mut BarEditorApp, ui: &mut egui::Ui, group: &SculptLayerGroup) {
-    let channel_label = channel_display_name(&group.channel);
-    ui.add_space(4.0);
-    ui.label(egui::RichText::new(channel_label).small().strong());
+fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayerEntry) {
+    let indent_px = entry.indent as f32 * 16.0;
+    let is_selected =
+        !entry.is_compositor && app.paint.selected_sculpt_layer == Some(entry.node_id);
+    let node_id = entry.node_id;
+    let is_compositor = entry.is_compositor;
+    let is_paintable = entry.is_paintable;
+    let label = entry.label.clone();
+    let channel = entry.channel.clone();
 
-    for entry in group.entries.iter().rev() {
-        let is_selected = app.paint.selected_sculpt_layer == Some(entry.node_id);
-
-        let icon = if !entry.is_connected {
-            "!"
-        } else if entry.is_paintable {
-            "~"
-        } else {
-            "#"
-        };
-
-        let label_text = if entry.is_connected {
-            format!("[{}] {}", icon, entry.label)
-        } else {
-            format!("[!] {} (disconnected)", entry.label)
-        };
-
-        let resp = ui.add_enabled(
-            true,
-            egui::SelectableLabel::new(
-                is_selected,
-                egui::RichText::new(&label_text).color(if entry.is_connected {
-                    ui.visuals().text_color()
+    let clicked = ui
+        .horizontal(|ui| {
+            if indent_px > 0.0 {
+                ui.add_space(indent_px);
+            }
+            paint_channel_dot(ui, &channel);
+            if is_compositor {
+                ui.weak(format!("> {}", label));
+                false
+            } else {
+                let label_text = if is_paintable {
+                    label
                 } else {
-                    ui.visuals().weak_text_color()
-                }),
-            ),
-        );
+                    format!("{} [locked]", label)
+                };
+                ui.selectable_label(is_selected, &label_text).clicked()
+            }
+        })
+        .inner;
 
-        if !entry.is_connected {
-            resp.on_hover_text("Layer is disconnected -- wire it in the canvas.");
-        } else if resp.clicked() {
-            app.paint.selected_sculpt_layer = Some(entry.node_id);
-        }
+    if clicked {
+        app.paint.selected_sculpt_layer = Some(node_id);
     }
 }
 
-fn channel_display_name(channel: &str) -> &'static str {
+fn paint_channel_dot(ui: &mut egui::Ui, channel: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), 4.0, channel_color(channel));
+}
+
+fn channel_color(channel: &str) -> Color32 {
     match channel {
-        "heightmap" => "Heightmap",
-        "texture" => "Texture",
-        "metalmap" => "Metal",
-        "typemap" => "Type",
-        "grassmap" => "Grass",
-        "specular" => "Specular",
-        "normalmap" => "Normal",
-        _ => "Other",
+        "heightmap" => Color32::from_rgb(100, 200, 100),
+        "texture" => Color32::from_rgb(180, 100, 220),
+        "metalmap" => Color32::from_rgb(220, 120, 60),
+        "typemap" => Color32::from_rgb(80, 140, 210),
+        "grassmap" => Color32::from_rgb(80, 195, 140),
+        "specular" => Color32::from_rgb(210, 195, 70),
+        "normalmap" => Color32::from_rgb(130, 90, 210),
+        _ => Color32::from_rgb(160, 160, 160),
     }
+}
+
+fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.weak("No terrain loaded --");
+        if ui.small_button("Run preview").clicked() {
+            app.preview.run_requested = true;
+        }
+    });
 }
 
 /// Create a disconnected PaintedHeightmap node and notify the user to wire it.
