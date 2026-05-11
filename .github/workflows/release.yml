@@ -1,13 +1,12 @@
 name: Release
 
-# Triggered by pushes to `master` and `release/**` branches, and by the
-# manual `workflow_dispatch` button. Version comes from `Cargo.toml`'s
-# `[workspace.package].version` -- bump that before merging to master to
-# produce a new numbered release. Each push to master creates (or
-# re-creates) the GitHub Release for that version tag.
+# Triggered only on pushes to `master` and by the manual `workflow_dispatch`
+# button. release/** branches are covered by CI only -- the expensive
+# multi-platform binary build runs once, at the point of release.
+# Version comes from `Cargo.toml`'s `[workspace.package].version`.
 on:
   push:
-    branches: [master, "release/**"]
+    branches: [master]
   workflow_dispatch:
 
 env:
