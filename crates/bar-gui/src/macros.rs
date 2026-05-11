@@ -142,6 +142,11 @@ pub fn instantiate(
         for (k, v) in &n.params {
             node.params.insert(k.clone(), v.clone());
         }
+        if node.node_type == NodeType::TextureWeightmap {
+            if let Some(ParamValue::UInt(lc)) = node.params.get("layer_count") {
+                node.resize_texture_weightmap_ports(*lc);
+            }
+        }
         // Replace any UInt-kind `seed` parameter with a fresh
         // per-drop value. Mixed in the param key's hash so multi-
         // node macros (e.g. two noise generators feeding a Blend)

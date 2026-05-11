@@ -451,6 +451,11 @@ impl Recipe {
             for (k, v) in recipe_node.params.iter() {
                 node.params.insert(k.clone(), v.clone());
             }
+            if node.node_type == NodeType::TextureWeightmap {
+                if let Some(ParamValue::UInt(lc)) = node.params.get("layer_count") {
+                    node.resize_texture_weightmap_ports(*lc);
+                }
+            }
             let id = graph.add_node(node);
             key_to_id.insert(&recipe_node.key, id);
         }
