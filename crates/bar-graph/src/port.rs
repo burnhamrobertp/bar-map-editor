@@ -22,9 +22,30 @@ pub enum PortKind {
     File,
     /// A bag of external file references (used by PassThrough nodes)
     FileList,
+    /// Spatial modulator field -- top-left port slot (slot 0).
+    Control,
+    /// Spatial density/weight field -- top-right port slot (slot 1).
+    Density,
 }
 
 impl PortKind {
+    /// Whether `self` (as an output / from-side) can feed into `other` (as an
+    /// input / to-side). Heightmap, Mask, Control, and Density are all f32
+    /// spatial fields and are freely interchangeable; every other kind only
+    /// matches itself.
+    pub fn compatible_with(self, other: PortKind) -> bool {
+        if self == other {
+            return true;
+        }
+        let is_f32_field = |k: PortKind| {
+            matches!(
+                k,
+                PortKind::Heightmap | PortKind::Mask | PortKind::Control | PortKind::Density
+            )
+        };
+        is_f32_field(self) && is_f32_field(other)
+    }
+
     /// Parse from the human-readable name used in `param_choices`
     /// (e.g. SubgraphInput's `kind` param). Returns `None` for
     /// unknown strings rather than panicking.
@@ -36,7 +57,31 @@ impl PortKind {
             "Scalar" => Some(PortKind::Scalar),
             "File" => Some(PortKind::File),
             "FileList" => Some(PortKind::FileList),
+            "Control" => Some(PortKind::Control),
+            "Density" => Some(PortKind::Density),
             _ => None,
+        }
+    }
+}
+
+/// Where a port renders on the node border.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortPlacement {
+    Left,
+    Right,
+    /// Top edge, fixed slot. 0 = Control, 1 = Density.
+    Top(u8),
+    Bottom,
+}
+
+impl PortPlacement {
+    /// Placement for an input port of the given kind.
+    pub fn for_input(kind: PortKind) -> Self {
+        match kind {
+            PortKind::Control => PortPlacement::Top(0),
+            PortKind::Density => PortPlacement::Top(1),
+            PortKind::Mask => PortPlacement::Bottom,
+            _ => PortPlacement::Left,
         }
     }
 }

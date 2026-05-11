@@ -1,30 +1,29 @@
 {
   "name": "Mountain Range - Plateaus",
-  "description": "Flat-topped peaks. Mountain noise is clamped at the high end, so anything above the threshold becomes a plateau at that height. Useful for mesa-style maps and chokepoints. Wire its `terrain` output to a Bundler.",
+  "description": "Flat-topped peaks separated by steep drops. Rugged noise is eroded then hard-clamped, shearing off summits into level plateaus. Good for chokepoints and fortified high ground.",
   "nodes": [
+    {
+      "key": "shape",
+      "type": "Gradient",
+      "label": "Shape",
+      "params": {
+        "direction": { "String": "radial" },
+        "invert": { "Bool": false },
+        "center_x": { "Float": 0.5 },
+        "center_y": { "Float": 0.5 }
+      }
+    },
     {
       "key": "ridges",
       "type": "PerlinNoise",
       "label": "Mountain Noise",
       "params": {
-        "character": {
-          "String": "rugged"
-        },
-        "frequency": {
-          "Float": 3
-        },
-        "octaves": {
-          "UInt": 7
-        },
-        "lacunarity": {
-          "Float": 2.2
-        },
-        "persistence": {
-          "Float": 0.65
-        },
-        "seed": {
-          "UInt": 47
-        }
+        "character": { "String": "rugged" },
+        "frequency": { "Float": 3.0 },
+        "octaves": { "UInt": 7 },
+        "lacunarity": { "Float": 2.2 },
+        "persistence": { "Float": 0.65 },
+        "seed": { "UInt": 47 }
       }
     },
     {
@@ -32,36 +31,24 @@
       "type": "ThermalErosion",
       "label": "Talus Erosion",
       "params": {
-        "iterations": {
-          "UInt": 60
-        },
-        "talus_angle": {
-          "Float": 0.3
-        }
+        "iterations": { "UInt": 60 },
+        "talus_angle": { "Float": 0.30 }
       }
     },
     {
-      "key": "plateau",
+      "key": "cap",
       "type": "Clamp",
       "label": "Plateau Cap",
       "params": {
-        "min": {
-          "Float": 0
-        },
-        "max": {
-          "Float": 0.62
-        }
+        "min": { "Float": 0.0 },
+        "max": { "Float": 0.62 }
       }
     },
     {
       "key": "smooth",
       "type": "Blur",
       "label": "Soften Edges",
-      "params": {
-        "radius": {
-          "Float": 1
-        }
-      }
+      "params": { "radius": { "Float": 1.0 } }
     },
     {
       "key": "slope_map",
@@ -73,38 +60,68 @@
       "key": "auto_tex",
       "type": "AutoTexture",
       "label": "Auto Texture",
+      "params": { "biome": { "String": "mountainous" } }
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
       "params": {
-        "biome": {
-          "String": "mountainous"
-        }
+        "rock_color": { "String": "706560" },
+        "soil_color": { "String": "8A6040" },
+        "slope_threshold": { "Float": 0.25 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.8 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Vegetation",
+      "params": {
+        "vegetation_color": { "String": "3B6B1A" },
+        "dry_color": { "String": "6B5030" },
+        "altitude_max": { "Float": 0.50 },
+        "slope_cutoff": { "Float": 0.3 },
+        "slope_blend": { "Float": 0.15 },
+        "ao_strength": { "Float": 0.7 }
+      }
+    },
+    {
+      "key": "rock_comp",
+      "type": "TextureOverlay",
+      "label": "Rock Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    },
+    {
+      "key": "veg_comp",
+      "type": "TextureOverlay",
+      "label": "Vegetation Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
       }
     }
   ],
   "connections": [
-    {
-      "from": "ridges.output",
-      "to": "erosion.input"
-    },
-    {
-      "from": "erosion.output",
-      "to": "plateau.input"
-    },
-    {
-      "from": "plateau.output",
-      "to": "smooth.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "slope_map.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "auto_tex.input"
-    },
-    {
-      "from": "slope_map.output",
-      "to": "auto_tex.slope"
-    }
+    { "from": "shape.output",     "to": "ridges.control" },
+    { "from": "ridges.output",    "to": "erosion.input" },
+    { "from": "erosion.output",   "to": "cap.input" },
+    { "from": "cap.output",       "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "auto_tex.input" },
+    { "from": "slope_map.output", "to": "auto_tex.slope" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" },
+    { "from": "smooth.output",    "to": "veg.input" },
+    { "from": "slope_map.output", "to": "veg.slope" },
+    { "from": "auto_tex.output",  "to": "rock_comp.base" },
+    { "from": "rock_soil.output", "to": "rock_comp.overlay" },
+    { "from": "rock_comp.output", "to": "veg_comp.base" },
+    { "from": "veg.output",       "to": "veg_comp.overlay" }
   ],
   "subgraph": {
     "label": "Mountain Range - Plateaus",
@@ -112,66 +129,17 @@
     "collapsed": true,
     "inputs": [],
     "outputs": [
-      {
-        "name": "terrain",
-        "label": "Terrain",
-        "kind": "Heightmap",
-        "binding": "smooth:output"
-      },
-      {
-        "name": "texture",
-        "label": "Texture",
-        "kind": "Color",
-        "binding": "auto_tex:output"
-      },
-      {
-        "name": "slope",
-        "label": "Slope",
-        "kind": "Heightmap",
-        "binding": "slope_map:output"
-      }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "veg_comp:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    {
-      "name": "ridge_density",
-      "label": "Ridge density",
-      "kind": "Float",
-      "binding": "ridges:frequency",
-      "min": 1,
-      "max": 6
-    },
-    {
-      "name": "plateau_height",
-      "label": "Plateau height",
-      "kind": "Float",
-      "binding": "plateau:max",
-      "min": 0.3,
-      "max": 0.95
-    },
-    {
-      "name": "erosion_passes",
-      "label": "Erosion passes",
-      "kind": "UInt",
-      "binding": "erosion:iterations",
-      "min": 0,
-      "max": 200
-    },
-    {
-      "name": "smoothing",
-      "label": "Smoothing",
-      "kind": "Float",
-      "binding": "smooth:radius",
-      "min": 0,
-      "max": 4
-    },
-    {
-      "name": "seed",
-      "label": "Seed",
-      "kind": "UInt",
-      "binding": "ridges:seed",
-      "min": 0,
-      "max": 100000
-    }
+    { "name": "ridge_density",  "label": "Ridge density",  "kind": "Float", "binding": "ridges:frequency",          "min": 1.0, "max": 6.0  },
+    { "name": "plateau_height", "label": "Plateau height", "kind": "Float", "binding": "cap:max",                   "min": 0.3, "max": 0.95 },
+    { "name": "erosion_passes", "label": "Erosion passes", "kind": "UInt",  "binding": "erosion:iterations",        "min": 0,   "max": 200  },
+    { "name": "rock_threshold", "label": "Rock threshold", "kind": "Float", "binding": "rock_soil:slope_threshold", "min": 0.1, "max": 0.5  },
+    { "name": "tree_line",      "label": "Tree line",      "kind": "Float", "binding": "veg:altitude_max",          "min": 0.2, "max": 0.7  },
+    { "name": "seed",           "label": "Seed",           "kind": "UInt",  "binding": "ridges:seed" }
   ]
 }

@@ -1,24 +1,29 @@
 {
   "name": "Mountain Range",
-  "description": "A ridged mountain pipeline: large-scale Perlin noise for ridges, thermal erosion to carve realistic talus slopes, and a light blur. Drop it, wire its terrain output to a Bundler.",
+  "description": "Central mountain spine. A radial gradient concentrates the ridges toward the map center, leaving flatter flanks for approach routes. Thermal erosion carves talus slopes.",
   "nodes": [
     {
+      "key": "shape",
+      "type": "Gradient",
+      "label": "Shape",
+      "params": {
+        "direction": { "String": "radial" },
+        "invert": { "Bool": false },
+        "center_x": { "Float": 0.5 },
+        "center_y": { "Float": 0.5 }
+      }
+    },
+    {
       "key": "ridges",
-      "type": "PerlinNoise",
+      "type": "RidgedNoise",
       "label": "Ridges",
       "params": {
-        "frequency": {
-          "Float": 2
-        },
-        "octaves": {
-          "UInt": 5
-        },
-        "persistence": {
-          "Float": 0.6
-        },
-        "seed": {
-          "UInt": 11
-        }
+        "character": { "String": "ridges" },
+        "frequency": { "Float": 2.5 },
+        "octaves": { "UInt": 6 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.5 },
+        "seed": { "UInt": 11 }
       }
     },
     {
@@ -26,23 +31,15 @@
       "type": "ThermalErosion",
       "label": "Talus Erosion",
       "params": {
-        "iterations": {
-          "UInt": 80
-        },
-        "talus_angle": {
-          "Float": 0.25
-        }
+        "iterations": { "UInt": 100 },
+        "talus_angle": { "Float": 0.24 }
       }
     },
     {
       "key": "smooth",
       "type": "Blur",
       "label": "Soften",
-      "params": {
-        "radius": {
-          "Float": 1
-        }
-      }
+      "params": { "radius": { "Float": 1.2 } }
     },
     {
       "key": "slope_map",
@@ -54,34 +51,67 @@
       "key": "auto_tex",
       "type": "AutoTexture",
       "label": "Auto Texture",
+      "params": { "biome": { "String": "mountainous" } }
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
       "params": {
-        "biome": {
-          "String": "mountainous"
-        }
+        "rock_color": { "String": "706560" },
+        "soil_color": { "String": "7A5C3A" },
+        "slope_threshold": { "Float": 0.3 },
+        "slope_blend": { "Float": 0.25 },
+        "ao_strength": { "Float": 0.9 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Vegetation",
+      "params": {
+        "vegetation_color": { "String": "3B6B1A" },
+        "dry_color": { "String": "6B5030" },
+        "altitude_max": { "Float": 0.45 },
+        "slope_cutoff": { "Float": 0.35 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.7 }
+      }
+    },
+    {
+      "key": "rock_comp",
+      "type": "TextureOverlay",
+      "label": "Rock Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    },
+    {
+      "key": "veg_comp",
+      "type": "TextureOverlay",
+      "label": "Vegetation Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
       }
     }
   ],
   "connections": [
-    {
-      "from": "ridges.output",
-      "to": "erosion.input"
-    },
-    {
-      "from": "erosion.output",
-      "to": "smooth.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "slope_map.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "auto_tex.input"
-    },
-    {
-      "from": "slope_map.output",
-      "to": "auto_tex.slope"
-    }
+    { "from": "shape.output",     "to": "ridges.control" },
+    { "from": "ridges.output",    "to": "erosion.input" },
+    { "from": "erosion.output",   "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "auto_tex.input" },
+    { "from": "slope_map.output", "to": "auto_tex.slope" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" },
+    { "from": "smooth.output",    "to": "veg.input" },
+    { "from": "slope_map.output", "to": "veg.slope" },
+    { "from": "auto_tex.output",  "to": "rock_comp.base" },
+    { "from": "rock_soil.output", "to": "rock_comp.overlay" },
+    { "from": "rock_comp.output", "to": "veg_comp.base" },
+    { "from": "veg.output",       "to": "veg_comp.overlay" }
   ],
   "subgraph": {
     "label": "Mountain Range",
@@ -89,64 +119,16 @@
     "collapsed": true,
     "inputs": [],
     "outputs": [
-      {
-        "name": "terrain",
-        "label": "Terrain",
-        "kind": "Heightmap",
-        "binding": "smooth:output"
-      },
-      {
-        "name": "texture",
-        "label": "Texture",
-        "kind": "Color",
-        "binding": "auto_tex:output"
-      },
-      {
-        "name": "slope",
-        "label": "Slope",
-        "kind": "Heightmap",
-        "binding": "slope_map:output"
-      }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "veg_comp:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    {
-      "name": "ridge_density",
-      "label": "Ridge density",
-      "kind": "Float",
-      "binding": "ridges:frequency",
-      "min": 0.5,
-      "max": 6
-    },
-    {
-      "name": "ridge_sharpness",
-      "label": "Ridge sharpness",
-      "kind": "Float",
-      "binding": "ridges:persistence",
-      "min": 0.2,
-      "max": 0.85
-    },
-    {
-      "name": "erosion_passes",
-      "label": "Erosion passes",
-      "kind": "UInt",
-      "binding": "erosion:iterations",
-      "min": 0,
-      "max": 400
-    },
-    {
-      "name": "smoothing",
-      "label": "Smoothing",
-      "kind": "Float",
-      "binding": "smooth:radius",
-      "min": 0,
-      "max": 5
-    },
-    {
-      "name": "seed",
-      "label": "Seed",
-      "kind": "UInt",
-      "binding": "ridges:seed"
-    }
+    { "name": "ridge_density",  "label": "Ridge density",  "kind": "Float", "binding": "ridges:frequency",          "min": 1.0, "max": 5.0 },
+    { "name": "erosion_passes", "label": "Erosion passes", "kind": "UInt",  "binding": "erosion:iterations",        "min": 0,   "max": 400 },
+    { "name": "rock_threshold", "label": "Rock threshold", "kind": "Float", "binding": "rock_soil:slope_threshold", "min": 0.1, "max": 0.7 },
+    { "name": "tree_line",      "label": "Tree line",      "kind": "Float", "binding": "veg:altitude_max",          "min": 0.2, "max": 0.8 },
+    { "name": "seed",           "label": "Seed",           "kind": "UInt",  "binding": "ridges:seed" }
   ]
 }

@@ -32,7 +32,14 @@ pub fn export_smf(
     let metalmap = get_metalmap_output(graph, &results);
     let typemap = get_typemap_output(graph, &results);
 
-    write_smf_full(&heightmap, metalmap.as_ref(), typemap.as_ref(), width, height, path)?;
+    write_smf_full(
+        &heightmap,
+        metalmap.as_ref(),
+        typemap.as_ref(),
+        width,
+        height,
+        path,
+    )?;
 
     tracing::info!("Exported SMF to {}", path.display());
     Ok(())
@@ -180,8 +187,9 @@ pub fn export_normalmap_png(
     let results =
         evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
 
-    let normalmap = get_normalmap_output(graph, &results)
-        .context("No normal map output — connect a NormalMap node to the Bundler's normalmap port")?;
+    let normalmap = get_normalmap_output(graph, &results).context(
+        "No normal map output — connect a NormalMap node to the Bundler's normalmap port",
+    )?;
 
     write_color_png(&normalmap, path)?;
 
@@ -242,8 +250,12 @@ pub fn export_sd7_directory(
     map_name: &str,
     settings: &MapSettings,
 ) -> Result<()> {
-    fs::create_dir_all(output_dir)
-        .with_context(|| format!("Failed to create output directory: {}", output_dir.display()))?;
+    fs::create_dir_all(output_dir).with_context(|| {
+        format!(
+            "Failed to create output directory: {}",
+            output_dir.display()
+        )
+    })?;
 
     // BAR expects SMF/SMT inside maps/ subdirectory
     let maps_dir = output_dir.join("maps");
@@ -313,10 +325,7 @@ pub fn export_sd7_directory(
     fs::write(&mapinfo_path, mapinfo)?;
     tracing::info!("Wrote mapinfo: {}", mapinfo_path.display());
 
-    tracing::info!(
-        "SD7 directory export complete: {}",
-        output_dir.display()
-    );
+    tracing::info!("SD7 directory export complete: {}", output_dir.display());
     Ok(())
 }
 
@@ -498,7 +507,7 @@ pub fn export_with_target(
     let width = recipe.output.width;
     let height = recipe.output.height;
     let settings = &recipe.output.map_settings;
-    use crate::targets::{ExportPlan, LayerSet, Severity, TargetRegistry, load_target_config};
+    use crate::targets::{load_target_config, ExportPlan, LayerSet, Severity, TargetRegistry};
 
     let registry = TargetRegistry::new();
 
@@ -521,8 +530,12 @@ pub fn export_with_target(
         .get_codec(&config.codec)
         .ok_or_else(|| anyhow::anyhow!("Unknown codec: {}", config.codec))?;
 
-    fs::create_dir_all(output_dir)
-        .with_context(|| format!("Failed to create output directory: {}", output_dir.display()))?;
+    fs::create_dir_all(output_dir).with_context(|| {
+        format!(
+            "Failed to create output directory: {}",
+            output_dir.display()
+        )
+    })?;
 
     // Evaluate graph
     let results =

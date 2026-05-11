@@ -3,12 +3,12 @@
 What's vendored, what's been translated to WGSL, and what remains. Source
 for the map editor's pivot from "invented procedural visuals" to
 "engine-faithful visuals via source-translated shaders" — see
-`~/.claude/plans/tidy-napping-shamir.md` (M2) for the strategic context.
+`ROADMAP.md` for current status.
 
 Vendored upstream files live at `vendor/recoil/shaders/GLSL/`. Our ports
 live at `shaders/recoil/<name>.wgsl` and concatenate into the renderer
 pipeline in this order: `modern_sky.wgsl` → `smf_ground.wgsl` →
-`smf_water.wgsl` → `terrain.wgsl`. Both directories are pinned to the
+`water.wgsl` → `terrain.wgsl`. Both directories are pinned to the
 upstream commit recorded in `vendor/recoil/UPSTREAM.md`.
 
 ---
@@ -20,7 +20,7 @@ upstream commit recorded in `vendor/recoil/UPSTREAM.md`.
 | `ModernSkyVS.glsl`, `ModernSkyFS.glsl`           | **Ported**                    | `shaders/recoil/modern_sky.wgsl`   | Sky pass (skybox + fog source)                       |
 | `SMFVertProg.glsl`, `SMFFragProg.glsl`           | **Partially ported**          | `shaders/recoil/smf_ground.wgsl`   | Ground pass (called from `terrain.wgsl`)             |
 | `MiniMapVertProg.glsl`, `MiniMapFragProg.glsl`   | **Ported** (not yet GUI-wired)| `shaders/recoil/minimap.wgsl`      | 2D inspector (off-line; not yet replacing topo view) |
-| `BumpWaterVS.glsl`, `BumpWaterFS.glsl`           | **Ported** (core; see gaps)   | `shaders/recoil/smf_water.wgsl`    | Water pass (Group 3, called from `terrain.wgsl`)     |
+| `BumpWaterVS.glsl`, `BumpWaterFS.glsl`           | **Replaced** (see below)      | `shaders/water.wgsl` (original)    | Water pass (Group 3, called from `terrain.wgsl`)     |
 | `SMFShadingTexture{Vert,Frag}Prog.glsl`          | Folded into SMF               | (math inlined in `smf_ground.wgsl`)| n/a                                                  |
 | `SMFBorderProg`                                  | Not vendored                  | —                                  | Map border (cosmetic edge fill)                      |
 | `BumpWaterCoastBlur*`                            | Not vendored                  | —                                  | Shore softening (subordinate to BumpWater)           |
@@ -105,35 +105,28 @@ textures, and additional render passes.
 
 ---
 
-## BumpWater — done (core; shore effects remain future work)
+## BumpWater — replaced by original PBR shader
 
-- Source: `BumpWater{VS,FS}.glsl`
-- Port: `shaders/recoil/smf_water.wgsl` (Group 3, called via `bump_water()`
-  in `terrain.wgsl`)
-- Uniform inputs: `sun_dir_exp`, `ground_specular`, `water_base_color`,
-  `time`, `quality`, `screen_w/h`, `camera_pos` — all already in
-  `CameraUniform`.
+The Recoil BumpWater port (`shaders/recoil/smf_water.wgsl`) has been deleted
+and replaced with an intentionally original PBR water shader at
+`shaders/water.wgsl`. Motivation: the Recoil port carries GPL-v2 terms that
+complicate the project's licensing; the original shader targets the same
+BAR-website visual aesthetic without the GPL entanglement.
+
+- Shader: `shaders/water.wgsl` (MIT / Apache-2.0, original)
+- Entry point called via `shade_water()` from `terrain.wgsl`
 - Extra bind group: Group 3 (`water_normal_tex` / `water_normal_sam`).
-  Currently a 1×1 flat-normal stub `[127,127,255,255]`.
+  Normal map is a procedurally generated 128x128 texture; no vendored asset
+  required.
 - Uses existing planar reflection pre-pass (Group 2) for the reflection
-  sample.
-- **What's faithful**: Schlick Fresnel (f0 = 0.02), 4-octave scrolling
-  normal-map surface, Blinn-Phong specular with `sun_dir_exp` +
-  `ground_specular`, planar-reflection sample at normal-distorted screen UV.
-  FBM-noise procedural water and all its dead helpers removed from
-  `terrain.wgsl`.
-- **What's stubbed / deferred**:
-  - **Normal map asset** — the 1×1 stub decodes to a perfectly flat surface
-    (`vec3(0,0,1)`); no visible ripple variation until a real tiling normal
-    texture is vendored from BAR's content tree (`cont/base/maphelper/`).
-  - **Refraction pre-pass** — BumpWaterFS samples a `refraction` texture
-    for underwater distortion. Not implemented; water is opaque.
-  - **Shorewaves** (`opt_shorewaves`) — needs `coastmap` (shoreline distance
-    field), `foam` texture, and `waverand` noise texture.
-  - **Caustics** — needs a 32-frame animated caustic sequence, indexed by
-    `frame`.
-  - **`BumpWaterCoastBlur*`** — shore-blur shaders; subordinate to
-    shorewaves; not vendored.
+  sample at quality > 0.5.
+- **What's implemented**: GGX specular (`ggx_d`, roughness 0.06), Schlick
+  Fresnel (f0 = 0.02), 4-octave scrolling normal-map surface, planar-
+  reflection sample with normal distortion, sky-color fallback when quality
+  is low.
+- **Not implemented** (same gaps as the old port, except these are now
+  explicitly out of scope for the original shader):
+  - Refraction pre-pass, shorewaves, caustics -- deferred until user need.
 
 ---
 

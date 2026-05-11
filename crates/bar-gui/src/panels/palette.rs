@@ -6,8 +6,8 @@
 //! through `add_node_at`. The canvas's drop handler (still in
 //! `app.rs`) is what actually creates the node.
 
-use eframe::egui;
 use bar_graph::NodeType;
+use eframe::egui;
 
 use crate::app::{BarEditorApp, PaletteDrag, PaletteKind};
 use crate::t;
@@ -39,10 +39,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Sharpen", NodeType::Sharpen),
         ("Clamp", NodeType::Clamp),
         ("Invert", NodeType::Invert),
-        ("Sculpt", NodeType::Sculpt),
-        ("Texture Sculpt", NodeType::TextureSculpt),
-        ("Metal Sculpt", NodeType::MetalSculpt),
-        ("Type Sculpt", NodeType::TypeSculpt),
+        ("2D Sculpt", NodeType::Sculpt),
         ("Preview", NodeType::Preview),
     ];
 
@@ -60,6 +57,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Height Select", NodeType::HeightSelect),
         ("Splat Map", NodeType::SplatMap),
         ("Auto Texture", NodeType::AutoTexture),
+        ("Rock and Soil", NodeType::RockSoil),
+        ("Vegetation", NodeType::Vegetation),
+        ("Texture Overlay", NodeType::TextureOverlay),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
         ("Specular Map", NodeType::SpecularMap),
@@ -129,20 +129,24 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     // of graph wired up for a typical map archetype. Drop one,
     // wire its output to a Bundler, you're done.
     ui.collapsing("Macros", |ui| {
-        for (name, _json) in crate::macros::BUILTIN_MACROS {
-            let resp = ui.add(
-                egui::Label::new(*name)
-                    .sense(egui::Sense::click_and_drag())
-                    .selectable(false),
-            );
-            if resp.drag_started() && drag_start.is_none() {
-                drag_start = Some(PaletteDrag {
-                    kind: PaletteKind::Macro {
-                        name: (*name).to_string(),
-                    },
-                    label: (*name).to_string(),
-                });
-            }
+        for group in crate::macros::BUILTIN_MACRO_GROUPS {
+            ui.collapsing(group.name, |ui| {
+                for entry in group.entries {
+                    let resp = ui.add(
+                        egui::Label::new(entry.display_name)
+                            .sense(egui::Sense::click_and_drag())
+                            .selectable(false),
+                    );
+                    if resp.drag_started() && drag_start.is_none() {
+                        drag_start = Some(PaletteDrag {
+                            kind: PaletteKind::Macro {
+                                name: entry.full_name.to_string(),
+                            },
+                            label: format!("{} - {}", group.name, entry.display_name),
+                        });
+                    }
+                }
+            });
         }
     });
 

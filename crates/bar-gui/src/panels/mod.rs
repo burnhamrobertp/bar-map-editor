@@ -14,11 +14,11 @@
 //! Either pattern is fine; pick whichever makes the call sites
 //! cleaner.
 
+pub mod canvas;
 pub mod dialogs;
 pub mod icons;
 pub mod inspector;
 pub mod mapinfo_editor;
-pub mod node_canvas;
 pub mod palette;
 pub mod properties;
 pub mod tokens;

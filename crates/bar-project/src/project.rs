@@ -14,6 +14,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::recipe::Recipe;
 
+/// Project-level sculpt overlays. Stored as sidecar files next to the
+/// .barproj. Merged on top of graph eval output at export time.
+/// All fields are bar:// paths; None means no sculpt data for that layer.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SculptRecord {
+    /// 16-bit grayscale PNG, biased: 32768 == 0 delta, range maps to [-1, +1].
+    #[serde(default)]
+    pub height: Option<String>,
+    /// 16-bit grayscale PNG: paint value [0..1]; separate alpha channel
+    /// implies no-paint where 0.
+    #[serde(default)]
+    pub metal: Option<String>,
+    #[serde(default)]
+    pub type_map: Option<String>,
+    /// RGBA PNG: rgb = painted colour, alpha = paint coverage mask.
+    #[serde(default)]
+    pub texture: Option<String>,
+}
+
 /// A complete project file — recipe + editor layout.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -22,6 +41,9 @@ pub struct Project {
     /// Editor layout state (node positions, etc.).
     #[serde(default)]
     pub layout: EditorLayout,
+    /// Project-level sculpt overlays applied on top of graph output at export.
+    #[serde(default)]
+    pub sculpt: SculptRecord,
 }
 
 /// Editor visual state that isn't part of the pipeline logic.
@@ -43,12 +65,6 @@ pub struct EditorLayout {
     /// yet; the editor will prompt on first use of the Edit Map Info button.
     #[serde(default)]
     pub map_info_file: Option<String>,
-    /// Project-relative `bar://` path to a sidecar PNG holding the user's
-    /// sculpt edits. `None` means no sculpt overlay has been baked yet.
-    /// Resolved against the project directory at load time; written by
-    /// the editor when the user saves a project that has unsaved sculpts.
-    #[serde(default)]
-    pub sculpt_overlay: Option<String>,
     /// Visual node groupings. Purely organisational — they don't change
     /// graph topology or evaluation. The chip-style "subgraph as a
     /// reusable component" model lives at a separate layer once it
@@ -69,15 +85,12 @@ pub struct EditorLayout {
 }
 
 /// Persisted form of a canvas tab. SubGraphs are referenced by stable
-/// group id (which round-trips through save/load already); Sculpt
-/// tabs are referenced by recipe-key so they survive runtime NodeId
-/// regeneration the same way connections do.
+/// group id (which round-trips through save/load already).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum PersistedCanvasView {
     Main,
     SubGraph { group_id: u64 },
-    Sculpt { node_key: String },
 }
 
 /// A visual group on the editor canvas. Members are referenced by
@@ -185,6 +198,7 @@ impl Project {
         Self {
             recipe,
             layout: EditorLayout::default(),
+            sculpt: SculptRecord::default(),
         }
     }
 
@@ -250,10 +264,10 @@ mod tests {
         let mut project = Project::from_recipe(recipe);
 
         // Add some layout
-        project.layout.node_positions.insert(
-            "perlin".to_string(),
-            Position { x: 100.0, y: 200.0 },
-        );
+        project
+            .layout
+            .node_positions
+            .insert("perlin".to_string(), Position { x: 100.0, y: 200.0 });
         project.layout.canvas_offset = (50.0, -30.0);
         project.recipe.output.width = 512;
         project.recipe.output.height = 512;

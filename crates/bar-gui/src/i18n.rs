@@ -118,11 +118,7 @@ fn build_catalogue() -> HashMap<String, HashMap<String, String>> {
     let mut catalogue: HashMap<String, HashMap<String, String>> = HashMap::new();
 
     for locale_dir in LANGUAGE.dirs() {
-        let Some(locale) = locale_dir
-            .path()
-            .file_name()
-            .and_then(|n| n.to_str())
-        else {
+        let Some(locale) = locale_dir.path().file_name().and_then(|n| n.to_str()) else {
             continue;
         };
 
@@ -139,10 +135,7 @@ fn build_catalogue() -> HashMap<String, HashMap<String, String>> {
             let value: Value = match serde_json::from_str(content) {
                 Ok(v) => v,
                 Err(e) => {
-                    tracing::warn!(
-                        "Failed to parse {}: {e}",
-                        file.path().display()
-                    );
+                    tracing::warn!("Failed to parse {}: {e}", file.path().display());
                     continue;
                 }
             };
@@ -201,10 +194,7 @@ mod tests {
 
     #[test]
     fn flatten_nests() {
-        let v: Value = serde_json::from_str(
-            r#"{"a": {"b": "x", "c": {"d": "y"}}}"#,
-        )
-        .unwrap();
+        let v: Value = serde_json::from_str(r#"{"a": {"b": "x", "c": {"d": "y"}}}"#).unwrap();
         let mut out = HashMap::new();
         flatten_into("", &v, &mut out);
         assert_eq!(out.get("a.b"), Some(&"x".to_string()));
@@ -236,10 +226,7 @@ mod tests {
     fn t_args_interpolates() {
         init();
         assert_eq!(
-            t_args(
-                "editor.notify.template_started",
-                &[("name", "Plains")],
-            ),
+            t_args("editor.notify.template_started", &[("name", "Plains")],),
             "Started a new project with the 'Plains' template."
         );
     }

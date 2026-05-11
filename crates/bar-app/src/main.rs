@@ -9,7 +9,7 @@ use tracing_subscriber::EnvFilter;
 use bar_compute::GpuContext;
 use bar_engine::{CpuExecutor, HybridExecutor};
 use bar_graph::{evaluate_graph, NodeExecutor};
-use bar_render::{pick_terrain, Camera, TerrainRenderer};
+use bar_render::{pick_terrain, Camera, TerrainRenderer, TerrainUpdateParams};
 
 /// Result sent back from a background preview evaluation thread.
 ///
@@ -53,34 +53,25 @@ struct PreviewResult {
 /// across frames.
 #[derive(Clone)]
 struct OwnedFrame {
-    revision: u64,
-    heightmap: bar_data::Heightmap,
-    texture: Option<bar_data::ColorBuffer>,
     height_scale: f32,
     x_extent: f32,
     z_extent: f32,
     water_y: f32,
     water_color: [f32; 3],
-    max_grid_size: u32,
     quality_high: bool,
     smf_lighting: bar_render::SmfLighting,
 }
 
 impl OwnedFrame {
-    /// Borrow as a `PreviewFrame` for the renderer. `time` comes
-    /// from the per-frame animation tick, not from the OwnedFrame,
-    /// so animation can run without re-evaluating the graph.
-    fn as_frame(&self, time: f32) -> bar_render::PreviewFrame<'_> {
+    /// Build a `PreviewFrame` for the renderer. `time` comes from the
+    /// per-frame animation tick so animation can run without re-evaluating.
+    fn as_frame(&self, time: f32) -> bar_render::PreviewFrame {
         bar_render::PreviewFrame {
-            revision: self.revision,
-            heightmap: &self.heightmap,
-            texture: self.texture.as_ref(),
             height_scale: self.height_scale,
             x_extent: self.x_extent,
             z_extent: self.z_extent,
             water_y: self.water_y,
             water_color: self.water_color,
-            max_grid_size: self.max_grid_size,
             quality_high: self.quality_high,
             time,
             smf_lighting: self.smf_lighting,
@@ -142,16 +133,18 @@ struct Session {
     /// session_id so any in-flight result is rejected. A debug override
     /// for cases where the gating logic is suspected of being stuck.
     force_refresh_requested: bool,
+    /// Last brush target for which the Sculpt3D viewport applied a layer
+    /// visualization. When the target changes to Metal/Typemap we push the
+    /// tinted overlay immediately (rather than waiting for the first stroke)
+    /// so the view does not shift unexpectedly mid-session.
+    last_viz_target: Option<bar_gui::BrushTarget>,
 }
 
 impl Session {
     fn new(gpu_context: &Option<GpuContext>, session_id: u64) -> Self {
         let terrain_renderer = gpu_context.as_ref().map(|ctx| {
-            let mut r = TerrainRenderer::new(
-                &ctx.device,
-                &ctx.queue,
-                wgpu::TextureFormat::Rgba8UnormSrgb,
-            );
+            let mut r =
+                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
             r.resize(&ctx.device, 512, 512);
             r
         });
@@ -173,6 +166,7 @@ impl Session {
             session_id,
             started_at: Instant::now(),
             force_refresh_requested: false,
+            last_viz_target: None,
         }
     }
 }
@@ -222,11 +216,16 @@ fn main() -> Result<()> {
         None => (None, [1440.0, 900.0], true),
     };
 
-    // Run the GUI application
+    // Run the GUI application. The window is created hidden and made
+    // visible after the first frame paints; otherwise winit/Windows
+    // briefly flashes the OS-default white background between window
+    // creation and the first egui frame, which is jarring on every
+    // reload.
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size(default_size)
         .with_min_inner_size([800.0, 600.0])
         .with_maximized(default_maximized)
+        .with_visible(false)
         .with_title("BAR - Map Editor");
     if let Some(pos) = default_pos {
         viewport = viewport.with_position(pos);
@@ -234,20 +233,23 @@ fn main() -> Result<()> {
     if let Some(icon_data) = icon {
         viewport = viewport.with_icon(icon_data);
     }
-    let options = eframe::NativeOptions { viewport, ..Default::default() };
+    let options = eframe::NativeOptions {
+        viewport,
+        ..Default::default()
+    };
 
     eframe::run_native(
         "BAR - Map Editor",
         options,
         Box::new(move |cc| {
-            let app = bar_gui::BarEditorApp::new(cc);
+            let mut app = bar_gui::BarEditorApp::new(cc);
 
             // Extract wgpu render state from eframe for shared GPU access
             let render_state = cc.wgpu_render_state.clone();
 
-            let gpu_context = render_state.as_ref().map(|rs| {
-                GpuContext::from_existing(rs.device.clone(), rs.queue.clone())
-            });
+            let gpu_context = render_state
+                .as_ref()
+                .map(|rs| GpuContext::from_existing(rs.device.clone(), rs.queue.clone()));
 
             // Create HybridExecutor if GPU available, otherwise use CPU only
             let executor: Arc<dyn NodeExecutor + Send + Sync> = if let Some(ref ctx) = gpu_context {
@@ -261,6 +263,16 @@ fn main() -> Result<()> {
             // Start with an empty session (no project loaded yet)
             let initial_session = Session::new(&gpu_context, 0);
 
+            // Detect BAR install once at startup and populate the version
+            // picker labels so the toolbar can show the chevron immediately.
+            let bar_install = bar_install::BarVersions::detect();
+            if let Some(ref versions) = bar_install {
+                app.bar_versions.game_labels =
+                    versions.games.iter().map(|g| g.label.clone()).collect();
+                app.bar_versions.engine_labels =
+                    versions.engines.iter().map(|e| e.label.clone()).collect();
+            }
+
             Ok(Box::new(AppWrapper {
                 app,
                 executor,
@@ -271,9 +283,11 @@ fn main() -> Result<()> {
                 sd7_extract_rx: None,
                 test_in_bar_rx: None,
                 pending_export_dir: None,
+                bar_install,
                 session: Some(initial_session),
                 next_session_id: 1,
                 pending_maximize: default_maximized,
+                has_shown_window: false,
             }))
         }),
     )
@@ -286,8 +300,6 @@ fn main() -> Result<()> {
 struct PendingExportDir {
     /// Receiver carrying the user's folder choice (None if cancelled).
     rx: mpsc::Receiver<Option<std::path::PathBuf>>,
-    /// Specific Bundler the user clicked, or None for "run all bundlers".
-    run_bundler_node: Option<bar_graph::NodeId>,
     /// Cached label of the targeted bundler at request time, used to
     /// filter `execute_bundlers`. Captured up front so a node rename
     /// or deletion mid-flow doesn't change which bundle gets exported.
@@ -324,6 +336,9 @@ struct AppWrapper {
     /// context (which bundler, optional filter label) so the export
     /// matches what the user clicked even if state changed mid-flow.
     pending_export_dir: Option<PendingExportDir>,
+    /// Detected BAR install with all available game/engine versions.
+    /// `None` when BAR is not installed on this machine.
+    bar_install: Option<bar_install::BarVersions>,
     // ── Per-project session (replaced atomically on every project switch) ──
     session: Option<Session>,
     next_session_id: u64,
@@ -333,6 +348,11 @@ struct AppWrapper {
     /// the runtime command is reliably honoured. Set from the saved
     /// window state at startup.
     pending_maximize: bool,
+    /// `false` until the first frame has been queued, then flips to
+    /// `true` and a viewport-show command is emitted. We start the
+    /// window hidden (see `with_visible(false)` in `main`) so the
+    /// OS-default white background doesn't flash before egui paints.
+    has_shown_window: bool,
 }
 
 impl eframe::App for AppWrapper {
@@ -346,6 +366,27 @@ impl eframe::App for AppWrapper {
         if self.pending_maximize {
             self.pending_maximize = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
+        }
+
+        // Reveal the window after the first frame has been queued. The
+        // window was created hidden in `main` so the OS doesn't paint
+        // a white default background before egui's first frame lands.
+        if !self.has_shown_window {
+            self.has_shown_window = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+
+        // Hand the editor's window + display handles to bar-gui so
+        // native file dialogs spawned from worker threads can be
+        // parented to *our* window instead of whichever OS window
+        // happens to be foreground at dialog-spawn time.
+        {
+            use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+            let handles = match (frame.window_handle(), frame.display_handle()) {
+                (Ok(w), Ok(d)) => Some((w.as_raw(), d.as_raw())),
+                _ => None,
+            };
+            self.app.set_parent_window_handles(handles);
         }
 
         // ── Window close intercept ──────────────────────────────────────────
@@ -404,15 +445,14 @@ impl eframe::App for AppWrapper {
         }
 
         // Handle Run button (toolbar = all bundlers; per-node button = that bundler only)
-        let run_all = self.app.take_run_requested();
-        let run_bundler_node = self.app.take_run_bundler_node();
+        let run_all = self.app.preview.take_run_requested();
+        let run_bundler_node = self.app.preview.take_run_bundler_node();
         let run_filter_label = run_bundler_node
             .and_then(|id| self.app.graph().get_node(id))
             .map(|n| n.label.clone());
-        let no_export_in_flight = self.export_result_rx.is_none()
-            && self.pending_export_dir.is_none();
-        let should_request_dir =
-            (run_all || run_bundler_node.is_some()) && no_export_in_flight;
+        let no_export_in_flight =
+            self.export_result_rx.is_none() && self.pending_export_dir.is_none();
+        let should_request_dir = (run_all || run_bundler_node.is_some()) && no_export_in_flight;
 
         // Phase 1: spawn the folder picker on a worker. The egui main
         // loop keeps rendering while the OS dialog is up, instead of
@@ -420,16 +460,21 @@ impl eframe::App for AppWrapper {
         if should_request_dir {
             let (tx, rx) = mpsc::channel::<Option<std::path::PathBuf>>();
             let ctx_clone = ctx.clone();
+            // Capture the editor's window + display handles on the main
+            // thread so the folder picker is parented to our window
+            // rather than the OS's current foreground.
+            let parent = self.app.parent_window();
             std::thread::spawn(move || {
-                let dir = rfd::FileDialog::new()
-                    .set_title("Choose export folder")
-                    .pick_folder();
+                let mut dialog = rfd::FileDialog::new().set_title("Choose export folder");
+                if let Some(parent) = &parent {
+                    dialog = dialog.set_parent(parent);
+                }
+                let dir = dialog.pick_folder();
                 let _ = tx.send(dir);
                 ctx_clone.request_repaint();
             });
             self.pending_export_dir = Some(PendingExportDir {
                 rx,
-                run_bundler_node,
                 run_filter_label,
             });
             // Reflect "an export is in progress" the moment the
@@ -449,7 +494,8 @@ impl eframe::App for AppWrapper {
                 Ok(Some(output_dir)) => {
                     let graph = self.app.graph().clone();
                     let recipe = self.app.recipe_for_export();
-                    let (w, h) = self.app.map_dimensions();
+                    let sculpt_snapshot = self.app.sculpt_export_snapshot();
+                    let (w, h) = self.app.map.dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
                     let ctx_clone = ctx.clone();
@@ -460,12 +506,15 @@ impl eframe::App for AppWrapper {
                         let msg = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                             Ok(outputs) => {
                                 let filter = run_filter_label.as_deref();
+                                let sculpt_ref =
+                                    sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
                                 match bar_engine::execute_bundlers(
                                     &graph,
                                     &outputs,
                                     &recipe,
                                     &output_dir,
                                     filter,
+                                    sculpt_ref,
                                 ) {
                                     Ok(results) if !results.is_empty() => {
                                         format!(
@@ -506,7 +555,7 @@ impl eframe::App for AppWrapper {
         }
 
         // ── Test in BAR: handle button + chain export → lobby launch ──────
-        if self.app.take_test_in_bar_requested() && self.test_in_bar_rx.is_none() {
+        if self.app.preview.take_test_in_bar() && self.test_in_bar_rx.is_none() {
             self.start_test_in_bar(ctx);
         }
         if let Some(ref rx) = self.test_in_bar_rx {
@@ -522,7 +571,7 @@ impl eframe::App for AppWrapper {
 
         // Push current export status to the GUI so bundle buttons render
         // busy state. Cheap (single Copy) and idempotent.
-        self.app.set_export_status(self.export_status);
+        self.app.preview.set_export_status(self.export_status);
 
         // Run the GUI (menus, node palette, properties, status bar)
         self.app.update(ctx, frame);
@@ -540,20 +589,21 @@ impl eframe::App for AppWrapper {
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
-                    self.app.set_status("Open operation failed unexpectedly".to_string());
+                    self.app
+                        .set_status("Open operation failed unexpectedly".to_string());
                     self.sd7_extract_rx = None;
                 }
             }
         }
 
         // Handle SD7 open requests queued by the GUI file dialog
-        if let Some(sd7_path) = self.app.take_sd7_open_request() {
+        if let Some(sd7_path) = self.app.project.sd7_open_request.take() {
             let (tx, rx) = mpsc::channel::<Result<bar_engine::WorkDirScan, String>>();
             self.sd7_extract_rx = Some(rx);
             let ctx_clone = ctx.clone();
             std::thread::spawn(move || {
-                let result = bar_engine::extract_sd7_to_work_dir(&sd7_path)
-                    .map_err(|e| e.to_string());
+                let result =
+                    bar_engine::extract_sd7_to_work_dir(&sd7_path).map_err(|e| e.to_string());
                 let _ = tx.send(result);
                 ctx_clone.request_repaint();
             });
@@ -563,7 +613,7 @@ impl eframe::App for AppWrapper {
         // Dropping the old Session frees its GPU buffers, channels, and camera
         // state; the new Session starts completely clean — no manual per-field
         // reset list required.
-        if self.app.take_graph_reset() {
+        if self.app.project.take_graph_reset() {
             let id = self.next_session_id;
             self.next_session_id += 1;
             self.session = Some(Session::new(&self.gpu_context, id));
@@ -612,13 +662,10 @@ impl eframe::App for AppWrapper {
             }
 
             if result.session_id == session.session_id && result.cache_key == current_key {
-                // Mesh LOD: low-res passes are clamped to a small mesh so they
-                // read as visibly chunky and the user can see the refinement
-                // when the high-res pass arrives. High-res uses a much larger
-                // cap (up to 2048) so source detail isn't decimated away —
-                // sub-pixel shimmer is acceptable in exchange for visible
-                // ridge-line detail on real BAR-scale heightmaps.
-                let mesh_lod = if result.is_low_res {
+                // grid_n: low-res passes use a coarse mesh so the user can
+                // see the refinement when the high-res pass arrives. High-res
+                // uses up to the full heightmap resolution (capped at 2048).
+                let grid_n = if result.is_low_res {
                     96
                 } else {
                     let hm_size = result
@@ -626,62 +673,55 @@ impl eframe::App for AppWrapper {
                         .as_ref()
                         .map(|h| h.width().max(h.height()))
                         .unwrap_or(1024);
-                    // Use the full source heightmap up to a hard cap of 2048
-                    // (mesh tessellation gets slow above that; we'd benefit
-                    // more from GPU tessellation than CPU vertex generation).
                     hm_size.min(2048)
                 };
 
-                // Build the frame to present. Either the eval gave us a
-                // heightmap (Some(frame)) or it didn't (None — empty
-                // viewport). There's no half-state.
-                let new_frame = if let Some(heightmap) = result.heightmap {
+                if let Some(heightmap) = result.heightmap {
                     if !result.is_low_res {
                         self.app.set_inspector_heightmap(heightmap.clone());
-                        // Refresh the live colour-buffer cache from
-                        // the eval result so the colour brush has a
-                        // base layer to overlay onto. Same shape as
-                        // the heightmap mirror — the eval is the
-                        // authoritative source; brush dabs mutate
-                        // the cache in-place between evals for
-                        // per-stroke feedback.
                         if let Some(ref tex) = result.texture {
-                            self.app.set_inspector_color_buffer(tex.clone());
+                            self.app.paint.color_buffer = Some(tex.clone());
                         }
                     }
                     session.last_water_y = result.water_y;
                     session.last_water_color = result.water_color;
-                    Some(OwnedFrame {
-                        // Distinct revision per (cache key, quality
-                        // pass) so the renderer re-uploads when the
-                        // high-res result lands but not on every
-                        // camera tick. Wrapping is fine — the
-                        // renderer compares for equality, not order.
-                        revision: result.cache_key.wrapping_mul(2)
-                            .wrapping_add(result.is_low_res as u64),
-                        heightmap,
-                        texture: result.texture,
+                    session.current_frame = Some(OwnedFrame {
                         height_scale: result.height_scale,
                         x_extent: result.x_extent,
                         z_extent: result.z_extent,
                         water_y: result.water_y,
                         water_color: result.water_color,
-                        max_grid_size: mesh_lod,
                         quality_high: !result.is_low_res,
                         smf_lighting: result.smf_lighting,
-                    })
+                    });
+                    if let Some(ref gpu) = self.gpu_context {
+                        if let Some(ref mut renderer) = session.terrain_renderer {
+                            renderer.update_heightmap(
+                                &gpu.device,
+                                &gpu.queue,
+                                &heightmap,
+                                TerrainUpdateParams {
+                                    height_scale: result.height_scale,
+                                    x_extent: result.x_extent,
+                                    z_extent: result.z_extent,
+                                    water_y: result.water_y,
+                                    water_color: result.water_color,
+                                    grid_n,
+                                },
+                            );
+                            if let Some(ref tex) = result.texture {
+                                renderer.update_albedo(&gpu.device, &gpu.queue, tex);
+                            } else {
+                                renderer.clear_albedo(&gpu.device, &gpu.queue);
+                            }
+                        }
+                    }
                 } else if !result.is_low_res {
-                    // High-pass eval succeeded but the active preview
-                    // target had nothing wired into it. Replace the
-                    // frame with None so the viewport is empty.
-                    None
-                } else {
-                    // Low-pass with no heightmap — keep whatever the
-                    // viewport was showing; the high-pass result will
-                    // arrive shortly and replace the frame.
-                    session.current_frame.clone()
-                };
-                session.current_frame = new_frame;
+                    // High-pass eval with nothing wired to the preview target.
+                    session.current_frame = None;
+                }
+                // Low-pass with no heightmap: keep the current frame so the
+                // viewport isn't blanked while waiting for the high-pass.
 
                 if let Some(ref gpu) = self.gpu_context {
                     if let Some(ref mut renderer) = session.terrain_renderer {
@@ -714,9 +754,9 @@ impl eframe::App for AppWrapper {
         // ── Progressive preview: spawn passes as needed ───────────────────
         if !self.app.graph().nodes().is_empty() {
             // Compute height/water params once; both passes share the same values.
-            let (w, h) = self.app.map_dimensions();
+            let (w, h) = self.app.map.dimensions();
             let (height_scale, water_y, x_extent, z_extent) = {
-                let (min_h, max_h) = self.app.map_height_range();
+                let (min_h, max_h) = self.app.map.height_range();
                 // 1:1 with the engine. Spring renders 1 elmo X = 1 elmo Y =
                 // 1 elmo Z; we mirror that by normalising X/Z to a unit-cube
                 // mesh and scaling Y by the same factor (1 / (pm * 8)). The
@@ -753,15 +793,15 @@ impl eframe::App for AppWrapper {
                 water_base: smf.water_base,
                 water_min: smf.water_min,
             };
-            let preview_node_id = self.app.preview_node();
+            let preview_node_id = self.app.preview.node();
             let session_id = session.session_id;
 
             // Pass 1 — low-res (128 px): fires immediately when any preview
             // input changes. Allowed to run even while a stale high-res thread
             // is still in flight; the stale result will be discarded by the
             // session_id + cache_key guard.
-            let needs_low_res = current_key != session.last_low_res_key
-                && current_key != session.last_high_res_key;
+            let needs_low_res =
+                current_key != session.last_low_res_key && current_key != session.last_high_res_key;
 
             if needs_low_res && !session.low_res_pending {
                 let low_res_size = 128u32.min(w.min(h));
@@ -772,12 +812,8 @@ impl eframe::App for AppWrapper {
 
                 session.low_res_pending = true;
                 std::thread::spawn(move || {
-                    let (heightmap, texture) = eval_preview(
-                        &graph,
-                        executor.as_ref(),
-                        low_res_size,
-                        preview_node_id,
-                    );
+                    let (heightmap, texture) =
+                        eval_preview(&graph, executor.as_ref(), low_res_size, preview_node_id);
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -816,12 +852,8 @@ impl eframe::App for AppWrapper {
 
                 session.high_res_pending = true;
                 std::thread::spawn(move || {
-                    let (heightmap, texture) = eval_preview(
-                        &graph,
-                        executor.as_ref(),
-                        high_res_size,
-                        preview_node_id,
-                    );
+                    let (heightmap, texture) =
+                        eval_preview(&graph, executor.as_ref(), high_res_size, preview_node_id);
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -845,18 +877,13 @@ impl eframe::App for AppWrapper {
         // clouds stay alive. Cheap: we don't rebuild the mesh, just push
         // a fresh time uniform and submit one draw. Skipped when there's
         // no mesh yet (nothing to animate) or no preview window open.
-        if self.app.preview_open() {
+        if self.app.preview.is_open() {
             if let Some(ref gpu) = self.gpu_context {
                 if let Some(ref mut renderer) = session.terrain_renderer {
                     if let Some(ref owned) = session.current_frame {
                         let elapsed = session.started_at.elapsed().as_secs_f32();
                         let frame = owned.as_frame(elapsed);
-                        renderer.render(
-                            &gpu.device,
-                            &gpu.queue,
-                            &session.camera,
-                            Some(&frame),
-                        );
+                        renderer.render(&gpu.device, &gpu.queue, &session.camera, Some(&frame));
                         Self::update_viewport_texture_on(
                             &mut session.viewport_texture_id,
                             &session.terrain_renderer,
@@ -871,11 +898,77 @@ impl eframe::App for AppWrapper {
             }
         }
 
+        // When the Sculpt3D layout is active the central panel is left
+        // unclaimed by bar-gui so we can fill it here with the 3D viewport.
+        // `session` is already in scope from the guard above.
+        if self.app.active_layout() == bar_gui::Layout::Sculpt3D {
+            // When the user switches to Metal or Typemap, apply the layer
+            // visualization immediately so the view does not shift on first stroke.
+            let cur_target = self.app.paint.brush.target;
+            if session.last_viz_target.as_ref() != Some(&cur_target) {
+                match cur_target {
+                    bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
+                        let cache = match cur_target {
+                            bar_gui::BrushTarget::Metalmap => self.app.paint.metalmap.clone(),
+                            _ => self.app.paint.typemap.clone(),
+                        };
+                        if let (Some(ref gpu), Some(hm)) = (&self.gpu_context, cache) {
+                            let visual = Self::visualise_layer(&hm, cur_target);
+                            if let Some(ref mut renderer) = session.terrain_renderer {
+                                renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
+                                let elapsed = session.started_at.elapsed().as_secs_f32();
+                                let frame_borrow =
+                                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                                renderer.render(
+                                    &gpu.device,
+                                    &gpu.queue,
+                                    &session.camera,
+                                    frame_borrow.as_ref(),
+                                );
+                            }
+                        }
+                    }
+                    bar_gui::BrushTarget::Heightmap | bar_gui::BrushTarget::Color => {
+                        // Switching back to height/color: restore normal terrain albedo.
+                        if let (Some(ref gpu), Some(cb)) =
+                            (&self.gpu_context, self.app.paint.color_buffer.clone())
+                        {
+                            if let Some(ref mut renderer) = session.terrain_renderer {
+                                renderer.update_albedo(&gpu.device, &gpu.queue, &cb);
+                                let elapsed = session.started_at.elapsed().as_secs_f32();
+                                let frame_borrow =
+                                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                                renderer.render(
+                                    &gpu.device,
+                                    &gpu.queue,
+                                    &session.camera,
+                                    frame_borrow.as_ref(),
+                                );
+                            }
+                        }
+                    }
+                }
+                session.last_viz_target = Some(cur_target);
+            }
+
+            egui::CentralPanel::default().show(ctx, |ui| {
+                Self::draw_viewport_on(
+                    session,
+                    &self.gpu_context,
+                    &self.render_state,
+                    ui,
+                    ctx,
+                    &mut self.app,
+                );
+            });
+        }
+
         // Show 3D viewport window when a preview has been opened. Default
         // position docks the window to the right edge of the screen, just
         // left of the Properties side panel — that's a far more useful
         // initial location than the top-left corner.
-        if self.app.preview_open() {
+        // Not shown in Sculpt3D layout -- the embedded panel above takes over.
+        if self.app.preview.is_open() && self.app.active_layout() != bar_gui::Layout::Sculpt3D {
             let title = self.app.preview_node_label();
             let mut preview_open = true;
             // Properties panel is 250 px wide; allow ~24 px gutter.
@@ -899,7 +992,7 @@ impl eframe::App for AppWrapper {
                     );
                 });
             if !preview_open {
-                self.app.set_preview_open(false);
+                self.app.preview.set_open(false);
             }
         }
     }
@@ -910,14 +1003,15 @@ impl AppWrapper {
     /// background thread that exports the current project to a temp
     /// directory. The completed SD7 path comes back through
     /// `test_in_bar_rx`; `finish_test_in_bar` then copies it into BAR
-    /// and spawns the lobby.
+    /// and launches the engine directly into a skirmish.
     fn start_test_in_bar(&mut self, ctx: &eframe::egui::Context) {
-        let Some(_install) = bar_install::BarInstall::detect() else {
+        if self.bar_install.is_none() {
             self.app.set_status(
-                "BAR install not found. Install Beyond All Reason or set the path manually.".to_string(),
+                "BAR install not found. Install Beyond All Reason or set the path manually."
+                    .to_string(),
             );
             return;
-        };
+        }
 
         // Export to a temp directory unique to this run so concurrent
         // tests don't collide.
@@ -930,13 +1024,15 @@ impl AppWrapper {
                 .unwrap_or(0),
         ));
         if let Err(e) = std::fs::create_dir_all(&temp_dir) {
-            self.app.set_status(format!("Test in BAR: cannot create temp dir: {e}"));
+            self.app
+                .set_status(format!("Test in BAR: cannot create temp dir: {e}"));
             return;
         }
 
         let graph = self.app.graph().clone();
         let recipe = self.app.recipe_for_export();
-        let (w, h) = self.app.map_dimensions();
+        let sculpt_snapshot = self.app.sculpt_export_snapshot();
+        let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
         let (tx, rx) = mpsc::channel::<Result<std::path::PathBuf, String>>();
         self.test_in_bar_rx = Some(rx);
@@ -946,12 +1042,9 @@ impl AppWrapper {
         std::thread::spawn(move || {
             let result = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
                 Ok(outputs) => {
+                    let sculpt_ref = sculpt_snapshot.as_ref().map(|(r, d)| (r, d.as_path()));
                     match bar_engine::execute_bundlers(
-                        &graph,
-                        &outputs,
-                        &recipe,
-                        &temp_dir,
-                        None,
+                        &graph, &outputs, &recipe, &temp_dir, None, sculpt_ref,
                     ) {
                         Ok(results) => {
                             // Pick the first SD7 produced. Bundlers can
@@ -959,7 +1052,10 @@ impl AppWrapper {
                             // launch with the first one.
                             results
                                 .into_iter()
-                                .find(|r| r.output_path.extension().and_then(|s| s.to_str()) == Some("sd7"))
+                                .find(|r| {
+                                    r.output_path.extension().and_then(|s| s.to_str())
+                                        == Some("sd7")
+                                })
                                 .map(|r| Ok(r.output_path))
                                 .unwrap_or_else(|| Err("Bundler produced no SD7".to_string()))
                         }
@@ -973,18 +1069,21 @@ impl AppWrapper {
         });
     }
 
-    /// Copy the just-built SD7 into BAR's maps directory and spawn the
-    /// lobby. Surfaces the result in the status bar.
+    /// Copy the just-built SD7 into BAR's maps directory and launch the
+    /// engine directly into a skirmish using the versions selected in the
+    /// toolbar picker. Surfaces the result in the status bar.
     fn finish_test_in_bar(&mut self, sd7_path: &std::path::Path) {
-        let Some(install) = bar_install::BarInstall::detect() else {
-            self.app.set_status("BAR install vanished mid-flight".to_string());
+        let Some(ref install) = self.bar_install else {
+            self.app
+                .set_status("BAR install vanished mid-flight".to_string());
             return;
         };
-        match install.launch_lobby_with_map(sd7_path) {
-            Ok(bar_install::LaunchOutcome::LobbyOpened { map_stem, .. }) => {
-                self.app.set_status(format!(
-                    "BAR opened. In the lobby pick Skirmish → map: {map_stem}"
-                ));
+        let game_idx = self.app.bar_versions.selected_game;
+        let engine_idx = self.app.bar_versions.selected_engine;
+        match install.launch_skirmish(sd7_path, game_idx, engine_idx) {
+            Ok(bar_install::LaunchOutcome::EngineStarted { map_stem }) => {
+                self.app
+                    .set_status(format!("BAR started: skirmish on {map_stem}"));
             }
             Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
         }
@@ -997,8 +1096,12 @@ impl AppWrapper {
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         ctx: &eframe::egui::Context,
     ) {
-        let Some(ref renderer) = terrain_renderer else { return };
-        let Some(view) = renderer.output_view() else { return };
+        let Some(ref renderer) = terrain_renderer else {
+            return;
+        };
+        let Some(view) = renderer.output_view() else {
+            return;
+        };
         let Some(ref rs) = render_state else { return };
 
         let mut egui_rend = rs.renderer.write();
@@ -1011,11 +1114,8 @@ impl AppWrapper {
                 tex_id,
             );
         } else {
-            let tex_id = egui_rend.register_native_texture(
-                &rs.device,
-                view,
-                wgpu::FilterMode::Linear,
-            );
+            let tex_id =
+                egui_rend.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear);
             *viewport_texture_id = Some(tex_id);
         }
 
@@ -1034,10 +1134,16 @@ impl AppWrapper {
         app: &mut bar_gui::BarEditorApp,
     ) {
         let Some(pointer) = ctx.pointer_latest_pos() else {
+            tracing::debug!("sculpt: no pointer pos");
             return;
         };
         let rect = response.rect;
         if !rect.contains(pointer) {
+            tracing::debug!(
+                "sculpt: pointer outside rect ({:?} not in {:?})",
+                pointer,
+                rect
+            );
             return;
         }
         let cursor_uv = (
@@ -1045,10 +1151,12 @@ impl AppWrapper {
             (pointer.y - rect.top()) / rect.height().max(1.0),
         );
         let aspect = rect.width().max(1.0) / rect.height().max(1.0);
-        let Some(hm) = app.inspector_heightmap_ref() else {
+        let Some(hm) = app.paint.heightmap.as_ref() else {
+            tracing::debug!("sculpt: no inspector heightmap");
             return;
         };
         let Some(renderer) = session.terrain_renderer.as_ref() else {
+            tracing::debug!("sculpt: no terrain renderer");
             return;
         };
         let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
@@ -1062,27 +1170,27 @@ impl AppWrapper {
             height_scale,
         );
         let Some(p) = pick else {
+            tracing::debug!(
+                "sculpt: pick_terrain miss (uv={:?}, extents={:?})",
+                cursor_uv,
+                (x_extent, z_extent, height_scale)
+            );
             return;
         };
+        tracing::debug!("sculpt: dab at hm=({:.1},{:.1})", p.hm_x, p.hm_y);
         let stroke_starting = !response.dragged_by(eframe::egui::PointerButton::Primary)
             || response.drag_started_by(eframe::egui::PointerButton::Primary);
         // Dispatch the dab to the active brush target. Heightmap →
         // mutate the inspector's heightmap + record onto a Sculpt
         // node; Color → write into a PaintedTexture grid; Metalmap /
         // Typemap remain TODO (see docs/3d-painting-plan.md).
-        let changed = match app.active_brush_target() {
+        let changed = match app.paint.brush.target {
             bar_gui::BrushTarget::Heightmap => {
                 app.apply_brush_at_heightmap(p.hm_x, p.hm_y, stroke_starting)
             }
-            bar_gui::BrushTarget::Color => {
-                app.apply_color_brush_at_heightmap(p.hm_x, p.hm_y)
-            }
-            bar_gui::BrushTarget::Metalmap => {
-                app.apply_metal_brush_at_heightmap(p.hm_x, p.hm_y)
-            }
-            bar_gui::BrushTarget::Typemap => {
-                app.apply_type_brush_at_heightmap(p.hm_x, p.hm_y)
-            }
+            bar_gui::BrushTarget::Color => app.apply_color_brush_at_heightmap(p.hm_x, p.hm_y),
+            bar_gui::BrushTarget::Metalmap => app.apply_metal_brush_at_heightmap(p.hm_x, p.hm_y),
+            bar_gui::BrushTarget::Typemap => app.apply_type_brush_at_heightmap(p.hm_x, p.hm_y),
         };
         // Color and other-target paints don't mutate the heightmap, so
         // the renderer's mesh stays put — only the texture (which the
@@ -1092,88 +1200,89 @@ impl AppWrapper {
         if !changed {
             return;
         }
-        let target = app.active_brush_target();
+        let target = app.paint.brush.target;
         match target {
             bar_gui::BrushTarget::Heightmap => {
-                // Heightmap stroke: the inspector heightmap was
-                // mutated in-place. Push it into the current frame
-                // so the renderer re-uploads the mesh.
-                if let (Some(ref gpu), Some(updated)) =
-                    (gpu_context, app.inspector_heightmap_clone())
-                {
+                // Heightmap stroke: the inspector heightmap was mutated in-place.
+                // Upload only the dirty rectangle around the brush footprint so
+                // the GPU sees the change without rebuilding the mesh.
+                if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.heightmap.clone()) {
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        if let Some(frame) = session.current_frame.as_mut() {
-                            frame.heightmap = updated;
-                            let dim = frame
-                                .heightmap
-                                .width()
-                                .max(frame.heightmap.height())
-                                .min(2048);
-                            frame.max_grid_size = dim;
-                            frame.revision = frame.revision.wrapping_add(2);
-                            let elapsed = session.started_at.elapsed().as_secs_f32();
-                            let pf = frame.as_frame(elapsed);
-                            renderer.render(
-                                &gpu.device,
-                                &gpu.queue,
-                                &session.camera,
-                                Some(&pf),
-                            );
+                        let br = app.paint.brush.radius_px.ceil() as i32 + 1;
+                        let hm_w = updated.width() as i32;
+                        let hm_h = updated.height() as i32;
+                        let x0 = ((p.hm_x as i32) - br).max(0) as u32;
+                        let y0 = ((p.hm_y as i32) - br).max(0) as u32;
+                        let x1 = ((p.hm_x as i32) + br + 1).min(hm_w) as u32;
+                        let y1 = ((p.hm_y as i32) + br + 1).min(hm_h) as u32;
+                        let rw = x1 - x0;
+                        let rh = y1 - y0;
+                        if rw > 0 && rh > 0 {
+                            let hm_ref = &updated;
+                            let data: Vec<f32> = (y0..y1)
+                                .flat_map(|y| {
+                                    (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0))
+                                })
+                                .collect();
+                            renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
                         }
+                        let elapsed = session.started_at.elapsed().as_secs_f32();
+                        let frame_borrow =
+                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        renderer.render(
+                            &gpu.device,
+                            &gpu.queue,
+                            &session.camera,
+                            frame_borrow.as_ref(),
+                        );
                     }
                 }
             }
             bar_gui::BrushTarget::Color => {
-                // Colour stroke: the inspector colour-buffer cache was
-                // stamped with the dab. Push the cache into the current
-                // frame's texture so the user sees the stroke before
-                // the background eval re-evaluates.
+                // Colour stroke: inspector colour-buffer was stamped with the dab.
+                // Re-upload the full albedo texture (colour buffer dimensions may
+                // differ from heightmap, so a region upload would need a coordinate
+                // remap — full upload is simpler and fast enough at these sizes).
                 if let (Some(ref gpu), Some(updated)) =
-                    (gpu_context, app.inspector_color_buffer_clone())
+                    (gpu_context, app.paint.color_buffer.clone())
                 {
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        if let Some(frame) = session.current_frame.as_mut() {
-                            frame.texture = Some(updated);
-                            frame.revision = frame.revision.wrapping_add(2);
-                            let elapsed = session.started_at.elapsed().as_secs_f32();
-                            let pf = frame.as_frame(elapsed);
-                            renderer.render(
-                                &gpu.device,
-                                &gpu.queue,
-                                &session.camera,
-                                Some(&pf),
-                            );
-                        }
+                        renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
+                        let elapsed = session.started_at.elapsed().as_secs_f32();
+                        let frame_borrow =
+                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        renderer.render(
+                            &gpu.device,
+                            &gpu.queue,
+                            &session.camera,
+                            frame_borrow.as_ref(),
+                        );
                     }
                 }
             }
             bar_gui::BrushTarget::Metalmap | bar_gui::BrushTarget::Typemap => {
-                // Metal / type strokes: synthesise a tinted preview
-                // colour buffer from the inspector cache and feed it
-                // through `frame.texture` so the user sees the stamp
-                // immediately. The synthesised buffer is purely
-                // visualisation — the authoritative metalmap /
-                // typemap value flows through the graph at export.
+                // Metal / type strokes: synthesise a tinted preview colour buffer
+                // from the inspector cache and upload it as the albedo so the user
+                // sees the stamp immediately. Purely visualisation -- the
+                // authoritative metalmap / typemap value flows through the graph.
                 let cache = match target {
-                    bar_gui::BrushTarget::Metalmap => app.inspector_metalmap_clone(),
-                    bar_gui::BrushTarget::Typemap => app.inspector_typemap_clone(),
+                    bar_gui::BrushTarget::Metalmap => app.paint.metalmap.clone(),
+                    bar_gui::BrushTarget::Typemap => app.paint.typemap.clone(),
                     _ => None,
                 };
                 if let (Some(ref gpu), Some(hm)) = (gpu_context, cache) {
                     let visual = Self::visualise_layer(&hm, target);
                     if let Some(ref mut renderer) = session.terrain_renderer {
-                        if let Some(frame) = session.current_frame.as_mut() {
-                            frame.texture = Some(visual);
-                            frame.revision = frame.revision.wrapping_add(2);
-                            let elapsed = session.started_at.elapsed().as_secs_f32();
-                            let pf = frame.as_frame(elapsed);
-                            renderer.render(
-                                &gpu.device,
-                                &gpu.queue,
-                                &session.camera,
-                                Some(&pf),
-                            );
-                        }
+                        renderer.update_albedo(&gpu.device, &gpu.queue, &visual);
+                        let elapsed = session.started_at.elapsed().as_secs_f32();
+                        let frame_borrow =
+                            session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                        renderer.render(
+                            &gpu.device,
+                            &gpu.queue,
+                            &session.camera,
+                            frame_borrow.as_ref(),
+                        );
                     }
                 }
             }
@@ -1238,21 +1347,22 @@ impl AppWrapper {
     ) {
         use eframe::egui;
 
-        ui.horizontal(|ui| {
-            ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // Right-aligned debug refresh: forces both progressive
-                // passes to re-spawn even if the graph revision hasn't
-                // changed, so the user can override stuck preview state
-                // while we hunt down the root cause.
-                let resp = ui
-                    .small_button("\u{27F3}")
-                    .on_hover_text(bar_gui::i18n::t("editor.viewport_3d.force_refresh"));
-                if resp.clicked() {
-                    session.force_refresh_requested = true;
-                }
+        let is_sculpt_layout = app.active_layout() == bar_gui::Layout::Sculpt3D;
+        if is_sculpt_layout {
+            ui.small(bar_gui::i18n::t("editor.viewport_3d.sculpt_controls_hint"));
+        } else {
+            ui.horizontal(|ui| {
+                ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let resp = ui
+                        .small_button("\u{27F3}")
+                        .on_hover_text(bar_gui::i18n::t("editor.viewport_3d.force_refresh"));
+                    if resp.clicked() {
+                        session.force_refresh_requested = true;
+                    }
+                });
             });
-        });
+        }
         ui.separator();
 
         let available_size = ui.available_size();
@@ -1269,8 +1379,7 @@ impl AppWrapper {
                 if renderer.width != vp_w || renderer.height != vp_h {
                     renderer.resize(&gpu.device, vp_w, vp_h);
                     let elapsed = session.started_at.elapsed().as_secs_f32();
-                    let frame_borrow =
-                        session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                    let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                     renderer.render(
                         &gpu.device,
                         &gpu.queue,
@@ -1313,9 +1422,18 @@ impl AppWrapper {
 
             Self::handle_camera_input_on(session, gpu_context, render_state, &response, ctx, app);
         } else {
+            // No texture yet -- initial render in progress. Show a centered
+            // spinner sized to the context: large in the dedicated sculpt
+            // workspace, medium in the floating preview window.
+            let spinner_size = if is_sculpt_layout { 80.0 } else { 48.0 };
             ui.centered_and_justified(|ui| {
-                ui.label("Rendering…");
+                ui.add(
+                    egui::Spinner::new()
+                        .size(spinner_size)
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 200, 80, 220)),
+                );
             });
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
 
@@ -1340,30 +1458,34 @@ impl AppWrapper {
         // ring disappears so the user knows their next click won't
         // land. Updated every frame regardless of drag state, so the
         // ring follows the cursor while idle.
-        let cursor_uv = response
-            .hover_pos()
-            .map(|p| {
-                let r = response.rect;
-                (
-                    (p.x - r.left()) / r.width().max(1.0),
-                    (p.y - r.top()) / r.height().max(1.0),
-                )
-            });
+        let cursor_uv = response.hover_pos().map(|p| {
+            let r = response.rect;
+            (
+                (p.x - r.left()) / r.width().max(1.0),
+                (p.y - r.top()) / r.height().max(1.0),
+            )
+        });
         let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
         let cursor_world = if sculpt_active {
             cursor_uv.and_then(|uv| {
-                let hm = app.inspector_heightmap_ref()?;
+                let hm = app.paint.heightmap.as_ref()?;
                 let renderer = session.terrain_renderer.as_ref()?;
                 let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
                 let pick = pick_terrain(
-                    &session.camera, aspect, uv, hm, x_extent, z_extent, height_scale,
+                    &session.camera,
+                    aspect,
+                    uv,
+                    hm,
+                    x_extent,
+                    z_extent,
+                    height_scale,
                 )?;
                 // Brush radius in world-space units. The mesh spans
                 // 2 * x_extent across `hm.width()` heightmap pixels,
                 // so radius_px → radius_world is just the per-pixel
                 // world step times the brush radius.
                 let world_per_px = (2.0 * x_extent) / hm.width().max(1) as f32;
-                let radius_world = app.brush_radius_px() * world_per_px;
+                let radius_world = app.paint.brush.radius_px * world_per_px;
                 Some((pick.world.x, pick.world.z, radius_world))
             })
         } else {
@@ -1375,7 +1497,6 @@ impl AppWrapper {
 
         if response.dragged_by(eframe::egui::PointerButton::Primary) {
             if sculpt_active {
-                // Sculpt: hijack the primary drag to apply the brush.
                 Self::apply_sculpt_dab_at_cursor(session, gpu_context, response, ctx, app);
             } else {
                 let delta = response.drag_delta();
@@ -1386,6 +1507,14 @@ impl AppWrapper {
         if sculpt_active && response.drag_stopped_by(eframe::egui::PointerButton::Primary) {
             app.end_brush_stroke();
         }
+
+        // RMB always orbits regardless of sculpt mode.
+        if response.dragged_by(eframe::egui::PointerButton::Secondary) {
+            let delta = response.drag_delta();
+            session.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+            camera_changed = true;
+        }
+
         // The cursor ring is purely visual — flag a render so the
         // shader picks up the new uniform even when nothing else
         // changed this frame.
@@ -1400,9 +1529,7 @@ impl AppWrapper {
             // any zoom level.
             let delta = response.drag_delta();
             let speed = session.camera.distance * 0.0015;
-            session
-                .camera
-                .pan_xz(delta.x * speed, -delta.y * speed);
+            session.camera.pan_xz(delta.x * speed, -delta.y * speed);
             camera_changed = true;
         }
 
@@ -1423,8 +1550,7 @@ impl AppWrapper {
                 (&mut session.terrain_renderer, gpu_context)
             {
                 let elapsed = session.started_at.elapsed().as_secs_f32();
-                let frame_borrow =
-                    session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                let frame_borrow = session.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                 renderer.render(
                     &gpu.device,
                     &gpu.queue,
@@ -1484,7 +1610,7 @@ fn eval_preview(
 }
 
 fn load_icon() -> Option<eframe::egui::IconData> {
-    let bytes = include_bytes!("../../../assets/bar.png");
+    let bytes = include_bytes!("../../../assets/bar-map-editor.png");
     let image = image::load_from_memory(bytes).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
     Some(eframe::egui::IconData {

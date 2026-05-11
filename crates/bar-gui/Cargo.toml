@@ -12,6 +12,7 @@ bar-project = { workspace = true }
 egui = { workspace = true }
 eframe = { workspace = true }
 rfd = { workspace = true }
+raw-window-handle = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

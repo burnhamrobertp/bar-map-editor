@@ -1,35 +1,36 @@
 {
   "name": "Plains",
-  "description": "Gently rolling open terrain. Low-frequency Perlin with extra smoothing. Good base for cavalry-friendly maps.",
+  "description": "Gently rolling open terrain. A radial gradient subtly concentrates undulation toward the center, leaving flatter approach corridors on the flanks. Good for cavalry-friendly maps.",
   "nodes": [
+    {
+      "key": "shape",
+      "type": "Gradient",
+      "label": "Shape",
+      "params": {
+        "direction": { "String": "radial" },
+        "invert": { "Bool": false },
+        "center_x": { "Float": 0.5 },
+        "center_y": { "Float": 0.5 }
+      }
+    },
     {
       "key": "rolling",
       "type": "PerlinNoise",
       "label": "Rolling",
       "params": {
-        "frequency": {
-          "Float": 1.5
-        },
-        "octaves": {
-          "UInt": 3
-        },
-        "persistence": {
-          "Float": 0.45
-        },
-        "seed": {
-          "UInt": 7
-        }
+        "character": { "String": "rolling_hills" },
+        "frequency": { "Float": 2.0 },
+        "octaves": { "UInt": 4 },
+        "lacunarity": { "Float": 2.0 },
+        "persistence": { "Float": 0.45 },
+        "seed": { "UInt": 7 }
       }
     },
     {
       "key": "smooth",
       "type": "Blur",
       "label": "Soften",
-      "params": {
-        "radius": {
-          "Float": 2.5
-        }
-      }
+      "params": { "radius": { "Float": 2.0 } }
     },
     {
       "key": "slope_map",
@@ -41,30 +42,66 @@
       "key": "auto_tex",
       "type": "AutoTexture",
       "label": "Auto Texture",
+      "params": { "biome": { "String": "temperate" } }
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
       "params": {
-        "biome": {
-          "String": "temperate"
-        }
+        "rock_color": { "String": "909080" },
+        "soil_color": { "String": "8B7850" },
+        "slope_threshold": { "Float": 0.5 },
+        "slope_blend": { "Float": 0.25 },
+        "ao_strength": { "Float": 0.7 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Vegetation",
+      "params": {
+        "vegetation_color": { "String": "4A7A20" },
+        "dry_color": { "String": "8A7040" },
+        "altitude_max": { "Float": 0.85 },
+        "slope_cutoff": { "Float": 0.55 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.6 }
+      }
+    },
+    {
+      "key": "rock_comp",
+      "type": "TextureOverlay",
+      "label": "Rock Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    },
+    {
+      "key": "veg_comp",
+      "type": "TextureOverlay",
+      "label": "Vegetation Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
       }
     }
   ],
   "connections": [
-    {
-      "from": "rolling.output",
-      "to": "smooth.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "slope_map.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "auto_tex.input"
-    },
-    {
-      "from": "slope_map.output",
-      "to": "auto_tex.slope"
-    }
+    { "from": "shape.output",     "to": "rolling.control" },
+    { "from": "rolling.output",   "to": "smooth.input" },
+    { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "auto_tex.input" },
+    { "from": "slope_map.output", "to": "auto_tex.slope" },
+    { "from": "smooth.output",    "to": "rock_soil.input" },
+    { "from": "slope_map.output", "to": "rock_soil.slope" },
+    { "from": "smooth.output",    "to": "veg.input" },
+    { "from": "slope_map.output", "to": "veg.slope" },
+    { "from": "auto_tex.output",  "to": "rock_comp.base" },
+    { "from": "rock_soil.output", "to": "rock_comp.overlay" },
+    { "from": "rock_comp.output", "to": "veg_comp.base" },
+    { "from": "veg.output",       "to": "veg_comp.overlay" }
   ],
   "subgraph": {
     "label": "Plains",
@@ -72,48 +109,15 @@
     "collapsed": true,
     "inputs": [],
     "outputs": [
-      {
-        "name": "terrain",
-        "label": "Terrain",
-        "kind": "Heightmap",
-        "binding": "smooth:output"
-      },
-      {
-        "name": "texture",
-        "label": "Texture",
-        "kind": "Color",
-        "binding": "auto_tex:output"
-      },
-      {
-        "name": "slope",
-        "label": "Slope",
-        "kind": "Heightmap",
-        "binding": "slope_map:output"
-      }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "veg_comp:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    {
-      "name": "rolling_amount",
-      "label": "Rolling amount",
-      "kind": "Float",
-      "binding": "rolling:frequency",
-      "min": 0.5,
-      "max": 4
-    },
-    {
-      "name": "smoothing",
-      "label": "Smoothing",
-      "kind": "Float",
-      "binding": "smooth:radius",
-      "min": 0,
-      "max": 6
-    },
-    {
-      "name": "seed",
-      "label": "Seed",
-      "kind": "UInt",
-      "binding": "rolling:seed"
-    }
+    { "name": "rolling_amount", "label": "Rolling amount", "kind": "Float", "binding": "rolling:frequency",          "min": 0.5, "max": 4.0 },
+    { "name": "rock_threshold", "label": "Rock threshold", "kind": "Float", "binding": "rock_soil:slope_threshold",  "min": 0.3, "max": 0.8 },
+    { "name": "tree_line",      "label": "Tree line",      "kind": "Float", "binding": "veg:altitude_max",           "min": 0.4, "max": 1.0 },
+    { "name": "seed",           "label": "Seed",           "kind": "UInt",  "binding": "rolling:seed" }
   ]
 }

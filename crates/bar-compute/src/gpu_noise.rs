@@ -1,5 +1,5 @@
-use bytemuck::{Pod, Zeroable};
 use bar_data::Heightmap;
+use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 use tracing::info;
 
@@ -39,7 +39,7 @@ struct GpuNoiseParams {
     persistence: f32,
     offset_x: f32,
     offset_y: f32,
-    noise_type: u32,  // shader variant: 0=FBM, 1=Ridged, 2=Billow
+    noise_type: u32, // shader variant: 0=FBM, 1=Ridged, 2=Billow
     _padding2: f32,
     _padding3: f32,
 }

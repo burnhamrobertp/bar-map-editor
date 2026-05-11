@@ -80,10 +80,7 @@ fn out_hm(outputs: &HashMap<String, PortValue>, port: &str) -> Heightmap {
     }
 }
 
-fn out_color(
-    outputs: &HashMap<String, PortValue>,
-    port: &str,
-) -> bar_data::ColorBuffer {
+fn out_color(outputs: &HashMap<String, PortValue>, port: &str) -> bar_data::ColorBuffer {
     match outputs.get(port).expect("port present") {
         PortValue::Color(cb) => cb.clone(),
         other => panic!("expected colour buffer on '{port}', got {other:?}"),
@@ -220,7 +217,10 @@ fn gradient_linear_y_increases_top_to_bottom() {
     assert_hm_dims(&h);
     let top = h.get(W / 2, 0).unwrap();
     let bot = h.get(W / 2, H - 1).unwrap();
-    assert!(bot > top, "linear_y should increase downward: top {top}, bot {bot}");
+    assert!(
+        bot > top,
+        "linear_y should increase downward: top {top}, bot {bot}"
+    );
 }
 
 #[test]
@@ -241,7 +241,10 @@ fn gradient_invert_flips_direction() {
     let inverted = out_hm(&run(NodeType::Gradient, &p2, &empty_inputs()), "output");
     let n = normal.get(W / 2, 0).unwrap();
     let i = inverted.get(W / 2, 0).unwrap();
-    assert!((n + i - 1.0).abs() < 0.05, "invert should mirror values: {n} vs {i}");
+    assert!(
+        (n + i - 1.0).abs() < 0.05,
+        "invert should mirror values: {n} vs {i}"
+    );
 }
 
 #[test]
@@ -251,7 +254,10 @@ fn painted_heightmap_with_empty_data_emits_flat_zero() {
         ("data", ParamValue::String(String::new())),
         ("resolution", ParamValue::UInt(64)),
     ];
-    let h = out_hm(&run(NodeType::PaintedHeightmap, p, &empty_inputs()), "output");
+    let h = out_hm(
+        &run(NodeType::PaintedHeightmap, p, &empty_inputs()),
+        "output",
+    );
     assert_hm_dims(&h);
     let (mn, mx) = min_max(&h);
     assert!(mn >= 0.0 && mx <= 1.0);
@@ -285,7 +291,10 @@ fn blur_smooths_a_delta() {
     let centre = h.get(cx as u32, cy as u32).unwrap();
     let neighbour = h.get((cx + 1) as u32, cy as u32).unwrap();
     assert!(centre < 1.0, "centre should be lower after blur: {centre}");
-    assert!(neighbour > 0.0, "neighbour should pick up some value: {neighbour}");
+    assert!(
+        neighbour > 0.0,
+        "neighbour should pick up some value: {neighbour}"
+    );
 }
 
 #[test]
@@ -298,7 +307,10 @@ fn sharpen_amplifies_contrast() {
     let h = out_hm(&run(NodeType::Sharpen, &[], &inputs), "output");
     assert_hm_dims(&h);
     let (mn, mx) = min_max(&h);
-    assert!(mn >= 0.0 && mx <= 1.0, "sharpen escapes range: ({mn}, {mx})");
+    assert!(
+        mn >= 0.0 && mx <= 1.0,
+        "sharpen escapes range: ({mn}, {mx})"
+    );
 }
 
 #[test]
@@ -356,7 +368,10 @@ fn invert_reflects_values_around_half() {
     // Inverted ramp should run high→low.
     let left = h.get(0, H / 2).unwrap();
     let right = h.get(W - 1, H / 2).unwrap();
-    assert!(left > right, "invert should reverse the ramp: {left} vs {right}");
+    assert!(
+        left > right,
+        "invert should reverse the ramp: {left} vs {right}"
+    );
 }
 
 #[test]
@@ -411,7 +426,10 @@ fn displacement_runs_with_zero_displacement_is_near_identity() {
     // weights the impl uses.
     let want = mean(&base);
     let got = mean(&h);
-    assert!((want - got).abs() < 0.05, "mean drift: want {want}, got {got}");
+    assert!(
+        (want - got).abs() < 0.05,
+        "mean drift: want {want}, got {got}"
+    );
 }
 
 // ── Combiners ───────────────────────────────────────────────────────
@@ -489,7 +507,10 @@ fn slope_map_is_zero_on_flat_input() {
     let h = out_hm(&run(NodeType::SlopeMap, &[], &inputs), "output");
     assert_hm_dims(&h);
     let (_, mx) = min_max(&h);
-    assert!(mx < 0.05, "flat input should give near-zero slope: max {mx}");
+    assert!(
+        mx < 0.05,
+        "flat input should give near-zero slope: max {mx}"
+    );
 }
 
 #[test]
@@ -518,7 +539,10 @@ fn height_select_picks_band() {
     // Edge columns (u=0, u=1) should be near 0.
     let left = h.get(0, H / 2).unwrap();
     let right = h.get(W - 1, H / 2).unwrap();
-    assert!(left < 0.5 && right < 0.5, "edges deselected: {left}, {right}");
+    assert!(
+        left < 0.5 && right < 0.5,
+        "edges deselected: {left}, {right}"
+    );
 }
 
 #[test]
@@ -537,10 +561,7 @@ fn splat_map_blends_three_bands() {
 #[test]
 fn auto_texture_outputs_color_buffer() {
     let mut inputs = input_hm("input", gen(|u, _| u));
-    inputs.insert(
-        "slope".to_string(),
-        PortValue::Heightmap(flat(0.2)),
-    );
+    inputs.insert("slope".to_string(), PortValue::Heightmap(flat(0.2)));
     let p = &[
         ("biome", ParamValue::String("temperate".to_string())),
         ("slope_power", ParamValue::Float(0.7)),
@@ -676,7 +697,10 @@ fn subgraph_input_passes_value_through() {
     let h = out_hm(&outputs, "value");
     assert_hm_dims(&h);
     let m = mean(&h);
-    assert!((m - 0.42).abs() < 1e-3, "passthrough should preserve value: {m}");
+    assert!(
+        (m - 0.42).abs() < 1e-3,
+        "passthrough should preserve value: {m}"
+    );
 }
 
 #[test]
@@ -687,7 +711,10 @@ fn subgraph_output_passes_value_through() {
     let h = out_hm(&outputs, "value");
     assert_hm_dims(&h);
     let m = mean(&h);
-    assert!((m - 0.7).abs() < 1e-3, "passthrough should preserve value: {m}");
+    assert!(
+        (m - 0.7).abs() < 1e-3,
+        "passthrough should preserve value: {m}"
+    );
 }
 
 #[test]
@@ -696,124 +723,8 @@ fn subgraph_io_with_no_input_emits_no_output() {
     // generic "skip nodes whose inputs aren't present" behaviour
     // every other passthrough node uses, e.g. Preview).
     let outputs = run(NodeType::SubgraphInput, &[], &empty_inputs());
-    assert!(outputs.get("value").is_none(),
-        "no input → no output: {outputs:?}");
-}
-
-#[test]
-fn texture_sculpt_passes_input_through_when_no_dabs() {
-    // With no recorded dabs the node is a pass-through: output ==
-    // input pixel-for-pixel.
-    let mut cb = bar_data::ColorBuffer::new(W, H).unwrap();
-    for y in 0..H {
-        for x in 0..W {
-            cb.set(x, y, [0.3, 0.6, 0.2, 1.0]);
-        }
-    }
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), PortValue::Color(cb.clone()));
-    let outputs = run(
-        NodeType::TextureSculpt,
-        &[("dabs", ParamValue::String("[]".to_string()))],
-        &inputs,
+    assert!(
+        !outputs.contains_key("value"),
+        "no input → no output: {outputs:?}"
     );
-    let out = out_color(&outputs, "output");
-    assert_color_dims(&out);
-    let p = out.get(W / 2, H / 2).unwrap();
-    assert!((p[0] - 0.3).abs() < 1e-3);
-    assert!((p[1] - 0.6).abs() < 1e-3);
-    assert!((p[2] - 0.2).abs() < 1e-3);
-}
-
-#[test]
-fn texture_sculpt_replays_dab_on_top_of_input() {
-    // A single recorded dab at the centre stamps its colour on top
-    // of the upstream texture. Outside the brush footprint the
-    // upstream pixels show through unchanged.
-    let mut cb = bar_data::ColorBuffer::new(W, H).unwrap();
-    for y in 0..H {
-        for x in 0..W {
-            cb.set(x, y, [0.0, 0.0, 0.0, 1.0]);
-        }
-    }
-    let mut inputs = HashMap::new();
-    inputs.insert("input".to_string(), PortValue::Color(cb));
-    // ru = 0.2 covers ~3 pixels at radius on a 16-wide buffer.
-    let dabs = "[{\"u\":0.5,\"v\":0.5,\"ru\":0.2,\"r\":255,\"g\":0,\"b\":0}]";
-    let outputs = run(
-        NodeType::TextureSculpt,
-        &[("dabs", ParamValue::String(dabs.to_string()))],
-        &inputs,
-    );
-    let out = out_color(&outputs, "output");
-    let centre = out.get(W / 2, H / 2).unwrap();
-    assert!(centre[0] > 0.95, "centre stamped red: {centre:?}");
-    let corner = out.get(0, 0).unwrap();
-    assert!(corner[0] < 0.05, "corner unchanged: {corner:?}");
-}
-
-#[test]
-fn texture_sculpt_emits_no_output_with_disconnected_input() {
-    // Same defensive shape as Sculpt — no input means no output.
-    let outputs = run(
-        NodeType::TextureSculpt,
-        &[("dabs", ParamValue::String("[]".to_string()))],
-        &empty_inputs(),
-    );
-    assert!(outputs.get("output").is_none(),
-        "no input → no output: {outputs:?}");
-}
-
-#[test]
-fn metal_sculpt_stamps_value_into_brush_footprint() {
-    // Single dab at the centre stamps `value` into the heightmap.
-    // Outside the brush footprint the upstream zero shows through.
-    let inputs = input_hm("input", flat(0.0));
-    let dabs = "[{\"u\":0.5,\"v\":0.5,\"ru\":0.2,\"value\":0.75}]";
-    let h = out_hm(
-        &run(
-            NodeType::MetalSculpt,
-            &[("dabs", ParamValue::String(dabs.to_string()))],
-            &inputs,
-        ),
-        "output",
-    );
-    let centre = h.get(W / 2, H / 2).unwrap();
-    assert!((centre - 0.75).abs() < 1e-3, "centre stamped: {centre}");
-    let corner = h.get(0, 0).unwrap();
-    assert!(corner.abs() < 1e-3, "corner unchanged: {corner}");
-}
-
-#[test]
-fn metal_sculpt_passes_input_through_when_no_dabs() {
-    // No dabs → identity passthrough on the upstream heightmap.
-    let inputs = input_hm("input", flat(0.4));
-    let h = out_hm(
-        &run(
-            NodeType::MetalSculpt,
-            &[("dabs", ParamValue::String("[]".to_string()))],
-            &inputs,
-        ),
-        "output",
-    );
-    let m = mean(&h);
-    assert!((m - 0.4).abs() < 1e-3, "expected identity, mean {m}");
-}
-
-#[test]
-fn type_sculpt_stamps_value_into_brush_footprint() {
-    // TypeSculpt shares the value-stamp implementation; verify the
-    // node-type wiring lands on the same dab-replay code.
-    let inputs = input_hm("input", flat(0.0));
-    let dabs = "[{\"u\":0.5,\"v\":0.5,\"ru\":0.2,\"value\":0.5}]";
-    let h = out_hm(
-        &run(
-            NodeType::TypeSculpt,
-            &[("dabs", ParamValue::String(dabs.to_string()))],
-            &inputs,
-        ),
-        "output",
-    );
-    let centre = h.get(W / 2, H / 2).unwrap();
-    assert!((centre - 0.5).abs() < 1e-3, "centre stamped: {centre}");
 }

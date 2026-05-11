@@ -1,7 +1,7 @@
 # BAR - Map Editor
 
 <div align="center">
-  <img src="assets/bar.png" alt="BAR - Map Editor" width="200">
+  <img src="assets/bar-map-editor.png" alt="BAR - Map Editor" width="200">
 </div>
 
 A standalone map editor for **Beyond All Reason** (Spring/Recoil engine),
@@ -14,28 +14,26 @@ workflow without ever having to launch the game until you're ready to playtest.
 
 ## Features
 
-### Working today
 - **Full `.sd7` import / export** — heightmap, metalmap, typemap, minimap,
-  Spring SMF/SMT binary I/O, archive packaging
-- **Node graph for procedural generation** — compose noise, erosion, blend,
-  and filter nodes into a DAG that evaluates to a heightmap
-- **GPU-accelerated** — compute shaders for noise + erosion via wgpu;
-  CPU fallback when no GPU
-- **`mapinfo.lua` honored** — `smf.minheight`/`maxheight` overrides applied
-  on import so the preview matches the engine's interpretation
+  Spring SMF/SMT binary I/O, `mapinfo.lua` generation, archive packaging
+- **Node graph for procedural generation** — 34 node types (noise, erosion,
+  blend, mask, splat, texture); subgraph nesting; compose into a DAG
+- **GPU-accelerated preview** — compute shaders for noise and erosion;
+  engine-faithful terrain renderer (Recoil sky, ground, and water shaders);
+  GPU vertex displacement; animated water; CPU fallback when no GPU
+- **Brush-based sculpting** — raise, lower, smooth, flatten; color, metalmap,
+  typemap paint layers; live 3D viewport feedback; edits persist in project
+- **Structured mapinfo editor** — form-based UI for all `mapinfo.lua` fields;
+  start-position placement on the 2D inspector
+- **Pre-export validation** — checks spawn positions, layer dimensions,
+  mapinfo references, height range, and archive paths before allowing export
+- **One-click "Test in BAR"** — exports project, drops SD7 into BAR maps
+  dir, and spawns the lobby; detects install automatically
 - **Self-contained project format** — single `.barproj` JSON + sibling
-  `.assets/` directory; portable, version-controllable
+  `.assets/` directory; portable, version-controllable; full undo/redo
 
-### In progress (v0.2 pivot — see plan)
-- Streamlined preset-driven generation (less configurability, stronger
-  defaults; node graph remains as the "advanced" tier)
-- Brush-based heightmap / metalmap / typemap sculpting in the editor
-- Structured `mapinfo.lua` editor (forms instead of raw text)
-- Visual start-position placement on a 2D inspector
-- Pre-export semantic validation
-- One-click "Test in BAR" launcher
-- Engine-fidelity rendering by porting Recoil's actual map shaders rather
-  than inventing parallel implementations
+See [ROADMAP.md](ROADMAP.md) for current status, in-progress gaps, and
+upcoming work.
 
 ### Explicitly NOT a goal
 - Embedding or running the BAR/Recoil game inside this app — selectively

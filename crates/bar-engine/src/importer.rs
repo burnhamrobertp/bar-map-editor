@@ -68,10 +68,7 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
     let result = import_sd7(archive_path, output_dir)?;
 
     // Normalise to forward-slash for cross-platform recipe portability
-    let hm_path_str = result
-        .heightmap_png
-        .to_slash_lossy()
-        .to_string();
+    let hm_path_str = result.heightmap_png.to_slash_lossy().to_string();
 
     let nodes = vec![
         RecipeNode {
@@ -138,7 +135,10 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         shortname: None,
         description: format!(
             "Imported from .sd7: {}",
-            archive_path.file_name().unwrap_or_default().to_string_lossy()
+            archive_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy()
         ),
         author: None,
         version: None,
@@ -161,13 +161,16 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         node_sizes: HashMap::new(),
         canvas_offset: (0.0, 0.0),
         map_info_file: None,
-        sculpt_overlay: None,
         groups: Vec::new(),
         open_tabs: Vec::new(),
         active_tab: 0,
     };
 
-    Ok(Project { recipe, layout })
+    Ok(Project {
+        recipe,
+        layout,
+        sculpt: Default::default(),
+    })
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────
@@ -241,9 +244,7 @@ fn find_single_smf(maps_dir: &Path) -> Result<PathBuf> {
     match smf_files.len() {
         0 => bail!("No .smf file found in maps/ directory"),
         1 => Ok(smf_files.into_iter().next().unwrap()),
-        n => bail!(
-            "Found {n} .smf files in maps/ directory; expected exactly 1"
-        ),
+        n => bail!("Found {n} .smf files in maps/ directory; expected exactly 1"),
     }
 }
 
@@ -309,10 +310,9 @@ pub fn parse_mapinfo_smf_heights(lua: &str) -> Option<(f32, f32)> {
         search_from = abs + 3;
     };
     let _ = smf_idx; // documents intent; not used below.
-    let after_smf = &lua[..]; // the absolute index `brace_open` references the original string.
-    let brace_open = brace_open;
-    // Track depth so a sub-table inside smf doesn't fool us. Find the
-    // matching closing brace.
+    let after_smf = lua; // the absolute index `brace_open` references the original string.
+                         // Track depth so a sub-table inside smf doesn't fool us. Find the
+                         // matching closing brace.
     let mut depth = 0;
     let mut end = brace_open;
     for (i, c) in after_smf[brace_open..].char_indices() {
@@ -336,7 +336,7 @@ pub fn parse_mapinfo_smf_heights(lua: &str) -> Option<(f32, f32)> {
     let parse_field = |key: &str| -> Option<f32> {
         // Split on both newlines AND commas so we can parse both
         // multi-line and inline `{ a = 1, b = 2 }` forms.
-        for piece in body.split(|c: char| c == '\n' || c == ',') {
+        for piece in body.split(['\n', ',']) {
             let trimmed = piece.trim().to_lowercase();
             // Match `<key> = ` or `<key>=`. Comments and trailing chars are
             // tolerated; we just want the first numeric token after `=`.
@@ -382,9 +382,7 @@ pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {
     for line in lua.lines() {
         let trimmed = line.trim();
         // Match `<key> =` ignoring whitespace around the equals
-        let stripped = trimmed
-            .strip_prefix(key)
-            .map(|rest| rest.trim_start());
+        let stripped = trimmed.strip_prefix(key).map(|rest| rest.trim_start());
         let rest = match stripped {
             Some(r) if r.starts_with('=') => &r[1..],
             _ => {
@@ -502,19 +500,13 @@ local mapinfo = {
     author = "Somebody",
 }
 "#;
-        assert_eq!(
-            parse_mapinfo_name(lua),
-            Some("Open Plains v2".to_string())
-        );
+        assert_eq!(parse_mapinfo_name(lua), Some("Open Plains v2".to_string()));
     }
 
     #[test]
     fn parse_name_single_quotes() {
         let lua = "name = 'rocky_hills'";
-        assert_eq!(
-            parse_mapinfo_name(lua),
-            Some("rocky_hills".to_string())
-        );
+        assert_eq!(parse_mapinfo_name(lua), Some("rocky_hills".to_string()));
     }
 
     #[test]

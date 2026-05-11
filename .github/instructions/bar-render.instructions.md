@@ -14,7 +14,13 @@ applyTo: "crates/bar-render/**"
 > Vendored upstream GLSL sources live in `vendor/recoil/shaders/GLSL/`.
 > Ported WGSL files live in `shaders/recoil/` with SPDX GPL-3.0-or-later
 > headers. The shader concatenation order in `renderer.rs` is:
-> `modern_sky.wgsl` → `smf_water.wgsl` → `terrain.wgsl`.
+> `modern_sky.wgsl` -> `smf_ground.wgsl` -> `water.wgsl` -> `terrain.wgsl`.
+>
+> The water surface uses two off-screen passes (planar reflection +
+> planar refraction) plus the main pass. Each off-screen pass uses a
+> `clip_plane` uniform to keep only one side of the water plane;
+> `shade_water` blends them with Schlick fresnel above water and
+> Snell's-window logic below. See `shaders/water.wgsl::shade_water`.
 
 ## Role
 `bar-render` owns the real-time 3D preview pipeline. Given a `Heightmap` (and
@@ -79,21 +85,23 @@ math; `bytemuck` for uniform buffer byte casting.
 ## Shader Contract
 The terrain shader lives at `shaders/terrain.wgsl` (loaded at compile time via
 `include_str!`). The `CameraUniform` struct layout must be kept in sync between
-Rust and WGSL:
-- `view_proj: mat4x4<f32>` (64 bytes, offset 0)
-- `camera_pos: vec3<f32>` + `has_texture: u32` (16 bytes, offset 64)
-- `height_scale: f32` + `water_r/g/b: f32` (16 bytes, offset 80)
-- `water_y: f32` + `_pad: [f32; 3]` (16 bytes, offset 96)
-- Total: **112 bytes**, 16-byte aligned
-- Compile-time size assertion: `const _: () = assert!(size_of::<CameraUniform>() == 112);`
+Rust and WGSL. Total size: **336 bytes**, 16-byte aligned.
+Compile-time size assertion: `const _: () = assert!(size_of::<CameraUniform>() == 336);`
 
 Bind group layout across all pipelines:
 | Group | Binding | Name | Declared in |
 |---|---|---|---|
-| 0 | 0/1 | `camera_uniform` / `camera_sampler` | `terrain.wgsl` |
-| 1 | 0/1 | `t_diffuse` / `s_diffuse` | `terrain.wgsl` |
+| 0 | 0 | `camera` (uniform buffer) | `terrain.wgsl` |
+| 1 | 0/1 | `albedo_tex` / `albedo_sam` | `terrain.wgsl` |
+| 1 | 2 | `metalmap_tex` | `terrain.wgsl` |
+| 1 | 3/4 | `typemap_tex` / `material_sam` | `terrain.wgsl` |
 | 2 | 0/1 | `reflection_texture` / `reflection_sampler` | `terrain.wgsl` |
-| 3 | 0/1 | `water_normal_tex` / `water_normal_sam` | `smf_water.wgsl` |
+| 2 | 2/3 | `refraction_texture` / `refraction_sampler` | `terrain.wgsl` |
+| 3 | 0/1 | `water_normal_tex` / `water_normal_sam` | `water.wgsl` |
+| 3 | 2 | `heightmap_tex` (R32Float, non-filterable) | `terrain.wgsl` |
+
+The reflection and refraction textures share group 2 to keep the renderer
+within the default `max_bind_groups = 4` wgpu limit.
 
 UV encoding used by the mesh generator and tested in the fragment shader:
 - `uv.x < -0.5` → water/lava plane fragment (flat colour, no lighting)

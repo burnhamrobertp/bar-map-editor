@@ -96,6 +96,66 @@ impl Default for UndoHistory {
     }
 }
 
+use crate::app::BarEditorApp;
+
+impl BarEditorApp {
+    /// Capture the entire undoable editor state.
+    pub(crate) fn snapshot(&self, description: &str) -> Snapshot {
+        Snapshot {
+            state: EditorState {
+                graph: self.graph.clone(),
+                node_visuals: self.visuals.node_visuals.clone(),
+                groups: self.visuals.groups.clone(),
+                node_to_group: self.visuals.node_to_group.clone(),
+                next_group_id: self.visuals.next_group_id,
+            },
+            description: description.to_string(),
+        }
+    }
+
+    /// Push the current state onto the undo stack before a mutation.
+    /// Pair every user-visible mutation with one of these calls.
+    pub(crate) fn push_undo(&mut self, description: &str) {
+        let snap = self.snapshot(description);
+        self.history.push(snap);
+        self.project.is_dirty = true;
+    }
+
+    /// Swap the editor's state with a captured snapshot. Resets
+    /// transient UI state so the user doesn't see stale highlights
+    /// pointing at deleted things.
+    pub(crate) fn restore_snapshot(&mut self, snap: Snapshot) {
+        self.graph = snap.state.graph;
+        self.visuals.node_visuals = snap.state.node_visuals;
+        self.visuals.groups = snap.state.groups;
+        self.visuals.node_to_group = snap.state.node_to_group;
+        self.visuals.next_group_id = snap.state.next_group_id;
+        self.clear_selection();
+        if let Some(pn) = self.preview.node {
+            if self.graph.get_node(pn).is_none() {
+                self.preview.node = None;
+                self.preview.open = false;
+            }
+        }
+    }
+
+    /// Perform undo.
+    pub fn undo(&mut self) {
+        let current = self.snapshot("current");
+        if let Some(prev) = self.history.undo(current) {
+            self.restore_snapshot(prev);
+        }
+    }
+
+    /// Perform redo.
+    pub fn redo(&mut self) {
+        let current = self.snapshot("current");
+        if let Some(next) = self.history.redo(current) {
+            self.restore_snapshot(next);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

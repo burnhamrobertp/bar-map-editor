@@ -208,7 +208,16 @@ impl ExportCodec for SpringSmfCodec {
         // Write SMF
         if let Some(ref heightmap) = layers.heightmap {
             let smf_path = maps_dir.join(format!("{}.smf", map_name));
-            self.write_smf(config, heightmap, layers, map_name, sq_x, sq_y, &plan.settings, &smf_path)?;
+            self.write_smf(
+                config,
+                heightmap,
+                layers,
+                map_name,
+                sq_x,
+                sq_y,
+                &plan.settings,
+                &smf_path,
+            )?;
             written.files.push(format!("maps/{}.smf", map_name));
             tracing::info!("Wrote SMF: {}", smf_path.display());
         }
@@ -323,13 +332,7 @@ impl SpringSmfCodec {
     /// - `teams[]` always — even if the user accepts SPAWN_FIXED, the
     ///   floor of two corner spawns must be present.
     /// - DNTs / splats only when the user supplied detail textures.
-    fn generate_mapinfo(
-        &self,
-        name: &str,
-        map_x: u32,
-        map_y: u32,
-        plan: &ExportPlan,
-    ) -> String {
+    fn generate_mapinfo(&self, name: &str, map_x: u32, map_y: u32, plan: &ExportPlan) -> String {
         let settings = &plan.settings;
         let defaults = MapSettings::default();
         let esc = |s: &str| -> String {
@@ -342,7 +345,11 @@ impl SpringSmfCodec {
             // generated file matches what hand-written mapinfos look like.
             let s = format!("{:.4}", x);
             let trimmed = s.trim_end_matches('0').trim_end_matches('.');
-            if trimmed.is_empty() { "0".to_string() } else { trimmed.to_string() }
+            if trimmed.is_empty() {
+                "0".to_string()
+            } else {
+                trimmed.to_string()
+            }
         };
 
         let mut out = String::with_capacity(2048);
@@ -354,7 +361,10 @@ impl SpringSmfCodec {
             out.push_str(&format!("    shortname   = \"{}\",\n", esc(s)));
         }
         if !plan.description.is_empty() {
-            out.push_str(&format!("    description = \"{}\",\n", esc(&plan.description)));
+            out.push_str(&format!(
+                "    description = \"{}\",\n",
+                esc(&plan.description)
+            ));
         }
         if let Some(s) = plan.author.as_deref().filter(|s| !s.is_empty()) {
             out.push_str(&format!("    author      = \"{}\",\n", esc(s)));
@@ -371,7 +381,10 @@ impl SpringSmfCodec {
         // would be more code than it's worth.
         let mut physics = String::new();
         if settings.map_hardness != defaults.map_hardness {
-            physics.push_str(&format!("    maphardness    = {},\n", settings.map_hardness));
+            physics.push_str(&format!(
+                "    maphardness    = {},\n",
+                settings.map_hardness
+            ));
         }
         if !settings.deformable {
             physics.push_str("    notDeformable  = true,\n");
@@ -380,13 +393,22 @@ impl SpringSmfCodec {
             physics.push_str(&format!("    gravity        = {},\n", f(settings.gravity)));
         }
         if settings.tidal_strength != defaults.tidal_strength {
-            physics.push_str(&format!("    tidalStrength  = {},\n", f(settings.tidal_strength)));
+            physics.push_str(&format!(
+                "    tidalStrength  = {},\n",
+                f(settings.tidal_strength)
+            ));
         }
         if settings.max_metal != defaults.max_metal {
-            physics.push_str(&format!("    maxMetal       = {},\n", f(settings.max_metal)));
+            physics.push_str(&format!(
+                "    maxMetal       = {},\n",
+                f(settings.max_metal)
+            ));
         }
         if settings.extractor_radius != defaults.extractor_radius {
-            physics.push_str(&format!("    extractorRadius = {},\n", f(settings.extractor_radius)));
+            physics.push_str(&format!(
+                "    extractorRadius = {},\n",
+                f(settings.extractor_radius)
+            ));
         }
         if settings.void_water {
             physics.push_str("    voidWater      = true,\n");
@@ -404,8 +426,14 @@ impl SpringSmfCodec {
         // overrides that mirror what we baked into the SMF binary, kept
         // here so the mapinfo is self-describing.
         out.push_str("\n    smf = {\n");
-        out.push_str(&format!("        minheight = {},\n", f(settings.min_height)));
-        out.push_str(&format!("        maxheight = {},\n", f(settings.max_height)));
+        out.push_str(&format!(
+            "        minheight = {},\n",
+            f(settings.min_height)
+        ));
+        out.push_str(&format!(
+            "        maxheight = {},\n",
+            f(settings.max_height)
+        ));
         out.push_str(&format!("        smtFileName0 = \"maps/{}.smt\",\n", name));
         out.push_str("    },\n");
 
@@ -553,7 +581,9 @@ fn generate_fallback_texture(
             // Map texture pixel to heightmap coordinate
             let hx = (tx as f32 / tex_w as f32 * (hm_w - 1) as f32) as u32;
             let hy = (ty as f32 / tex_h as f32 * (hm_h - 1) as f32) as u32;
-            let h = heightmap.get(hx.min(hm_w - 1), hy.min(hm_h - 1)).unwrap_or(0.0);
+            let h = heightmap
+                .get(hx.min(hm_w - 1), hy.min(hm_h - 1))
+                .unwrap_or(0.0);
 
             // Color ramp: dark green → tan → gray → white
             let (r, g, b) = if h < 0.25 {
@@ -700,9 +730,11 @@ mod tests {
     #[test]
     fn mapinfo_emits_void_flags_when_true() {
         let codec = SpringSmfCodec;
-        let mut s = MapSettings::default();
-        s.void_water = true;
-        s.void_ground = true;
+        let s = MapSettings {
+            void_water: true,
+            void_ground: true,
+            ..MapSettings::default()
+        };
         let lua = codec.generate_mapinfo("test", 32, 32, &make_plan(s));
         assert!(lua.contains("voidWater"));
         assert!(lua.contains("voidGround"));

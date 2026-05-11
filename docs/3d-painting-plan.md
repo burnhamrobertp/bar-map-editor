@@ -96,71 +96,52 @@ re-routed; their procedural pipeline is untouched.
   cache key advances). Upstream goes through TextureSculpt; output
   feeds the Bundler.
 
-### Phase C — Metalmap painting (shipped)
+### Phase C — Metalmap painting
 
-- New `NodeType::MetalSculpt`: 1 Heightmap input, 1 Heightmap output,
-  `dabs` JSON-string param. Executor stamps `value` (metal density
-  in [0, 1]) into every pixel inside the brush footprint.
-- `apply_metal_brush_at_heightmap` records a normalised-UV dab onto
-  the MetalSculpt; `ensure_metal_sculpt_for_bundler` either reuses
-  an existing MetalSculpt feeding `Bundler.metalmap` or splices one
-  between source and Bundler. When no upstream exists, drops a
-  `Constant(0.0) → MetalSculpt → Bundler.metalmap` chain so painting
-  works from a clean canvas.
-- Brush UI exposes a `Density` slider in the inspector toolbar when
-  the active target is Metalmap.
-- Renderer overlay (subtle red/orange tint where density > 0): not
-  yet implemented; Phase E candidate.
+**Planned:** `NodeType::MetalSculpt` graph node storing dabs as a JSON-string
+param; `ensure_metal_sculpt_for_bundler` auto-splicing it into the graph.
 
-### Phase D — Typemap painting (shipped)
+**Actual implementation:** Brush strokes write directly into `SculptState.metal_overlay`
+(an `Option<Heightmap>` in session state). Persisted as `sculpt-metal.png` sidecar
+alongside the `.barproj` on every save; reloaded on open. No graph node is created.
+The `Density` slider is present in the Sculpt3D sidebar. Renderer overlay not yet
+implemented (pending embedded viewport -- Phase F).
 
-- New `NodeType::TypeSculpt`: same shape and executor path as
-  MetalSculpt — value-stamp dabs into the brush footprint.
-- `apply_type_brush_at_heightmap` + `ensure_type_sculpt_for_bundler`
-  mirror the metal variant. Same Bundler chain auto-insertion.
-- Brush UI exposes a `Type id (×255)` slider — quantised 0..1 maps
-  to the eight terrain types BAR uses; the export pipeline scales
-  to u8 at SMF write time.
-- Per-type-id colour overlay on the 3D terrain: not yet; Phase E
-  candidate.
+### Phase D — Typemap painting
 
-### Phase E — Real-time visualisation (shipped)
+**Planned:** `NodeType::TypeSculpt` graph node; `ensure_type_sculpt_for_bundler`.
 
-Three pieces ship together:
+**Actual implementation:** Same pattern as Phase C -- strokes go into
+`SculptState.type_overlay`, persisted as `sculpt-type.png`. No graph node. The
+`Value` slider is present in the Sculpt3D sidebar. Per-type-id colour overlay
+not yet implemented (pending Phase F).
 
-- **Brush ring on the 3D mesh.** The `CameraUniform` gained a
-  `brush_cursor: vec4` slot (xy = world XZ, z = radius, w = active
-  flag). `terrain.wgsl`'s fragment shader paints a translucent
-  amber annulus on the surface within the brush radius and a
-  faint inner disc, so the user sees where the brush will stamp
-  before they click. The cursor follows the pointer every frame
-  while sculpt mode is active and the cursor is over the viewport;
-  disappears as soon as the cursor leaves.
-- **Live colour cache.** `BarEditorApp` gained
-  `inspector_color_buffer: Option<ColorBuffer>` mirroring the
-  existing `inspector_heightmap` pattern. The eval result populates
-  it on each high-res pass; colour brush dabs stamp into it
-  in-place AND append to the TextureSculpt's `dabs`. The 3D
-  viewport pushes the live cache through `frame.texture` per-stroke
-  so the user sees the colour land immediately, before the
-  background eval re-runs.
-- **Live metal / type cache + visualisation.**
-  `inspector_metalmap` and `inspector_typemap` mirror the colour
-  cache for those layers. Auto-created on first paint (zero-filled
-  to the inspector heightmap's dim) so users don't need a
-  pre-existing pipeline to start painting. While the brush target
-  is Metalmap or Typemap, `bar-app` synthesises a tinted colour
-  buffer from the cache and feeds it through `frame.texture` —
-  metal renders as a red/orange density gradient, type as a
-  per-id colour palette. The actual metalmap/typemap data flows
-  through the graph at export time; the visualisation is purely
-  for authoring feedback.
+### Phase E — Real-time visualisation (partially shipped)
 
-## What this stage ships
+- **Brush ring on 3D mesh**: shipped. `CameraUniform.brush_cursor` vec4, amber
+  annulus in `terrain.wgsl`.
+- **Live colour/metal/type caches**: shipped. `metalmap` / `typemap`
+  on `BarEditorApp::paint` (the `PaintSession` sub-state); synthesised
+  tint while those targets are active.
+- **Embedded viewport**: not shipped. The 3D renderer is a floating `egui::Window`
+  launched from the standard layout. The Sculpt3D layout's central panel is a
+  placeholder.
 
-- Phase A + Phase B.
-- Heightmap sculpting unchanged (still works).
-- Colour painting via 3D pick → PaintedTexture write.
-- Inspector toolbar exposes the target picker.
-- Phases C / D / E remain to do, with the per-target adapter
-  pattern in place so each is a localised addition.
+### Phase F — Embedded Sculpt3D viewport (next)
+
+Wire `draw_viewport_on` (currently a floating window in `bar-app/src/main.rs`)
+into the central panel of the `sculpt3d` layout. Input routing (sculpt drag vs
+camera orbit) already works in the floating window and transfers as-is. The sidebar
+controls and brush dispatch are complete. This is the remaining step to deliver
+the single-screen sculpting experience this plan was designed around.
+
+## What shipped vs. what remains
+
+| Phase | Status |
+|-------|--------|
+| A -- brush target selector | shipped |
+| B -- colour painting end-to-end | shipped |
+| C -- metalmap painting | shipped (sidecar model, not graph node) |
+| D -- typemap painting | shipped (sidecar model, not graph node) |
+| E -- real-time visualisation | partially shipped (caches + brush ring; no embedded viewport) |
+| F -- embedded Sculpt3D viewport | **up next** |

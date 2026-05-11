@@ -7,8 +7,8 @@
 //! Thermal erosion uses ping-pong buffering. Each cell computes both its loss
 //! to lower neighbours and its gain from higher neighbours, preserving mass.
 
-use bytemuck::{Pod, Zeroable};
 use bar_data::Heightmap;
+use bytemuck::{Pod, Zeroable};
 use thiserror::Error;
 use tracing::info;
 use wgpu::util::DeviceExt;
@@ -63,18 +63,18 @@ struct GpuThermalParams {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct GpuFlowParams {
-    width:             u32,
-    height:            u32,
-    dt:                f32,
-    pipe_length:       f32,
-    gravity:           f32,
-    rain_rate:         f32,
-    evaporation_rate:  f32,
+    width: u32,
+    height: u32,
+    dt: f32,
+    pipe_length: f32,
+    gravity: f32,
+    rain_rate: f32,
+    evaporation_rate: f32,
     sediment_capacity: f32,
-    erosion_rate:      f32,
-    deposition_rate:   f32,
-    min_tilt:          f32,
-    _padding:          u32,
+    erosion_rate: f32,
+    deposition_rate: f32,
+    min_tilt: f32,
+    _padding: u32,
 }
 
 /// GPU-based erosion compute pipelines.
@@ -84,59 +84,56 @@ pub struct GpuErosionPipeline {
     thermal_pipeline: wgpu::ComputePipeline,
     thermal_layout: wgpu::BindGroupLayout,
     // Virtual-pipe hydraulic flow — 4 passes per iteration
-    flow_flux_pipeline:      wgpu::ComputePipeline,
+    flow_flux_pipeline: wgpu::ComputePipeline,
     flow_water_vel_pipeline: wgpu::ComputePipeline,
-    flow_erosion_pipeline:   wgpu::ComputePipeline,
-    flow_apply_pipeline:     wgpu::ComputePipeline,
-    flow_layout:             wgpu::BindGroupLayout,
+    flow_erosion_pipeline: wgpu::ComputePipeline,
+    flow_apply_pipeline: wgpu::ComputePipeline,
+    flow_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuErosionPipeline {
     /// Create both erosion compute pipelines.
     pub fn new(device: &wgpu::Device) -> Self {
-        let hydraulic_shader =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("erosion_hydraulic"),
-                source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../shaders/erosion_hydraulic.wgsl").into(),
-                ),
-            });
+        let hydraulic_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("erosion_hydraulic"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/erosion_hydraulic.wgsl").into(),
+            ),
+        });
 
-        let thermal_shader =
-            device.create_shader_module(wgpu::ShaderModuleDescriptor {
-                label: Some("erosion_thermal"),
-                source: wgpu::ShaderSource::Wgsl(
-                    include_str!("../../../shaders/erosion_thermal.wgsl").into(),
-                ),
-            });
+        let thermal_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("erosion_thermal"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/erosion_thermal.wgsl").into(),
+            ),
+        });
 
         // Hydraulic: uniform params + read_write heightmap storage
-        let hydraulic_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("hydraulic_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let hydraulic_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("hydraulic_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
         let hydraulic_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -145,53 +142,51 @@ impl GpuErosionPipeline {
                 push_constant_ranges: &[],
             });
 
-        let hydraulic_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("hydraulic_pipeline"),
-                layout: Some(&hydraulic_pipeline_layout),
-                module: &hydraulic_shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let hydraulic_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("hydraulic_pipeline"),
+            layout: Some(&hydraulic_pipeline_layout),
+            module: &hydraulic_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         // Thermal: uniform params + read_write input + read_write output (ping-pong)
-        let thermal_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("thermal_bind_group_layout"),
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Uniform,
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+        let thermal_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("thermal_bind_group_layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 2,
-                        visibility: wgpu::ShaderStages::COMPUTE,
-                        ty: wgpu::BindingType::Buffer {
-                            ty: wgpu::BufferBindingType::Storage { read_only: false },
-                            has_dynamic_offset: false,
-                            min_binding_size: None,
-                        },
-                        count: None,
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
                     },
-                ],
-            });
+                    count: None,
+                },
+            ],
+        });
 
         let thermal_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -200,26 +195,25 @@ impl GpuErosionPipeline {
                 push_constant_ranges: &[],
             });
 
-        let thermal_pipeline =
-            device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-                label: Some("thermal_pipeline"),
-                layout: Some(&thermal_pipeline_layout),
-                module: &thermal_shader,
-                entry_point: Some("main"),
-                compilation_options: Default::default(),
-                cache: None,
-            });
+        let thermal_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("thermal_pipeline"),
+            layout: Some(&thermal_pipeline_layout),
+            module: &thermal_shader,
+            entry_point: Some("main"),
+            compilation_options: Default::default(),
+            cache: None,
+        });
 
         Self {
             hydraulic_pipeline,
             hydraulic_layout,
             thermal_pipeline,
             thermal_layout,
-            flow_flux_pipeline:      Self::make_flow_pipeline(device, "pass_flux"),
+            flow_flux_pipeline: Self::make_flow_pipeline(device, "pass_flux"),
             flow_water_vel_pipeline: Self::make_flow_pipeline(device, "pass_water_vel"),
-            flow_erosion_pipeline:   Self::make_flow_pipeline(device, "pass_erosion"),
-            flow_apply_pipeline:     Self::make_flow_pipeline(device, "pass_apply"),
-            flow_layout:             Self::make_flow_layout(device),
+            flow_erosion_pipeline: Self::make_flow_pipeline(device, "pass_erosion"),
+            flow_apply_pipeline: Self::make_flow_pipeline(device, "pass_apply"),
+            flow_layout: Self::make_flow_layout(device),
         }
     }
 
@@ -328,21 +322,21 @@ impl GpuErosionPipeline {
         let buffer_size = (num_pixels * 4) as u64;
 
         // Upload heightmap data as read_write storage
-        let heightmap_buffer =
-            ctx.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("hydraulic_heightmap"),
-                    contents: bytemuck::cast_slice(heightmap.data()),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                });
+        let heightmap_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hydraulic_heightmap"),
+                contents: bytemuck::cast_slice(heightmap.data()),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
 
-        let params_buffer =
-            ctx.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("hydraulic_params"),
-                    contents: bytemuck::bytes_of(&gpu_params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
+        let params_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hydraulic_params"),
+                contents: bytemuck::bytes_of(&gpu_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let staging_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("hydraulic_staging"),
@@ -366,11 +360,11 @@ impl GpuErosionPipeline {
             ],
         });
 
-        let mut encoder =
-            ctx.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("hydraulic_encoder"),
-                });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("hydraulic_encoder"),
+            });
 
         {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -393,10 +387,12 @@ impl GpuErosionPipeline {
         // Clamp to [0, 1] (GPU shader doesn't guarantee this)
         let clamped: Vec<f32> = data.iter().map(|v| v.clamp(0.0, 1.0)).collect();
 
-        info!("GPU hydraulic erosion complete: {}x{}, {} droplets", w, h, params.num_droplets);
+        info!(
+            "GPU hydraulic erosion complete: {}x{}, {} droplets",
+            w, h, params.num_droplets
+        );
 
-        Heightmap::frbar_data(w, h, clamped)
-            .map_err(|e| GpuErosionError::Pipeline(e.to_string()))
+        Heightmap::frbar_data(w, h, clamped).map_err(|e| GpuErosionError::Pipeline(e.to_string()))
     }
 
     /// Run thermal erosion on the GPU with ping-pong buffering.
@@ -423,13 +419,13 @@ impl GpuErosionPipeline {
         let buffer_size = (num_pixels * 4) as u64;
 
         // Create two storage buffers for ping-pong
-        let buffer_a =
-            ctx.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("thermal_buffer_a"),
-                    contents: bytemuck::cast_slice(heightmap.data()),
-                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-                });
+        let buffer_a = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("thermal_buffer_a"),
+                contents: bytemuck::cast_slice(heightmap.data()),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
 
         let buffer_b = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("thermal_buffer_b"),
@@ -438,13 +434,13 @@ impl GpuErosionPipeline {
             mapped_at_creation: false,
         });
 
-        let params_buffer =
-            ctx.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("thermal_params"),
-                    contents: bytemuck::bytes_of(&gpu_params),
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
+        let params_buffer = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("thermal_params"),
+                contents: bytemuck::bytes_of(&gpu_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         let staging_buffer = ctx.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("thermal_staging"),
@@ -493,11 +489,11 @@ impl GpuErosionPipeline {
         });
 
         // Dispatch all iterations in a single encoder
-        let mut encoder =
-            ctx.device
-                .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                    label: Some("thermal_encoder"),
-                });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("thermal_encoder"),
+            });
 
         let groups_x = w.div_ceil(16);
         let groups_y = h.div_ceil(16);
@@ -533,10 +529,12 @@ impl GpuErosionPipeline {
         // Clamp to [0, 1]
         let clamped: Vec<f32> = data.iter().map(|v| v.clamp(0.0, 1.0)).collect();
 
-        info!("GPU thermal erosion complete: {}x{}, {} iterations", w, h, params.iterations);
+        info!(
+            "GPU thermal erosion complete: {}x{}, {} iterations",
+            w, h, params.iterations
+        );
 
-        Heightmap::frbar_data(w, h, clamped)
-            .map_err(|e| GpuErosionError::Pipeline(e.to_string()))
+        Heightmap::frbar_data(w, h, clamped).map_err(|e| GpuErosionError::Pipeline(e.to_string()))
     }
 
     /// Run hydraulic erosion using the virtual-pipe shallow-water model.
@@ -558,68 +556,97 @@ impl GpuErosionPipeline {
         // Flux buffer is the largest: 4 × f32 per cell
         Self::check_buffer_size(ctx, num_pixels * 4)?;
 
-        let f32_size  = (num_pixels * 4)  as u64; // one f32 per cell
+        let f32_size = (num_pixels * 4) as u64; // one f32 per cell
         let vec4_size = (num_pixels * 16) as u64; // vec4<f32> per cell (flux)
-        let vec2_size = (num_pixels * 8)  as u64; // vec2<f32> per cell (velocity)
+        let vec2_size = (num_pixels * 8) as u64; // vec2<f32> per cell (velocity)
 
         let gpu_params = GpuFlowParams {
-            width:             w,
-            height:            h,
-            dt:                params.dt,
-            pipe_length:       params.pipe_length,
-            gravity:           params.gravity,
-            rain_rate:         params.rain_rate,
-            evaporation_rate:  params.evaporation_rate,
+            width: w,
+            height: h,
+            dt: params.dt,
+            pipe_length: params.pipe_length,
+            gravity: params.gravity,
+            rain_rate: params.rain_rate,
+            evaporation_rate: params.evaporation_rate,
             sediment_capacity: params.sediment_capacity,
-            erosion_rate:      params.erosion_rate,
-            deposition_rate:   params.deposition_rate,
-            min_tilt:          params.min_tilt,
-            _padding:          0,
+            erosion_rate: params.erosion_rate,
+            deposition_rate: params.deposition_rate,
+            min_tilt: params.min_tilt,
+            _padding: 0,
         };
 
-        let params_buf = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some("flow_params"),
-            contents: bytemuck::bytes_of(&gpu_params),
-            usage:    wgpu::BufferUsages::UNIFORM,
-        });
+        let params_buf = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("flow_params"),
+                contents: bytemuck::bytes_of(&gpu_params),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
 
         // terrain — initialised with heightmap data; read back at the end
-        let terrain_buf = ctx.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label:    Some("flow_terrain"),
-            contents: bytemuck::cast_slice(heightmap.data()),
-            usage:    wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-        });
+        let terrain_buf = ctx
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("flow_terrain"),
+                contents: bytemuck::cast_slice(heightmap.data()),
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+            });
 
         // water, flux, velocity, scratch — start at zero
         let make_zero = |label: &'static str, size: u64, extra: wgpu::BufferUsages| {
             ctx.device.create_buffer(&wgpu::BufferDescriptor {
-                label:              Some(label),
+                label: Some(label),
                 size,
-                usage:              wgpu::BufferUsages::STORAGE | extra,
+                usage: wgpu::BufferUsages::STORAGE | extra,
                 mapped_at_creation: false,
             })
         };
-        let water_buf        = make_zero("flow_water",        f32_size,  wgpu::BufferUsages::empty());
+        let water_buf = make_zero("flow_water", f32_size, wgpu::BufferUsages::empty());
         // sediment receives the ping-pong copy each iteration
-        let sediment_buf     = make_zero("flow_sediment",     f32_size,  wgpu::BufferUsages::COPY_DST);
-        let flux_buf         = make_zero("flow_flux",         vec4_size, wgpu::BufferUsages::empty());
-        let velocity_buf     = make_zero("flow_velocity",     vec2_size, wgpu::BufferUsages::empty());
-        let scratch_buf      = make_zero("flow_scratch",      f32_size,  wgpu::BufferUsages::empty());
+        let sediment_buf = make_zero("flow_sediment", f32_size, wgpu::BufferUsages::COPY_DST);
+        let flux_buf = make_zero("flow_flux", vec4_size, wgpu::BufferUsages::empty());
+        let velocity_buf = make_zero("flow_velocity", vec2_size, wgpu::BufferUsages::empty());
+        let scratch_buf = make_zero("flow_scratch", f32_size, wgpu::BufferUsages::empty());
         // sediment_out is the ping-pong write target; copied → sediment each step
-        let sediment_out_buf = make_zero("flow_sediment_out", f32_size,  wgpu::BufferUsages::COPY_SRC);
+        let sediment_out_buf =
+            make_zero("flow_sediment_out", f32_size, wgpu::BufferUsages::COPY_SRC);
 
         let bind_group = ctx.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label:  Some("flow_bind_group"),
+            label: Some("flow_bind_group"),
             layout: &self.flow_layout,
             entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: params_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: terrain_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 2, resource: water_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 3, resource: sediment_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: flux_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 5, resource: velocity_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 6, resource: scratch_buf.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 7, resource: sediment_out_buf.as_entire_binding() },
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: params_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: terrain_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: water_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: sediment_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: flux_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: velocity_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: scratch_buf.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: sediment_out_buf.as_entire_binding(),
+                },
             ],
         });
 
@@ -628,9 +655,11 @@ impl GpuErosionPipeline {
 
         let iterations = params.iterations.clamp(5, 200);
 
-        let mut encoder = ctx.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("flow_encoder"),
-        });
+        let mut encoder = ctx
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("flow_encoder"),
+            });
 
         for _ in 0..iterations {
             let dispatch = |encoder: &mut wgpu::CommandEncoder,
@@ -645,22 +674,24 @@ impl GpuErosionPipeline {
                 pass.dispatch_workgroups(groups_x, groups_y, 1);
             };
 
-            dispatch(&mut encoder, &self.flow_flux_pipeline,      "pass_flux");
-            dispatch(&mut encoder, &self.flow_water_vel_pipeline,  "pass_water_vel");
-            dispatch(&mut encoder, &self.flow_erosion_pipeline,    "pass_erosion");
-            dispatch(&mut encoder, &self.flow_apply_pipeline,      "pass_apply");
+            dispatch(&mut encoder, &self.flow_flux_pipeline, "pass_flux");
+            dispatch(
+                &mut encoder,
+                &self.flow_water_vel_pipeline,
+                "pass_water_vel",
+            );
+            dispatch(&mut encoder, &self.flow_erosion_pipeline, "pass_erosion");
+            dispatch(&mut encoder, &self.flow_apply_pipeline, "pass_apply");
 
             // Ping-pong: commit advected sediment for the next iteration
-            encoder.copy_buffer_to_buffer(
-                &sediment_out_buf, 0, &sediment_buf, 0, f32_size,
-            );
+            encoder.copy_buffer_to_buffer(&sediment_out_buf, 0, &sediment_buf, 0, f32_size);
         }
 
         // Read back terrain to CPU
         let staging = ctx.device.create_buffer(&wgpu::BufferDescriptor {
-            label:              Some("flow_staging"),
-            size:               f32_size,
-            usage:              wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            label: Some("flow_staging"),
+            size: f32_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
         encoder.copy_buffer_to_buffer(&terrain_buf, 0, &staging, 0, f32_size);
@@ -674,8 +705,7 @@ impl GpuErosionPipeline {
             w, h, iterations
         );
 
-        Heightmap::frbar_data(w, h, clamped)
-            .map_err(|e| GpuErosionError::Pipeline(e.to_string()))
+        Heightmap::frbar_data(w, h, clamped).map_err(|e| GpuErosionError::Pipeline(e.to_string()))
     }
 
     /// Read back a staging buffer into a Vec<f32>.
@@ -845,7 +875,9 @@ mod tests {
             ..Default::default()
         };
 
-        let result = pipeline.hydraulic_flow_erode(&ctx, &input, &params).unwrap();
+        let result = pipeline
+            .hydraulic_flow_erode(&ctx, &input, &params)
+            .unwrap();
         assert_eq!(result.width(), 64);
         assert_eq!(result.height(), 64);
 
@@ -883,4 +915,3 @@ mod tests {
         assert!(GpuErosionPipeline::check_buffer_size(&ctx, over_limit).is_err());
     }
 }
-

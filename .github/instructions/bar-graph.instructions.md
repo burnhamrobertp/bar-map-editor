@@ -21,6 +21,8 @@ without pulling in GPU or windowing code.
 - Compute topological evaluation order via Kahn's algorithm and detect cycles.
 - Define the `NodeType` enum covering all 40+ node variants (generators,
   filters, combiners, texture ops, mask ops, bundler/packaging, import nodes).
+  Texture ops include: `SlopeMap`, `HeightSelect`, `SplatMap`, `AutoTexture`,
+  `RockSoil`, `Vegetation`, `TextureOverlay`, `NormalMap`, `GrassMap`, `SpecularMap`.
 - Define `PortValue` — the runtime value union (`Heightmap`, `Color`, `Mask`,
   `Scalar`, `File`, `FileList`, `Empty`) that flows between ports at eval time.
 - Declare the `NodeExecutor` trait (`Send + Sync`) which the engine layer

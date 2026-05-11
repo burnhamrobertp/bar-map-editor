@@ -69,6 +69,11 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("smoothness", ParamValue::Float(0.0)),
         ],
         NodeType::MaskBlur => vec![("radius", ParamValue::Float(2.0))],
+        NodeType::BiasGain => vec![
+            ("bias", ParamValue::Float(0.5)),
+            ("gain", ParamValue::Float(0.5)),
+        ],
+        NodeType::Displacement => vec![("strength", ParamValue::Float(0.1))],
         NodeType::NormalMap => vec![("strength", ParamValue::Float(1.0))],
         NodeType::GrassMap => vec![
             ("min_height", ParamValue::Float(0.15)),
@@ -98,6 +103,27 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // darkening. 0 disables AO; 1.0 keeps the full effect.
             ("ao_strength", ParamValue::Float(1.0)),
         ],
+        NodeType::RockSoil => vec![
+            ("rock_color", ParamValue::String("807870".to_string())),
+            ("soil_color", ParamValue::String("8B6914".to_string())),
+            ("slope_threshold", ParamValue::Float(0.4)),
+            ("slope_blend", ParamValue::Float(0.3)),
+            ("ao_strength", ParamValue::Float(0.8)),
+            ("detail_strength", ParamValue::Float(0.25)),
+        ],
+        NodeType::Vegetation => vec![
+            ("vegetation_color", ParamValue::String("4A7020".to_string())),
+            ("dry_color", ParamValue::String("8B7355".to_string())),
+            ("altitude_max", ParamValue::Float(0.6)),
+            ("slope_cutoff", ParamValue::Float(0.5)),
+            ("slope_blend", ParamValue::Float(0.2)),
+            ("ao_strength", ParamValue::Float(0.6)),
+            ("detail_strength", ParamValue::Float(0.2)),
+        ],
+        NodeType::TextureOverlay => vec![
+            ("blend_mode", ParamValue::String("over".to_string())),
+            ("opacity", ParamValue::Float(1.0)),
+        ],
         NodeType::SpecularMap => vec![
             ("rock_specular", ParamValue::Float(0.6)),
             ("flat_specular", ParamValue::Float(0.2)),
@@ -105,6 +131,19 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("water_height", ParamValue::Float(0.2)),
             ("snow_specular", ParamValue::Float(0.7)),
             ("snow_height", ParamValue::Float(0.85)),
+        ],
+        NodeType::Sculpt => vec![
+            // Hex-encoded flat u8 delta buffer (one byte per pixel).
+            // 128 = no change; 0 = maximum subtract; 255 = maximum add.
+            // Empty string means no deltas applied -- node is a pure passthrough.
+            // Format and encoding identical to PaintedHeightmap.
+            ("data", ParamValue::String(String::new())),
+            // Canvas resolution. Same power-of-two choices as PaintedHeightmap.
+            // Locked once the user has painted (non-empty data).
+            ("resolution", ParamValue::UInt(256)),
+            // Max delta magnitude: delta_applied = (v - 128) / 128 * scale.
+            // 0.5 = max +-50% change relative to the input value.
+            ("scale", ParamValue::Float(0.5)),
         ],
         NodeType::Bundler => vec![
             // bar-editor only ever exports spring-smf packaged as
@@ -135,12 +174,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // The cap was previously 512 which lost ~6× detail on
             // kolmog-class maps (1280-px native textures).
             ("max_preview_size", ParamValue::UInt(4096)),
-        ],
-        NodeType::Sculpt => vec![
-            // Empty dab list — JSON array of `SculptDab` records. Brush
-            // strokes append entries here. Stored as a string so we can
-            // round-trip through the existing ParamValue::String path.
-            ("dabs", ParamValue::String("[]".to_string())),
         ],
         NodeType::PaintedHeightmap => vec![
             // Hex-encoded greyscale pixel grid (each pixel is one u8).
@@ -191,21 +224,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("name", ParamValue::String(String::new())),
             ("kind", ParamValue::String("Heightmap".to_string())),
         ],
-        NodeType::TextureSculpt => vec![
-            // JSON list of `ColorDab` records appended by the
-            // colour-brush input path. Stored as a String so it
-            // round-trips through ParamValue without a dedicated
-            // schema variant; same shape as `Sculpt.dabs`.
-            ("dabs", ParamValue::String("[]".to_string())),
-        ],
-        NodeType::MetalSculpt | NodeType::TypeSculpt => vec![
-            // JSON list of value-stamp dabs. Each entry carries
-            // `{u, v, ru, value}` where `value` is the metal
-            // density (Metal) or quantised type id (Type) at the
-            // moment the dab was recorded. Replay stamps the
-            // value into every pixel inside the brush footprint.
-            ("dabs", ParamValue::String("[]".to_string())),
-        ],
         // PassThrough manages its files via a custom UI.
         // Other node types intentionally have no default params.
         _ => Vec::new(),
@@ -224,9 +242,7 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
 pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'static str]> {
     match (node_type, key) {
         (NodeType::Voronoi, "mode") => Some(&["f1", "f2", "f2_f1", "cell"]),
-        (NodeType::Gradient, "direction") => {
-            Some(&["linear_x", "linear_y", "radial", "angular"])
-        }
+        (NodeType::Gradient, "direction") => Some(&["linear_x", "linear_y", "radial", "angular"]),
         (NodeType::AutoTexture, "biome") => Some(&[
             "temperate",
             "grassland",
@@ -236,16 +252,16 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "tundra",
             "lunar",
         ]),
-        (
-            NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise,
-            "character",
-        ) => Some(&[
-            "rolling_hills",
-            "rugged",
-            "broad_waves",
-            "fine_detail",
-            "wispy",
-        ]),
+        (NodeType::TextureOverlay, "blend_mode") => Some(&["over", "multiply", "screen", "add"]),
+        (NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise, "character") => {
+            Some(&[
+                "rolling_hills",
+                "rugged",
+                "broad_waves",
+                "fine_detail",
+                "wispy",
+            ])
+        }
         (NodeType::RidgedNoise, "character") => Some(&[
             "ridges",
             "jagged_peaks",
@@ -253,14 +269,9 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "broad_ridges",
             "spires",
         ]),
-        (NodeType::SubgraphInput | NodeType::SubgraphOutput, "kind") => Some(&[
-            "Heightmap",
-            "Color",
-            "Mask",
-            "Scalar",
-            "File",
-            "FileList",
-        ]),
+        (NodeType::SubgraphInput | NodeType::SubgraphOutput, "kind") => {
+            Some(&["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"])
+        }
         _ => None,
     }
 }
@@ -271,8 +282,7 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
 pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
     matches!(
         (node_type, key),
-        (NodeType::AutoTexture, "rock_color")
-            | (NodeType::PaintedTexture, "brush_color")
+        (NodeType::AutoTexture, "rock_color") | (NodeType::PaintedTexture, "brush_color")
     )
 }
 

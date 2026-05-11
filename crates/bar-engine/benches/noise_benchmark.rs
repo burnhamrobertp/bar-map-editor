@@ -68,9 +68,7 @@ fn bench_cpu_executor_noise(c: &mut Criterion) {
 
 fn bench_gpu_noise(c: &mut Criterion) {
     // Try to create a standalone GPU context
-    let gpu_context = match pollster::block_on(async {
-        GpuContext::new_standalone().await
-    }) {
+    let gpu_context = match pollster::block_on(async { GpuContext::new_standalone().await }) {
         Ok(ctx) => ctx,
         Err(_) => {
             eprintln!("No GPU available, skipping GPU benchmarks");
@@ -86,11 +84,20 @@ fn bench_gpu_noise(c: &mut Criterion) {
     for &size in RESOLUTIONS {
         group.bench_with_input(BenchmarkId::new("perlin", size), &size, |b, &size| {
             let params = noise_params(size);
-            b.iter(|| pipeline.generate(&gpu_context, &params, NoiseType::Perlin).unwrap());
+            b.iter(|| {
+                pipeline
+                    .generate(&gpu_context, &params, NoiseType::Perlin)
+                    .unwrap()
+            });
         });
     }
     group.finish();
 }
 
-criterion_group!(benches, bench_cpu_noise, bench_cpu_executor_noise, bench_gpu_noise);
+criterion_group!(
+    benches,
+    bench_cpu_noise,
+    bench_cpu_executor_noise,
+    bench_gpu_noise
+);
 criterion_main!(benches);

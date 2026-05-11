@@ -10,5 +10,5 @@ pub mod terrain;
 
 pub use camera::Camera;
 pub use picking::{pick_terrain, PickResult};
-pub use renderer::{PreviewFrame, SmfLighting, TerrainRenderer};
-pub use terrain::{generate_terrain_mesh, generate_terrain_mesh_lod, TerrainVertex};
+pub use renderer::{PreviewFrame, SmfLighting, TerrainRenderer, TerrainUpdateParams};
+pub use terrain::TerrainVertex;

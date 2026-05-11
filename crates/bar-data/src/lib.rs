@@ -11,5 +11,6 @@ pub mod smt;
 pub use color::ColorBuffer;
 pub use heightmap::Heightmap;
 pub use sd7::{SmfHeader, SmfMap};
-pub use smt::{compress_image_dxt1, decode_tile_dxt1, generate_minimap_dxt1, read_smt, write_smt,
-              MINIMAP_SIZE};
+pub use smt::{
+    compress_image_dxt1, decode_tile_dxt1, generate_minimap_dxt1, read_smt, write_smt, MINIMAP_SIZE,
+};

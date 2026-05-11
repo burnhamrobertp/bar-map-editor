@@ -74,10 +74,7 @@ pub enum ParamError {
     /// type. Currently surfaced as a warning rather than an error
     /// (see module docs); kept in the API so callers can opt into
     /// stricter behaviour later.
-    UnknownKey {
-        node_type: NodeType,
-        key: String,
-    },
+    UnknownKey { node_type: NodeType, key: String },
     /// Param key matches a spec but the value is the wrong type.
     /// E.g. `Blur.radius` is `Float` but the recipe supplied a
     /// `String`. Always a hard error — silent type coercion would
@@ -152,9 +149,10 @@ mod tests {
             let specs = param_specs(nt);
             let defaults = default_params(nt);
             for (name, value) in defaults {
-                let spec = specs.iter().find(|s| s.name == name).unwrap_or_else(|| {
-                    panic!("no spec for default param {nt:?}.{name}")
-                });
+                let spec = specs
+                    .iter()
+                    .find(|s| s.name == name)
+                    .unwrap_or_else(|| panic!("no spec for default param {nt:?}.{name}"));
                 let got = ParamKind::of(&value);
                 assert_eq!(
                     spec.kind, got,
@@ -173,7 +171,9 @@ mod tests {
         let errs = validate_node_params(&NodeType::Blur, &p);
         assert_eq!(errs.len(), 1);
         match &errs[0] {
-            ParamError::TypeMismatch { key, expected, got, .. } => {
+            ParamError::TypeMismatch {
+                key, expected, got, ..
+            } => {
                 assert_eq!(key, "radius");
                 assert_eq!(*expected, ParamKind::Float);
                 assert_eq!(*got, ParamKind::String);
@@ -224,7 +224,6 @@ mod tests {
         NodeType::Clamp,
         NodeType::Terrace,
         NodeType::Invert,
-        NodeType::Sculpt,
         NodeType::Blend,
         NodeType::Add,
         NodeType::Subtract,
@@ -256,8 +255,5 @@ mod tests {
         NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
-        NodeType::TextureSculpt,
-        NodeType::MetalSculpt,
-        NodeType::TypeSculpt,
     ];
 }

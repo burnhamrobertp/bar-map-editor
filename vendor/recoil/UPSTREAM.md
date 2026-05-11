@@ -25,7 +25,7 @@ when we sync. All porting/adaptation happens in the WGSL ports.
 |---|---|---|
 | `SMFFragProg.glsl` / `SMFVertProg.glsl` | Main SMF terrain shader (lighting, splatting) | M2 terrain ground shader port |
 | `SMFShadingTextureFragProg.glsl` / `SMFShadingTextureVertProg.glsl` | Lookup texture pre-pass | M2 terrain shader port |
-| `BumpWaterFS.glsl` / `BumpWaterVS.glsl` | Bump-water surface shader | M2 water shader port (replaces the abandoned procedural FBM water) |
+| `BumpWaterFS.glsl` / `BumpWaterVS.glsl` | Bump-water surface shader | Reference only -- the WGSL port was replaced by an original PBR shader at `shaders/water.wgsl` to avoid GPL entanglement |
 | `ModernSkyFS.glsl` / `ModernSkyVS.glsl` | Atmospheric sky shader | M2 sky shader port (replaces the abandoned procedural gradient sky) |
 | `MiniMapFragProg.glsl` / `MiniMapVertProg.glsl` | In-engine minimap renderer | Reference for the 2D inspector's heightmap visualization |
 

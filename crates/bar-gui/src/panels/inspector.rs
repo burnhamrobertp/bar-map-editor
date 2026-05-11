@@ -8,28 +8,24 @@
 use eframe::egui;
 
 use crate::app::{
-    apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp,
-    BrushTarget, BrushTool, InspectorMode,
+    apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp, BrushTarget,
+    BrushTool, InspectorMode,
 };
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog_show_inspector() {
+    if !app.dialog.show_inspector {
         return;
     }
 
     // Refresh the cached egui texture if the heightmap has changed.
     if app.paint().heightmap_rev != app.paint().texture_rev {
-        let img_and_rev = app
-            .paint()
-            .heightmap
-            .as_ref()
-            .map(|hm| {
-                let (mn, mx) = app.map_height_range();
-                (
-                    heightmap_to_color_image(hm, mn, mx),
-                    app.paint().heightmap_rev,
-                )
-            });
+        let img_and_rev = app.paint().heightmap.as_ref().map(|hm| {
+            let (mn, mx) = app.map.height_range();
+            (
+                heightmap_to_color_image(hm, mn, mx),
+                app.paint().heightmap_rev,
+            )
+        });
         if let Some((img, rev)) = img_and_rev {
             let tex = ctx.load_texture("inspector_heightmap", img, egui::TextureOptions::LINEAR);
             let p = app.paint_mut();
@@ -38,11 +34,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         }
     }
 
-    let mut open = app.dialog_show_inspector();
+    let mut open = app.dialog.show_inspector;
     let mut to_remove: Option<usize> = None;
     let mut new_drag: Option<usize> = None;
     let mut spawn_to_add: Option<[u32; 2]> = None;
-    let (map_w, map_h) = app.map_dimensions();
+    let (map_w, map_h) = app.map.dimensions();
     // Elmo bounds (1 heightmap pixel = 8 elmos in X/Z).
     let world_w = (map_w.saturating_sub(1)) * 8;
     let world_h = (map_h.saturating_sub(1)) * 8;
@@ -325,9 +321,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         .map(|hm| format!("{}x{} px", hm.width(), hm.height()))
                         .unwrap_or_else(|| "(no preview)".to_string());
                     ui.weak(format!("Heightmap: {h_label}"));
-                    if app.paint().sculpted {
+                    if app.paint().sculpt.dirty {
                         ui.label(
-                            egui::RichText::new("- sculpted (locked)")
+                            egui::RichText::new("- sculpted")
                                 .color(egui::Color32::from_rgb(255, 200, 80)),
                         );
                     }
@@ -336,7 +332,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         p.heightmap = None;
                         p.texture = None;
                         p.texture_rev = p.heightmap_rev;
-                        p.sculpted = false;
+                        p.sculpt = Default::default();
                     }
                     let can_save = app.paint().heightmap.is_some();
                     ui.add_enabled_ui(can_save, |ui| {
@@ -348,7 +344,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             });
         });
 
-    app.set_dialog_show_inspector(open);
+    app.dialog.show_inspector = open;
     if let Some(idx) = to_remove {
         app.map_settings_mut().start_positions.remove(idx);
         if app.dragging_spawn() == Some(idx) {
@@ -407,7 +403,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 apply_brush_dab(hm, hx, hy, &p.brush);
             }
             p.heightmap_rev = p.heightmap_rev.wrapping_add(1);
-            p.sculpted = true;
+            p.sculpt.dirty = true;
         }
         app.mark_dirty();
     }
@@ -421,7 +417,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     // closure so the rfd modal doesn't interleave with the egui
     // borrow on `app`.
     if clicked_save_png {
-        if let Some(path) = rfd::FileDialog::new()
+        if let Some(path) = app
+            .make_dialog()
             .set_title("Save sculpted heightmap")
             .add_filter("16-bit grayscale PNG", &["png"])
             .set_file_name("sculpted-heightmap.png")

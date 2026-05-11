@@ -19,12 +19,15 @@ nothing to other crates.
   instantiate `HybridExecutor` (GPU) or `CpuExecutor` (no GPU) as
   `Arc<dyn NodeExecutor>`.
 - **Frame loop** (`AppWrapper::update`): call `OpenMachineApp::update` (the GUI),
-  poll all `take_*` signals, and dispatch to the appropriate async path.
+  poll the relevant sub-state pulses (`app.preview.take_run_requested()`,
+  `app.preview.take_run_bundler_node()`, `app.preview.take_test_in_bar()`,
+  `app.project.take_graph_reset()`, `app.project.sd7_open_request.take()`),
+  and dispatch to the appropriate async path.
 - **Per-project isolation** via `Session`: all render state for a project
   (`TerrainRenderer`, `Camera`, preview channels, revision counters,
   `session_id`) lives inside `Option<Session>`. Opening a new project replaces
   `self.session` with a fresh `Session::new()`; Rust drop semantics free all
-  GPU buffers, old channels, and camera state atomically — no manual field
+  GPU buffers, old channels, and camera state atomically -- no manual field
   enumeration.
 - **Two-pass progressive preview**: when the graph revision changes, immediately
   spawn a low-res (128 px) background thread for fast visual feedback, then
@@ -34,9 +37,9 @@ nothing to other crates.
   pending. Results are discarded if `session_id` or `revision` no longer match.
 - **Dynamic viewport resize**: the renderer's GPU textures are recreated every
   frame to match the available viewport area (pixel-exact, no stretch/distortion).
-- **Export**: spawn a background thread that calls `evaluate_graph` →
+- **Export**: spawn a background thread that calls `evaluate_graph` ->
   `execute_bundlers`; poll `export_result_rx` each frame and surface the result
-  string via `set_status`.
+  string via `app.set_status(...)`.
 - **SD7 extraction**: spawn a background thread calling
   `extract_sd7_to_work_dir`; return `WorkDirScan` to
   `OpenMachineApp::finish_open_map`.
@@ -62,8 +65,9 @@ New project / Open project / Open SD7
   → register output_view with egui
 ```
 
-The `graph_reset` flag (set by `OpenMachineApp::take_graph_reset`) triggers
-`self.session = Some(Session::new(...))` at the top of the next frame.
+The `graph_reset` flag (consumed via `app.project.take_graph_reset()`)
+triggers `self.session = Some(Session::new(...))` at the top of the next
+frame.
 
 ## Key Internal Types
 | Type | Description |
@@ -87,7 +91,7 @@ The `graph_reset` flag (set by `OpenMachineApp::take_graph_reset`) triggers
 `PreviewResult` fields:
 - `heightmap: Option<Heightmap>`, `texture: Option<ColorBuffer>`
 - `revision: u64`, `session_id: u64`
-- `height_scale: f32` — computed per-frame from `map_height_range()` (see formula below)
+- `height_scale: f32` -- computed per-frame from `app.map.height_range()` (see formula below)
 - `water_y: f32` — render-space Y of the water surface (negative = no water)
 - `water_color: [f32; 3]`
 - `is_low_res: bool` — distinguishes the two passes
@@ -138,7 +142,8 @@ height_scale = (max_h - min_h).abs() * 0.2 / pm
 ## Boundaries — What This Crate Must NOT Do
 - Must not define any domain types (graph nodes, project formats, pixel
   buffers) — those all live in the crates below.
-- Must not perform graph mutations — signal `bar-gui` to mutate and pick up the
-  result via `take_*` methods.
+- Must not perform graph mutations -- signal `bar-gui` to mutate and pick up
+  the result via the sub-state `take_*` accessors (`app.preview.take_*`,
+  `app.project.take_*`).
 - Must not block the main thread with heavy computation — all evaluation and
   export must happen on background threads.

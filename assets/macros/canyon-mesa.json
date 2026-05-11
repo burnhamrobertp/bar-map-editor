@@ -1,30 +1,24 @@
 {
   "name": "Canyon - Mesa",
-  "description": "Wide flat mesas separated by canyons. Lower-frequency ridged noise + a clamp on the high end produces broader plateau tops with sharp drops between. Wire its `terrain` output to a Bundler.",
+  "description": "Wide flat-topped mesas separated by sheer drops. Low-frequency ridged noise inverted and lifted, then clamped at both ends, produces broad level surfaces with well-defined cliff edges.",
   "nodes": [
     {
       "key": "ridges",
       "type": "RidgedNoise",
       "label": "Canyon Ridges",
       "params": {
-        "frequency": {
-          "Float": 1.4
-        },
-        "octaves": {
-          "UInt": 4
-        },
-        "lacunarity": {
-          "Float": 2.2
-        },
-        "seed": {
-          "UInt": 29
-        }
+        "character": { "String": "broad_ridges" },
+        "frequency": { "Float": 1.4 },
+        "octaves": { "UInt": 4 },
+        "lacunarity": { "Float": 2.2 },
+        "persistence": { "Float": 0.5 },
+        "seed": { "UInt": 29 }
       }
     },
     {
-      "key": "invert",
+      "key": "invert_terrain",
       "type": "Invert",
-      "label": "Plateau ↔ Canyon",
+      "label": "Plateau / Canyon",
       "params": {}
     },
     {
@@ -32,12 +26,8 @@
       "type": "BiasGain",
       "label": "Lift Plateau",
       "params": {
-        "bias": {
-          "Float": 0.7
-        },
-        "gain": {
-          "Float": 0.5
-        }
+        "bias": { "Float": 0.70 },
+        "gain": { "Float": 0.5 }
       }
     },
     {
@@ -45,23 +35,15 @@
       "type": "Clamp",
       "label": "Mesa Cap",
       "params": {
-        "min": {
-          "Float": 0.2
-        },
-        "max": {
-          "Float": 0.85
-        }
+        "min": { "Float": 0.15 },
+        "max": { "Float": 0.85 }
       }
     },
     {
       "key": "smooth",
       "type": "Blur",
       "label": "Soften Walls",
-      "params": {
-        "radius": {
-          "Float": 1.2
-        }
-      }
+      "params": { "radius": { "Float": 1.2 } }
     },
     {
       "key": "slope_map",
@@ -73,42 +55,68 @@
       "key": "auto_tex",
       "type": "AutoTexture",
       "label": "Auto Texture",
+      "params": { "biome": { "String": "desert" } }
+    },
+    {
+      "key": "rock_soil",
+      "type": "RockSoil",
+      "label": "Rock and Soil",
       "params": {
-        "biome": {
-          "String": "desert"
-        }
+        "soil_color": { "String": "C0703A" },
+        "rock_color": { "String": "7A4A2A" },
+        "slope_threshold": { "Float": 0.2 },
+        "slope_blend": { "Float": 0.2 },
+        "ao_strength": { "Float": 0.75 }
+      }
+    },
+    {
+      "key": "veg",
+      "type": "Vegetation",
+      "label": "Desert Scrub",
+      "params": {
+        "vegetation_color": { "String": "2A5010" },
+        "dry_color": { "String": "704020" },
+        "altitude_max": { "Float": 0.15 },
+        "slope_cutoff": { "Float": 0.1 },
+        "slope_blend": { "Float": 0.08 },
+        "ao_strength": { "Float": 0.5 }
+      }
+    },
+    {
+      "key": "rock_comp",
+      "type": "TextureOverlay",
+      "label": "Rock Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    },
+    {
+      "key": "veg_comp",
+      "type": "TextureOverlay",
+      "label": "Scrub Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
       }
     }
   ],
   "connections": [
-    {
-      "from": "ridges.output",
-      "to": "invert.input"
-    },
-    {
-      "from": "invert.output",
-      "to": "lift.input"
-    },
-    {
-      "from": "lift.output",
-      "to": "cap.input"
-    },
-    {
-      "from": "cap.output",
-      "to": "smooth.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "slope_map.input"
-    },
-    {
-      "from": "smooth.output",
-      "to": "auto_tex.input"
-    },
-    {
-      "from": "slope_map.output",
-      "to": "auto_tex.slope"
-    }
+    { "from": "ridges.output",         "to": "invert_terrain.input" },
+    { "from": "invert_terrain.output", "to": "lift.input" },
+    { "from": "lift.output",           "to": "cap.input" },
+    { "from": "cap.output",            "to": "smooth.input" },
+    { "from": "smooth.output",         "to": "slope_map.input" },
+    { "from": "smooth.output",         "to": "auto_tex.input" },
+    { "from": "slope_map.output",      "to": "auto_tex.slope" },
+    { "from": "smooth.output",         "to": "rock_soil.input" },
+    { "from": "slope_map.output",      "to": "rock_soil.slope" },
+    { "from": "smooth.output",         "to": "veg.input" },
+    { "from": "slope_map.output",      "to": "veg.slope" },
+    { "from": "auto_tex.output",       "to": "rock_comp.base" },
+    { "from": "rock_soil.output",      "to": "rock_comp.overlay" },
+    { "from": "rock_comp.output",      "to": "veg_comp.base" },
+    { "from": "veg.output",            "to": "veg_comp.overlay" }
   ],
   "subgraph": {
     "label": "Canyon - Mesa",
@@ -116,58 +124,16 @@
     "collapsed": true,
     "inputs": [],
     "outputs": [
-      {
-        "name": "terrain",
-        "label": "Terrain",
-        "kind": "Heightmap",
-        "binding": "smooth:output"
-      },
-      {
-        "name": "texture",
-        "label": "Texture",
-        "kind": "Color",
-        "binding": "auto_tex:output"
-      },
-      {
-        "name": "slope",
-        "label": "Slope",
-        "kind": "Heightmap",
-        "binding": "slope_map:output"
-      }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "veg_comp:output" },
+      { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
   "macro_params": [
-    {
-      "name": "mesa_size",
-      "label": "Mesa size",
-      "kind": "Float",
-      "binding": "ridges:frequency",
-      "min": 0.8,
-      "max": 3
-    },
-    {
-      "name": "mesa_height",
-      "label": "Mesa height",
-      "kind": "Float",
-      "binding": "cap:max",
-      "min": 0.4,
-      "max": 0.95
-    },
-    {
-      "name": "wall_steepness",
-      "label": "Wall steepness",
-      "kind": "Float",
-      "binding": "smooth:radius",
-      "min": 0,
-      "max": 3
-    },
-    {
-      "name": "seed",
-      "label": "Seed",
-      "kind": "UInt",
-      "binding": "ridges:seed",
-      "min": 0,
-      "max": 100000
-    }
+    { "name": "mesa_size",  "label": "Mesa size",   "kind": "Float",  "binding": "ridges:frequency",          "min": 0.8, "max": 3.0  },
+    { "name": "mesa_height","label": "Mesa height", "kind": "Float",  "binding": "cap:max",                   "min": 0.4, "max": 0.95 },
+    { "name": "rock_color", "label": "Rock color",  "kind": "String", "binding": "rock_soil:soil_color" },
+    { "name": "scrub_line", "label": "Scrub line",  "kind": "Float",  "binding": "veg:altitude_max",          "min": 0.0, "max": 0.4  },
+    { "name": "seed",       "label": "Seed",        "kind": "UInt",   "binding": "ridges:seed" }
   ]
 }

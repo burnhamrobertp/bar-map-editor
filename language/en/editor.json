@@ -67,7 +67,8 @@
       "validate_first": "Test in BAR: fix validation errors first."
     },
     "viewport_3d": {
-      "controls_hint": "LMB: rotate | Scroll: zoom | MMB: pan",
+      "controls_hint": "LMB/RMB: rotate | Scroll: zoom | MMB: pan",
+      "sculpt_controls_hint": "LMB: sculpt | RMB: rotate | Scroll: zoom | MMB: pan",
       "force_refresh": "Force re-render preview"
     },
     "map_settings": {
