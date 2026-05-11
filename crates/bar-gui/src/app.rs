@@ -227,6 +227,8 @@ pub struct BarEditorApp {
     /// In-flight drag from the node palette (set when pointer starts
     /// dragging an item, cleared on pointer release).
     pub(crate) palette_drag: Option<PaletteDrag>,
+    /// Live text filter typed into the palette search box. Empty = show all.
+    pub(crate) palette_filter: String,
     pub(crate) settings: Settings,
     /// Active top-level UI layout. Loaded from settings on launch,
     /// persisted via `set_active_layout`.
@@ -260,6 +262,7 @@ impl Default for BarEditorApp {
             props: crate::editor::PropsPanelState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
+            palette_filter: String::new(),
             settings: Settings::default(),
             active_layout: Layout::default(),
         }

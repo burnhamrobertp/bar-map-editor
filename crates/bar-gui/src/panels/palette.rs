@@ -1,4 +1,4 @@
-//! Node palette — the collapsible category list on the left
+//! Node palette -- the collapsible category list on the left
 //! sidebar. Drag an item onto the canvas to drop a node;
 //! double-click to drop at a default position. The palette is a
 //! pure renderer: drag state is published via
@@ -29,6 +29,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Simplex Noise", NodeType::SimplexNoise),
         ("Worley Noise", NodeType::WorleyNoise),
         ("Ridged Noise", NodeType::RidgedNoise),
+        ("Voronoi", NodeType::Voronoi),
+        ("Gradient", NodeType::Gradient),
+        ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
     ];
 
@@ -38,9 +41,12 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Blur", NodeType::Blur),
         ("Sharpen", NodeType::Sharpen),
         ("Clamp", NodeType::Clamp),
-        ("Invert", NodeType::Invert),
-        ("2D Sculpt", NodeType::Sculpt),
-        ("Preview", NodeType::Preview),
+        ("Mirror", NodeType::Mirror),
+        ("Terrace", NodeType::Terrace),
+        ("Curve", NodeType::Curve),
+        ("Normalize", NodeType::Normalize),
+        ("Bias / Gain", NodeType::BiasGain),
+        ("Displacement", NodeType::Displacement),
     ];
 
     let combiners = [
@@ -50,22 +56,30 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Multiply", NodeType::Multiply),
         ("Max", NodeType::Max),
         ("Min", NodeType::Min),
+        ("Mask Select", NodeType::MaskSelect),
     ];
 
-    let texture = [
-        ("Slope Map", NodeType::SlopeMap),
-        ("Height Select", NodeType::HeightSelect),
-        ("Splat Map", NodeType::SplatMap),
+    // Height-to-color and paint-style outputs.
+    let colorizers = [
         ("Auto Texture", NodeType::AutoTexture),
         ("Rock and Soil", NodeType::RockSoil),
         ("Vegetation", NodeType::Vegetation),
-        ("Texture Overlay", NodeType::TextureOverlay),
+        ("Layer Blend", NodeType::LayerBlend),
+        ("Texture Weightmap", NodeType::TextureWeightmap),
+    ];
+
+    // Analytical maps derived from the heightmap.
+    let splat_maps = [
+        ("Slope Map", NodeType::SlopeMap),
+        ("Height Select", NodeType::HeightSelect),
+        ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
         ("Specular Map", NodeType::SpecularMap),
     ];
 
     let masks = [
+        ("Invert", NodeType::Invert),
         ("Painted Heightmap", NodeType::PaintedHeightmap),
         ("Painted Texture", NodeType::PaintedTexture),
         ("Mask Threshold", NodeType::MaskThreshold),
@@ -74,7 +88,12 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Apply", NodeType::MaskApply),
     ];
 
-    let bundlers = [("Bundler", NodeType::Bundler)];
+    let sculpt = [("2D Sculpt", NodeType::Sculpt)];
+
+    let output = [
+        ("Preview", NodeType::Preview),
+        ("Bundler", NodeType::Bundler),
+    ];
 
     let sources = [
         ("SMF Import", NodeType::SmfImport),
@@ -83,8 +102,73 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("File Reference", NodeType::FileReference),
     ];
 
+    // Flat list of every node entry across all categories (for search).
+    let all_nodes: &[(&str, NodeType)] = &[
+        ("Perlin Noise", NodeType::PerlinNoise),
+        ("Simplex Noise", NodeType::SimplexNoise),
+        ("Worley Noise", NodeType::WorleyNoise),
+        ("Ridged Noise", NodeType::RidgedNoise),
+        ("Voronoi", NodeType::Voronoi),
+        ("Gradient", NodeType::Gradient),
+        ("File Input", NodeType::FileInput),
+        ("Constant", NodeType::Constant),
+        ("Hydraulic Erosion", NodeType::HydraulicErosion),
+        ("Thermal Erosion", NodeType::ThermalErosion),
+        ("Blur", NodeType::Blur),
+        ("Sharpen", NodeType::Sharpen),
+        ("Clamp", NodeType::Clamp),
+        ("Mirror", NodeType::Mirror),
+        ("Terrace", NodeType::Terrace),
+        ("Curve", NodeType::Curve),
+        ("Normalize", NodeType::Normalize),
+        ("Bias / Gain", NodeType::BiasGain),
+        ("Displacement", NodeType::Displacement),
+        ("Blend", NodeType::Blend),
+        ("Add", NodeType::Add),
+        ("Subtract", NodeType::Subtract),
+        ("Multiply", NodeType::Multiply),
+        ("Max", NodeType::Max),
+        ("Min", NodeType::Min),
+        ("Mask Select", NodeType::MaskSelect),
+        ("Auto Texture", NodeType::AutoTexture),
+        ("Rock and Soil", NodeType::RockSoil),
+        ("Vegetation", NodeType::Vegetation),
+        ("Layer Blend", NodeType::LayerBlend),
+        ("Texture Weightmap", NodeType::TextureWeightmap),
+        ("Slope Map", NodeType::SlopeMap),
+        ("Height Select", NodeType::HeightSelect),
+        ("Terrain Splat", NodeType::TerrainSplat),
+        ("Normal Map", NodeType::NormalMap),
+        ("Grass Map", NodeType::GrassMap),
+        ("Specular Map", NodeType::SpecularMap),
+        ("Invert", NodeType::Invert),
+        ("Painted Heightmap", NodeType::PaintedHeightmap),
+        ("Painted Texture", NodeType::PaintedTexture),
+        ("Mask Threshold", NodeType::MaskThreshold),
+        ("Mask Invert", NodeType::MaskInvert),
+        ("Mask Blur", NodeType::MaskBlur),
+        ("Mask Apply", NodeType::MaskApply),
+        ("2D Sculpt", NodeType::Sculpt),
+        ("Preview", NodeType::Preview),
+        ("Bundler", NodeType::Bundler),
+        ("SMF Import", NodeType::SmfImport),
+        ("SMT Import", NodeType::SmtImport),
+        ("Pass-Through", NodeType::PassThrough),
+        ("File Reference", NodeType::FileReference),
+    ];
+
     let mut to_add: Option<(NodeType, String)> = None;
     let mut drag_start: Option<PaletteDrag> = None;
+
+    // Search box -- always visible at the top of the palette.
+    ui.add(
+        egui::TextEdit::singleline(&mut app.palette_filter)
+            .hint_text("Search nodes...")
+            .desired_width(f32::INFINITY),
+    );
+    ui.add_space(4.0);
+
+    let filter = app.palette_filter.to_lowercase();
 
     macro_rules! palette_group {
         ($ui:expr, $title:expr, $items:expr) => {
@@ -105,33 +189,29 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         };
     }
 
-    // SubGraph IO nodes — only meaningful inside a subgraph view.
-    // Pinned to the TOP of the palette (above Generators) since
-    // they're how a subgraph's external interface is now defined.
-    if app.is_in_subgraph_view() {
-        let subgraph_io = [
-            ("Subgraph Input", NodeType::SubgraphInput),
-            ("Subgraph Output", NodeType::SubgraphOutput),
-        ];
-        palette_group!(ui, "SubGraph IO", subgraph_io);
-        ui.add_space(8.0);
-    }
-
-    palette_group!(ui, "Generators", generators);
-    palette_group!(ui, "Filters", filters);
-    palette_group!(ui, "Combiners", combiners);
-    palette_group!(ui, "Texture", texture);
-    palette_group!(ui, "Masks", masks);
-    palette_group!(ui, "Bundler", bundlers);
-    palette_group!(ui, "Sources", sources);
-
-    // Macros — pre-built SubGraphs that drop as a complete chunk
-    // of graph wired up for a typical map archetype. Drop one,
-    // wire its output to a Bundler, you're done.
-    ui.collapsing("Macros", |ui| {
+    if !filter.is_empty() {
+        // Flat filtered list -- categories are suppressed.
+        let mut any = false;
+        for (label, node_type) in all_nodes {
+            if label.to_lowercase().contains(&filter) {
+                let resp = palette_item(ui, label, node_type);
+                if resp.drag_started() && drag_start.is_none() {
+                    drag_start = Some(PaletteDrag {
+                        kind: PaletteKind::Node((*node_type).clone()),
+                        label: label.to_string(),
+                    });
+                }
+                if resp.double_clicked() {
+                    to_add = Some(((*node_type).clone(), label.to_string()));
+                }
+                any = true;
+            }
+        }
+        // Also search macros.
         for group in crate::macros::BUILTIN_MACRO_GROUPS {
-            ui.collapsing(group.name, |ui| {
-                for entry in group.entries {
+            for entry in group.entries {
+                let full = format!("{} {}", group.name, entry.display_name).to_lowercase();
+                if full.contains(&filter) || entry.display_name.to_lowercase().contains(&filter) {
                     let resp = ui.add(
                         egui::Label::new(entry.display_name)
                             .sense(egui::Sense::click_and_drag())
@@ -145,10 +225,67 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                             label: format!("{} - {}", group.name, entry.display_name),
                         });
                     }
+                    any = true;
                 }
-            });
+            }
         }
-    });
+        if !any {
+            ui.label(
+                egui::RichText::new("No matches")
+                    .color(egui::Color32::from_gray(120))
+                    .italics(),
+            );
+        }
+    } else {
+        // Normal category tree.
+
+        // SubGraph IO nodes -- only meaningful inside a subgraph view.
+        // Pinned to the TOP of the palette (above Generators) since
+        // they're how a subgraph's external interface is now defined.
+        if app.is_in_subgraph_view() {
+            let subgraph_io = [
+                ("Subgraph Input", NodeType::SubgraphInput),
+                ("Subgraph Output", NodeType::SubgraphOutput),
+            ];
+            palette_group!(ui, "SubGraph IO", subgraph_io);
+            ui.add_space(8.0);
+        }
+
+        palette_group!(ui, "Generators", generators);
+        palette_group!(ui, "Filters", filters);
+        palette_group!(ui, "Combiners", combiners);
+        palette_group!(ui, "Colorizers", colorizers);
+        palette_group!(ui, "Splat / Maps", splat_maps);
+        palette_group!(ui, "Masks", masks);
+        palette_group!(ui, "Sculpt", sculpt);
+        palette_group!(ui, "Output", output);
+        palette_group!(ui, "Sources", sources);
+
+        // Macros -- pre-built SubGraphs that drop as a complete chunk
+        // of graph wired up for a typical map archetype. Drop one,
+        // wire its output to a Bundler, you're done.
+        ui.collapsing("Macros", |ui| {
+            for group in crate::macros::BUILTIN_MACRO_GROUPS {
+                ui.collapsing(group.name, |ui| {
+                    for entry in group.entries {
+                        let resp = ui.add(
+                            egui::Label::new(entry.display_name)
+                                .sense(egui::Sense::click_and_drag())
+                                .selectable(false),
+                        );
+                        if resp.drag_started() && drag_start.is_none() {
+                            drag_start = Some(PaletteDrag {
+                                kind: PaletteKind::Macro {
+                                    name: entry.full_name.to_string(),
+                                },
+                                label: format!("{} - {}", group.name, entry.display_name),
+                            });
+                        }
+                    }
+                });
+            }
+        });
+    }
 
     if let Some(pd) = drag_start {
         app.set_palette_drag(pd);

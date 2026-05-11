@@ -91,6 +91,7 @@ impl BarEditorApp {
         self.canvas.marquee_start = None;
         self.map.dragging_spawn = None;
         self.palette_drag = None;
+        self.palette_filter.clear();
         self.project.passthrough_edit = None;
         self.dialog.pending_props_open = None;
         self.props.close();
