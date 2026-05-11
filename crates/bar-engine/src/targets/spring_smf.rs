@@ -730,9 +730,11 @@ mod tests {
     #[test]
     fn mapinfo_emits_void_flags_when_true() {
         let codec = SpringSmfCodec;
-        let mut s = MapSettings::default();
-        s.void_water = true;
-        s.void_ground = true;
+        let s = MapSettings {
+            void_water: true,
+            void_ground: true,
+            ..MapSettings::default()
+        };
         let lua = codec.generate_mapinfo("test", 32, 32, &make_plan(s));
         assert!(lua.contains("voidWater"));
         assert!(lua.contains("voidGround"));

@@ -309,7 +309,7 @@ mod tests {
             let x = i % 32;
             let y = i / 32;
             // Skip border pixels where edge clamping affects result
-            if x >= 4 && x < 28 && y >= 4 && y < 28 {
+            if (4..28).contains(&x) && (4..28).contains(&y) {
                 assert!(
                     (v - 0.5).abs() < 0.001,
                     "Interior pixel ({x},{y}) should be ~0.5, got {v}"

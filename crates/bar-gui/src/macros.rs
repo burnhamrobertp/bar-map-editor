@@ -562,7 +562,7 @@ mod tests {
             .member_ids
             .iter()
             .filter(|id| {
-                g.get_node(**id).map_or(false, |n| {
+                g.get_node(**id).is_some_and(|n| {
                     matches!(
                         n.node_type,
                         bar_graph::NodeType::SubgraphInput | bar_graph::NodeType::SubgraphOutput

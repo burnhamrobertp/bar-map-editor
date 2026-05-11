@@ -899,9 +899,11 @@ mod tests {
     fn rejects_inverted_height_range() {
         let mut graph = empty_graph();
         graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
-        let mut settings = MapSettings::default();
-        settings.min_height = 100.0;
-        settings.max_height = 50.0;
+        let settings = MapSettings {
+            min_height: 100.0,
+            max_height: 50.0,
+            ..MapSettings::default()
+        };
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             f.iter().any(|x| x.category == "dimensions"

@@ -234,11 +234,12 @@ mod tests {
         // Camera directly above origin, looking down. Cursor at the
         // centre of the viewport should hit (0, 0) world XZ →
         // centre of the heightmap.
-        let mut camera = Camera::default();
-        camera.target = Vec3::ZERO;
-        camera.distance = 2.0;
-        camera.azimuth = 0.0;
-        camera.elevation = std::f32::consts::FRAC_PI_2 - 0.01;
+        let camera = Camera {
+            distance: 2.0,
+            azimuth: 0.0,
+            elevation: std::f32::consts::FRAC_PI_2 - 0.01,
+            ..Camera::default()
+        };
 
         let hm = flat_hm(65, 65, 0.0);
         let pick = pick_terrain(&camera, 1.0, (0.5, 0.5), &hm, 0.5, 0.5, 1.0);
@@ -253,8 +254,10 @@ mod tests {
     fn returns_none_when_cursor_points_at_sky() {
         // Cursor at the top of the viewport pointing roughly upward
         // misses the terrain entirely.
-        let mut camera = Camera::default();
-        camera.elevation = 0.1; // shallow angle
+        let camera = Camera {
+            elevation: 0.1,
+            ..Camera::default()
+        }; // shallow angle
         let hm = flat_hm(65, 65, 0.0);
         let pick = pick_terrain(&camera, 1.0, (0.5, 0.0), &hm, 0.5, 0.5, 1.0);
         assert!(pick.is_none(), "expected miss, got {:?}", pick);

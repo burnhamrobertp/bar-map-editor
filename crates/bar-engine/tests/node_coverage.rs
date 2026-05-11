@@ -724,7 +724,7 @@ fn subgraph_io_with_no_input_emits_no_output() {
     // every other passthrough node uses, e.g. Preview).
     let outputs = run(NodeType::SubgraphInput, &[], &empty_inputs());
     assert!(
-        outputs.get("value").is_none(),
+        !outputs.contains_key("value"),
         "no input → no output: {outputs:?}"
     );
 }

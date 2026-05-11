@@ -295,12 +295,8 @@ impl NodeExecutor for CpuExecutor {
                 let slope = get_optional_heightmap(inputs, "slope");
                 let mask = get_optional_heightmap(inputs, "mask");
                 let color = generate_rock_soil(&input, slope.as_ref(), params);
-                let color = apply_color_modulation(
-                    [0.0, 0.0, 0.0, 0.0],
-                    color,
-                    None,
-                    mask.as_ref(),
-                );
+                let color =
+                    apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -309,12 +305,8 @@ impl NodeExecutor for CpuExecutor {
                 let slope = get_optional_heightmap(inputs, "slope");
                 let mask = get_optional_heightmap(inputs, "mask");
                 let color = generate_vegetation(&input, slope.as_ref(), params);
-                let color = apply_color_modulation(
-                    [0.0, 0.0, 0.0, 0.0],
-                    color,
-                    None,
-                    mask.as_ref(),
-                );
+                let color =
+                    apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -322,7 +314,8 @@ impl NodeExecutor for CpuExecutor {
                 let base = get_input_color(inputs, "base")?;
                 let overlay = get_input_color(inputs, "overlay")?;
                 let distribution = get_optional_heightmap(inputs, "distribution");
-                let color = generate_texture_overlay(&base, &overlay, distribution.as_ref(), params);
+                let color =
+                    generate_texture_overlay(&base, &overlay, distribution.as_ref(), params);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -1264,8 +1257,7 @@ fn detail_value_noise(fx: f32, fy: f32) -> f32 {
     let sx = tx * tx * (3.0 - 2.0 * tx);
     let sy = ty * ty * (3.0 - 2.0 * ty);
     let a = detail_hash(ix, iy) + sx * (detail_hash(ix + 1, iy) - detail_hash(ix, iy));
-    let b = detail_hash(ix, iy + 1)
-        + sx * (detail_hash(ix + 1, iy + 1) - detail_hash(ix, iy + 1));
+    let b = detail_hash(ix, iy + 1) + sx * (detail_hash(ix + 1, iy + 1) - detail_hash(ix, iy + 1));
     a + sy * (b - a)
 }
 
@@ -1305,9 +1297,7 @@ fn generate_rock_soil(
     let ao_strength = get_float(params, "ao_strength", 0.8).clamp(0.0, 1.0);
     let detail_strength = get_float(params, "detail_strength", 0.25).clamp(0.0, 1.0);
 
-    let computed_slope = slope_input
-        .is_none()
-        .then(|| compute_slope_map(heightmap));
+    let computed_slope = slope_input.is_none().then(|| compute_slope_map(heightmap));
     let slope_map = slope_input.unwrap_or_else(|| computed_slope.as_ref().unwrap());
 
     for y in 0..h {
@@ -1326,12 +1316,16 @@ fn generate_rock_soil(
             let base_r = soil_rgb[0] + rock_w * (rock_rgb[0] - soil_rgb[0]);
             let base_g = soil_rgb[1] + rock_w * (rock_rgb[1] - soil_rgb[1]);
             let base_b = soil_rgb[2] + rock_w * (rock_rgb[2] - soil_rgb[2]);
-            color.set(x, y, [
-                (base_r * ao * detail).clamp(0.0, 1.0),
-                (base_g * ao * detail).clamp(0.0, 1.0),
-                (base_b * ao * detail).clamp(0.0, 1.0),
-                rock_w, // alpha = rock coverage; transparent on flat terrain
-            ]);
+            color.set(
+                x,
+                y,
+                [
+                    (base_r * ao * detail).clamp(0.0, 1.0),
+                    (base_g * ao * detail).clamp(0.0, 1.0),
+                    (base_b * ao * detail).clamp(0.0, 1.0),
+                    rock_w, // alpha = rock coverage; transparent on flat terrain
+                ],
+            );
         }
     }
     color
@@ -1359,9 +1353,7 @@ fn generate_vegetation(
     let ao_strength = get_float(params, "ao_strength", 0.6).clamp(0.0, 1.0);
     let detail_strength = get_float(params, "detail_strength", 0.2).clamp(0.0, 1.0);
 
-    let computed_slope = slope_input
-        .is_none()
-        .then(|| compute_slope_map(heightmap));
+    let computed_slope = slope_input.is_none().then(|| compute_slope_map(heightmap));
     let slope_map = slope_input.unwrap_or_else(|| computed_slope.as_ref().unwrap());
 
     const ALT_BLEND: f32 = 0.1;
@@ -1389,12 +1381,16 @@ fn generate_vegetation(
             let base_r = dry_rgb[0] + veg_weight * (veg_rgb[0] - dry_rgb[0]);
             let base_g = dry_rgb[1] + veg_weight * (veg_rgb[1] - dry_rgb[1]);
             let base_b = dry_rgb[2] + veg_weight * (veg_rgb[2] - dry_rgb[2]);
-            color.set(x, y, [
-                (base_r * ao * detail).clamp(0.0, 1.0),
-                (base_g * ao * detail).clamp(0.0, 1.0),
-                (base_b * ao * detail).clamp(0.0, 1.0),
-                veg_weight,
-            ]);
+            color.set(
+                x,
+                y,
+                [
+                    (base_r * ao * detail).clamp(0.0, 1.0),
+                    (base_g * ao * detail).clamp(0.0, 1.0),
+                    (base_b * ao * detail).clamp(0.0, 1.0),
+                    veg_weight,
+                ],
+            );
         }
     }
     color
@@ -1422,7 +1418,10 @@ fn generate_texture_overlay(
             let ov_x = ((x as f32 / w as f32) * overlay.width() as f32) as u32;
             let ov_y = ((y as f32 / h as f32) * overlay.height() as f32) as u32;
             let ov = overlay
-                .get(ov_x.min(overlay.width() - 1), ov_y.min(overlay.height() - 1))
+                .get(
+                    ov_x.min(overlay.width() - 1),
+                    ov_y.min(overlay.height() - 1),
+                )
                 .unwrap_or([0.0; 4]);
 
             let dist = if let Some(dm) = distribution {
@@ -2593,8 +2592,8 @@ mod tests {
         let b = Heightmap::frbar_data(4, 4, vec![0.8; 16]).unwrap();
         // Mask: top half 0.0 (choose a), bottom half 1.0 (choose b)
         let mut mask_data = vec![0.0_f32; 16];
-        for i in 8..16 {
-            mask_data[i] = 1.0;
+        for v in mask_data[8..16].iter_mut() {
+            *v = 1.0;
         }
         let mask = Heightmap::frbar_data(4, 4, mask_data).unwrap();
 
