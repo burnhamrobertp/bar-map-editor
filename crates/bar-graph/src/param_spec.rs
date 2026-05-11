@@ -256,5 +256,6 @@ mod tests {
         NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
+        NodeType::ColorRamp,
     ];
 }

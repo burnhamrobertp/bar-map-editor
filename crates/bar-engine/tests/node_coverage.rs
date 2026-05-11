@@ -756,3 +756,44 @@ fn subgraph_io_with_no_input_emits_no_output() {
         "no input → no output: {outputs:?}"
     );
 }
+
+#[test]
+fn color_ramp_black_to_white_maps_value_to_gray() {
+    // Default 2-stop ramp: black at 0.0, white at 1.0.
+    // A flat heightmap at 0.5 should produce a mid-gray Color output.
+    let mut inputs = HashMap::new();
+    inputs.insert("input".to_string(), PortValue::Heightmap(flat(0.5)));
+    let outputs = run(NodeType::ColorRamp, &[], &inputs);
+    let cb = out_color(&outputs, "output");
+    assert_color_dims(&cb);
+    // Channel 0 (red) should be ~0.5 in a grayscale ramp.
+    let data = cb.data();
+    let r: f32 =
+        data.chunks_exact(4).map(|p| p[0]).sum::<f32>() / (cb.width() * cb.height()) as f32;
+    assert!(
+        (r - 0.5).abs() < 0.02,
+        "mid-height should map to ~0.5 in black-to-white ramp, got {r}"
+    );
+}
+
+#[test]
+fn color_ramp_custom_stop_tints_output() {
+    // Override stop 0 to red at 0.0, stop 1 stays white at 1.0.
+    // A flat heightmap at 0.0 should be fully red.
+    let mut inputs = HashMap::new();
+    inputs.insert("input".to_string(), PortValue::Heightmap(flat(0.0)));
+    let params = [
+        ("stop_count", ParamValue::UInt(2)),
+        ("pos_0", ParamValue::Float(0.0)),
+        ("color_0", ParamValue::String("FF0000".to_string())),
+        ("pos_1", ParamValue::Float(1.0)),
+        ("color_1", ParamValue::String("FFFFFF".to_string())),
+    ];
+    let outputs = run(NodeType::ColorRamp, &params, &inputs);
+    let cb = out_color(&outputs, "output");
+    let data = cb.data();
+    let r = data[0];
+    let g = data[1];
+    assert!(r > 0.95, "red channel should be ~1.0 at stop 0: {r}");
+    assert!(g < 0.05, "green channel should be ~0.0 at red stop: {g}");
+}

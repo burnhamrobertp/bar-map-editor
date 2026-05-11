@@ -157,6 +157,25 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("priority_7", ParamValue::Float(0.0)),
             ("exclusion_7", ParamValue::Float(0.0)),
         ],
+        NodeType::ColorRamp => vec![
+            ("stop_count", ParamValue::UInt(2)),
+            ("pos_0", ParamValue::Float(0.0)),
+            ("color_0", ParamValue::String("000000".to_string())),
+            ("pos_1", ParamValue::Float(1.0)),
+            ("color_1", ParamValue::String("FFFFFF".to_string())),
+            ("pos_2", ParamValue::Float(0.25)),
+            ("color_2", ParamValue::String("404040".to_string())),
+            ("pos_3", ParamValue::Float(0.375)),
+            ("color_3", ParamValue::String("606060".to_string())),
+            ("pos_4", ParamValue::Float(0.5)),
+            ("color_4", ParamValue::String("808080".to_string())),
+            ("pos_5", ParamValue::Float(0.625)),
+            ("color_5", ParamValue::String("A0A0A0".to_string())),
+            ("pos_6", ParamValue::Float(0.75)),
+            ("color_6", ParamValue::String("C0C0C0".to_string())),
+            ("pos_7", ParamValue::Float(0.875)),
+            ("color_7", ParamValue::String("E0E0E0".to_string())),
+        ],
         NodeType::SpecularMap => vec![
             ("rock_specular", ParamValue::Float(0.6)),
             ("flat_specular", ParamValue::Float(0.2)),
@@ -329,7 +348,9 @@ pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
             | (NodeType::Vegetation, "vegetation_color")
             | (NodeType::Vegetation, "dry_color")
             | (NodeType::PaintedTexture, "brush_color")
-    )
+    ) || (node_type == &NodeType::ColorRamp
+        && key.starts_with("color_")
+        && key[6..].parse::<u8>().is_ok())
 }
 
 /// Per-biome defaults for the AutoTexture params that are biome-

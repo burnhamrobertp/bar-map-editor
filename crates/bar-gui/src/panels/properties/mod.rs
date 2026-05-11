@@ -19,6 +19,7 @@
 //! `pub(crate) fn draw(app, ...)` so the deep field access remains
 //! clean -- `&mut self` already grants what's needed.
 
+pub(crate) mod color_ramp;
 pub(crate) mod group;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
@@ -333,6 +334,9 @@ impl BarEditorApp {
                 } else if node_type == NodeType::TextureWeightmap {
                     ui.separator();
                     self.draw_texture_weightmap_properties(ui, node_id, &node_params);
+                } else if node_type == NodeType::ColorRamp {
+                    ui.separator();
+                    self.draw_color_ramp_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.

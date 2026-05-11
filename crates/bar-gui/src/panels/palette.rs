@@ -61,6 +61,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 
     // Height-to-color and paint-style outputs.
     let colorizers = [
+        ("Color Ramp", NodeType::ColorRamp),
         ("Auto Texture", NodeType::AutoTexture),
         ("Rock and Soil", NodeType::RockSoil),
         ("Vegetation", NodeType::Vegetation),
@@ -130,6 +131,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Max", NodeType::Max),
         ("Min", NodeType::Min),
         ("Mask Select", NodeType::MaskSelect),
+        ("Color Ramp", NodeType::ColorRamp),
         ("Auto Texture", NodeType::AutoTexture),
         ("Rock and Soil", NodeType::RockSoil),
         ("Vegetation", NodeType::Vegetation),

@@ -60,6 +60,10 @@ pub enum NodeType {
     /// priority/exclusion system where higher-priority layers claim canvas area
     /// from lower-priority ones. Replaces cascaded TextureOverlay chains.
     TextureWeightmap,
+    /// Maps heightmap values through a user-defined color gradient. Up to 8
+    /// color stops, each with a position [0,1] and an RRGGBB color. Outputs a
+    /// full-resolution Color buffer; the mask input controls per-pixel alpha.
+    ColorRamp,
 
     // Map layers
     NormalMap,
@@ -428,6 +432,13 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("texture_1", "Texture 1", PortKind::Color),
             ],
             vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::ColorRamp => (
+            vec![
+                Port::new("input", "Heightmap", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Color", PortKind::Color)],
         ),
 
         // Map layer generators
