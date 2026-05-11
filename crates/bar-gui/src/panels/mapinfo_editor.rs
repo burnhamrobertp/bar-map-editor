@@ -292,6 +292,10 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let dim_finding_min = findings_index.field("dimensions", "min_height");
                         let dim_finding_max = findings_index.field("dimensions", "max_height");
                         {
+                            // Map sizes are expressed in "BAR squares" (N)
+                            // where pixel_dim = N * 64 + 1. The community
+                            // calls these "8x8", "12x8", etc.; each square
+                            // is 512 elmos so an 8x8 map is 4096x4096 elmos.
                             let (w, h) = app.map_dimensions_mut();
                             outline_finding(ui, dim_finding_w, |ui| {
                                 ui.horizontal(|ui| {
@@ -299,16 +303,22 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            let mut wv = *w as i32;
+                                            let elmos = (*w).saturating_sub(1) as u64 * 512;
+                                            ui.label(
+                                                egui::RichText::new(format!("{elmos} elmos"))
+                                                    .weak()
+                                                    .small(),
+                                            );
+                                            let mut wv = (*w).saturating_sub(1) / 64;
                                             if ui
                                                 .add(
                                                     egui::DragValue::new(&mut wv)
-                                                        .range(64..=16384)
-                                                        .speed(64.0),
+                                                        .range(1u32..=512u32)
+                                                        .speed(1.0),
                                                 )
                                                 .changed()
                                             {
-                                                *w = wv as u32;
+                                                *w = wv.max(1) * 64 + 1;
                                                 dirty = true;
                                             }
                                         },
@@ -321,16 +331,22 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                     ui.with_layout(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
-                                            let mut hv = *h as i32;
+                                            let elmos = (*h).saturating_sub(1) as u64 * 512;
+                                            ui.label(
+                                                egui::RichText::new(format!("{elmos} elmos"))
+                                                    .weak()
+                                                    .small(),
+                                            );
+                                            let mut hv = (*h).saturating_sub(1) / 64;
                                             if ui
                                                 .add(
                                                     egui::DragValue::new(&mut hv)
-                                                        .range(64..=16384)
-                                                        .speed(64.0),
+                                                        .range(1u32..=512u32)
+                                                        .speed(1.0),
                                                 )
                                                 .changed()
                                             {
-                                                *h = hv as u32;
+                                                *h = hv.max(1) * 64 + 1;
                                                 dirty = true;
                                             }
                                         },

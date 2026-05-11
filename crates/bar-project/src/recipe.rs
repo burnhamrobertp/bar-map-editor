@@ -278,8 +278,9 @@ impl Default for MapSettings {
 impl Default for OutputConfig {
     fn default() -> Self {
         Self {
-            width: 257,
-            height: 257,
+            // 8x8 BAR squares: (8 * 64 + 1) = 513 px, 4096 x 4096 elmos.
+            width: 513,
+            height: 513,
             map_settings: MapSettings::default(),
         }
     }
