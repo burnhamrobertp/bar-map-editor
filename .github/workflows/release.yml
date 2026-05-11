@@ -118,6 +118,10 @@ jobs:
           dpkg-deb --build "$DEB_DIR" "bar-editor_${VERSION}_amd64.deb"
 
       # --- Windows: NSIS installer + portable zip ---
+      - name: Install NSIS (Windows)
+        if: runner.os == 'Windows'
+        run: choco install nsis --no-progress -y
+
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
