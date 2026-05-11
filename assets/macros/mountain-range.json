@@ -48,6 +48,12 @@
       "params": {}
     },
     {
+      "key": "auto_tex",
+      "type": "AutoTexture",
+      "label": "Auto Texture",
+      "params": { "biome": { "String": "mountainous" } }
+    },
+    {
       "key": "rock_soil",
       "type": "RockSoil",
       "label": "Rock and Soil",
@@ -73,9 +79,18 @@
       }
     },
     {
-      "key": "composite",
+      "key": "rock_comp",
       "type": "TextureOverlay",
-      "label": "Composite",
+      "label": "Rock Detail",
+      "params": {
+        "blend_mode": { "String": "over" },
+        "opacity": { "Float": 1.0 }
+      }
+    },
+    {
+      "key": "veg_comp",
+      "type": "TextureOverlay",
+      "label": "Vegetation Detail",
       "params": {
         "blend_mode": { "String": "over" },
         "opacity": { "Float": 1.0 }
@@ -87,12 +102,16 @@
     { "from": "ridges.output",    "to": "erosion.input" },
     { "from": "erosion.output",   "to": "smooth.input" },
     { "from": "smooth.output",    "to": "slope_map.input" },
+    { "from": "smooth.output",    "to": "auto_tex.input" },
+    { "from": "slope_map.output", "to": "auto_tex.slope" },
     { "from": "smooth.output",    "to": "rock_soil.input" },
     { "from": "slope_map.output", "to": "rock_soil.slope" },
     { "from": "smooth.output",    "to": "veg.input" },
     { "from": "slope_map.output", "to": "veg.slope" },
-    { "from": "rock_soil.output", "to": "composite.base" },
-    { "from": "veg.output",       "to": "composite.overlay" }
+    { "from": "auto_tex.output",  "to": "rock_comp.base" },
+    { "from": "rock_soil.output", "to": "rock_comp.overlay" },
+    { "from": "rock_comp.output", "to": "veg_comp.base" },
+    { "from": "veg.output",       "to": "veg_comp.overlay" }
   ],
   "subgraph": {
     "label": "Mountain Range",
@@ -101,7 +120,7 @@
     "inputs": [],
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
-      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "composite:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "veg_comp:output" },
       { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },
