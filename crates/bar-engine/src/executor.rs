@@ -1763,6 +1763,7 @@ fn generate_auto_texture(
     let slope_power = get_float(params, "slope_power", 0.7).max(0.01);
     let slope_blend_scale = get_float(params, "slope_blend", 1.0).clamp(0.0, 1.0);
     let ao_strength = get_float(params, "ao_strength", 1.0).clamp(0.0, 1.0);
+    let detail_strength = get_float(params, "detail_strength", 0.15).clamp(0.0, 1.0);
     let rock_hex = get_string(params, "rock_color", "736B61");
     let rock_rgb = parse_hex_color_srgb(rock_hex).unwrap_or([0.45, 0.42, 0.38]);
     let biome = get_string(params, "biome", "temperate");
@@ -1788,7 +1789,21 @@ fn generate_auto_texture(
             let ao_raw = compute_local_ao(heightmap, x, y);
             let ao = 1.0 - (1.0 - ao_raw) * ao_strength;
 
-            color.set(x, y, [r * ao, g * ao, b * ao, 1.0]);
+            // FBM micro-detail grain: same pattern as RockSoil/Vegetation.
+            let ux = x as f32 / w as f32;
+            let uy = y as f32 / h as f32;
+            let detail = 1.0 + detail_strength * (micro_fbm(ux, uy, 8.0) * 2.0 - 1.0);
+
+            color.set(
+                x,
+                y,
+                [
+                    (r * ao * detail).clamp(0.0, 1.0),
+                    (g * ao * detail).clamp(0.0, 1.0),
+                    (b * ao * detail).clamp(0.0, 1.0),
+                    1.0,
+                ],
+            );
         }
     }
 

@@ -111,6 +111,9 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // Strength of the local-variation ambient occlusion
             // darkening. 0 disables AO; 1.0 keeps the full effect.
             ("ao_strength", ParamValue::Float(1.0)),
+            // Amplitude of the FBM micro-detail grain applied on top of the
+            // biome gradient. 0 = flat gradient, 0.15 = subtle variation.
+            ("detail_strength", ParamValue::Float(0.15)),
         ],
         NodeType::RockSoil => vec![
             ("rock_color", ParamValue::String("807870".to_string())),
@@ -614,7 +617,9 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (AutoTexture, "beach_width") => (0.0, 0.3),
         (AutoTexture, "snow_height") => (0.5, 1.0),
         (AutoTexture, "slope_power") => (0.0, 4.0),
-        (AutoTexture, "slope_blend") | (AutoTexture, "ao_strength") => (0.0, 1.0),
+        (AutoTexture, "slope_blend")
+        | (AutoTexture, "ao_strength")
+        | (AutoTexture, "detail_strength") => (0.0, 1.0),
         (RockSoil, "slope_threshold")
         | (RockSoil, "slope_blend")
         | (RockSoil, "ao_strength")
