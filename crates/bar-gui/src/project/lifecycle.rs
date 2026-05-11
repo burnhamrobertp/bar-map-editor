@@ -8,7 +8,7 @@
 //! blank slate. Adding a new per-project field anywhere in
 //! `BarEditorApp` should come with a matching reset here.
 
-use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue};
+use bar_graph::{GraphEngine, Node, NodeId, NodeType};
 use eframe::egui;
 
 use crate::app::{BarEditorApp, CanvasView, PendingAction, RecipeMeta};
@@ -778,7 +778,9 @@ impl BarEditorApp {
         // heightmap input, the first Color port goes to texture,
         // etc. Subsequent ports of the same kind are skipped --
         // there's only one Bundler.heightmap to fill.
-        let outputs: Vec<(String, NodeId, String)> = self
+        // Collect subgraph outputs with their name so we can distinguish
+        // "terrain" from "slope" (both are Heightmap kind).
+        let outputs: Vec<(String, String, NodeId, String)> = self
             .visuals
             .groups
             .get(&new_gid)
@@ -787,23 +789,29 @@ impl BarEditorApp {
                     .iter()
                     .filter_map(|p| {
                         let (id, port) = p.binding.clone()?;
-                        Some((p.kind.clone(), id, port))
+                        Some((p.name.clone(), p.kind.clone(), id, port))
                     })
                     .collect()
             })
             .unwrap_or_default();
         let mut routed: std::collections::HashSet<&'static str> = std::collections::HashSet::new();
         let mut heightmap_src: Option<(NodeId, String)> = None;
-        for (kind, src_id, src_port) in outputs {
-            // Map port kind -> bundler/preview input port name.
-            // Only the kinds the Bundler actually consumes get a
-            // mapping; macros emitting Mask/Scalar are dropped.
+        let mut slope_src: Option<(NodeId, String)> = None;
+        for (name, kind, src_id, src_port) in outputs {
             let port_name: Option<&'static str> = match kind.as_str() {
                 "Heightmap" => Some("heightmap"),
                 "Color" => Some("texture"),
                 _ => None,
             };
             let Some(port_name) = port_name else { continue };
+
+            // Slope is a second Heightmap output that doesn't map to any
+            // Bundler input. Capture it for use by SpecularMap/GrassMap.
+            if port_name == "heightmap" && name == "slope" {
+                slope_src = Some((src_id, src_port));
+                continue;
+            }
+
             if !routed.insert(port_name) {
                 continue;
             }
@@ -820,9 +828,6 @@ impl BarEditorApp {
                     port_name: port_name.to_string(),
                 },
             );
-            // The Preview accepts heightmap + texture; the other
-            // bundler ports (normal_map, specular_map, metalmap,
-            // typemap) don't show up in the viewport.
             if matches!(port_name, "heightmap" | "texture") {
                 let _ = self.graph.connect(
                     PortId {
@@ -838,18 +843,17 @@ impl BarEditorApp {
         }
 
         // Auto-fill the rest of the Bundler's inputs so the preset
-        // exports a complete bundle out of the box. NormalMap and
-        // SpecularMap nodes derive their outputs from the macro's
-        // heightmap; metal/type/grass get a Constant(0) source so
-        // the Bundler sees a wired input it can read at export
-        // time. The user is free to swap any of these out later.
+        // exports a complete bundle out of the box. NormalMap, SpecularMap,
+        // and GrassMap derive from the macro's terrain/slope outputs.
+        // Metal and type get Constant(0) -- those are project-specific data
+        // the user replaces manually. The user is free to swap any node out.
         let aux_x = bundler_pos.x - 220.0;
         let mut aux_y = bundler_pos.y;
         let aux_step = 70.0_f32;
         let aux_size = egui::vec2(150.0, 80.0);
 
         if let Some((hm_id, hm_port)) = heightmap_src {
-            // NormalMap → Bundler.normalmap (+ Preview.normal_map).
+            // NormalMap → Bundler.normalmap
             let nm = Node::new(NodeId(0), NodeType::NormalMap, "Normal Map");
             let nm_id = self.graph.add_node(nm);
             self.visuals.node_visuals.insert(
@@ -881,7 +885,7 @@ impl BarEditorApp {
             );
             aux_y += aux_step;
 
-            // SpecularMap -> Bundler.specularmap.
+            // SpecularMap → Bundler.specular (+ optional slope input)
             let sm = Node::new(NodeId(0), NodeType::SpecularMap, "Specular Map");
             let sm_id = self.graph.add_node(sm);
             self.visuals.node_visuals.insert(
@@ -894,13 +898,25 @@ impl BarEditorApp {
             let _ = self.graph.connect(
                 PortId {
                     node_id: hm_id,
-                    port_name: hm_port,
+                    port_name: hm_port.clone(),
                 },
                 PortId {
                     node_id: sm_id,
                     port_name: "input".into(),
                 },
             );
+            if let Some((s_id, ref s_port)) = slope_src {
+                let _ = self.graph.connect(
+                    PortId {
+                        node_id: s_id,
+                        port_name: s_port.clone(),
+                    },
+                    PortId {
+                        node_id: sm_id,
+                        port_name: "slope".into(),
+                    },
+                );
+            }
             let _ = self.graph.connect(
                 PortId {
                     node_id: sm_id,
@@ -908,23 +924,61 @@ impl BarEditorApp {
                 },
                 PortId {
                     node_id: bundler_id,
-                    port_name: "specularmap".into(),
+                    port_name: "specular".into(),
+                },
+            );
+            aux_y += aux_step;
+
+            // GrassMap → Bundler.grassmap (+ optional slope input)
+            let gm = Node::new(NodeId(0), NodeType::GrassMap, "Grass Map");
+            let gm_id = self.graph.add_node(gm);
+            self.visuals.node_visuals.insert(
+                gm_id,
+                NodeVisual {
+                    position: egui::pos2(aux_x, aux_y),
+                    size: aux_size,
+                },
+            );
+            let _ = self.graph.connect(
+                PortId {
+                    node_id: hm_id,
+                    port_name: hm_port,
+                },
+                PortId {
+                    node_id: gm_id,
+                    port_name: "input".into(),
+                },
+            );
+            if let Some((s_id, ref s_port)) = slope_src {
+                let _ = self.graph.connect(
+                    PortId {
+                        node_id: s_id,
+                        port_name: s_port.clone(),
+                    },
+                    PortId {
+                        node_id: gm_id,
+                        port_name: "slope".into(),
+                    },
+                );
+            }
+            let _ = self.graph.connect(
+                PortId {
+                    node_id: gm_id,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: bundler_id,
+                    port_name: "grassmap".into(),
                 },
             );
             aux_y += aux_step;
         }
 
-        // Any constants fall to the right of the bundler so the
-        // user sees them as Bundler inputs by hovering over the
-        // Bundler.
-        for (port, label) in [
-            ("metalmap", "Metal 0"),
-            ("typemap", "Type 0"),
-            ("grassmap", "Grass 0"),
-        ] {
-            let mut node = Node::new(NodeId(0), NodeType::Constant, label);
-            node.params
-                .insert("value".to_string(), ParamValue::Float(0.0));
+        // PaintedHeightmap for metal and type -- starts blank (all
+        // zeros) but the map-maker can open either canvas and paint
+        // ore spots or terrain-type zones directly.
+        for (port, label) in [("metalmap", "Metal Map"), ("typemap", "Type Map")] {
+            let node = Node::new(NodeId(0), NodeType::PaintedHeightmap, label);
             let nid = self.graph.add_node(node);
             self.visuals.node_visuals.insert(
                 nid,
@@ -936,7 +990,7 @@ impl BarEditorApp {
             let _ = self.graph.connect(
                 PortId {
                     node_id: nid,
-                    port_name: "value".into(),
+                    port_name: "output".into(),
                 },
                 PortId {
                     node_id: bundler_id,
