@@ -1247,8 +1247,46 @@ fn biome_gradient(name: &str) -> BiomeGradient {
     }
 }
 
-/// Slope-driven two-tone colorizer. Soil on flat terrain, rock on steep.
-/// Smoothstep transition across [slope_threshold, slope_threshold + slope_blend].
+fn detail_hash(ix: i32, iy: i32) -> f32 {
+    let h = ix
+        .wrapping_mul(374761393i32)
+        .wrapping_add(iy.wrapping_mul(668265263i32));
+    let h = (h ^ (h >> 13)).wrapping_mul(1274126177i32);
+    let h = h ^ (h >> 16);
+    (h as u32) as f32 / u32::MAX as f32
+}
+
+fn detail_value_noise(fx: f32, fy: f32) -> f32 {
+    let ix = fx.floor() as i32;
+    let iy = fy.floor() as i32;
+    let tx = fx - ix as f32;
+    let ty = fy - iy as f32;
+    let sx = tx * tx * (3.0 - 2.0 * tx);
+    let sy = ty * ty * (3.0 - 2.0 * ty);
+    let a = detail_hash(ix, iy) + sx * (detail_hash(ix + 1, iy) - detail_hash(ix, iy));
+    let b = detail_hash(ix, iy + 1)
+        + sx * (detail_hash(ix + 1, iy + 1) - detail_hash(ix, iy + 1));
+    a + sy * (b - a)
+}
+
+/// 4-octave value-noise FBM over UV space. Returns [0, 1].
+fn micro_fbm(ux: f32, uy: f32, base_freq: f32) -> f32 {
+    let mut val = 0.0f32;
+    let mut amp = 0.5f32;
+    let mut freq = base_freq;
+    let mut norm = 0.0f32;
+    for _ in 0..4 {
+        val += detail_value_noise(ux * freq, uy * freq) * amp;
+        norm += amp;
+        amp *= 0.5;
+        freq *= 2.0;
+    }
+    val / norm
+}
+
+/// Slope-driven rock overlay. Alpha encodes rock coverage so this composites
+/// only over steep terrain when layered on top of a base texture (e.g. AutoTexture).
+/// detail_strength breaks up the flat color with FBM micro-variation.
 fn generate_rock_soil(
     heightmap: &Heightmap,
     slope_input: Option<&Heightmap>,
@@ -1265,6 +1303,7 @@ fn generate_rock_soil(
     let threshold = get_float(params, "slope_threshold", 0.4).clamp(0.0, 1.0);
     let blend = get_float(params, "slope_blend", 0.3).max(0.001);
     let ao_strength = get_float(params, "ao_strength", 0.8).clamp(0.0, 1.0);
+    let detail_strength = get_float(params, "detail_strength", 0.25).clamp(0.0, 1.0);
 
     let computed_slope = slope_input
         .is_none()
@@ -1275,23 +1314,32 @@ fn generate_rock_soil(
         for x in 0..w {
             let s = slope_map.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
             let t = ((s - threshold) / blend).clamp(0.0, 1.0);
-            // smoothstep
             let rock_w = t * t * (3.0 - 2.0 * t);
             let ao = {
                 let raw = compute_local_ao(heightmap, x, y);
                 1.0 - ao_strength * (1.0 - raw)
             };
-            let r = (soil_rgb[0] + rock_w * (rock_rgb[0] - soil_rgb[0])) * ao;
-            let g = (soil_rgb[1] + rock_w * (rock_rgb[1] - soil_rgb[1])) * ao;
-            let b = (soil_rgb[2] + rock_w * (rock_rgb[2] - soil_rgb[2])) * ao;
-            color.set(x, y, [r, g, b, 1.0]);
+            let ux = x as f32 / w as f32;
+            let uy = y as f32 / h as f32;
+            let noise = micro_fbm(ux, uy, 8.0);
+            let detail = 1.0 + detail_strength * (noise * 2.0 - 1.0);
+            let base_r = soil_rgb[0] + rock_w * (rock_rgb[0] - soil_rgb[0]);
+            let base_g = soil_rgb[1] + rock_w * (rock_rgb[1] - soil_rgb[1]);
+            let base_b = soil_rgb[2] + rock_w * (rock_rgb[2] - soil_rgb[2]);
+            color.set(x, y, [
+                (base_r * ao * detail).clamp(0.0, 1.0),
+                (base_g * ao * detail).clamp(0.0, 1.0),
+                (base_b * ao * detail).clamp(0.0, 1.0),
+                rock_w, // alpha = rock coverage; transparent on flat terrain
+            ]);
         }
     }
     color
 }
 
-/// Altitude+slope colorizer with alpha-encoded vegetation coverage.
-/// Green below altitude_max + slope_cutoff; fades to dry/bare above either.
+/// Altitude+slope vegetation overlay. Alpha encodes coverage so this composites
+/// only over gentle low terrain when layered on top of a base texture.
+/// detail_strength breaks up the flat green with FBM micro-variation.
 fn generate_vegetation(
     heightmap: &Heightmap,
     slope_input: Option<&Heightmap>,
@@ -1309,6 +1357,7 @@ fn generate_vegetation(
     let slope_cutoff = get_float(params, "slope_cutoff", 0.5).clamp(0.0, 1.0);
     let slope_blend = get_float(params, "slope_blend", 0.2).max(0.001);
     let ao_strength = get_float(params, "ao_strength", 0.6).clamp(0.0, 1.0);
+    let detail_strength = get_float(params, "detail_strength", 0.2).clamp(0.0, 1.0);
 
     let computed_slope = slope_input
         .is_none()
@@ -1321,11 +1370,9 @@ fn generate_vegetation(
             let elev = heightmap.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
             let s = slope_map.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
 
-            // alt_factor: 1.0 below altitude_max, fades to 0 over ALT_BLEND band above
             let alt_t = ((elev - altitude_max) / ALT_BLEND).clamp(0.0, 1.0);
             let alt_factor = 1.0 - alt_t * alt_t * (3.0 - 2.0 * alt_t);
 
-            // slope_factor: 1.0 below slope_cutoff, fades to 0 over slope_blend above
             let slp_t = ((s - slope_cutoff) / slope_blend).clamp(0.0, 1.0);
             let slope_factor = 1.0 - slp_t * slp_t * (3.0 - 2.0 * slp_t);
 
@@ -1334,10 +1381,20 @@ fn generate_vegetation(
                 let raw = compute_local_ao(heightmap, x, y);
                 1.0 - ao_strength * (1.0 - raw)
             };
-            let r = (dry_rgb[0] + veg_weight * (veg_rgb[0] - dry_rgb[0])) * ao;
-            let g = (dry_rgb[1] + veg_weight * (veg_rgb[1] - dry_rgb[1])) * ao;
-            let b = (dry_rgb[2] + veg_weight * (veg_rgb[2] - dry_rgb[2])) * ao;
-            color.set(x, y, [r, g, b, veg_weight]);
+            let ux = x as f32 / w as f32;
+            let uy = y as f32 / h as f32;
+            // Slightly higher frequency than rock detail for finer vegetation texture.
+            let noise = micro_fbm(ux, uy, 12.0);
+            let detail = 1.0 + detail_strength * (noise * 2.0 - 1.0);
+            let base_r = dry_rgb[0] + veg_weight * (veg_rgb[0] - dry_rgb[0]);
+            let base_g = dry_rgb[1] + veg_weight * (veg_rgb[1] - dry_rgb[1]);
+            let base_b = dry_rgb[2] + veg_weight * (veg_rgb[2] - dry_rgb[2]);
+            color.set(x, y, [
+                (base_r * ao * detail).clamp(0.0, 1.0),
+                (base_g * ao * detail).clamp(0.0, 1.0),
+                (base_b * ao * detail).clamp(0.0, 1.0),
+                veg_weight,
+            ]);
         }
     }
     color

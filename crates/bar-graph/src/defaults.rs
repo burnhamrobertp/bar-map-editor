@@ -109,6 +109,7 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("slope_threshold", ParamValue::Float(0.4)),
             ("slope_blend", ParamValue::Float(0.3)),
             ("ao_strength", ParamValue::Float(0.8)),
+            ("detail_strength", ParamValue::Float(0.25)),
         ],
         NodeType::Vegetation => vec![
             ("vegetation_color", ParamValue::String("4A7020".to_string())),
@@ -117,6 +118,7 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("slope_cutoff", ParamValue::Float(0.5)),
             ("slope_blend", ParamValue::Float(0.2)),
             ("ao_strength", ParamValue::Float(0.6)),
+            ("detail_strength", ParamValue::Float(0.2)),
         ],
         NodeType::TextureOverlay => vec![
             ("blend_mode", ParamValue::String("over".to_string())),
