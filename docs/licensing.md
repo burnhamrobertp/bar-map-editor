@@ -41,52 +41,40 @@ In practice this means:
 
 ## Project license
 
-BAR map editor is licensed **MIT/Apache-2.0** today. Both are
-GPL-compatible: code under either license can be combined into a
-GPL-licensed binary. This means **the application as a whole, when
-linked with GPL-licensed Recoil ports, is distributed under GPL v3
-terms** — even if the individual non-port crates retain their MIT/
-Apache headers.
+BAR map editor is licensed **GPL-2.0-or-later**, matching the upstream
+Recoil license. This means:
 
-Practical consequences:
-
-- The compiled `bar-app` binary is GPL v3.
+- All workspace crates are GPL-2.0-or-later. There is no dual-license
+  boundary to manage.
+- The compiled `bar-app` binary is GPL-2.0-or-later.
 - Anyone redistributing the binary must offer source for the whole
-  combined work (which is fine — we're already open source).
-- Individual non-port crates (`bar-graph`, `bar-data`, etc.) remain
-  dual-licensed; downstream projects that consume *only* those
-  crates as a library — without the Recoil ports — get them under
-  the original dual-license terms.
+  combined work (which is fine -- we're already open source).
 
 ## Isolation discipline
 
-To keep the GPL boundary explicit we follow these rules:
+Since the whole project is GPL, there is no license boundary to enforce
+between ported and original code. The discipline is purely about
+attribution and traceability:
 
 1. **Vendored upstream sources live in `vendor/recoil/`** and are
    never edited in place. They carry the upstream license headers
-   they came with (or none, when upstream supplies none — the
+   they came with (or none, when upstream supplies none -- the
    project-level `LICENSE` covers them by inclusion).
 2. **WGSL ports of Recoil shaders live in `shaders/recoil/`** (to
    be created as M2 lands). Every port file starts with an SPDX
    header:
 
    ```glsl
-   // SPDX-License-Identifier: GPL-3.0-or-later
+   // SPDX-License-Identifier: GPL-2.0-or-later
    // Ported from Recoil's <FileName>.glsl. Upstream commit
    // <hash> at vendor/recoil/UPSTREAM.md.
    ```
 3. **Rust ports of Recoil algorithms** (if any) live in a dedicated
-   crate (`bar-recoil-port` — to be created when needed) that itself
-   carries a `LICENSE` of GPL-3.0-or-later. The crate does *not*
-   carry the workspace's MIT/Apache dual-license headers.
-4. **Other crates** keep their MIT/Apache headers. They depend on
-   `bar-recoil-port` like any other crate; the GPL terms propagate at
-   link time, not file-by-file.
-5. **Public API**: nothing in the GPL crates is re-exported from the
-   non-GPL crates. A consumer that wants the procedural-only path
-   (no engine fidelity, no Recoil ports) can opt out at build time
-   via a feature flag (deferred design — the v0.2 binary always
-   includes the ports).
+   crate (`bar-recoil-port` -- to be created when needed) for
+   discoverability. It carries the same GPL-2.0-or-later workspace
+   license as every other crate.
+4. **All crates** use the workspace `LICENSE` (GPL-2.0-or-later). No
+   crate carries a separate MIT/Apache header.
 
 ## What we **don't** do
 
@@ -103,15 +91,7 @@ To keep the GPL boundary explicit we follow these rules:
 Every release ships the contents of `vendor/recoil/LICENSE`,
 `vendor/recoil/AUTHORS`, and a short note in the application About
 dialog: "BAR map editor includes shaders ported from the Recoil engine
-(github.com/beyond-all-reason/RecoilEngine), used under GPL v3."
+(github.com/beyond-all-reason/RecoilEngine), used under GPL v2 or later."
 That note is added when M2 lands; it doesn't apply yet because no
 ports exist in the current tree.
 
-## Open question (deferred)
-
-If a downstream user wants to consume `bar-graph` / `bar-data` as a
-library *without* GPL contamination, the cleanest path is a
-build-time `--features no-recoil-ports` switch on `bar-app` that
-removes the GPL crates from the dependency tree. We don't ship that
-flag yet because there's no concrete demand. Listed here so it's not
-forgotten.

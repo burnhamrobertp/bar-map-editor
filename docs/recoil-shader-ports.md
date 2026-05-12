@@ -113,7 +113,7 @@ and replaced with an intentionally original PBR water shader at
 complicate the project's licensing; the original shader targets the same
 BAR-website visual aesthetic without the GPL entanglement.
 
-- Shader: `shaders/water.wgsl` (MIT / Apache-2.0, original)
+- Shader: `shaders/water.wgsl`
 - Entry point called via `shade_water()` from `terrain.wgsl`
 - Extra bind group: Group 3 (`water_normal_tex` / `water_normal_sam`).
   Normal map is a procedurally generated 128x128 texture; no vendored asset
