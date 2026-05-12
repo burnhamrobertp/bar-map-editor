@@ -260,5 +260,11 @@ mod tests {
         NodeType::FlowSelect,
         NodeType::SelectConvexity,
         NodeType::LayoutGenerator,
+        NodeType::Transform,
+        NodeType::Warp,
+        NodeType::Stratify,
+        NodeType::MaskExpand,
+        NodeType::MaskShrink,
+        NodeType::SelectAspect,
     ];
 }

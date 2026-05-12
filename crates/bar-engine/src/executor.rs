@@ -649,6 +649,62 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
+            NodeType::Transform => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let mask = get_optional_heightmap(inputs, "mask");
+                let tx = get_float(params, "translate_x", 0.0);
+                let ty = get_float(params, "translate_y", 0.0);
+                let scale = get_float(params, "scale", 1.0).max(1e-4);
+                let angle = get_float(params, "angle", 0.0);
+                let hm = apply_transform(&input, tx, ty, scale, angle);
+                let hm = apply_modulation(&input, hm, None, mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::Warp => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let warp_x = get_optional_heightmap(inputs, "warp_x");
+                let warp_y = get_optional_heightmap(inputs, "warp_y");
+                let strength = get_float(params, "strength", 0.1);
+                let hm = apply_warp(&input, warp_x.as_ref(), warp_y.as_ref(), strength);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::Stratify => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let mask = get_optional_heightmap(inputs, "mask");
+                let layer_count = get_uint(params, "layer_count", 8).clamp(2, 32);
+                let irregularity = get_float(params, "irregularity", 0.3);
+                let hardness = get_float(params, "hardness", 0.8);
+                let noise_scale = get_float(params, "noise_scale", 0.05);
+                let hm = apply_stratify(&input, layer_count, irregularity, hardness, noise_scale);
+                let hm = apply_modulation(&input, hm, None, mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::MaskExpand => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let radius = get_float(params, "radius", 4.0).max(0.5);
+                let hm = apply_morphology(&input, radius, true);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::MaskShrink => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let radius = get_float(params, "radius", 4.0).max(0.5);
+                let hm = apply_morphology(&input, radius, false);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::SelectAspect => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let direction = get_float(params, "direction", 0.0);
+                let width = get_float(params, "width", 90.0);
+                let falloff = get_float(params, "falloff", 30.0).max(1e-4);
+                let hm = apply_select_aspect(&input, direction, width, falloff);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
             // --- Additional Combiners ---
             NodeType::MaskSelect => {
                 let a = get_input_heightmap(inputs, "a")?;
@@ -2742,6 +2798,233 @@ fn apply_layout_generator(
     Heightmap::frbar_data(width, height, data).unwrap()
 }
 
+/// Bilinear sample with clamp-to-edge.
+fn bilinear_sample(data: &[f32], w: usize, h: usize, x: f32, y: f32) -> f32 {
+    let x0 = (x.floor() as i32).clamp(0, w as i32 - 1) as usize;
+    let y0 = (y.floor() as i32).clamp(0, h as i32 - 1) as usize;
+    let x1 = (x0 + 1).min(w - 1);
+    let y1 = (y0 + 1).min(h - 1);
+    let fx = (x - x.floor()).clamp(0.0, 1.0);
+    let fy = (y - y.floor()).clamp(0.0, 1.0);
+    let v00 = data[y0 * w + x0];
+    let v10 = data[y0 * w + x1];
+    let v01 = data[y1 * w + x0];
+    let v11 = data[y1 * w + x1];
+    let v0 = v00 + (v10 - v00) * fx;
+    let v1 = v01 + (v11 - v01) * fx;
+    v0 + (v1 - v0) * fy
+}
+
+/// Translate, scale, rotate a heightmap via inverse-mapped bilinear sampling.
+fn apply_transform(input: &Heightmap, tx: f32, ty: f32, scale: f32, angle_deg: f32) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let angle_rad = angle_deg * PI / 180.0;
+    let cos_a = angle_rad.cos();
+    let sin_a = angle_rad.sin();
+    let inv_scale = 1.0 / scale;
+    let data_in = input.data();
+
+    let data: Vec<f32> = (0..h)
+        .flat_map(|py| {
+            (0..w).map(move |px| {
+                // Normalize output pixel to [-0.5, 0.5].
+                let nx = px as f32 / w as f32 - 0.5;
+                let ny = py as f32 / h as f32 - 0.5;
+                // Inverse transform: undo translate, undo rotate, undo scale.
+                let ux = nx - tx;
+                let uy = ny - ty;
+                let rx = (ux * cos_a + uy * sin_a) * inv_scale;
+                let ry = (-ux * sin_a + uy * cos_a) * inv_scale;
+                // Map back to pixel space.
+                let sx = (rx + 0.5) * w as f32;
+                let sy = (ry + 0.5) * h as f32;
+                if sx < 0.0 || sy < 0.0 || sx > w as f32 || sy > h as f32 {
+                    return 0.0;
+                }
+                bilinear_sample(data_in, w, h, sx, sy)
+            })
+        })
+        .collect();
+    Heightmap::frbar_data(w as u32, h as u32, data).unwrap()
+}
+
+/// Domain warp using separate X and Y displacement maps.
+/// Each warp map is treated as a signed offset: 0.5 = no displacement.
+fn apply_warp(
+    input: &Heightmap,
+    warp_x: Option<&Heightmap>,
+    warp_y: Option<&Heightmap>,
+    strength: f32,
+) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let data_in = input.data();
+
+    let data: Vec<f32> = (0..h)
+        .flat_map(|py| {
+            (0..w).map(move |px| {
+                let dx = warp_x
+                    .and_then(|m| m.get(px as u32, py as u32))
+                    .unwrap_or(0.5)
+                    - 0.5;
+                let dy = warp_y
+                    .and_then(|m| m.get(px as u32, py as u32))
+                    .unwrap_or(0.5)
+                    - 0.5;
+                let sx = px as f32 + dx * strength * w as f32;
+                let sy = py as f32 + dy * strength * h as f32;
+                bilinear_sample(data_in, w, h, sx, sy)
+            })
+        })
+        .collect();
+    Heightmap::frbar_data(w as u32, h as u32, data).unwrap()
+}
+
+/// Simple 2D value noise in [0, 1].
+fn strat_hash(x: i32, y: i32) -> f32 {
+    let n = x
+        .wrapping_mul(1619)
+        .wrapping_add(y.wrapping_mul(31337))
+        .wrapping_mul(6364136)
+        ^ 0x5851f42d_u32 as i32;
+    let n = n ^ (n >> 13);
+    let n = n.wrapping_mul(n.wrapping_add(15731)).wrapping_add(789221) ^ 1376312589;
+    ((n as u32) as f32) / u32::MAX as f32
+}
+
+fn value_noise_2d(x: f32, y: f32) -> f32 {
+    let xi = x.floor() as i32;
+    let yi = y.floor() as i32;
+    let xf = x - x.floor();
+    let yf = y - y.floor();
+    let ux = xf * xf * (3.0 - 2.0 * xf);
+    let uy = yf * yf * (3.0 - 2.0 * yf);
+    let v00 = strat_hash(xi, yi);
+    let v10 = strat_hash(xi + 1, yi);
+    let v01 = strat_hash(xi, yi + 1);
+    let v11 = strat_hash(xi + 1, yi + 1);
+    let v0 = v00 + (v10 - v00) * ux;
+    let v1 = v01 + (v11 - v01) * ux;
+    v0 + (v1 - v0) * uy
+}
+
+/// Procedural horizontal rock strata.
+fn apply_stratify(
+    input: &Heightmap,
+    layer_count: u32,
+    irregularity: f32,
+    hardness: f32,
+    noise_scale: f32,
+) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let n = layer_count as f32;
+
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .enumerate()
+        .map(|(idx, &v)| {
+            let px = (idx % w) as f32;
+            let py = (idx / w) as f32;
+            let perturb = if irregularity > 0.0 {
+                let scale = noise_scale * w as f32;
+                (value_noise_2d(px / scale, py / scale) - 0.5) * irregularity * (1.0 / n)
+            } else {
+                0.0
+            };
+            let vp = (v + perturb).clamp(0.0, 1.0);
+            let band = (vp * n).floor().min(n - 1.0);
+            let band_h = (band + 0.5) / n;
+            v * (1.0 - hardness) + band_h * hardness
+        })
+        .collect();
+    Heightmap::frbar_data(w as u32, h as u32, data).unwrap()
+}
+
+/// Morphological dilation (expand=true) or erosion (expand=false) via
+/// a separable max/min filter. O(w*h*r) rather than O(w*h*r^2).
+fn apply_morphology(input: &Heightmap, radius: f32, expand: bool) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let r = radius.round() as usize;
+    let identity = if expand { 0.0f32 } else { 1.0f32 };
+
+    // Horizontal pass.
+    let mut temp = vec![identity; w * h];
+    let data_in = input.data();
+    for py in 0..h {
+        for px in 0..w {
+            let lo = px.saturating_sub(r);
+            let hi = (px + r).min(w - 1);
+            let mut acc = data_in[py * w + lo];
+            for kx in lo..=hi {
+                let v = data_in[py * w + kx];
+                acc = if expand { acc.max(v) } else { acc.min(v) };
+            }
+            temp[py * w + px] = acc;
+        }
+    }
+
+    // Vertical pass.
+    let mut out = vec![identity; w * h];
+    for py in 0..h {
+        for px in 0..w {
+            let lo = py.saturating_sub(r);
+            let hi = (py + r).min(h - 1);
+            let mut acc = temp[lo * w + px];
+            for ky in lo..=hi {
+                let v = temp[ky * w + px];
+                acc = if expand { acc.max(v) } else { acc.min(v) };
+            }
+            out[py * w + px] = acc;
+        }
+    }
+
+    Heightmap::frbar_data(w as u32, h as u32, out).unwrap()
+}
+
+/// Aspect-direction mask. High where terrain faces `direction` degrees
+/// (0=North/up, 90=East, 180=South, 270=West).
+fn apply_select_aspect(input: &Heightmap, direction: f32, width: f32, falloff: f32) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let data = input.data();
+
+    let out: Vec<f32> = (0..h)
+        .flat_map(|py| {
+            (0..w).map(move |px| {
+                let xm = px.saturating_sub(1);
+                let xp = (px + 1).min(w - 1);
+                let ym = py.saturating_sub(1);
+                let yp = (py + 1).min(h - 1);
+                let dx = (data[py * w + xp] - data[py * w + xm]) / (xp - xm).max(1) as f32;
+                let dy = (data[yp * w + px] - data[ym * w + px]) / (yp - ym).max(1) as f32;
+                if dx * dx + dy * dy < 1e-12 {
+                    return 0.0;
+                }
+                // atan2(dx, -dy): 0=North, 90=East, 180=South, 270=West.
+                let aspect = dx.atan2(-dy).to_degrees().rem_euclid(360.0);
+                let mut diff = (aspect - direction).abs().rem_euclid(360.0);
+                if diff > 180.0 {
+                    diff = 360.0 - diff;
+                }
+                let half = width * 0.5;
+                if diff <= half {
+                    1.0
+                } else if diff <= half + falloff {
+                    let t = (diff - half) / falloff;
+                    1.0 - t * t * (3.0 - 2.0 * t)
+                } else {
+                    0.0
+                }
+            })
+        })
+        .collect();
+    Heightmap::frbar_data(w as u32, h as u32, out).unwrap()
+}
+
 fn get_float_k(params: &HashMap<String, ParamValue>, key: &str, default: f32) -> f32 {
     match params.get(key) {
         Some(ParamValue::Float(v)) => *v,
@@ -3148,5 +3431,387 @@ mod tests {
                 "blend with mask=0 should keep `a`, got {v}"
             );
         }
+    }
+
+    // ── Tier-1 node executor tests ────────────────────────────────────────────
+
+    #[test]
+    fn hydraulic_erosion_emits_four_output_ports() {
+        let executor = CpuExecutor;
+        let data: Vec<f32> = (0..64 * 64)
+            .map(|i| {
+                let x = (i % 64) as f32 / 63.0;
+                let y = (i / 64) as f32 / 63.0;
+                ((x - 0.5) * (x - 0.5) + (y - 0.5) * (y - 0.5)).sqrt()
+            })
+            .collect();
+        let hm = Heightmap::frbar_data(64, 64, data).unwrap();
+        let params = HashMap::from([("iterations".to_string(), ParamValue::UInt(2000))]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::HydraulicErosion, &params, &inputs, 64, 64)
+            .unwrap();
+        for port in ["output", "flow", "wear", "deposit"] {
+            let val = result.get(port).expect(port);
+            let PortValue::Heightmap(out) = val else {
+                panic!("{port} should be Heightmap");
+            };
+            for &v in out.data() {
+                assert!((0.0..=1.0).contains(&v), "{port} value {v} out of range");
+            }
+        }
+    }
+
+    #[test]
+    fn flow_select_thresholds_correctly() {
+        let executor = CpuExecutor;
+        // Uniform gradient 0..1 across 8 pixels.
+        let data: Vec<f32> = (0..8).map(|i| i as f32 / 7.0).collect();
+        let hm = Heightmap::frbar_data(8, 1, data).unwrap();
+        let params = HashMap::from([
+            ("threshold".to_string(), ParamValue::Float(0.5)),
+            ("falloff".to_string(), ParamValue::Float(0.25)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::FlowSelect, &params, &inputs, 8, 1)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // v=0 (well below threshold-falloff=0.25) should produce 0.
+        assert!(
+            out.get(0, 0).unwrap() < 0.01,
+            "pixel 0 should be ~0, got {}",
+            out.get(0, 0).unwrap()
+        );
+        // v=1 (above threshold) should produce 1.
+        assert!(
+            out.get(7, 0).unwrap() > 0.99,
+            "pixel 7 should be ~1, got {}",
+            out.get(7, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn select_convexity_ridges_mode_peaks_high() {
+        let executor = CpuExecutor;
+        // Single spike in centre on a flat background.
+        // The spike pixel itself has a strongly negative Laplacian
+        // (neighbors - 4*center < 0), so "ridges" mode should score it highest.
+        let mut data = vec![0.0f32; 16 * 16];
+        data[8 * 16 + 8] = 1.0;
+        let hm = Heightmap::frbar_data(16, 16, data).unwrap();
+        let params = HashMap::from([
+            ("mode".to_string(), ParamValue::String("ridges".to_string())),
+            ("strength".to_string(), ParamValue::Float(1.0)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::SelectConvexity, &params, &inputs, 16, 16)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // The spike pixel has the most negative Laplacian; ridges mode maps
+        // strongly negative -> high output.
+        let spike = out.get(8, 8).unwrap();
+        assert!(
+            spike > 0.8,
+            "spike should score high in ridges mode, got {spike}"
+        );
+        // Flat background pixel far from spike should be low.
+        let flat = out.get(0, 0).unwrap();
+        assert!(flat < 0.2, "flat area should score low, got {flat}");
+    }
+
+    #[test]
+    fn layout_generator_ellipse_peak_at_centre() {
+        let executor = CpuExecutor;
+        let mut params = HashMap::new();
+        params.insert("shape_count".to_string(), ParamValue::UInt(1));
+        params.insert(
+            "type_0".to_string(),
+            ParamValue::String("ellipse".to_string()),
+        );
+        params.insert("x_0".to_string(), ParamValue::Float(0.5));
+        params.insert("y_0".to_string(), ParamValue::Float(0.5));
+        params.insert("rx_0".to_string(), ParamValue::Float(0.3));
+        params.insert("ry_0".to_string(), ParamValue::Float(0.3));
+        params.insert("angle_0".to_string(), ParamValue::Float(0.0));
+        params.insert("height_0".to_string(), ParamValue::Float(0.8));
+        params.insert("falloff_0".to_string(), ParamValue::Float(0.5));
+        let result = executor
+            .execute(&NodeType::LayoutGenerator, &params, &HashMap::new(), 32, 32)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        let centre = out.get(16, 16).unwrap();
+        let edge = out.get(0, 0).unwrap();
+        assert!(centre > 0.5, "centre should be high, got {centre}");
+        assert!(edge < 0.01, "corner should be near zero, got {edge}");
+    }
+
+    // ── Tier-2 node executor tests ────────────────────────────────────────────
+
+    #[test]
+    fn transform_identity_roundtrips() {
+        let executor = CpuExecutor;
+        let data: Vec<f32> = (0..16).map(|i| i as f32 / 15.0).collect();
+        let hm = Heightmap::frbar_data(4, 4, data).unwrap();
+        let params = HashMap::from([
+            ("translate_x".to_string(), ParamValue::Float(0.0)),
+            ("translate_y".to_string(), ParamValue::Float(0.0)),
+            ("scale".to_string(), ParamValue::Float(1.0)),
+            ("angle".to_string(), ParamValue::Float(0.0)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm.clone()))]);
+        let result = executor
+            .execute(&NodeType::Transform, &params, &inputs, 4, 4)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // Identity transform: output should closely match input.
+        let diff: f32 = hm
+            .data()
+            .iter()
+            .zip(out.data().iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / 16.0;
+        assert!(diff < 0.05, "identity transform mean error = {diff}");
+    }
+
+    #[test]
+    fn transform_180_rotation_flips_values() {
+        let executor = CpuExecutor;
+        // Ramp increasing left-to-right.
+        let data: Vec<f32> = (0..8).map(|i| i as f32 / 7.0).collect();
+        let hm = Heightmap::frbar_data(8, 1, data).unwrap();
+        let params = HashMap::from([
+            ("translate_x".to_string(), ParamValue::Float(0.0)),
+            ("translate_y".to_string(), ParamValue::Float(0.0)),
+            ("scale".to_string(), ParamValue::Float(1.0)),
+            ("angle".to_string(), ParamValue::Float(180.0)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm.clone()))]);
+        let result = executor
+            .execute(&NodeType::Transform, &params, &inputs, 8, 1)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // After 180 rotation left pixel should be high, right pixel low.
+        assert!(
+            out.get(0, 0).unwrap() > out.get(7, 0).unwrap(),
+            "left={} should exceed right={}",
+            out.get(0, 0).unwrap(),
+            out.get(7, 0).unwrap()
+        );
+    }
+
+    #[test]
+    fn warp_no_displacement_is_identity() {
+        let executor = CpuExecutor;
+        let data: Vec<f32> = (0..16).map(|i| i as f32 / 15.0).collect();
+        let hm = Heightmap::frbar_data(4, 4, data).unwrap();
+        // Neutral warp maps: all 0.5 means zero displacement.
+        let neutral = Heightmap::frbar_data(4, 4, vec![0.5; 16]).unwrap();
+        let params = HashMap::from([("strength".to_string(), ParamValue::Float(0.5))]);
+        let inputs = HashMap::from([
+            ("input".to_string(), PortValue::Heightmap(hm.clone())),
+            ("warp_x".to_string(), PortValue::Heightmap(neutral.clone())),
+            ("warp_y".to_string(), PortValue::Heightmap(neutral)),
+        ]);
+        let result = executor
+            .execute(&NodeType::Warp, &params, &inputs, 4, 4)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        let diff: f32 = hm
+            .data()
+            .iter()
+            .zip(out.data().iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum::<f32>()
+            / 16.0;
+        assert!(diff < 0.01, "neutral warp should be identity, diff={diff}");
+    }
+
+    #[test]
+    fn warp_shifts_output() {
+        let executor = CpuExecutor;
+        // Flat 0 on the left half, flat 1 on the right half.
+        let mut data = vec![0.0f32; 8 * 8];
+        for y in 0..8usize {
+            for x in 4..8usize {
+                data[y * 8 + x] = 1.0;
+            }
+        }
+        let hm = Heightmap::frbar_data(8, 8, data).unwrap();
+        // warp_x = 1.0 -> dx = 0.5, so each output pixel samples from
+        // input_x + 0.5 * strength * width = px + 4.  The right-half content
+        // (bright) therefore appears in the left half of the output.
+        let wx = Heightmap::frbar_data(8, 8, vec![1.0; 64]).unwrap();
+        let wy = Heightmap::frbar_data(8, 8, vec![0.5; 64]).unwrap();
+        let params = HashMap::from([("strength".to_string(), ParamValue::Float(1.0))]);
+        let inputs = HashMap::from([
+            ("input".to_string(), PortValue::Heightmap(hm)),
+            ("warp_x".to_string(), PortValue::Heightmap(wx)),
+            ("warp_y".to_string(), PortValue::Heightmap(wy)),
+        ]);
+        let result = executor
+            .execute(&NodeType::Warp, &params, &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // Left column should now sample from the right half (bright).
+        let left_mean: f32 = (0..8).map(|y| out.get(1, y).unwrap()).sum::<f32>() / 8.0;
+        assert!(
+            left_mean > 0.5,
+            "positive warp should bring bright area left, mean={left_mean}"
+        );
+    }
+
+    #[test]
+    fn stratify_quantises_to_bands() {
+        let executor = CpuExecutor;
+        // Linear ramp 0..1.
+        let data: Vec<f32> = (0..8).map(|i| i as f32 / 7.0).collect();
+        let hm = Heightmap::frbar_data(8, 1, data).unwrap();
+        let params = HashMap::from([
+            ("layer_count".to_string(), ParamValue::UInt(4)),
+            ("irregularity".to_string(), ParamValue::Float(0.0)),
+            ("hardness".to_string(), ParamValue::Float(1.0)),
+            ("noise_scale".to_string(), ParamValue::Float(0.05)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::Stratify, &params, &inputs, 8, 1)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // With hardness=1 and 4 bands, all values should land on band centres.
+        let valid_centres = [0.125f32, 0.375, 0.625, 0.875];
+        for x in 0..8u32 {
+            let v = out.get(x, 0).unwrap();
+            let ok = valid_centres.iter().any(|&c| (v - c).abs() < 0.01);
+            assert!(ok, "pixel {x} value {v} is not a band centre");
+        }
+    }
+
+    #[test]
+    fn mask_expand_dilates() {
+        let executor = CpuExecutor;
+        // Single bright pixel in the centre of a dark field.
+        let mut data = vec![0.0f32; 8 * 8];
+        data[4 * 8 + 4] = 1.0;
+        let hm = Heightmap::frbar_data(8, 8, data).unwrap();
+        let params = HashMap::from([("radius".to_string(), ParamValue::Float(1.5))]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::MaskExpand, &params, &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // Centre + direct neighbours should be 1.
+        assert!(out.get(4, 4).unwrap() > 0.99);
+        assert!(
+            out.get(3, 4).unwrap() > 0.99,
+            "left neighbour should be expanded"
+        );
+        assert!(
+            out.get(5, 4).unwrap() > 0.99,
+            "right neighbour should be expanded"
+        );
+        // Far corner should still be 0.
+        assert!(
+            out.get(0, 0).unwrap() < 0.01,
+            "corner should not be expanded"
+        );
+    }
+
+    #[test]
+    fn mask_shrink_erodes() {
+        let executor = CpuExecutor;
+        // Mostly bright except a single dark pixel in the centre.
+        let mut data = vec![1.0f32; 8 * 8];
+        data[4 * 8 + 4] = 0.0;
+        let hm = Heightmap::frbar_data(8, 8, data).unwrap();
+        let params = HashMap::from([("radius".to_string(), ParamValue::Float(1.5))]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::MaskShrink, &params, &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // Centre + direct neighbours should be 0.
+        assert!(out.get(4, 4).unwrap() < 0.01);
+        assert!(
+            out.get(3, 4).unwrap() < 0.01,
+            "left neighbour should be eroded"
+        );
+        // Far corner should still be 1.
+        assert!(out.get(0, 0).unwrap() > 0.99, "corner should not be eroded");
+    }
+
+    #[test]
+    fn select_aspect_east_facing_slopes() {
+        let executor = CpuExecutor;
+        // Ramp increasing left-to-right: slopes face east (90 deg).
+        let data: Vec<f32> = (0..8 * 8).map(|i| (i % 8) as f32 / 7.0).collect();
+        let hm = Heightmap::frbar_data(8, 8, data).unwrap();
+        // Select east-facing (direction=90), full-strength band=60 deg.
+        let params = HashMap::from([
+            ("direction".to_string(), ParamValue::Float(90.0)),
+            ("width".to_string(), ParamValue::Float(60.0)),
+            ("falloff".to_string(), ParamValue::Float(30.0)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        // Interior pixels (not at edge) should have a high mask value.
+        let centre = out.get(4, 4).unwrap();
+        assert!(
+            centre > 0.8,
+            "east-facing slope should score high, got {centre}"
+        );
+    }
+
+    #[test]
+    fn select_aspect_opposite_direction_is_zero() {
+        let executor = CpuExecutor;
+        // Ramp increasing left-to-right: slopes face east (90 deg).
+        let data: Vec<f32> = (0..8 * 8).map(|i| (i % 8) as f32 / 7.0).collect();
+        let hm = Heightmap::frbar_data(8, 8, data).unwrap();
+        // Select west-facing (direction=270), tight band.
+        let params = HashMap::from([
+            ("direction".to_string(), ParamValue::Float(270.0)),
+            ("width".to_string(), ParamValue::Float(30.0)),
+            ("falloff".to_string(), ParamValue::Float(10.0)),
+        ]);
+        let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
+        let result = executor
+            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8)
+            .unwrap();
+        let PortValue::Heightmap(out) = result.get("output").unwrap() else {
+            panic!("expected heightmap");
+        };
+        let centre = out.get(4, 4).unwrap();
+        assert!(
+            centre < 0.01,
+            "west selector on east-facing slope should be 0, got {centre}"
+        );
     }
 }

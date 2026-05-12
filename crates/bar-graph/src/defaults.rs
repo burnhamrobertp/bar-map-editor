@@ -103,6 +103,27 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("mode", ParamValue::String("ridges".to_string())),
             ("strength", ParamValue::Float(1.0)),
         ],
+        NodeType::Transform => vec![
+            ("translate_x", ParamValue::Float(0.0)),
+            ("translate_y", ParamValue::Float(0.0)),
+            ("scale", ParamValue::Float(1.0)),
+            ("angle", ParamValue::Float(0.0)),
+        ],
+        NodeType::Warp => vec![("strength", ParamValue::Float(0.1))],
+        NodeType::Stratify => vec![
+            ("layer_count", ParamValue::UInt(8)),
+            ("irregularity", ParamValue::Float(0.3)),
+            ("hardness", ParamValue::Float(0.8)),
+            ("noise_scale", ParamValue::Float(0.05)),
+        ],
+        NodeType::MaskExpand | NodeType::MaskShrink => {
+            vec![("radius", ParamValue::Float(4.0))]
+        }
+        NodeType::SelectAspect => vec![
+            ("direction", ParamValue::Float(0.0)),
+            ("width", ParamValue::Float(90.0)),
+            ("falloff", ParamValue::Float(30.0)),
+        ],
         NodeType::Mirror => vec![("mode", ParamValue::String("mirror_x".to_string()))],
         NodeType::Terrace => vec![
             ("step_count", ParamValue::UInt(4)),
@@ -684,6 +705,21 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (FlowSelect, "falloff") => (0.0, 0.5),
         // SelectConvexity
         (SelectConvexity, "strength") => (0.1, 8.0),
+        // Transform
+        (Transform, "translate_x") | (Transform, "translate_y") => (-0.5, 0.5),
+        (Transform, "scale") => (0.1, 4.0),
+        (Transform, "angle") => (0.0, 360.0),
+        // Warp
+        (Warp, "strength") => (0.0, 1.0),
+        // Stratify
+        (Stratify, "irregularity") | (Stratify, "hardness") => (0.0, 1.0),
+        (Stratify, "noise_scale") => (0.01, 0.5),
+        // MaskExpand / MaskShrink
+        (MaskExpand | MaskShrink, "radius") => (0.5, 20.0),
+        // SelectAspect
+        (SelectAspect, "direction") => (0.0, 360.0),
+        (SelectAspect, "width") => (0.0, 180.0),
+        (SelectAspect, "falloff") => (0.0, 90.0),
         // LayoutGenerator per-shape numeric params
         (LayoutGenerator, k)
             if matches!(
@@ -709,6 +745,7 @@ pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
         (TextureWeightmap, "layer_count") => (2, 8),
         (ColorRamp, "stop_count") => (2, 8),
         (LayoutGenerator, "shape_count") => (1, 8),
+        (Stratify, "layer_count") => (2, 32),
         _ => return None,
     })
 }

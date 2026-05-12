@@ -127,6 +127,30 @@ pub enum NodeType {
     /// and falloff. Shapes are composited by taking the per-pixel maximum.
     LayoutGenerator,
 
+    // Filters (transform / warp / strata)
+    /// Translate, scale, and rotate a heightmap. Inverse-mapped bilinear
+    /// sampling; pixels outside the source clamp to zero.
+    Transform,
+    /// Dual-axis domain warp. Displaces each lookup position by separate X
+    /// and Y displacement maps. Enables directional terrain warping.
+    Warp,
+    /// Procedural horizontal rock strata. Snaps heights into `layer_count`
+    /// discrete bands with noise-perturbed boundaries for natural irregularity.
+    Stratify,
+
+    // Morphological mask operations
+    /// Morphological dilation: expands bright regions by taking the local
+    /// maximum within a circular neighbourhood of the given radius.
+    MaskExpand,
+    /// Morphological erosion: shrinks bright regions by taking the local
+    /// minimum within a circular neighbourhood of the given radius.
+    MaskShrink,
+
+    // Aspect selector
+    /// Masks by slope-facing direction. Outputs 1 where terrain faces the
+    /// given compass bearing, with a configurable band width and falloff.
+    SelectAspect,
+
     // Additional Combiners
     /// Selects between two heightmap inputs based on a mask threshold.
     MaskSelect,
@@ -618,6 +642,41 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         NodeType::LayoutGenerator => (
             vec![Port::new("mask", "Mask", PortKind::Mask)],
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
+        ),
+
+        NodeType::Transform => (
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        NodeType::Warp => (
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("warp_x", "Warp X", PortKind::Heightmap),
+                Port::new("warp_y", "Warp Y", PortKind::Heightmap),
+            ],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        NodeType::Stratify => (
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        NodeType::MaskExpand | NodeType::MaskShrink => (
+            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        NodeType::SelectAspect => (
+            vec![Port::new("input", "Heightmap", PortKind::Heightmap)],
+            vec![Port::new("output", "Aspect Mask", PortKind::Heightmap)],
         ),
 
         // --- Additional Combiners ---

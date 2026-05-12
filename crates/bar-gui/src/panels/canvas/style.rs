@@ -76,6 +76,9 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Normalize
         | NodeType::BiasGain
         | NodeType::Displacement
+        | NodeType::Transform
+        | NodeType::Warp
+        | NodeType::Stratify
         | NodeType::Sculpt => tokens::NODE_CAT_FILTER,
 
         NodeType::Blend
@@ -90,6 +93,7 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::HeightSelect
         | NodeType::FlowSelect
         | NodeType::SelectConvexity
+        | NodeType::SelectAspect
         | NodeType::TerrainSplat
         | NodeType::AutoTexture
         | NodeType::RockSoil
@@ -107,7 +111,9 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::MaskThreshold
         | NodeType::MaskInvert
         | NodeType::MaskBlur
-        | NodeType::MaskApply => tokens::NODE_CAT_MASK,
+        | NodeType::MaskApply
+        | NodeType::MaskExpand
+        | NodeType::MaskShrink => tokens::NODE_CAT_MASK,
 
         NodeType::Bundler | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
 

@@ -48,6 +48,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Normalize", NodeType::Normalize),
         ("Bias / Gain", NodeType::BiasGain),
         ("Displacement", NodeType::Displacement),
+        ("Transform", NodeType::Transform),
+        ("Warp", NodeType::Warp),
+        ("Stratify", NodeType::Stratify),
     ];
 
     let combiners = [
@@ -76,6 +79,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Height Select", NodeType::HeightSelect),
         ("Flow Select", NodeType::FlowSelect),
         ("Select Convexity", NodeType::SelectConvexity),
+        ("Select Aspect", NodeType::SelectAspect),
         ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
@@ -90,6 +94,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Invert", NodeType::MaskInvert),
         ("Mask Blur", NodeType::MaskBlur),
         ("Mask Apply", NodeType::MaskApply),
+        ("Mask Expand", NodeType::MaskExpand),
+        ("Mask Shrink", NodeType::MaskShrink),
     ];
 
     let sculpt = [("2D Sculpt", NodeType::Sculpt)];
@@ -128,6 +134,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Normalize", NodeType::Normalize),
         ("Bias / Gain", NodeType::BiasGain),
         ("Displacement", NodeType::Displacement),
+        ("Transform", NodeType::Transform),
+        ("Warp", NodeType::Warp),
+        ("Stratify", NodeType::Stratify),
         ("Blend", NodeType::Blend),
         ("Add", NodeType::Add),
         ("Subtract", NodeType::Subtract),
@@ -145,6 +154,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Height Select", NodeType::HeightSelect),
         ("Flow Select", NodeType::FlowSelect),
         ("Select Convexity", NodeType::SelectConvexity),
+        ("Select Aspect", NodeType::SelectAspect),
         ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
@@ -156,6 +166,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Invert", NodeType::MaskInvert),
         ("Mask Blur", NodeType::MaskBlur),
         ("Mask Apply", NodeType::MaskApply),
+        ("Mask Expand", NodeType::MaskExpand),
+        ("Mask Shrink", NodeType::MaskShrink),
         ("2D Sculpt", NodeType::Sculpt),
         ("Preview", NodeType::Preview),
         ("Bundler", NodeType::Bundler),
