@@ -16,7 +16,7 @@ mod packager;
 mod packaging;
 mod raw_layers;
 mod registry;
-mod spring_smf;
+pub(crate) mod spring_smf;
 mod target_io;
 mod validation;
 

@@ -105,13 +105,18 @@ impl GraphEngine {
             .ok_or_else(|| GraphError::PortNotFound(to.clone()))?;
 
         // Validate port kinds are compatible. SubgraphInput / SubgraphOutput
-        // boundary nodes accept any kind on their "value" port — the kind is
-        // auto-inferred from the connection after the fact.
-        let to_is_io_value = matches!(
+        // boundary nodes are kind-polymorphic on their "value" port -- the
+        // kind is auto-inferred from the connection after the fact by
+        // recompute_all_subgraph_io. Skip validation on both sides.
+        let io_value_bypass = (matches!(
             to_node.node_type,
             crate::node::NodeType::SubgraphInput | crate::node::NodeType::SubgraphOutput
-        ) && to.port_name == "value";
-        if !to_is_io_value && !source_port.kind.compatible_with(dest_port.kind) {
+        ) && to.port_name == "value")
+            || (matches!(
+                from_node.node_type,
+                crate::node::NodeType::SubgraphInput | crate::node::NodeType::SubgraphOutput
+            ) && from.port_name == "value");
+        if !io_value_bypass && !source_port.kind.compatible_with(dest_port.kind) {
             return Err(GraphError::IncompatiblePorts);
         }
 

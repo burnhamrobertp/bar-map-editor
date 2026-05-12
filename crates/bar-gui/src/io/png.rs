@@ -1,29 +1,10 @@
-//! PNG load/save helpers for `bar_data::Heightmap` and
-//! `bar_data::ColorBuffer`. Used by the project-save sculpt sidecar
-//! and by the inspector "Save heightmap as PNG" path.
+//! PNG helpers for heightmap and color buffer I/O.
 //!
-//! Two flavours of heightmap PNG:
-//! - `save_heightmap_as_png16` / `load_heightmap_from_png16`: maps
-//!   f32 [0, 1] to u16 [0, 65535] linearly. Used for absolute height
-//!   values (the source heightmap, sculpted result).
-//! - `save_heightmap_as_png16_biased` /
-//!   `load_heightmap_from_png16_biased`: maps f32 [-1, 1] to u16
-//!   [0, 65535] with 0 -> 32768. Used for signed deltas (the sculpt
-//!   overlay layer).
+//! `save_heightmap_as_png16`: inspector "Save heightmap as PNG" path.
+//! Maps f32 [0, 1] to u16 [0, 65535] linearly.
 
-use bar_data::{ColorBuffer, Heightmap};
+use bar_data::Heightmap;
 use eframe::egui;
-
-/// Read a 16-bit grayscale PNG into a Heightmap. Inverse of
-/// `save_heightmap_as_png16`. Used to restore sculpt overlays at
-/// project load time.
-pub(crate) fn load_heightmap_from_png16(path: &std::path::Path) -> Result<Heightmap, String> {
-    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let gray = img.to_luma16();
-    let (w, h) = gray.dimensions();
-    let data: Vec<f32> = gray.pixels().map(|p| p.0[0] as f32 / 65535.0).collect();
-    Heightmap::frbar_data(w, h, data).map_err(|e| e.to_string())
-}
 
 /// Write a heightmap as a 16-bit grayscale PNG. The heightmap stores
 /// f32 in [0, 1]; we map that to the full u16 range so the round-trip
@@ -49,74 +30,6 @@ pub(crate) fn save_heightmap_as_png16(
     }
     image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::L16)
         .map_err(|e| format!("PNG save failed: {e}"))
-}
-
-/// Write a signed height-delta as a biased 16-bit grayscale PNG.
-/// delta=0 maps to pixel value 32768; range [-1,+1] maps to [0, 65535].
-pub(crate) fn save_heightmap_as_png16_biased(
-    hm: &Heightmap,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    let w = hm.width();
-    let h = hm.height();
-    let mut bytes: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize) * 2);
-    for &v in hm.data() {
-        let pixel = ((v.clamp(-1.0, 1.0) + 1.0) * 0.5 * 65535.0) as u16;
-        bytes.extend_from_slice(&pixel.to_le_bytes());
-    }
-    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::L16)
-        .map_err(|e| format!("PNG save failed: {e}"))
-}
-
-/// Load a biased 16-bit grayscale PNG back to a signed height-delta.
-pub(crate) fn load_heightmap_from_png16_biased(
-    path: &std::path::Path,
-) -> Result<Heightmap, String> {
-    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let gray = img.to_luma16();
-    let (w, h) = gray.dimensions();
-    let data: Vec<f32> = gray
-        .pixels()
-        .map(|p| (p.0[0] as f32 / 65535.0) * 2.0 - 1.0)
-        .collect();
-    Heightmap::frbar_data(w, h, data).map_err(|e| e.to_string())
-}
-
-/// Write a `ColorBuffer` as an RGBA PNG.
-pub(crate) fn save_color_buffer_as_png(
-    cb: &ColorBuffer,
-    path: &std::path::Path,
-) -> Result<(), String> {
-    let w = cb.width();
-    let h = cb.height();
-    let mut bytes: Vec<u8> = Vec::with_capacity((w as usize) * (h as usize) * 4);
-    for chunk in cb.data().chunks_exact(4) {
-        bytes.push((chunk[0].clamp(0.0, 1.0) * 255.0) as u8);
-        bytes.push((chunk[1].clamp(0.0, 1.0) * 255.0) as u8);
-        bytes.push((chunk[2].clamp(0.0, 1.0) * 255.0) as u8);
-        bytes.push((chunk[3].clamp(0.0, 1.0) * 255.0) as u8);
-    }
-    image::save_buffer(path, &bytes, w, h, image::ExtendedColorType::Rgba8)
-        .map_err(|e| format!("PNG save failed: {e}"))
-}
-
-/// Load a `ColorBuffer` from an RGBA PNG.
-pub(crate) fn load_color_buffer_from_png(path: &std::path::Path) -> Result<ColorBuffer, String> {
-    let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    let data: Vec<f32> = rgba
-        .pixels()
-        .flat_map(|p| {
-            [
-                p.0[0] as f32 / 255.0,
-                p.0[1] as f32 / 255.0,
-                p.0[2] as f32 / 255.0,
-                p.0[3] as f32 / 255.0,
-            ]
-        })
-        .collect();
-    ColorBuffer::frbar_data(w, h, data).map_err(|e| e.to_string())
 }
 
 /// Render a heightmap into an egui `ColorImage` for the 2D inspector.
@@ -162,6 +75,14 @@ pub(crate) fn heightmap_to_color_image(hm: &Heightmap, min_h: f32, max_h: f32) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn load_heightmap_from_png16(path: &std::path::Path) -> Result<Heightmap, String> {
+        let img = image::open(path).map_err(|e| format!("open {}: {e}", path.display()))?;
+        let gray = img.to_luma16();
+        let (w, h) = gray.dimensions();
+        let data: Vec<f32> = gray.pixels().map(|p| p.0[0] as f32 / 65535.0).collect();
+        Heightmap::frbar_data(w, h, data).map_err(|e| e.to_string())
+    }
 
     #[test]
     fn png_save_roundtrip_preserves_values() {

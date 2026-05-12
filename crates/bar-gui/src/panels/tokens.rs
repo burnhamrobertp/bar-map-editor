@@ -116,3 +116,9 @@ pub const BTN_MAPSET_PRESS: Color32 = Color32::from_rgb(80, 60, 95);
 pub const BTN_SPAWNS_NORMAL: Color32 = Color32::from_rgb(75, 100, 125);
 pub const BTN_SPAWNS_HOVER: Color32 = Color32::from_rgb(95, 120, 150);
 pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
+
+// ── Param slider ─────────────────────────────────────────────────────────────
+pub const SLIDER_BG: Color32 = Color32::from_rgb(28, 30, 40);
+pub const SLIDER_FILL: Color32 = Color32::from_rgb(55, 95, 165);
+pub const SLIDER_HANDLE: Color32 = Color32::from_rgb(130, 175, 235);
+pub const SLIDER_HANDLE_HOT: Color32 = Color32::from_rgb(190, 220, 255);

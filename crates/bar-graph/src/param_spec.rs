@@ -234,7 +234,8 @@ mod tests {
         NodeType::ThermalErosion,
         NodeType::SlopeMap,
         NodeType::HeightSelect,
-        NodeType::SplatMap,
+        NodeType::TerrainSplat,
+        NodeType::Mirror,
         NodeType::AutoTexture,
         NodeType::NormalMap,
         NodeType::GrassMap,
@@ -255,5 +256,6 @@ mod tests {
         NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
+        NodeType::ColorRamp,
     ];
 }

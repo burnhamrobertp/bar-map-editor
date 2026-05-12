@@ -375,6 +375,34 @@ fn invert_reflects_values_around_half() {
 }
 
 #[test]
+fn mirror_x_makes_left_right_symmetric() {
+    // Left-to-right ramp: value at x mirrors value at (W-1-x).
+    let hm = gen(|u, _| u);
+    let inputs = input_hm("input", hm);
+    let p = &[("mode", ParamValue::String("mirror_x".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    assert_hm_dims(&h);
+    let left = h.get(2, H / 2).unwrap();
+    let right = h.get(W - 1 - 2, H / 2).unwrap();
+    assert!(
+        (left - right).abs() < 1e-4,
+        "mirror_x: left {left} != right {right}"
+    );
+}
+
+#[test]
+fn mirror_y_makes_top_bottom_symmetric() {
+    let hm = gen(|_, v| v);
+    let inputs = input_hm("input", hm);
+    let p = &[("mode", ParamValue::String("mirror_y".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    assert_hm_dims(&h);
+    let top = h.get(W / 2, 2).unwrap();
+    let bot = h.get(W / 2, H - 1 - 2).unwrap();
+    assert!((top - bot).abs() < 1e-4, "mirror_y: top {top} != bot {bot}");
+}
+
+#[test]
 fn curve_runs_and_preserves_dimensions() {
     let hm = gen(|u, _| u);
     let inputs = input_hm("input", hm);
@@ -430,6 +458,67 @@ fn displacement_runs_with_zero_displacement_is_near_identity() {
         (want - got).abs() < 0.05,
         "mean drift: want {want}, got {got}"
     );
+}
+
+#[test]
+fn normalize_maps_range_to_zero_one() {
+    // Input spans 0.2..0.8; after normalize it should span 0.0..1.0.
+    let input = gen(|u, _| 0.2 + u * 0.6);
+    let h = out_hm(
+        &run(NodeType::Normalize, &[], &input_hm("input", input)),
+        "output",
+    );
+    assert_hm_dims(&h);
+    let (mn, mx) = min_max(&h);
+    assert!(
+        mn < 0.01,
+        "min should be near 0.0 after normalize, got {mn}"
+    );
+    assert!(
+        mx > 0.99,
+        "max should be near 1.0 after normalize, got {mx}"
+    );
+}
+
+#[test]
+fn bias_gain_at_neutral_is_identity() {
+    // bias=0.5, gain=0.5 is the identity transform.
+    let input = gen(|u, _| u);
+    let params = &[
+        ("bias", ParamValue::Float(0.5)),
+        ("gain", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(
+            NodeType::BiasGain,
+            params,
+            &input_hm("input", input.clone()),
+        ),
+        "output",
+    );
+    assert_hm_dims(&h);
+    let want = mean(&input);
+    let got = mean(&h);
+    assert!(
+        (want - got).abs() < 0.02,
+        "bias=0.5/gain=0.5 should be near identity: want {want}, got {got}"
+    );
+}
+
+#[test]
+fn bias_gain_high_bias_shifts_midpoint_up() {
+    let input = flat(0.5);
+    let params = &[
+        ("bias", ParamValue::Float(0.8)),
+        ("gain", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(NodeType::BiasGain, params, &input_hm("input", input)),
+        "output",
+    );
+    assert_hm_dims(&h);
+    let m = mean(&h);
+    assert!(m > 0.6, "high bias should push midpoint up, got {m}");
 }
 
 // ── Combiners ───────────────────────────────────────────────────────
@@ -552,7 +641,7 @@ fn splat_map_blends_three_bands() {
     inputs.insert("band0".to_string(), PortValue::Heightmap(flat(0.1)));
     inputs.insert("band1".to_string(), PortValue::Heightmap(flat(0.5)));
     inputs.insert("band2".to_string(), PortValue::Heightmap(flat(0.9)));
-    let h = out_hm(&run(NodeType::SplatMap, &[], &inputs), "output");
+    let h = out_hm(&run(NodeType::TerrainSplat, &[], &inputs), "output");
     assert_hm_dims(&h);
     let (mn, mx) = min_max(&h);
     assert!(mn >= 0.0 && mx <= 1.0);
@@ -727,4 +816,45 @@ fn subgraph_io_with_no_input_emits_no_output() {
         !outputs.contains_key("value"),
         "no input → no output: {outputs:?}"
     );
+}
+
+#[test]
+fn color_ramp_black_to_white_maps_value_to_gray() {
+    // Default 2-stop ramp: black at 0.0, white at 1.0.
+    // A flat heightmap at 0.5 should produce a mid-gray Color output.
+    let mut inputs = HashMap::new();
+    inputs.insert("input".to_string(), PortValue::Heightmap(flat(0.5)));
+    let outputs = run(NodeType::ColorRamp, &[], &inputs);
+    let cb = out_color(&outputs, "output");
+    assert_color_dims(&cb);
+    // Channel 0 (red) should be ~0.5 in a grayscale ramp.
+    let data = cb.data();
+    let r: f32 =
+        data.chunks_exact(4).map(|p| p[0]).sum::<f32>() / (cb.width() * cb.height()) as f32;
+    assert!(
+        (r - 0.5).abs() < 0.02,
+        "mid-height should map to ~0.5 in black-to-white ramp, got {r}"
+    );
+}
+
+#[test]
+fn color_ramp_custom_stop_tints_output() {
+    // Override stop 0 to red at 0.0, stop 1 stays white at 1.0.
+    // A flat heightmap at 0.0 should be fully red.
+    let mut inputs = HashMap::new();
+    inputs.insert("input".to_string(), PortValue::Heightmap(flat(0.0)));
+    let params = [
+        ("stop_count", ParamValue::UInt(2)),
+        ("pos_0", ParamValue::Float(0.0)),
+        ("color_0", ParamValue::String("FF0000".to_string())),
+        ("pos_1", ParamValue::Float(1.0)),
+        ("color_1", ParamValue::String("FFFFFF".to_string())),
+    ];
+    let outputs = run(NodeType::ColorRamp, &params, &inputs);
+    let cb = out_color(&outputs, "output");
+    let data = cb.data();
+    let r = data[0];
+    let g = data[1];
+    assert!(r > 0.95, "red channel should be ~1.0 at stop 0: {r}");
+    assert!(g < 0.05, "green channel should be ~0.0 at red stop: {g}");
 }

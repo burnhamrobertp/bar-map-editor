@@ -1,20 +1,16 @@
-//! Brush, sculpt-lock, and per-layer paint caches used by the 2D
-//! inspector and the 3D viewport for per-stroke feedback. The caches
-//! mirror whatever the most recent graph eval produced; brush dabs
-//! mutate them in place between evals so the user sees strokes land
-//! before the eval has caught up.
+//! Brush configuration, live paint caches, and sculpt-layer selection used
+//! by the 2D inspector and the 3D sculpt viewport.
 //!
-//! `PaintSession` is grouped here so the application root doesn't have
-//! to declare every paint-cache field separately. Its lifetime is one
-//! project: `invalidate_on_graph_reset` drops the live caches on
-//! project switch / new project / graph reset.
+//! `PaintSession` groups all per-project paint state so the application root
+//! does not declare each field individually. Its lifetime is one project:
+//! `invalidate_on_graph_reset` clears everything on project switch / new
+//! project / graph reset.
 
 use bar_graph::NodeId;
 use eframe::egui;
 use std::collections::HashMap;
 
 /// What primary action a left-click + drag in the 2D Inspector does.
-/// Switched via the radio control at the top of the inspector window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InspectorMode {
     /// Click to add / drag existing markers / right-click to delete.
@@ -23,15 +19,13 @@ pub enum InspectorMode {
     Sculpt,
 }
 
-/// Heightmap-sculpting brush mode. Each tool applies a different
-/// transformation to the pixels under the brush footprint.
+/// Heightmap-sculpting brush mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrushTool {
     Raise,
     Lower,
     Smooth,
-    /// Pull pixels toward a target height (the height under the cursor when the
-    /// stroke started).
+    /// Pull pixels toward a target height captured at stroke start.
     Flatten,
 }
 
@@ -46,52 +40,30 @@ impl BrushTool {
     }
 }
 
-/// What kind of data the brush writes to.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum BrushTarget {
-    Heightmap,
-    Color,
-    Metalmap,
-    Typemap,
+/// In-memory buffer for a live brush stroke on a paintable node.
+/// Held in `PaintSession::live_paint` while the mouse is down; flushed to
+/// node params and cleared on stroke end.
+pub enum LivePaintBuffer {
+    Height(bar_data::Heightmap),
+    Color(bar_data::ColorBuffer),
 }
 
-impl BrushTarget {
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            BrushTarget::Heightmap => "Heightmap",
-            BrushTarget::Color => "Colour",
-            BrushTarget::Metalmap => "Metal",
-            BrushTarget::Typemap => "Type",
-        }
-    }
-    pub(crate) fn is_available(self) -> bool {
-        true
-    }
-}
-
-/// Live brush configuration shared between the 2D Inspector and the
-/// 3D viewport. Pixel-radius applies to the heightmap; the inspector
-/// scales it to its rendered image size.
+/// Live brush configuration shared between the 2D Inspector and the 3D
+/// sculpt viewport.
 #[derive(Clone, Debug)]
 pub struct BrushState {
     pub tool: BrushTool,
-    pub target: BrushTarget,
     /// Radius in heightmap pixels (1 px = 8 elmos).
     pub radius_px: f32,
-    /// Strength in normalized heightmap units per stroke-application.
-    /// (Heightmap is f32 [0,1]; 0.01 = 1% of full range per dab.)
+    /// Strength per dab (heightmap is f32 [0,1]; 0.01 = 1% of full range).
     pub strength: f32,
     /// Falloff exponent (1.0 = linear, 2.0 = squared, sharper centre).
     pub falloff: f32,
     /// Target height for Flatten mode, captured at stroke start.
     pub flatten_target: Option<f32>,
-    /// Brush colour for `BrushTarget::Color`. Packed RGB; alpha is
-    /// implicit 1.0 -- full coverage.
+    /// Brush colour for color-target layers. Packed RGB; alpha is implicit 1.0.
     pub color_rgb: [u8; 3],
-    /// Stamp value for `BrushTarget::Metalmap` / `BrushTarget::Typemap`.
-    /// Range `[0, 1]` -- for metal it's density (0 = none, 1 = max);
-    /// for type it's a quantised id (multiplied by 255 at export
-    /// time).
+    /// Stamp value for value-layer painting. Range [0, 1].
     pub paint_value: f32,
 }
 
@@ -99,7 +71,6 @@ impl Default for BrushState {
     fn default() -> Self {
         Self {
             tool: BrushTool::Raise,
-            target: BrushTarget::Heightmap,
             color_rgb: [0x8B, 0x73, 0x55],
             paint_value: 1.0,
             radius_px: 32.0,
@@ -110,32 +81,19 @@ impl Default for BrushState {
     }
 }
 
-/// Persistent sculpt + paint layers. Mirrored to disk via the sculpt
-/// sidecar; merged with graph evaluation output at export time.
-#[derive(Default)]
-pub struct SculptState {
-    /// Signed height delta. Zero where unmodified.
-    pub height_delta: Option<bar_data::Heightmap>,
-    pub metal_overlay: Option<bar_data::Heightmap>,
-    pub metal_alpha: Option<bar_data::Heightmap>,
-    pub type_overlay: Option<bar_data::Heightmap>,
-    pub type_alpha: Option<bar_data::Heightmap>,
-    /// RGBA texture overlay. rgb = colour, alpha = coverage.
-    pub texture_overlay: Option<bar_data::ColorBuffer>,
-    pub dirty: bool,
-}
-
 pub struct PaintSession {
     pub inspector_mode: InspectorMode,
     pub brush: BrushState,
-    /// True while a sculpt stroke is in progress (mouse held
-    /// down). Used to capture the Flatten target at stroke start.
+    /// True while a sculpt stroke is in progress (mouse held down).
     pub brush_stroking: bool,
-    /// Project-level in-memory sculpt data.
-    pub sculpt: SculptState,
+    /// The node currently active in the sculpt layer panel.
+    /// Brush strokes in the 3D viewport write to this node's live buffer.
+    pub selected_sculpt_layer: Option<NodeId>,
+    /// Per-node live paint buffers, held for the duration of one stroke.
+    /// Cleared when the stroke ends and the buffer is flushed to node params.
+    pub live_paint: HashMap<NodeId, LivePaintBuffer>,
     /// Brush radius (heightmap pixels) for `PaintedHeightmap` /
-    /// `PaintedTexture` / `Sculpt` in-node paint canvases. The 2D
-    /// inspector brush uses `brush.radius_px` instead.
+    /// `PaintedTexture` / `Sculpt` in-node paint canvases.
     pub paint_brush_radius: f32,
     /// Strength for the Sculpt node's delta brush (0.0-1.0).
     pub sculpt_brush_strength: f32,
@@ -151,9 +109,6 @@ pub struct PaintSession {
     pub typemap: Option<bar_data::Heightmap>,
     /// Retained egui texture handles for `PaintedHeightmap` canvases.
     pub mask_textures: HashMap<NodeId, egui::TextureHandle>,
-    /// Populated by `pack_sculpt_record` before `build_project` is
-    /// called. Taken with `.take()` in `build_project`.
-    pub pending_sculpt_record: Option<bar_project::SculptRecord>,
 }
 
 impl Default for PaintSession {
@@ -162,7 +117,8 @@ impl Default for PaintSession {
             inspector_mode: InspectorMode::Spawns,
             brush: BrushState::default(),
             brush_stroking: false,
-            sculpt: SculptState::default(),
+            selected_sculpt_layer: None,
+            live_paint: HashMap::new(),
             paint_brush_radius: 4.0,
             sculpt_brush_strength: 0.5,
             heightmap: None,
@@ -173,7 +129,6 @@ impl Default for PaintSession {
             metalmap: None,
             typemap: None,
             mask_textures: HashMap::new(),
-            pending_sculpt_record: None,
         }
     }
 }
@@ -184,7 +139,8 @@ impl PaintSession {
     pub fn invalidate_on_graph_reset(&mut self) {
         self.brush = BrushState::default();
         self.brush_stroking = false;
-        self.sculpt = SculptState::default();
+        self.selected_sculpt_layer = None;
+        self.live_paint.clear();
         self.heightmap = None;
         self.heightmap_rev = self.heightmap_rev.wrapping_add(1);
         self.texture = None;

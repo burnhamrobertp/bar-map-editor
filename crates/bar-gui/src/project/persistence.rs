@@ -103,7 +103,6 @@ impl BarEditorApp {
 
         Project {
             recipe,
-            sculpt: self.paint.pending_sculpt_record.take().unwrap_or_default(),
             layout: EditorLayout {
                 node_positions: layout_positions,
                 node_sizes: layout_sizes,
@@ -286,9 +285,6 @@ impl BarEditorApp {
             }
         }
 
-        // Sculpt: write any dirty layers to sidecar PNGs and populate
-        // `pending_sculpt_record` so `build_project` can embed the paths.
-        self.pack_sculpt_record(&assets_dir, &project_dir)?;
         Ok(())
     }
 }

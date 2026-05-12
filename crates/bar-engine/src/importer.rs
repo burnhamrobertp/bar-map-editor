@@ -166,11 +166,7 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         active_tab: 0,
     };
 
-    Ok(Project {
-        recipe,
-        layout,
-        sculpt: Default::default(),
-    })
+    Ok(Project { recipe, layout })
 }
 
 // ── Internal helpers ────────────────────────────────────────────────────────

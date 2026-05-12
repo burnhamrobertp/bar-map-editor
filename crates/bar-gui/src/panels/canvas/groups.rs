@@ -507,6 +507,8 @@ impl BarEditorApp {
             NodeType::PassThrough => egui::vec2(180.0, 200.0),
             NodeType::Bundler => egui::vec2(210.0, 240.0),
             NodeType::SubgraphInput | NodeType::SubgraphOutput => IO_NODE_SIZE,
+            // Start at the correct height for its default port count (2 inputs).
+            NodeType::TextureWeightmap => egui::vec2(150.0, PORT_Y_BASE + 2.0 * PORT_Y_STEP + 10.0),
             _ => egui::vec2(150.0, 80.0),
         };
         self.visuals.node_visuals.insert(

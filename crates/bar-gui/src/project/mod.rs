@@ -1,15 +1,9 @@
 //! Project lifecycle and persistence.
-//!
-//! Stage 1 lands `path` (pure path helpers used by save/load asset
-//! packing). Stage 2+ lands `state`, `lifecycle`, `persistence`,
-//! `autosave`, `sculpt_sidecar` modules per the architecture refactor
-//! plan.
 
 pub(crate) mod autosave;
 pub(crate) mod lifecycle;
 pub(crate) mod path;
 pub(crate) mod persistence;
-pub(crate) mod sculpt_sidecar;
 pub(crate) mod state;
 
 pub(crate) use state::ProjectState;
