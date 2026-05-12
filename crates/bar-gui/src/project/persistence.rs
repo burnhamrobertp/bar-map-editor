@@ -100,6 +100,7 @@ impl BarEditorApp {
                     ..self.map.settings.clone()
                 },
             },
+            features: self.map.features.clone(),
         };
 
         Project {

@@ -348,6 +348,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             height,
             map_settings,
         },
+        features: scan.features.clone(),
     };
 
     let layout = EditorLayout {
@@ -389,6 +390,7 @@ mod tests {
             typemap_res: 0,
             texture_hex: String::new(),
             texture_res: 0,
+            features: Vec::new(),
         }
     }
 
@@ -506,6 +508,23 @@ mod tests {
     }
 
     #[test]
+    fn features_propagate_to_recipe() {
+        let mut scan = empty_scan("feat_test");
+        scan.features = vec![crate::recipe::PlacedFeature {
+            feature_type: "arborreal".to_string(),
+            x: 100.0,
+            y: 0.0,
+            z: 200.0,
+            angle: 1.57,
+            taken_damage: 0,
+        }];
+        let p = scan_to_project(&scan);
+        assert_eq!(p.recipe.features.len(), 1);
+        assert_eq!(p.recipe.features[0].feature_type, "arborreal");
+        assert!((p.recipe.features[0].x - 100.0).abs() < 0.001);
+    }
+
+    #[test]
     fn passthrough_files_create_pass_node_and_connect_to_bundler() {
         let mut scan = empty_scan("pass");
         scan.passthrough_files = vec![(
@@ -570,4 +589,7 @@ pub struct WorkDirScan {
     /// Hex-encoded RGB (3 bytes/pixel) assembled texture at `texture_res x texture_res`.
     pub texture_hex: String,
     pub texture_res: u32,
+
+    /// Feature placements extracted from the SMF feature section.
+    pub features: Vec<crate::recipe::PlacedFeature>,
 }

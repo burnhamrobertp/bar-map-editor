@@ -8,6 +8,7 @@
 //! they're kept in sync with `settings` whenever either side is
 //! edited.
 
+use bar_project::recipe::PlacedFeature;
 use bar_project::MapSettings;
 
 /// Plain-data snapshot of SMF ground-shading inputs (lighting +
@@ -63,6 +64,9 @@ pub struct MapState {
     /// Index of the spawn marker currently being dragged in the 2D
     /// inspector (None if no drag in progress).
     pub dragging_spawn: Option<usize>,
+    /// Feature placements preserved from the last .sd7 import.
+    /// Editable in the sculpt view in a future iteration.
+    pub features: Vec<PlacedFeature>,
 }
 
 impl MapState {

@@ -165,6 +165,7 @@ fn test_complex_recipe_with_combiners() {
             height: 64,
             map_settings: MapSettings::default(),
         },
+        features: Vec::new(),
     };
 
     recipe.validate().unwrap();
@@ -271,6 +272,7 @@ fn test_recipe_with_erosion_pipeline() {
             height: 64,
             map_settings: MapSettings::default(),
         },
+        features: Vec::new(),
     };
 
     recipe.validate().unwrap();
@@ -394,6 +396,7 @@ fn test_mask_operations_pipeline() {
             height: 64,
             map_settings: MapSettings::default(),
         },
+        features: Vec::new(),
     };
 
     recipe.validate().unwrap();

@@ -206,6 +206,23 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
             (String::new(), 0)
         };
 
+    let features: Vec<bar_project::recipe::PlacedFeature> = smf_data
+        .as_ref()
+        .map(|smf| {
+            smf.features
+                .iter()
+                .map(|f| bar_project::recipe::PlacedFeature {
+                    feature_type: f.feature_type.clone(),
+                    x: f.x,
+                    y: f.y,
+                    z: f.z,
+                    angle: f.angle,
+                    taken_damage: f.taken_damage,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
     Ok(WorkDirScan {
         work_dir,
         map_name,
@@ -225,6 +242,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         typemap_res,
         texture_hex,
         texture_res,
+        features,
     })
 }
 

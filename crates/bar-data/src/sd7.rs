@@ -37,6 +37,23 @@ pub enum Sd7Error {
     Heightmap(#[from] crate::heightmap::HeightmapError),
 }
 
+/// A placed feature instance read from or written to an SMF feature section.
+///
+/// Feature type names are resolved from the in-file index table during read
+/// and re-deduplicated into an index table during write.
+#[derive(Debug, Clone)]
+pub struct SmfFeaturePlacement {
+    /// Feature type name (e.g. "arborreal", "GeoTherm_Lava_Rock").
+    pub feature_type: String,
+    pub x: f32,
+    /// World Y position (engine snaps to terrain; typically 0 at import).
+    pub y: f32,
+    pub z: f32,
+    /// Rotation angle in degrees (Spring convention).
+    pub angle: f32,
+    pub taken_damage: i16,
+}
+
 /// SMF file magic number: "spring map file\0" → first 4 bytes = "spri"
 pub const SMF_MAGIC: &[u8; 16] = b"spring map file\0";
 
@@ -216,6 +233,8 @@ pub struct SmfMap {
     /// Pre-compressed DXT1 minimap with 9 mipmap levels (exactly 699048 bytes).
     /// If empty, a solid-color placeholder is written.
     pub minimap_dxt1: Vec<u8>,
+    /// Feature placements read from or written to the SMF feature section.
+    pub features: Vec<SmfFeaturePlacement>,
 }
 
 impl SmfMap {
@@ -238,6 +257,7 @@ impl SmfMap {
             smt_filename: String::new(),
             tile_indices: Vec::new(),
             minimap_dxt1: Vec::new(),
+            features: Vec::new(),
         })
     }
 
@@ -310,6 +330,41 @@ impl SmfMap {
             }
         }
 
+        // Read feature section
+        let mut features = Vec::new();
+        if header.featuremap_ptr > 0 {
+            reader.seek(SeekFrom::Start(header.featuremap_ptr as u64))?;
+            let num_types = read_i32(reader)?.max(0) as usize;
+            let num_feature_records = read_i32(reader)?.max(0) as usize;
+
+            let mut type_names: Vec<String> = Vec::with_capacity(num_types);
+            for _ in 0..num_types {
+                let mut name_buf = [0u8; 256];
+                reader.read_exact(&mut name_buf)?;
+                let end = name_buf.iter().position(|&b| b == 0).unwrap_or(256);
+                type_names.push(String::from_utf8_lossy(&name_buf[..end]).into_owned());
+            }
+
+            for _ in 0..num_feature_records {
+                let type_idx = read_i32(reader)?.max(0) as usize;
+                let x = read_f32(reader)?;
+                let y = read_f32(reader)?;
+                let z = read_f32(reader)?;
+                let angle = read_f32(reader)?;
+                let taken_damage = read_i16(reader)?;
+                let _pad = read_i16(reader)?;
+                let feature_type = type_names.get(type_idx).cloned().unwrap_or_default();
+                features.push(SmfFeaturePlacement {
+                    feature_type,
+                    x,
+                    y,
+                    z,
+                    angle,
+                    taken_damage,
+                });
+            }
+        }
+
         Ok(Self {
             header,
             heightmap,
@@ -318,6 +373,7 @@ impl SmfMap {
             smt_filename,
             tile_indices,
             minimap_dxt1: Vec::new(),
+            features,
         })
     }
 
@@ -354,8 +410,15 @@ impl SmfMap {
         // DXT1 minimap: 1024×1024 with 9 mipmap levels = exactly 699048 bytes
         let minimap_size: usize = 699048;
 
-        // Feature section: numFeatureTypes(i32) + numFeatures(i32) = 8 bytes (empty)
-        let feature_section_size = 8;
+        // Build deduplicated feature type name table (insertion order).
+        let mut type_names: Vec<String> = Vec::new();
+        for feat in &self.features {
+            if !type_names.contains(&feat.feature_type) {
+                type_names.push(feat.feature_type.clone());
+            }
+        }
+        // Feature section: numTypes(4) + numFeatures(4) + type_table(n*256) + records(m*24).
+        let feature_section_size = (8 + type_names.len() * 256 + self.features.len() * 24) as i32;
 
         // Calculate offsets sequentially
         let heightmap_ptr = SmfHeader::SIZE as i32;
@@ -425,9 +488,31 @@ impl SmfMap {
         // Write metalmap
         writer.write_all(&self.metalmap)?;
 
-        // Write feature section (empty: no features)
-        write_i32(writer, 0)?; // numFeatureTypes
-        write_i32(writer, 0)?; // numFeatures
+        // Write feature section
+        write_i32(writer, type_names.len() as i32)?;
+        write_i32(writer, self.features.len() as i32)?;
+        // Type name table: 256 bytes each, null-padded.
+        for name in &type_names {
+            let mut name_buf = [0u8; 256];
+            let bytes = name.as_bytes();
+            let copy_len = bytes.len().min(255);
+            name_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
+            writer.write_all(&name_buf)?;
+        }
+        // Feature records: 24 bytes each.
+        for feat in &self.features {
+            let type_idx = type_names
+                .iter()
+                .position(|n| n == &feat.feature_type)
+                .unwrap_or(0);
+            write_i32(writer, type_idx as i32)?;
+            write_f32(writer, feat.x)?;
+            write_f32(writer, feat.y)?;
+            write_f32(writer, feat.z)?;
+            write_f32(writer, feat.angle)?;
+            write_i16(writer, feat.taken_damage)?;
+            write_i16(writer, 0)?; // padding
+        }
 
         debug_assert_eq!(
             writer.stream_position()? as i32,
@@ -469,6 +554,16 @@ fn write_f32<W: Write>(w: &mut W, v: f32) -> Result<(), io::Error> {
 }
 
 fn write_u16<W: Write>(w: &mut W, v: u16) -> Result<(), io::Error> {
+    w.write_all(&v.to_le_bytes())
+}
+
+fn read_i16<R: Read>(r: &mut R) -> Result<i16, io::Error> {
+    let mut buf = [0u8; 2];
+    r.read_exact(&mut buf)?;
+    Ok(i16::from_le_bytes(buf))
+}
+
+fn write_i16<W: Write>(w: &mut W, v: i16) -> Result<(), io::Error> {
     w.write_all(&v.to_le_bytes())
 }
 
@@ -547,6 +642,53 @@ mod tests {
         for (i, &idx) in loaded.tile_indices.iter().enumerate() {
             assert_eq!(idx, i as i32, "tile index {i} mismatch");
         }
+    }
+
+    #[test]
+    fn test_smf_feature_roundtrip() {
+        let mut map = SmfMap::new(128, 128).unwrap();
+        map.features = vec![
+            SmfFeaturePlacement {
+                feature_type: "arborreal".to_string(),
+                x: 512.0,
+                y: 0.0,
+                z: 768.0,
+                angle: 1.57,
+                taken_damage: 0,
+            },
+            SmfFeaturePlacement {
+                feature_type: "GeoTherm_Lava_Rock".to_string(),
+                x: 100.0,
+                y: 0.0,
+                z: 200.0,
+                angle: 0.0,
+                taken_damage: 5,
+            },
+            // Second arborreal -- type table must deduplicate
+            SmfFeaturePlacement {
+                feature_type: "arborreal".to_string(),
+                x: 300.0,
+                y: 0.0,
+                z: 400.0,
+                angle: 3.14,
+                taken_damage: 0,
+            },
+        ];
+
+        let mut buf = Cursor::new(Vec::new());
+        map.write(&mut buf).unwrap();
+        buf.set_position(0);
+        let loaded = SmfMap::read(&mut buf).unwrap();
+
+        assert_eq!(loaded.features.len(), 3);
+        assert_eq!(loaded.features[0].feature_type, "arborreal");
+        assert!((loaded.features[0].x - 512.0).abs() < 0.001);
+        assert!((loaded.features[0].z - 768.0).abs() < 0.001);
+        assert!((loaded.features[0].angle - 1.57).abs() < 0.001);
+        assert_eq!(loaded.features[1].feature_type, "GeoTherm_Lava_Rock");
+        assert_eq!(loaded.features[1].taken_damage, 5);
+        assert_eq!(loaded.features[2].feature_type, "arborreal");
+        assert!((loaded.features[2].angle - 3.14).abs() < 0.001);
     }
 
     #[test]

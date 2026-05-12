@@ -68,6 +68,27 @@ pub struct Recipe {
     pub connections: Vec<RecipeConnection>,
     /// Output configuration.
     pub output: OutputConfig,
+    /// Feature placements (trees, rocks, crystals, etc.).
+    /// Preserved from .sd7 import; editable in the sculpt view in a future iteration.
+    #[serde(default)]
+    pub features: Vec<PlacedFeature>,
+}
+
+/// A feature (tree, rock, crystal, etc.) placed on the map.
+///
+/// Stored as explicit placement data on `Recipe` alongside `MapSettings`,
+/// not as a graph node -- features are authored positions, not generated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacedFeature {
+    /// Feature type name as referenced in game data (e.g. "arborreal").
+    pub feature_type: String,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    #[serde(default)]
+    pub angle: f32,
+    #[serde(default)]
+    pub taken_damage: i16,
 }
 
 /// A node in the recipe, identified by a stable string key.
@@ -579,6 +600,7 @@ impl Recipe {
                 height: 257,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         }
     }
 }
@@ -643,6 +665,7 @@ mod tests {
                 height: 0,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
     }
@@ -675,6 +698,7 @@ mod tests {
                 to: "out.heightmap".to_string(),
             }],
             output: OutputConfig::default(),
+            features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
     }
@@ -704,6 +728,7 @@ mod tests {
             ],
             connections: vec![],
             output: OutputConfig::default(),
+            features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
     }
@@ -841,6 +866,7 @@ mod tests {
                 height: 513,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
@@ -903,6 +929,7 @@ mod tests {
                 height: 1025,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
@@ -953,6 +980,7 @@ mod tests {
                 height: 513,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();

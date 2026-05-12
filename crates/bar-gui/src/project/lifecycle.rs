@@ -47,6 +47,7 @@ impl BarEditorApp {
         self.map.min_height = 0.0;
         self.map.max_height = 800.0;
         self.map.recipe_meta = RecipeMeta::default();
+        self.map.features = Vec::new();
 
         // Inspector / preview.
         self.preview.node = None;
@@ -377,6 +378,7 @@ impl BarEditorApp {
         };
         self.map.min_height = self.map.settings.min_height;
         self.map.max_height = self.map.settings.max_height;
+        self.map.features = project.recipe.features.clone();
 
         // Resolve any project-relative file paths (`bar://...`)
         // against the .barproj's directory so executors get absolute
