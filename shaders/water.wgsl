@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-2.0-or-later
 // Original PBR water shader targeting BAR-website aesthetic.
-// Not a Recoil port; no GPL terms apply.
+// Not a Recoil port; written from scratch.
 //
 // Bind group 3 (water normal map) is declared here.
 // camera (group 0), reflection_texture (group 2), refraction_texture (group 4)

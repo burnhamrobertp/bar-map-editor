@@ -102,9 +102,4 @@ dependency boundaries:
 
 ## License
 
-Licensed under either of:
-
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
-
-at your option.
+Licensed under the [GNU General Public License v2.0](LICENSE) or later ([GPL-2.0-or-later](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html)).
