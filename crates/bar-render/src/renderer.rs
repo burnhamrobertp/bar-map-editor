@@ -162,6 +162,7 @@ pub struct TerrainRenderer {
     sky_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    feature_renderer: Option<crate::features::FeatureRenderer>,
     // ── Group 1: albedo + metalmap + typemap ────────────────────────────────
     texture_bind_group_layout: wgpu::BindGroupLayout,
     texture_bind_group: wgpu::BindGroup,
@@ -816,11 +817,19 @@ impl TerrainRenderer {
             })
         };
 
+        let feature_renderer = crate::features::FeatureRenderer::new(
+            device,
+            output_format,
+            depth_format,
+            &camera_bind_group_layout,
+        );
+
         Self {
             render_pipeline,
             sky_pipeline,
             camera_buffer,
             camera_bind_group,
+            feature_renderer: Some(feature_renderer),
             texture_bind_group_layout,
             texture_bind_group,
             albedo_texture,
@@ -1814,6 +1823,19 @@ impl TerrainRenderer {
                 render_pass.draw(0..3, 0..1);
             }
         }
+
+        // Feature pass: separate render pass using LoadOp::Load so the terrain
+        // depth buffer correctly occludes feature boxes.
+        if let (Some(ref fr), Some(ref depth_view)) = (&self.feature_renderer, &self.depth_texture)
+        {
+            fr.draw(
+                &mut encoder,
+                output_view,
+                depth_view,
+                &self.camera_bind_group,
+            );
+        }
+
         queue.submit(std::iter::once(encoder.finish()));
     }
 
@@ -1839,6 +1861,34 @@ impl TerrainRenderer {
 
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
         self.output_view.as_ref()
+    }
+
+    pub fn depth_texture_view(&self) -> Option<&wgpu::TextureView> {
+        self.depth_texture.as_ref()
+    }
+
+    pub fn camera_bind_group(&self) -> &wgpu::BindGroup {
+        &self.camera_bind_group
+    }
+
+    pub fn depth_format(&self) -> wgpu::TextureFormat {
+        self.depth_format
+    }
+
+    /// Mutable access to the feature renderer for uploading instance data.
+    pub fn feature_renderer_mut(&mut self) -> Option<&mut crate::features::FeatureRenderer> {
+        self.feature_renderer.as_mut()
+    }
+
+    /// Upload a new set of feature instances.
+    pub fn update_feature_instances(
+        &mut self,
+        device: &wgpu::Device,
+        instances: &[crate::features::FeatureInstance],
+    ) {
+        if let Some(ref mut fr) = self.feature_renderer {
+            fr.update_instances(device, instances);
+        }
     }
 
     /// Copy the rendered output back to a CPU RGBA8 buffer. Used by the

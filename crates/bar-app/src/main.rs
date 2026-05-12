@@ -7,9 +7,10 @@ use anyhow::Result;
 use tracing_subscriber::EnvFilter;
 
 use bar_compute::GpuContext;
+use bar_engine::recipe::PlacedFeature;
 use bar_engine::{CpuExecutor, HybridExecutor};
 use bar_graph::{evaluate_graph, NodeExecutor};
-use bar_render::{pick_terrain, Camera, TerrainRenderer, TerrainUpdateParams};
+use bar_render::{pick_terrain, Camera, FeatureInstance, TerrainRenderer, TerrainUpdateParams};
 
 /// Result sent back from a background preview evaluation thread.
 ///
@@ -133,6 +134,9 @@ struct Session {
     /// session_id so any in-flight result is rejected. A debug override
     /// for cases where the gating logic is suspected of being stuck.
     force_refresh_requested: bool,
+    /// True while the feature instance buffer needs rebuilding.
+    /// Starts true so the first render after a project load uploads instances.
+    features_dirty: bool,
 }
 
 impl Session {
@@ -161,6 +165,7 @@ impl Session {
             session_id,
             started_at: Instant::now(),
             force_refresh_requested: false,
+            features_dirty: true,
         }
     }
 }
@@ -677,6 +682,19 @@ impl eframe::App for AppWrapper {
         let Some(ref mut session) = self.session else {
             return;
         };
+
+        // Upload feature instances once per session (dirty flag set on new Session).
+        if session.features_dirty {
+            if let (Some(ref mut renderer), Some(ref gpu)) =
+                (&mut session.terrain_renderer, &self.gpu_context)
+            {
+                let (w, h) = self.app.map.dimensions();
+                let (min_h, max_h) = self.app.map.height_range();
+                let instances = build_feature_instances(&self.app.map.features, w, h, min_h, max_h);
+                renderer.update_feature_instances(&gpu.device, &instances);
+                session.features_dirty = false;
+            }
+        }
 
         // ── Progressive preview: poll completed background evaluations ──────
         //
@@ -1546,6 +1564,59 @@ fn eval_preview(
     let hm = bar_graph::get_node_output_heightmap_named(&result, pid, "heightmap");
     let tex = bar_graph::get_node_output_color_named(&result, pid, "texture");
     (hm, tex)
+}
+
+/// Convert `PlacedFeature` world positions (Spring elmos) to render-space
+/// `FeatureInstance` values using the same normalisation as the terrain mesh.
+///
+/// Spring stores map dimensions in squares (1 square = 8 elmos). Features use
+/// elmo coordinates, so `x` ranges over `[0, (w-1)*8]`.
+fn build_feature_instances(
+    features: &[PlacedFeature],
+    w: u32,
+    h: u32,
+    min_h: f32,
+    max_h: f32,
+) -> Vec<FeatureInstance> {
+    use glam::{Mat4, Quat, Vec3};
+
+    let pw = (w as f32 - 1.0).max(1.0);
+    let ph = (h as f32 - 1.0).max(1.0);
+    let pm = pw.max(ph);
+    let xe = (0.5 * pw / pm).min(0.5);
+    let ze = (0.5 * ph / pm).min(0.5);
+    let height_range = (max_h - min_h).abs().max(1.0);
+    let hs = (height_range / (pm * 8.0)).max(0.005);
+    // Box half-size in render-space: ~4 elmos per side so boxes are visible
+    // without swamping smaller maps.
+    let box_scale = 4.0 / (pm * 8.0);
+
+    features
+        .iter()
+        .map(|f| {
+            let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
+            let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+            // Spring snaps features to terrain Y at runtime; stored Y is often 0.
+            // Place boxes at the spring-zero elevation until M1 verification.
+            let ry = ((f.y - min_h) / height_range) * hs;
+
+            // Spring angle: degrees CCW from +Z around Y axis. Negate to match
+            // render-space handedness.
+            let transform = Mat4::from_scale_rotation_translation(
+                Vec3::splat(box_scale),
+                Quat::from_rotation_y(-f.angle.to_radians()),
+                Vec3::new(rx, ry, rz),
+            );
+            let cols = transform.to_cols_array_2d();
+            FeatureInstance {
+                col0: cols[0],
+                col1: cols[1],
+                col2: cols[2],
+                col3: cols[3],
+                tint: [1.0, 0.5, 0.0, 1.0], // solid orange placeholder
+            }
+        })
+        .collect()
 }
 
 fn load_icon() -> Option<eframe::egui::IconData> {

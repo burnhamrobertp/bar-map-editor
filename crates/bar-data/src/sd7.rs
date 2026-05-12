@@ -653,7 +653,7 @@ mod tests {
                 x: 512.0,
                 y: 0.0,
                 z: 768.0,
-                angle: 1.57,
+                angle: std::f32::consts::FRAC_PI_2,
                 taken_damage: 0,
             },
             SmfFeaturePlacement {
@@ -670,7 +670,7 @@ mod tests {
                 x: 300.0,
                 y: 0.0,
                 z: 400.0,
-                angle: 3.14,
+                angle: std::f32::consts::PI,
                 taken_damage: 0,
             },
         ];
@@ -684,11 +684,11 @@ mod tests {
         assert_eq!(loaded.features[0].feature_type, "arborreal");
         assert!((loaded.features[0].x - 512.0).abs() < 0.001);
         assert!((loaded.features[0].z - 768.0).abs() < 0.001);
-        assert!((loaded.features[0].angle - 1.57).abs() < 0.001);
+        assert!((loaded.features[0].angle - std::f32::consts::FRAC_PI_2).abs() < 0.001);
         assert_eq!(loaded.features[1].feature_type, "GeoTherm_Lava_Rock");
         assert_eq!(loaded.features[1].taken_damage, 5);
         assert_eq!(loaded.features[2].feature_type, "arborreal");
-        assert!((loaded.features[2].angle - 3.14).abs() < 0.001);
+        assert!((loaded.features[2].angle - std::f32::consts::PI).abs() < 0.001);
     }
 
     #[test]
