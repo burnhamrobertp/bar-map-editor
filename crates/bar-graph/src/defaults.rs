@@ -21,6 +21,28 @@ use crate::node::{NodeType, ParamValue};
 
 /// Return the full set of default parameter values for a node type.
 pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
+    // LayoutGenerator has dynamically-named per-shape params; handle it before
+    // the static-key match below.
+    if node_type == &NodeType::LayoutGenerator {
+        let mut m = HashMap::new();
+        m.insert("shape_count".to_string(), ParamValue::UInt(1));
+        for i in 0..8usize {
+            let h = if i == 0 { 0.5 } else { 0.0 };
+            m.insert(
+                format!("type_{i}"),
+                ParamValue::String("ellipse".to_string()),
+            );
+            m.insert(format!("x_{i}"), ParamValue::Float(0.5));
+            m.insert(format!("y_{i}"), ParamValue::Float(0.5));
+            m.insert(format!("rx_{i}"), ParamValue::Float(0.2));
+            m.insert(format!("ry_{i}"), ParamValue::Float(0.2));
+            m.insert(format!("angle_{i}"), ParamValue::Float(0.0));
+            m.insert(format!("height_{i}"), ParamValue::Float(h));
+            m.insert(format!("falloff_{i}"), ParamValue::Float(0.5));
+        }
+        return m;
+    }
+
     let entries: Vec<(&str, ParamValue)> = match node_type {
         NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise => vec![
             // Named character preset that drives frequency / octaves /
@@ -72,6 +94,35 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
         NodeType::BiasGain => vec![
             ("bias", ParamValue::Float(0.5)),
             ("gain", ParamValue::Float(0.5)),
+        ],
+        NodeType::FlowSelect => vec![
+            ("threshold", ParamValue::Float(0.2)),
+            ("falloff", ParamValue::Float(0.15)),
+        ],
+        NodeType::SelectConvexity => vec![
+            ("mode", ParamValue::String("ridges".to_string())),
+            ("strength", ParamValue::Float(1.0)),
+        ],
+        NodeType::Transform => vec![
+            ("translate_x", ParamValue::Float(0.0)),
+            ("translate_y", ParamValue::Float(0.0)),
+            ("scale", ParamValue::Float(1.0)),
+            ("angle", ParamValue::Float(0.0)),
+        ],
+        NodeType::Warp => vec![("strength", ParamValue::Float(0.1))],
+        NodeType::Stratify => vec![
+            ("layer_count", ParamValue::UInt(8)),
+            ("irregularity", ParamValue::Float(0.3)),
+            ("hardness", ParamValue::Float(0.8)),
+            ("noise_scale", ParamValue::Float(0.05)),
+        ],
+        NodeType::MaskExpand | NodeType::MaskShrink => {
+            vec![("radius", ParamValue::Float(4.0))]
+        }
+        NodeType::SelectAspect => vec![
+            ("direction", ParamValue::Float(0.0)),
+            ("width", ParamValue::Float(90.0)),
+            ("falloff", ParamValue::Float(30.0)),
         ],
         NodeType::Mirror => vec![("mode", ParamValue::String("mirror_x".to_string()))],
         NodeType::Terrace => vec![
@@ -213,23 +264,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("path", ParamValue::String(String::new())),
             ("bundle_path", ParamValue::String(String::new())),
         ],
-        NodeType::SmfImport => vec![
-            ("path", ParamValue::String(String::new())),
-            ("load_metalmap", ParamValue::Bool(true)),
-            ("load_typemap", ParamValue::Bool(true)),
-        ],
-        NodeType::SmtImport => vec![
-            ("path", ParamValue::String(String::new())),
-            ("smf_path", ParamValue::String(String::new())),
-            ("tiles_x", ParamValue::UInt(0)),
-            ("tiles_y", ParamValue::UInt(0)),
-            // 4096 covers typical BAR maps (8×8 to 32×32 squares) at full
-            // native texture resolution. Larger maps are still capped, but
-            // 4096² × 4 bytes RGBA = 64 MB — well within GPU memory.
-            // The cap was previously 512 which lost ~6× detail on
-            // kolmog-class maps (1280-px native textures).
-            ("max_preview_size", ParamValue::UInt(4096)),
-        ],
         NodeType::PaintedHeightmap => vec![
             // Hex-encoded greyscale pixel grid (each pixel is one u8).
             // Empty until the user paints. The buffer is sized to
@@ -335,6 +369,10 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
         (NodeType::SubgraphInput | NodeType::SubgraphOutput, "kind") => {
             Some(&["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"])
         }
+        (NodeType::SelectConvexity, "mode") => Some(&["ridges", "valleys", "full"]),
+        (NodeType::LayoutGenerator, k) if k.starts_with("type_") => {
+            Some(&["ellipse", "rectangle", "ridge"])
+        }
         _ => None,
     }
 }
@@ -353,7 +391,7 @@ pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
             | (NodeType::PaintedTexture, "brush_color")
     ) || (node_type == &NodeType::ColorRamp
         && key.starts_with("color_")
-        && key[6..].parse::<u8>().is_ok())
+        && key.get(6..).and_then(|s| s.parse::<u8>().ok()).is_some())
 }
 
 /// Per-biome defaults for the AutoTexture params that are biome-
@@ -645,6 +683,36 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (TextureWeightmap, k) if k.starts_with("exclusion_") => (0.0, 1.0),
         // ColorRamp stop positions
         (ColorRamp, k) if k.starts_with("pos_") => (0.0, 1.0),
+        // FlowSelect
+        (FlowSelect, "threshold") => (0.0, 1.0),
+        (FlowSelect, "falloff") => (0.0, 0.5),
+        // SelectConvexity
+        (SelectConvexity, "strength") => (0.1, 8.0),
+        // Transform
+        (Transform, "translate_x") | (Transform, "translate_y") => (-0.5, 0.5),
+        (Transform, "scale") => (0.1, 4.0),
+        (Transform, "angle") => (0.0, 360.0),
+        // Warp
+        (Warp, "strength") => (0.0, 1.0),
+        // Stratify
+        (Stratify, "irregularity") | (Stratify, "hardness") => (0.0, 1.0),
+        (Stratify, "noise_scale") => (0.01, 0.5),
+        // MaskExpand / MaskShrink
+        (MaskExpand | MaskShrink, "radius") => (0.5, 20.0),
+        // SelectAspect
+        (SelectAspect, "direction") => (0.0, 360.0),
+        (SelectAspect, "width") => (0.0, 180.0),
+        (SelectAspect, "falloff") => (0.0, 90.0),
+        // LayoutGenerator per-shape numeric params
+        (LayoutGenerator, k)
+            if matches!(
+                k.trim_end_matches(|c: char| c.is_ascii_digit()),
+                "x_" | "y_" | "rx_" | "ry_" | "height_" | "falloff_"
+            ) =>
+        {
+            (0.0, 1.0)
+        }
+        (LayoutGenerator, k) if k.starts_with("angle_") => (0.0, 360.0),
         _ => return None,
     })
 }
@@ -659,6 +727,8 @@ pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
         (ThermalErosion, "iterations") => (10, 1_000),
         (TextureWeightmap, "layer_count") => (2, 8),
         (ColorRamp, "stop_count") => (2, 8),
+        (LayoutGenerator, "shape_count") => (1, 8),
+        (Stratify, "layer_count") => (2, 32),
         _ => return None,
     })
 }

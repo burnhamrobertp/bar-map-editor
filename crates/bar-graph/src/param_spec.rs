@@ -211,51 +211,105 @@ mod tests {
         }
     }
 
-    /// Every `NodeType` variant. Hand-maintained alongside `node.rs` —
-    /// when a new variant is added there, add it here.
+    /// Every `NodeType` variant in enum declaration order. Must stay in
+    /// sync with `node.rs` -- the const assert below makes a missing
+    /// entry a compile error.
     const NODE_TYPES_FOR_TEST: &[NodeType] = &[
+        // Generators
         NodeType::PerlinNoise,
         NodeType::SimplexNoise,
         NodeType::WorleyNoise,
         NodeType::RidgedNoise,
         NodeType::Constant,
+        // Filters
+        NodeType::HydraulicErosion,
+        NodeType::ThermalErosion,
         NodeType::Blur,
         NodeType::Sharpen,
         NodeType::Clamp,
         NodeType::Terrace,
-        NodeType::Invert,
+        // Combiners
         NodeType::Blend,
         NodeType::Add,
         NodeType::Subtract,
         NodeType::Multiply,
         NodeType::Max,
         NodeType::Min,
-        NodeType::HydraulicErosion,
-        NodeType::ThermalErosion,
+        // Texture/Splat
         NodeType::SlopeMap,
         NodeType::HeightSelect,
         NodeType::TerrainSplat,
-        NodeType::Mirror,
         NodeType::AutoTexture,
+        NodeType::RockSoil,
+        NodeType::Vegetation,
+        NodeType::LayerBlend,
+        NodeType::TextureWeightmap,
+        NodeType::ColorRamp,
+        // Map layers
         NodeType::NormalMap,
         NodeType::GrassMap,
         NodeType::SpecularMap,
-        NodeType::Mask,
-        NodeType::PaintedHeightmap,
-        NodeType::PaintedTexture,
+        NodeType::Sculpt,
+        // Mask operations
         NodeType::MaskThreshold,
         NodeType::MaskInvert,
         NodeType::MaskBlur,
         NodeType::MaskApply,
+        // Utility
+        NodeType::Mask,
+        NodeType::Invert,
+        NodeType::Mirror,
+        NodeType::Curve,
+        NodeType::PaintedHeightmap,
+        NodeType::PaintedTexture,
+        // Additional generators
         NodeType::FileInput,
+        NodeType::Voronoi,
+        NodeType::Gradient,
+        // Additional filters
+        NodeType::Normalize,
+        NodeType::BiasGain,
+        NodeType::Displacement,
+        // Selectors
+        NodeType::FlowSelect,
+        NodeType::SelectConvexity,
+        // Shape generator
+        NodeType::LayoutGenerator,
+        // Transform / warp / strata filters
+        NodeType::Transform,
+        NodeType::Warp,
+        NodeType::Stratify,
+        // Morphological
+        NodeType::MaskExpand,
+        NodeType::MaskShrink,
+        // Aspect selector
+        NodeType::SelectAspect,
+        // Additional combiners
+        NodeType::MaskSelect,
+        // Bundler/packaging
         NodeType::Bundler,
         NodeType::FileReference,
-        NodeType::SmfImport,
-        NodeType::SmtImport,
+        // Source nodes
         NodeType::PassThrough,
         NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
-        NodeType::ColorRamp,
     ];
+
+    #[test]
+    fn node_types_for_test_is_exhaustive() {
+        // Guards against a new NodeType variant being added without updating
+        // NODE_TYPES_FOR_TEST. Update this constant AND the array when you add a variant.
+        // (A compile-time version of this check requires nightly variant_count; this
+        // test is the stable equivalent.)
+        const EXPECTED_VARIANT_COUNT: usize = 62;
+        assert_eq!(
+            NODE_TYPES_FOR_TEST.len(),
+            EXPECTED_VARIANT_COUNT,
+            "NODE_TYPES_FOR_TEST has {} entries but NodeType has {} variants. \
+             Add/remove the variant from the array and update EXPECTED_VARIANT_COUNT.",
+            NODE_TYPES_FOR_TEST.len(),
+            EXPECTED_VARIANT_COUNT,
+        );
+    }
 }

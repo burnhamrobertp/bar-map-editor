@@ -327,6 +327,7 @@ fn build_recipe(
             height,
             map_settings: MapSettings::default(),
         },
+        features: Vec::new(),
     })
 }
 

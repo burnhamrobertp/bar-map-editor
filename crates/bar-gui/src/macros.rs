@@ -174,7 +174,13 @@ pub fn instantiate(
         key_to_id.insert(n.key.clone(), id);
         member_ids.insert(id);
         let pos = egui::pos2(drop_pos.x + step.x * i as f32, drop_pos.y);
-        visuals.push((id, NodeVisual { position: pos, size: default_size }));
+        visuals.push((
+            id,
+            NodeVisual {
+                position: pos,
+                size: default_size,
+            },
+        ));
     }
 
     for c in &template.connections {

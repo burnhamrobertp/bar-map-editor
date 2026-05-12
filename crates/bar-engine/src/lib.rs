@@ -18,6 +18,7 @@ pub mod project;
 pub mod recipe;
 pub mod targets;
 
+pub use bar_project::scan_to_project;
 pub use bundler::{execute_bundlers, find_bundler_nodes, BundlerResult};
 pub use executor::CpuExecutor;
 pub use export::{

@@ -33,6 +33,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Gradient", NodeType::Gradient),
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
+        ("Layout Generator", NodeType::LayoutGenerator),
     ];
 
     let filters = [
@@ -47,6 +48,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Normalize", NodeType::Normalize),
         ("Bias / Gain", NodeType::BiasGain),
         ("Displacement", NodeType::Displacement),
+        ("Transform", NodeType::Transform),
+        ("Warp", NodeType::Warp),
+        ("Stratify", NodeType::Stratify),
     ];
 
     let combiners = [
@@ -73,6 +77,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let splat_maps = [
         ("Slope Map", NodeType::SlopeMap),
         ("Height Select", NodeType::HeightSelect),
+        ("Flow Select", NodeType::FlowSelect),
+        ("Select Convexity", NodeType::SelectConvexity),
+        ("Select Aspect", NodeType::SelectAspect),
         ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
@@ -87,6 +94,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Invert", NodeType::MaskInvert),
         ("Mask Blur", NodeType::MaskBlur),
         ("Mask Apply", NodeType::MaskApply),
+        ("Mask Expand", NodeType::MaskExpand),
+        ("Mask Shrink", NodeType::MaskShrink),
     ];
 
     let sculpt = [("2D Sculpt", NodeType::Sculpt)];
@@ -97,8 +106,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ];
 
     let sources = [
-        ("SMF Import", NodeType::SmfImport),
-        ("SMT Import", NodeType::SmtImport),
         ("Pass-Through", NodeType::PassThrough),
         ("File Reference", NodeType::FileReference),
     ];
@@ -113,6 +120,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Gradient", NodeType::Gradient),
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
+        ("Layout Generator", NodeType::LayoutGenerator),
         ("Hydraulic Erosion", NodeType::HydraulicErosion),
         ("Thermal Erosion", NodeType::ThermalErosion),
         ("Blur", NodeType::Blur),
@@ -124,6 +132,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Normalize", NodeType::Normalize),
         ("Bias / Gain", NodeType::BiasGain),
         ("Displacement", NodeType::Displacement),
+        ("Transform", NodeType::Transform),
+        ("Warp", NodeType::Warp),
+        ("Stratify", NodeType::Stratify),
         ("Blend", NodeType::Blend),
         ("Add", NodeType::Add),
         ("Subtract", NodeType::Subtract),
@@ -139,6 +150,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Texture Weightmap", NodeType::TextureWeightmap),
         ("Slope Map", NodeType::SlopeMap),
         ("Height Select", NodeType::HeightSelect),
+        ("Flow Select", NodeType::FlowSelect),
+        ("Select Convexity", NodeType::SelectConvexity),
+        ("Select Aspect", NodeType::SelectAspect),
         ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
@@ -150,11 +164,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Invert", NodeType::MaskInvert),
         ("Mask Blur", NodeType::MaskBlur),
         ("Mask Apply", NodeType::MaskApply),
+        ("Mask Expand", NodeType::MaskExpand),
+        ("Mask Shrink", NodeType::MaskShrink),
         ("2D Sculpt", NodeType::Sculpt),
         ("Preview", NodeType::Preview),
         ("Bundler", NodeType::Bundler),
-        ("SMF Import", NodeType::SmfImport),
-        ("SMT Import", NodeType::SmtImport),
         ("Pass-Through", NodeType::PassThrough),
         ("File Reference", NodeType::FileReference),
     ];
@@ -235,7 +249,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         if !any {
             ui.label(
                 egui::RichText::new("No matches")
-                    .color(egui::Color32::from_gray(120))
+                    .color(ui.visuals().weak_text_color())
                     .italics(),
             );
         }
@@ -310,10 +324,18 @@ fn palette_item(ui: &mut egui::Ui, label: &str, node_type: &NodeType) -> egui::R
     let (rect, response) = ui.allocate_exact_size(desired_size, egui::Sense::click_and_drag());
 
     if ui.is_rect_visible(rect) {
+        let (bg_hover, bg_press, text_col) = {
+            let vis = ui.visuals();
+            (
+                vis.widgets.hovered.weak_bg_fill,
+                vis.widgets.active.weak_bg_fill,
+                vis.strong_text_color(),
+            )
+        };
         let bg = if response.is_pointer_button_down_on() {
-            egui::Color32::from_rgb(55, 60, 80)
+            bg_press
         } else if response.hovered() {
-            egui::Color32::from_rgb(48, 53, 70)
+            bg_hover
         } else {
             egui::Color32::TRANSPARENT
         };
@@ -328,12 +350,6 @@ fn palette_item(ui: &mut egui::Ui, label: &str, node_type: &NodeType) -> egui::R
             crate::app::node_type_color(node_type),
         );
 
-        // Label
-        let text_col = if response.hovered() || response.is_pointer_button_down_on() {
-            egui::Color32::WHITE
-        } else {
-            egui::Color32::from_rgb(190, 190, 200)
-        };
         ui.painter().text(
             egui::pos2(rect.left() + 19.0, rect.center().y),
             egui::Align2::LEFT_CENTER,

@@ -144,7 +144,6 @@ pub(crate) fn stamp_color_dab_in_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::BrushTarget;
 
     fn flat_hm(w: u32, h: u32, val: f32) -> Heightmap {
         let mut hm = Heightmap::new(w, h).unwrap();
@@ -159,7 +158,6 @@ mod tests {
     fn brush(tool: BrushTool) -> BrushState {
         BrushState {
             tool,
-            target: BrushTarget::Heightmap,
             radius_px: 4.0,
             strength: 0.1,
             falloff: 1.0,
@@ -217,7 +215,6 @@ mod tests {
         hm.set(8, 8, 1.0).unwrap();
         let b = BrushState {
             tool: BrushTool::Smooth,
-            target: BrushTarget::Heightmap,
             radius_px: 3.0,
             strength: 0.5,
             falloff: 1.0,
@@ -241,7 +238,6 @@ mod tests {
         let mut hm = flat_hm(8, 8, 1.0);
         let b = BrushState {
             tool: BrushTool::Raise,
-            target: BrushTarget::Heightmap,
             radius_px: 2.0,
             strength: 0.5,
             falloff: 1.0,

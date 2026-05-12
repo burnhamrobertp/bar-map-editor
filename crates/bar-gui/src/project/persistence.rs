@@ -16,6 +16,7 @@ use crate::app::{BarEditorApp, CanvasView};
 use crate::project::path::{
     pack_passthrough_files, pack_path_param, resolve_passthrough_files, resolve_path_param,
 };
+use crate::t;
 
 impl BarEditorApp {
     /// Snapshot the live editor state into a `bar_project::Project`
@@ -99,6 +100,7 @@ impl BarEditorApp {
                     ..self.map.settings.clone()
                 },
             },
+            features: self.map.features.clone(),
         };
 
         Project {
@@ -192,7 +194,7 @@ impl BarEditorApp {
     /// status.
     pub(crate) fn save_project(&mut self, path: std::path::PathBuf) {
         if let Err(e) = self.pack_assets_for_save(&path) {
-            self.dialog.status_message = Some(format!("Asset packing failed: {e}"));
+            self.log_error(format!("Asset packing failed: {e}"));
             return;
         }
         let project = self.build_project(&path);
@@ -200,13 +202,16 @@ impl BarEditorApp {
             Ok(()) => {
                 self.project.path = Some(path.clone());
                 self.project.is_dirty = false;
-                self.dialog.status_message = Some(format!("Saved: {}", path.display()));
+                self.log_info(t!(
+                    "editor.project.saved",
+                    path = path.display().to_string()
+                ));
                 self.settings.add_recent(&path);
                 self.settings.save();
                 self.project.last_autosave_at = Some(std::time::Instant::now());
             }
             Err(e) => {
-                self.dialog.status_message = Some(format!("Save failed: {e}"));
+                self.log_error(t!("editor.project.save_failed", error = e.to_string()));
             }
         }
     }
@@ -219,13 +224,6 @@ impl BarEditorApp {
     pub(crate) fn resolve_relative_paths(&mut self, project_dir: &std::path::Path) {
         for (_, node) in self.graph.nodes_mut() {
             match node.node_type {
-                NodeType::SmfImport => {
-                    resolve_path_param(&mut node.params, "path", project_dir);
-                }
-                NodeType::SmtImport => {
-                    resolve_path_param(&mut node.params, "path", project_dir);
-                    resolve_path_param(&mut node.params, "smf_path", project_dir);
-                }
                 NodeType::FileReference => {
                     resolve_path_param(&mut node.params, "path", project_dir);
                 }
@@ -262,19 +260,6 @@ impl BarEditorApp {
         // on-disk path that should be packed into the assets dir.
         for (_, node) in self.graph.nodes_mut() {
             match node.node_type {
-                NodeType::SmfImport => {
-                    pack_path_param(&mut node.params, "path", &project_dir, &assets_dir, "maps")?;
-                }
-                NodeType::SmtImport => {
-                    pack_path_param(&mut node.params, "path", &project_dir, &assets_dir, "maps")?;
-                    pack_path_param(
-                        &mut node.params,
-                        "smf_path",
-                        &project_dir,
-                        &assets_dir,
-                        "maps",
-                    )?;
-                }
                 NodeType::FileReference => {
                     pack_path_param(&mut node.params, "path", &project_dir, &assets_dir, "")?;
                 }

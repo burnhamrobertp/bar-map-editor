@@ -21,6 +21,7 @@
 
 pub(crate) mod color_ramp;
 pub(crate) mod group;
+pub(crate) mod layout_generator;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
@@ -338,6 +339,9 @@ impl BarEditorApp {
                 } else if node_type == NodeType::ColorRamp {
                     ui.separator();
                     self.draw_color_ramp_properties(ui, node_id, &node_params);
+                } else if node_type == NodeType::LayoutGenerator {
+                    ui.separator();
+                    self.draw_layout_generator_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.

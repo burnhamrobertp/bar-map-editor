@@ -17,9 +17,26 @@ use crate::app::{
     UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::io::is_text_file;
+use crate::panels::log::level_color;
 use crate::panels::tokens;
 use crate::project::path::collect_all_passthrough_files;
 use crate::t;
+
+/// Maps a 0-based layout index to its Ctrl+# trigger key (Num1..Num9).
+fn layout_num_key(idx: usize) -> Option<egui::Key> {
+    const KEYS: &[egui::Key] = &[
+        egui::Key::Num1,
+        egui::Key::Num2,
+        egui::Key::Num3,
+        egui::Key::Num4,
+        egui::Key::Num5,
+        egui::Key::Num6,
+        egui::Key::Num7,
+        egui::Key::Num8,
+        egui::Key::Num9,
+    ];
+    KEYS.get(idx).copied()
+}
 
 impl BarEditorApp {
     pub(crate) fn pre_frame_work(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -121,21 +138,32 @@ impl BarEditorApp {
             || self.dialog.show_about;
         let typing = ctx.wants_keyboard_input();
         if !modal_open {
-            let (do_undo, do_redo, do_save, do_save_as, do_open, do_new) = ctx.input(|i| {
-                let ctrl = i.modifiers.ctrl || i.modifiers.command;
-                let shift = i.modifiers.shift;
-                (
-                    !typing && ctrl && !shift && i.key_pressed(egui::Key::Z),
-                    !typing
-                        && ctrl
-                        && ((!shift && i.key_pressed(egui::Key::Y))
-                            || (shift && i.key_pressed(egui::Key::Z))),
-                    !typing && ctrl && !shift && i.key_pressed(egui::Key::S),
-                    !typing && ctrl && shift && i.key_pressed(egui::Key::S),
-                    !typing && ctrl && i.key_pressed(egui::Key::O),
-                    !typing && ctrl && i.key_pressed(egui::Key::N),
-                )
-            });
+            let (do_undo, do_redo, do_save, do_save_as, do_open, do_new, layout_idx) =
+                ctx.input(|i| {
+                    let ctrl = i.modifiers.ctrl || i.modifiers.command;
+                    let shift = i.modifiers.shift;
+                    let layout_idx = if !typing && ctrl && !shift {
+                        Layout::ALL.iter().enumerate().find_map(|(idx, _)| {
+                            layout_num_key(idx)
+                                .filter(|&k| i.key_pressed(k))
+                                .map(|_| idx)
+                        })
+                    } else {
+                        None
+                    };
+                    (
+                        !typing && ctrl && !shift && i.key_pressed(egui::Key::Z),
+                        !typing
+                            && ctrl
+                            && ((!shift && i.key_pressed(egui::Key::Y))
+                                || (shift && i.key_pressed(egui::Key::Z))),
+                        !typing && ctrl && !shift && i.key_pressed(egui::Key::S),
+                        !typing && ctrl && shift && i.key_pressed(egui::Key::S),
+                        !typing && ctrl && i.key_pressed(egui::Key::O),
+                        !typing && ctrl && i.key_pressed(egui::Key::N),
+                        layout_idx,
+                    )
+                });
             if do_undo {
                 self.undo();
             }
@@ -153,6 +181,13 @@ impl BarEditorApp {
             }
             if do_new {
                 self.start_new_project();
+            }
+            if let Some(idx) = layout_idx {
+                if self.has_project() {
+                    if let Some(&layout) = Layout::ALL.get(idx) {
+                        self.set_active_layout(layout);
+                    }
+                }
             }
         }
 
@@ -283,30 +318,32 @@ impl BarEditorApp {
                     ui.style_mut().spacing.button_padding = egui::vec2(7.78, 5.0);
                     ui.style_mut().spacing.item_spacing.x = 0.0;
                     let v = &mut ui.style_mut().visuals;
-                    v.widgets.hovered.weak_bg_fill = egui::Color32::from_rgb(60, 70, 90);
-                    v.widgets.hovered.bg_fill = egui::Color32::from_rgb(60, 70, 90);
-                    v.widgets.active.weak_bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                    v.widgets.active.bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                    v.widgets.open.weak_bg_fill = egui::Color32::from_rgb(80, 105, 145);
-                    v.widgets.open.bg_fill = egui::Color32::from_rgb(80, 105, 145);
+                    let base = v.panel_fill;
+                    let towards = if v.dark_mode {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::BLACK
+                    };
+                    let hover_fill = base.lerp_to_gamma(towards, 0.14);
+                    let active_fill = base.lerp_to_gamma(towards, 0.26);
+                    v.widgets.hovered.weak_bg_fill = hover_fill;
+                    v.widgets.hovered.bg_fill = hover_fill;
+                    v.widgets.active.weak_bg_fill = active_fill;
+                    v.widgets.active.bg_fill = active_fill;
+                    v.widgets.open.weak_bg_fill = active_fill;
+                    v.widgets.open.bg_fill = active_fill;
                     // Square corners so adjacent entries look like one
                     // continuous strip rather than rounded chips.
                     v.widgets.hovered.corner_radius = egui::CornerRadius::ZERO;
                     v.widgets.active.corner_radius = egui::CornerRadius::ZERO;
                     v.widgets.open.corner_radius = egui::CornerRadius::ZERO;
                     ui.menu_button(t!("editor.menu.file"), |ui| {
-                        // Submenu min width keeps label and shortcut
-                        // text from crowding even when the localised
-                        // label runs longer than English. Applied at
-                        // every top-level submenu below; nested submenus
-                        // (Open Recent, New from Preset) get their own
-                        // smaller `set_min_width` since their entries
-                        // tend to be shorter.
-                        ui.set_min_width(320.0);
+                        ui.spacing_mut().item_spacing.x = 60.0;
+                        let sc = ui.visuals().text_color();
                         if ui
                             .add(
                                 egui::Button::new(t!("editor.menu.new_project"))
-                                    .shortcut_text("Ctrl+N"),
+                                    .shortcut_text(egui::RichText::new("Ctrl+N").color(sc)),
                             )
                             .clicked()
                         {
@@ -315,10 +352,8 @@ impl BarEditorApp {
                         }
                         let mut macro_to_load: Option<String> = None;
                         ui.menu_button(t!("editor.menu.new_from_preset"), |ui| {
-                            ui.set_min_width(180.0);
                             for group in crate::macros::BUILTIN_MACRO_GROUPS {
                                 ui.menu_button(group.name, |ui| {
-                                    ui.set_min_width(140.0);
                                     for entry in group.entries {
                                         if ui.button(entry.display_name).clicked() {
                                             macro_to_load = Some(entry.full_name.to_string());
@@ -333,7 +368,10 @@ impl BarEditorApp {
                         }
                         ui.separator();
                         if ui
-                            .add(egui::Button::new(t!("editor.menu.open")).shortcut_text("Ctrl+O"))
+                            .add(
+                                egui::Button::new(t!("editor.menu.open"))
+                                    .shortcut_text(egui::RichText::new("Ctrl+O").color(sc)),
+                            )
                             .clicked()
                         {
                             self.open_file_dialog_async();
@@ -343,7 +381,6 @@ impl BarEditorApp {
                         let recent_empty = self.settings.recent_files.is_empty();
                         ui.add_enabled_ui(!recent_empty, |ui| {
                             ui.menu_button(t!("editor.menu.open_recent"), |ui| {
-                                ui.set_min_width(280.0);
                                 for p in self.settings.recent_files.iter() {
                                     let label = p
                                         .file_name()
@@ -376,7 +413,7 @@ impl BarEditorApp {
                             .add_enabled(
                                 in_project,
                                 egui::Button::new(t!("editor.menu.save_project"))
-                                    .shortcut_text("Ctrl+S"),
+                                    .shortcut_text(egui::RichText::new("Ctrl+S").color(sc)),
                             )
                             .clicked()
                         {
@@ -387,7 +424,7 @@ impl BarEditorApp {
                             .add_enabled(
                                 in_project,
                                 egui::Button::new(t!("editor.menu.save_project_as"))
-                                    .shortcut_text("Ctrl+Shift+S"),
+                                    .shortcut_text(egui::RichText::new("Ctrl+Shift+S").color(sc)),
                             )
                             .clicked()
                         {
@@ -403,7 +440,8 @@ impl BarEditorApp {
                         }
                     });
                     ui.menu_button(t!("editor.menu.edit"), |ui| {
-                        ui.set_min_width(320.0);
+                        ui.spacing_mut().item_spacing.x = 60.0;
+                        let sc = ui.visuals().text_color();
                         let undo_label = if self.history.can_undo() {
                             format!("{} ({})", t!("editor.menu.undo"), self.history.undo_depth())
                         } else {
@@ -412,7 +450,8 @@ impl BarEditorApp {
                         if ui
                             .add_enabled(
                                 self.history.can_undo(),
-                                egui::Button::new(undo_label).shortcut_text("Ctrl+Z"),
+                                egui::Button::new(undo_label)
+                                    .shortcut_text(egui::RichText::new("Ctrl+Z").color(sc)),
                             )
                             .clicked()
                         {
@@ -427,7 +466,8 @@ impl BarEditorApp {
                         if ui
                             .add_enabled(
                                 self.history.can_redo(),
-                                egui::Button::new(redo_label).shortcut_text("Ctrl+Shift+Z"),
+                                egui::Button::new(redo_label)
+                                    .shortcut_text(egui::RichText::new("Ctrl+Shift+Z").color(sc)),
                             )
                             .clicked()
                         {
@@ -435,11 +475,10 @@ impl BarEditorApp {
                             ui.close_menu();
                         }
                         ui.separator();
-                        // Auto Layout — disabled when there's no
-                        // project (nothing to lay out).
+                        // Auto Layout — only meaningful on the NodeGraph layout.
                         if ui
                             .add_enabled(
-                                self.has_project(),
+                                self.has_project() && self.active_layout == Layout::Standard,
                                 egui::Button::new(t!("editor.menu.auto_layout")),
                             )
                             .clicked()
@@ -453,38 +492,34 @@ impl BarEditorApp {
                             ui.close_menu();
                         }
                     });
-                    ui.menu_button("View", |ui| {
-                        ui.set_min_width(220.0);
+                    ui.menu_button(t!("editor.menu.view"), |ui| {
+                        ui.spacing_mut().item_spacing.x = 60.0;
+                        let sc = ui.visuals().text_color();
                         let has_proj = self.has_project();
-                        if ui
-                            .add_enabled(
-                                has_proj,
-                                egui::SelectableLabel::new(
-                                    has_proj && self.active_layout == Layout::Standard,
-                                    "Node Graph",
-                                ),
-                            )
-                            .clicked()
-                        {
-                            self.set_active_layout(Layout::Standard);
-                            ui.close_menu();
+                        for (idx, &layout) in Layout::ALL.iter().enumerate() {
+                            let is_active = has_proj && self.active_layout == layout;
+                            let shortcut = layout_num_key(idx).map(|_| format!("Ctrl+{}", idx + 1));
+                            let mut btn =
+                                egui::Button::new(t!(layout.i18n_key())).selected(is_active);
+                            if let Some(s) = shortcut {
+                                btn = btn.shortcut_text(egui::RichText::new(s).color(sc));
+                            }
+                            if ui.add_enabled(has_proj, btn).clicked() {
+                                self.set_active_layout(layout);
+                                ui.close_menu();
+                            }
                         }
+                        ui.separator();
                         if ui
-                            .add_enabled(
-                                has_proj,
-                                egui::SelectableLabel::new(
-                                    has_proj && self.active_layout == Layout::Sculpt3D,
-                                    "3D Sculpt",
-                                ),
-                            )
+                            .selectable_label(self.dialog.show_log, t!("editor.menu.log"))
                             .clicked()
                         {
-                            self.set_active_layout(Layout::Sculpt3D);
+                            self.dialog.show_log = !self.dialog.show_log;
                             ui.close_menu();
                         }
                     });
                     ui.menu_button(t!("editor.menu.help"), |ui| {
-                        ui.set_min_width(280.0);
+                        ui.spacing_mut().item_spacing.x = 60.0;
                         if ui.button(t!("editor.app.about")).clicked() {
                             self.dialog.show_about = true;
                             ui.close_menu();
@@ -512,12 +547,28 @@ impl BarEditorApp {
                     self.set_mapinfo_tab(MapInfoTab::Dimensions);
                 }
                 ui.separator();
-                if let Some(ref msg) = self.dialog.status_message {
-                    ui.colored_label(tokens::PORT_HEIGHTMAP, msg);
+                let status_resp = if let Some(ref msg) = self.dialog.status_message {
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(msg).color(level_color(self.dialog.status_level)),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
                 } else if let Some(id) = self.selection.node {
-                    ui.label(format!("Selected: {:?}", id));
+                    ui.add(
+                        egui::Label::new(format!("Selected: {:?}", id)).sense(egui::Sense::click()),
+                    )
                 } else {
-                    ui.label("No selection");
+                    ui.add(
+                        egui::Label::new(egui::RichText::new("No selection").weak())
+                            .sense(egui::Sense::click()),
+                    )
+                };
+                if status_resp
+                    .on_hover_text(t!("editor.log.open_hint"))
+                    .clicked()
+                {
+                    self.dialog.show_log = true;
                 }
             });
         });
@@ -846,10 +897,10 @@ impl BarEditorApp {
                 match std::fs::write(&editor.abs_path, &editor.content) {
                     Ok(()) => {
                         editor.is_dirty = false;
-                        self.dialog.status_message = Some(format!("Saved {}", editor.archive_path));
+                        self.log_info(format!("Saved {}", editor.archive_path));
                     }
                     Err(e) => {
-                        self.dialog.status_message = Some(format!("Save failed: {e}"));
+                        self.log_error(format!("Save failed: {e}"));
                     }
                 }
             }
@@ -865,6 +916,9 @@ impl BarEditorApp {
 
         // ── Modal: About ─────────────────────────────────────────────────────
         crate::panels::dialogs::draw_about(self, ctx);
+
+        // ── Modal: Log window ────────────────────────────────────────────────
+        self.draw_log_window(ctx);
 
         if self.dialog.show_inspector {
             self.draw_inspector_window(ctx);
@@ -997,8 +1051,7 @@ impl BarEditorApp {
                         self.run_validation();
                         if bar_project::has_errors(&self.validation.findings) {
                             self.dialog.show_validation_panel = true;
-                            self.dialog.status_message =
-                                Some("Test in BAR: fix validation errors first.".to_string());
+                            self.log_warning(t!("editor.toolbar.validate_first"));
                         } else {
                             self.preview.test_in_bar_requested = true;
                         }

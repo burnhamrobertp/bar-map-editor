@@ -39,12 +39,23 @@ impl BarEditorApp {
             egui::vec2(ui.available_width(), strip_h),
             egui::Sense::hover(),
         );
+        let (neutral_active, neutral_inactive, neutral_hover, baseline, label_active, label_dim) = {
+            let vis = ui.visuals();
+            let towards = if vis.dark_mode {
+                egui::Color32::WHITE
+            } else {
+                egui::Color32::BLACK
+            };
+            (
+                vis.panel_fill.lerp_to_gamma(towards, 0.20),
+                vis.panel_fill.lerp_to_gamma(towards, 0.05),
+                vis.panel_fill.lerp_to_gamma(towards, 0.28),
+                vis.panel_fill.lerp_to_gamma(towards, 0.14),
+                vis.strong_text_color(),
+                vis.strong_text_color(),
+            )
+        };
         let painter = ui.painter_at(strip_rect);
-
-        let neutral_active = tokens::TAB_BG_ACTIVE;
-        let neutral_inactive = tokens::TAB_BG_INACTIVE;
-        let neutral_hover = tokens::TAB_BG_HOVER;
-        let baseline = tokens::TAB_BASELINE;
 
         // Pick the tab's tinted base colour. SubGraph tabs use their
         // group's palette colour so two SubGraphs with different
@@ -94,11 +105,7 @@ impl BarEditorApp {
             let label_galley = painter.layout_no_wrap(
                 label.clone(),
                 font.clone(),
-                if is_active {
-                    tokens::TAB_LABEL_ACTIVE
-                } else {
-                    tokens::TAB_LABEL_DIM
-                },
+                if is_active { label_active } else { label_dim },
             );
             let close_w = if closable { 18.0 } else { 0.0 };
             let raw_w = label_galley.size().x + 24.0 + close_w;
@@ -199,7 +206,7 @@ impl BarEditorApp {
                 painter.galley(
                     egui::pos2(label_x, label_y - label_galley.size().y * 0.5),
                     label_galley,
-                    egui::Color32::WHITE,
+                    label_active,
                 );
             } else {
                 // Render an ellipsis-truncated copy.
@@ -207,13 +214,12 @@ impl BarEditorApp {
                 while !truncated.is_empty() {
                     truncated.pop();
                     let test = format!("{truncated}…");
-                    let galley =
-                        painter.layout_no_wrap(test.clone(), font.clone(), egui::Color32::WHITE);
+                    let galley = painter.layout_no_wrap(test.clone(), font.clone(), label_active);
                     if galley.size().x <= max_label_w {
                         painter.galley(
                             egui::pos2(label_x, label_y - galley.size().y * 0.5),
                             galley,
-                            egui::Color32::WHITE,
+                            label_active,
                         );
                         break;
                     }
@@ -234,7 +240,7 @@ impl BarEditorApp {
                 let close_color = if close_resp.hovered() {
                     tokens::SEVERITY_ERROR
                 } else {
-                    tokens::TAB_LABEL_DIM
+                    label_dim
                 };
                 let m = 4.0_f32;
                 painter.line_segment(

@@ -295,6 +295,19 @@ impl BarEditorApp {
             return (rects, handle_positions, conn_start, conn_end);
         }
         let painter = ui.painter().clone();
+        let (sg_border_default, sg_border_sel, sg_label_col) = {
+            let vis = ui.visuals();
+            let towards = if vis.dark_mode {
+                egui::Color32::WHITE
+            } else {
+                egui::Color32::BLACK
+            };
+            (
+                vis.window_fill().lerp_to_gamma(towards, 0.35),
+                tokens::NODE_BORDER_SEL,
+                vis.strong_text_color(),
+            )
+        };
         let block_w = 180.0_f32;
         let header_h = 22.0_f32;
         let row_h = 18.0_f32;
@@ -364,9 +377,9 @@ impl BarEditorApp {
             // node + group rendering).
             let is_selected = self.selection.group == Some(*gid);
             let stroke = if is_selected {
-                egui::Stroke::new(1.5, egui::Color32::from_rgb(100, 160, 255))
+                egui::Stroke::new(1.5, sg_border_sel)
             } else {
-                egui::Stroke::new(1.5, egui::Color32::BLACK)
+                egui::Stroke::new(1.5, sg_border_default)
             };
             painter.rect_stroke(rect, 6.0, stroke, egui::StrokeKind::Outside);
             // Port handles + labels. Inputs on the left, outputs on
@@ -394,7 +407,7 @@ impl BarEditorApp {
                     egui::Align2::LEFT_CENTER,
                     &port.label,
                     egui::FontId::proportional(11.0),
-                    egui::Color32::WHITE,
+                    sg_label_col,
                 );
                 if let Some((nid, pname)) = &port.binding {
                     handle_positions.insert((*nid, pname.clone()), p);
@@ -426,7 +439,7 @@ impl BarEditorApp {
                     egui::Align2::RIGHT_CENTER,
                     &port.label,
                     egui::FontId::proportional(11.0),
-                    egui::Color32::WHITE,
+                    sg_label_col,
                 );
                 if let Some((nid, pname)) = &port.binding {
                     handle_positions.insert((*nid, pname.clone()), p);

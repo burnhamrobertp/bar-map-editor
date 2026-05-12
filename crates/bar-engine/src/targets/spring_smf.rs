@@ -9,7 +9,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-use bar_data::{generate_minimap_dxt1, write_smt, ColorBuffer, SmfMap};
+use bar_data::{generate_minimap_dxt1, write_smt, ColorBuffer, SmfFeaturePlacement, SmfMap};
 
 use super::codec::{ExportCodec, ExportPlan, WrittenFiles};
 use super::config::TargetConfig;
@@ -17,7 +17,7 @@ use super::dimensions::{DimensionRule, DimensionSet};
 use super::layers::{LayerSet, LayerStatus};
 use super::validation::{Severity, ValidationError};
 use crate::export::resample_to_u8;
-use crate::recipe::MapSettings;
+use crate::recipe::{MapSettings, PlacedFeature};
 
 /// Spring/Recoil SMF format codec.
 pub struct SpringSmfCodec;
@@ -216,6 +216,7 @@ impl ExportCodec for SpringSmfCodec {
                 sq_x,
                 sq_y,
                 &plan.settings,
+                &plan.features,
                 &smf_path,
             )?;
             written.files.push(format!("maps/{}.smf", map_name));
@@ -279,6 +280,7 @@ impl SpringSmfCodec {
         map_x: u32,
         map_y: u32,
         settings: &MapSettings,
+        features: &[PlacedFeature],
         path: &Path,
     ) -> Result<()> {
         let mut smf =
@@ -287,6 +289,17 @@ impl SpringSmfCodec {
         smf.smt_filename = format!("maps/{}.smt", map_name);
         smf.header.min_height = settings.min_height;
         smf.header.max_height = settings.max_height;
+        smf.features = features
+            .iter()
+            .map(|f| SmfFeaturePlacement {
+                feature_type: f.feature_type.clone(),
+                x: f.x,
+                y: f.y,
+                z: f.z,
+                angle: f.angle,
+                taken_damage: f.taken_damage,
+            })
+            .collect();
 
         let (mm_w, mm_h) = smf.header.metalmap_size();
         let mm_size = (mm_w as usize) * (mm_h as usize);
@@ -891,6 +904,7 @@ mod tests {
             version: None,
             dimensions: dims,
             settings: MapSettings::default(),
+            features: Vec::new(),
         };
         let layers = LayerSet::default(); // no layers
 
@@ -911,6 +925,7 @@ mod tests {
             version: None,
             dimensions: codec.compute_dimensions(&config, 257, 257),
             settings,
+            features: Vec::new(),
         }
     }
 

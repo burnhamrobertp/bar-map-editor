@@ -18,6 +18,7 @@ pub mod canvas;
 pub mod dialogs;
 pub mod icons;
 pub mod inspector;
+pub mod log;
 pub mod mapinfo_editor;
 pub mod palette;
 pub mod properties;
