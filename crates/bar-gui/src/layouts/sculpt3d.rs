@@ -110,23 +110,32 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     // --- BRUSH sliders ---
     ui.strong("Brush");
     ui.add_space(4.0);
-    ui.add(
-        egui::Slider::new(&mut app.paint.brush.radius_px, 0.5..=96.0)
-            .text("Radius")
-            .logarithmic(true)
-            .clamping(egui::SliderClamping::Always),
-    );
-    ui.add(
-        egui::Slider::new(&mut app.paint.brush.strength, 0.001..=0.2)
-            .text("Strength")
-            .logarithmic(true)
-            .clamping(egui::SliderClamping::Always),
-    );
-    ui.add(
-        egui::Slider::new(&mut app.paint.brush.falloff, 0.5..=4.0)
-            .text("Falloff")
-            .clamping(egui::SliderClamping::Always),
-    );
+    egui::Grid::new("sculpt_brush_params")
+        .num_columns(2)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Radius");
+            ui.add(crate::panels::widgets::ParamSlider::new(
+                &mut app.paint.brush.radius_px,
+                0.5,
+                96.0,
+            ));
+            ui.end_row();
+            ui.label("Strength");
+            ui.add(crate::panels::widgets::ParamSlider::new(
+                &mut app.paint.brush.strength,
+                0.001,
+                0.2,
+            ));
+            ui.end_row();
+            ui.label("Falloff");
+            ui.add(crate::panels::widgets::ParamSlider::new(
+                &mut app.paint.brush.falloff,
+                0.5,
+                4.0,
+            ));
+            ui.end_row();
+        });
 }
 
 fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayerEntry) {

@@ -121,4 +121,4 @@ pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
 pub const SLIDER_BG: Color32 = Color32::from_rgb(28, 30, 40);
 pub const SLIDER_FILL: Color32 = Color32::from_rgb(55, 95, 165);
 pub const SLIDER_HANDLE: Color32 = Color32::from_rgb(130, 175, 235);
-pub const SLIDER_TEXT: Color32 = Color32::from_rgb(220, 220, 230);
+pub const SLIDER_HANDLE_HOT: Color32 = Color32::from_rgb(190, 220, 255);
