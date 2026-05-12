@@ -40,8 +40,8 @@ impl BarEditorApp {
         self.project.is_dirty = false;
         self.project.map_info_file = None;
         self.map.settings = bar_project::MapSettings::default();
-        self.map.width = 256;
-        self.map.height = 256;
+        self.map.width = 513;
+        self.map.height = 513;
         self.map.min_height = 0.0;
         self.map.max_height = 800.0;
         self.map.recipe_meta = RecipeMeta::default();

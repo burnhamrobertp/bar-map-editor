@@ -22,7 +22,7 @@ pub struct WrittenFiles {
 pub struct ExportPlan {
     /// Map name (used in file names and the `name` field of mapinfo.lua).
     pub map_name: String,
-    /// Optional shortname used by mapinfo.lua. Falls back to `map_name`.
+    /// Optional shortname used by mapinfo.lua. Omitted when `None`.
     pub shortname: Option<String>,
     /// Free-form description used by mapinfo.lua.
     pub description: String,
