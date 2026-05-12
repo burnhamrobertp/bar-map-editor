@@ -264,23 +264,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("path", ParamValue::String(String::new())),
             ("bundle_path", ParamValue::String(String::new())),
         ],
-        NodeType::SmfImport => vec![
-            ("path", ParamValue::String(String::new())),
-            ("load_metalmap", ParamValue::Bool(true)),
-            ("load_typemap", ParamValue::Bool(true)),
-        ],
-        NodeType::SmtImport => vec![
-            ("path", ParamValue::String(String::new())),
-            ("smf_path", ParamValue::String(String::new())),
-            ("tiles_x", ParamValue::UInt(0)),
-            ("tiles_y", ParamValue::UInt(0)),
-            // 4096 covers typical BAR maps (8×8 to 32×32 squares) at full
-            // native texture resolution. Larger maps are still capped, but
-            // 4096² × 4 bytes RGBA = 64 MB — well within GPU memory.
-            // The cap was previously 512 which lost ~6× detail on
-            // kolmog-class maps (1280-px native textures).
-            ("max_preview_size", ParamValue::UInt(4096)),
-        ],
         NodeType::PaintedHeightmap => vec![
             // Hex-encoded greyscale pixel grid (each pixel is one u8).
             // Empty until the user paints. The buffer is sized to

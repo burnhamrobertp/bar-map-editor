@@ -162,12 +162,6 @@ pub enum NodeType {
     FileReference,
 
     // Source nodes (import from disk)
-    /// Reads a flat .smf file from disk (no archive). Exposes heightmap, metalmap, typemap.
-    /// Deserialises legacy "Sd7Import" project nodes without error.
-    #[serde(alias = "Sd7Import")]
-    SmfImport,
-    /// Reads a flat .smt tile file from disk and assembles a texture preview.
-    SmtImport,
     /// Holds all extra files from an extracted .sd7 that should pass through to the bundler
     /// without processing (lua configs, sounds, textures, etc.).
     PassThrough,
@@ -705,21 +699,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         ),
 
         NodeType::FileReference => (vec![], vec![Port::new("file", "File", PortKind::File)]),
-
-        // --- Import/Export ---
-        NodeType::SmfImport => (
-            vec![],
-            vec![
-                Port::new("heightmap", "Heightmap", PortKind::Heightmap),
-                Port::new("metalmap", "Metal Map", PortKind::Heightmap),
-                Port::new("typemap", "Type Map", PortKind::Heightmap),
-            ],
-        ),
-
-        NodeType::SmtImport => (
-            vec![],
-            vec![Port::new("texture", "Texture", PortKind::Color)],
-        ),
 
         NodeType::PassThrough => (
             vec![],

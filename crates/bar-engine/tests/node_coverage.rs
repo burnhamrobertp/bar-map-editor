@@ -15,9 +15,9 @@
 //! - One config-dependent behaviour: e.g. clamp respects min/max,
 //!   blur smooths, invert reflects, blend factor controls mix.
 //!
-//! Source nodes that need on-disk files (FileInput, SmfImport,
-//! SmtImport) and the terminal nodes (Bundler, Preview, FileReference,
-//! PassThrough) live in their own targeted tests in
+//! Source nodes that need on-disk files (FileInput) and the terminal
+//! nodes (Bundler, Preview, FileReference, PassThrough) live in their
+//! own targeted tests in
 //! `crates/bar-engine/src/executor.rs::tests` — they're not retried
 //! here because they need fixtures or have no observable port output.
 

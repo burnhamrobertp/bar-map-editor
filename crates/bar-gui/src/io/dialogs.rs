@@ -17,12 +17,6 @@ use bar_graph::NodeType;
 pub(crate) fn make_path_dialog(app: &BarEditorApp, node_type: &NodeType) -> rfd::FileDialog {
     let base = app.make_dialog();
     match node_type {
-        NodeType::SmfImport => base
-            .set_title("Select .smf Map File")
-            .add_filter("Spring Map File", &["smf"]),
-        NodeType::SmtImport => base
-            .set_title("Select .smt Tile File")
-            .add_filter("Spring Map Tiles", &["smt"]),
         NodeType::FileInput => base
             .set_title("Select Image File")
             .add_filter("Image", &["png", "tiff", "tif", "jpg", "jpeg"]),

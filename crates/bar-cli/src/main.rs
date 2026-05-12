@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
 
-use bar_engine::recipe::{Recipe, RECIPE_SCHEMA_VERSION};
+use bar_engine::recipe::Recipe;
 use bar_engine::CpuExecutor;
 
 mod macro_preview;
@@ -670,18 +670,10 @@ fn cmd_preview(
 
 /// Load a `.barproj` directly, or build a GUI-equivalent graph from an `.sd7`.
 ///
-/// SD7 path: extract via `extract_sd7_to_work_dir`, then construct a recipe
-/// with SmfImport + SmtImport + Bundler nodes wired the same way the GUI's
-/// `finish_open_map` builds them. This means the CLI preview matches what
-/// the user sees in the editor — same heightmap, same texture, same
-/// connections — instead of going through the simplified
-/// `import_sd7_to_project` path which only piped a heightmap PNG.
+/// SD7 path: extract via `extract_sd7_to_work_dir` then convert with
+/// `scan_to_project` -- same path the GUI takes so previews match exactly.
 fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
     use anyhow::Context as _;
-    use bar_engine::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode};
-    use bar_engine::{EditorLayout, Project};
-    use bar_graph::{NodeType, ParamValue};
-    use std::collections::HashMap as Map;
 
     let ext = path
         .extension()
@@ -692,114 +684,7 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
         Some("sd7") => {
             let scan = bar_engine::extract_sd7_to_work_dir(path)
                 .with_context(|| format!("Failed to extract {}", path.display()))?;
-
-            let mut nodes: Vec<RecipeNode> = Vec::new();
-            let mut connections: Vec<RecipeConnection> = Vec::new();
-
-            if let Some(ref smf_abs) = scan.smf_abs {
-                let mut params = Map::new();
-                params.insert(
-                    "path".into(),
-                    ParamValue::String(smf_abs.to_string_lossy().into_owned()),
-                );
-                params.insert("load_metalmap".into(), ParamValue::Bool(true));
-                params.insert("load_typemap".into(), ParamValue::Bool(true));
-                nodes.push(RecipeNode {
-                    key: "smf".into(),
-                    node_type: NodeType::SmfImport,
-                    label: "SMF Import".into(),
-                    params,
-                });
-                connections.push(RecipeConnection {
-                    from: "smf.heightmap".into(),
-                    to: "bundler.heightmap".into(),
-                });
-                connections.push(RecipeConnection {
-                    from: "smf.metalmap".into(),
-                    to: "bundler.metalmap".into(),
-                });
-                connections.push(RecipeConnection {
-                    from: "smf.typemap".into(),
-                    to: "bundler.typemap".into(),
-                });
-            }
-
-            if let Some(ref smt_abs) = scan.smt_abs {
-                let mut params = Map::new();
-                params.insert(
-                    "path".into(),
-                    ParamValue::String(smt_abs.to_string_lossy().into_owned()),
-                );
-                if let Some(ref smf_abs) = scan.smf_abs {
-                    params.insert(
-                        "smf_path".into(),
-                        ParamValue::String(smf_abs.to_string_lossy().into_owned()),
-                    );
-                }
-                if let Some((tx, ty)) = scan.tile_grid {
-                    params.insert("tiles_x".into(), ParamValue::UInt(tx));
-                    params.insert("tiles_y".into(), ParamValue::UInt(ty));
-                }
-                nodes.push(RecipeNode {
-                    key: "smt".into(),
-                    node_type: NodeType::SmtImport,
-                    label: "SMT Import".into(),
-                    params,
-                });
-                connections.push(RecipeConnection {
-                    from: "smt.texture".into(),
-                    to: "bundler.texture".into(),
-                });
-            }
-
-            nodes.push(RecipeNode {
-                key: "bundler".into(),
-                node_type: NodeType::Bundler,
-                label: "Bundler".into(),
-                params: Map::new(),
-            });
-
-            let (min_height, max_height) = scan.height_range.unwrap_or((0.0, 1024.0));
-            let (width, height) = scan.map_dims.unwrap_or((257, 257));
-
-            let recipe = Recipe {
-                schema_version: RECIPE_SCHEMA_VERSION,
-                name: scan.map_name.clone(),
-                shortname: None,
-                description: format!(
-                    "Imported preview: {}",
-                    path.file_name().unwrap_or_default().to_string_lossy()
-                ),
-                author: None,
-                version: None,
-                nodes,
-                connections,
-                output: OutputConfig {
-                    width,
-                    height,
-                    map_settings: MapSettings {
-                        min_height,
-                        max_height,
-                        ..MapSettings::default()
-                    },
-                },
-            };
-
-            // width / height already live on `recipe.output`; no
-            // duplicate on the layout.
-            let _ = (width, height);
-            Ok(Project {
-                recipe,
-                layout: EditorLayout {
-                    node_positions: Map::new(),
-                    node_sizes: Map::new(),
-                    canvas_offset: (0.0, 0.0),
-                    map_info_file: None,
-                    groups: Vec::new(),
-                    open_tabs: Vec::new(),
-                    active_tab: 0,
-                },
-            })
+            Ok(bar_engine::scan_to_project(&scan))
         }
         _ => bar_engine::Project::load(path)
             .with_context(|| format!("Failed to load {}", path.display())),
@@ -821,8 +706,7 @@ fn resolve_relative_paths_in_graph(graph: &mut bar_graph::GraphEngine, project_d
     };
     for (_, node) in graph.nodes_mut() {
         let path_keys: &[&str] = match node.node_type {
-            NodeType::SmfImport | NodeType::FileReference => &["path"],
-            NodeType::SmtImport => &["path", "smf_path"],
+            NodeType::FileReference => &["path"],
             NodeType::PassThrough => &[],
             _ => &[],
         };

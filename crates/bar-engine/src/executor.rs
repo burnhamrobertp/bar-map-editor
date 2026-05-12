@@ -7,7 +7,7 @@ use bar_compute::{
     generate_noise_cpu, hydraulic_erosion, thermal_erosion, HydraulicErosionParams, NoiseParams,
     NoiseType, ThermalErosionParams,
 };
-use bar_data::{smt::TILE_SIZE, ColorBuffer, Heightmap, SmfMap};
+use bar_data::{smt::TILE_SIZE, ColorBuffer, Heightmap};
 use bar_graph::{EvalError, NodeExecutor, NodeType, ParamValue, PortValue};
 use std::f32::consts::PI;
 
@@ -729,93 +729,6 @@ impl NodeExecutor for CpuExecutor {
                 // Terminal node — inputs are collected after graph evaluation by execute_bundlers().
             }
 
-            NodeType::SmfImport => {
-                let path = get_string(params, "path", "");
-                if path.is_empty() {
-                    return Ok(outputs);
-                }
-
-                let file = std::fs::File::open(path).map_err(|e| {
-                    EvalError::Compute(format!("SmfImport: cannot open '{}': {}", path, e))
-                })?;
-                let smf = SmfMap::read(&mut std::io::BufReader::new(file))
-                    .map_err(|e| EvalError::Compute(format!("SmfImport: parse error: {}", e)))?;
-
-                outputs.insert("heightmap".to_string(), PortValue::Heightmap(smf.heightmap));
-
-                if get_bool(params, "load_metalmap", true) {
-                    let (mm_w, mm_h) = smf.header.metalmap_size();
-                    let mm_data: Vec<f32> =
-                        smf.metalmap.iter().map(|&v| v as f32 / 255.0).collect();
-                    if let Ok(mm_hm) = Heightmap::frbar_data(mm_w, mm_h, mm_data) {
-                        outputs.insert("metalmap".to_string(), PortValue::Heightmap(mm_hm));
-                    }
-                }
-
-                if get_bool(params, "load_typemap", true) {
-                    let (tm_w, tm_h) = smf.header.metalmap_size();
-                    let tm_data: Vec<f32> = smf.typemap.iter().map(|&v| v as f32 / 255.0).collect();
-                    if let Ok(tm_hm) = Heightmap::frbar_data(tm_w, tm_h, tm_data) {
-                        outputs.insert("typemap".to_string(), PortValue::Heightmap(tm_hm));
-                    }
-                }
-            }
-
-            NodeType::SmtImport => {
-                let path = get_string(params, "path", "");
-                if path.is_empty() {
-                    return Ok(outputs);
-                }
-                let max_preview = get_uint(params, "max_preview_size", 4096);
-
-                // Determine tile grid: prefer reading from the paired .smf file.
-                let smf_path = get_string(params, "smf_path", "");
-                let (tiles_x, tiles_y, tile_indices) = if !smf_path.is_empty() {
-                    if let Ok(f) = std::fs::File::open(smf_path) {
-                        if let Ok(smf) = SmfMap::read(&mut std::io::BufReader::new(f)) {
-                            let (tx, ty) = smf.header.tile_grid_size();
-                            (tx, ty, smf.tile_indices)
-                        } else {
-                            let tx = get_uint(params, "tiles_x", 0);
-                            let ty = get_uint(params, "tiles_y", 0);
-                            let seq: Vec<i32> = (0..(tx * ty) as i32).collect();
-                            (tx, ty, seq)
-                        }
-                    } else {
-                        let tx = get_uint(params, "tiles_x", 0);
-                        let ty = get_uint(params, "tiles_y", 0);
-                        let seq: Vec<i32> = (0..(tx * ty) as i32).collect();
-                        (tx, ty, seq)
-                    }
-                } else {
-                    let tx = get_uint(params, "tiles_x", 0);
-                    let ty = get_uint(params, "tiles_y", 0);
-                    let seq: Vec<i32> = (0..(tx * ty) as i32).collect();
-                    (tx, ty, seq)
-                };
-
-                if tiles_x == 0 || tiles_y == 0 {
-                    return Ok(outputs);
-                }
-
-                let file = std::fs::File::open(path).map_err(|e| {
-                    EvalError::Compute(format!("SmtImport: cannot open '{}': {}", path, e))
-                })?;
-                let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file))
-                    .map_err(|e| EvalError::Compute(format!("SmtImport: parse error: {}", e)))?;
-
-                let src_w = tiles_x * TILE_SIZE;
-                let src_h = tiles_y * TILE_SIZE;
-                let out_w = max_preview.min(src_w).max(1);
-                let out_h = max_preview.min(src_h).max(1);
-
-                let rgba =
-                    assemble_texture_preview(&tiles, &tile_indices, tiles_x, tiles_y, out_w, out_h);
-                let color_buf = ColorBuffer::from_rgba8(out_w, out_h, &rgba)
-                    .map_err(|e| EvalError::Compute(e.to_string()))?;
-                outputs.insert("texture".to_string(), PortValue::Color(color_buf));
-            }
-
             NodeType::PassThrough => {
                 let files_str = get_string(params, "files", "");
                 let file_list: Vec<bar_graph::FileRef> = files_str
@@ -868,7 +781,7 @@ fn generate_noise(
 ///
 /// Uses nearest-neighbor sampling directly against the tile grid — no full-resolution
 /// intermediate buffer is ever allocated. Each output pixel maps to one source texel.
-fn assemble_texture_preview(
+pub(crate) fn assemble_texture_preview(
     tiles: &[Vec<u8>],
     tile_indices: &[i32],
     tiles_x: u32,

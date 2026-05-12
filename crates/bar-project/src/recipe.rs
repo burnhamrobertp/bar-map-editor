@@ -914,28 +914,26 @@ mod tests {
         assert_eq!(graph.connections().len(), 3);
     }
 
-    /// A recipe that mirrors the SD7 import pipeline (SmfImport + Bundler)
-    /// round-trips through JSON and builds its graph cleanly.
+    /// A PaintedHeightmap -> Bundler pipeline round-trips through JSON and
+    /// builds its graph cleanly.
     #[test]
-    fn sd7_import_style_recipe_roundtrip() {
+    fn painted_heightmap_to_bundler_roundtrip() {
         let recipe = Recipe {
             schema_version: RECIPE_SCHEMA_VERSION,
-            name: "SD7 import test".to_string(),
+            name: "Import test".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
             nodes: vec![
                 RecipeNode {
-                    key: "smf".to_string(),
-                    node_type: NodeType::SmfImport,
-                    label: "SMF".to_string(),
+                    key: "hm".to_string(),
+                    node_type: NodeType::PaintedHeightmap,
+                    label: "Heightmap".to_string(),
                     params: {
                         let mut p = HashMap::new();
-                        p.insert(
-                            "path".to_string(),
-                            ParamValue::String("/tmp/test.smf".to_string()),
-                        );
+                        p.insert("data".to_string(), ParamValue::String(String::new()));
+                        p.insert("resolution".to_string(), ParamValue::UInt(512));
                         p
                     },
                 },
@@ -947,7 +945,7 @@ mod tests {
                 },
             ],
             connections: vec![RecipeConnection {
-                from: "smf.heightmap".to_string(),
+                from: "hm.output".to_string(),
                 to: "out.heightmap".to_string(),
             }],
             output: OutputConfig {
