@@ -157,9 +157,7 @@ pub(crate) struct PaletteDrag {
     pub label: String,
 }
 
-pub use crate::paint::{
-    BrushState, BrushTarget, BrushTool, InspectorMode, PaintSession, SculptState,
-};
+pub use crate::paint::{BrushState, BrushTool, InspectorMode, PaintSession};
 
 pub use crate::editor::SmfLightingSnapshot;
 
@@ -229,6 +227,8 @@ pub struct BarEditorApp {
     /// In-flight drag from the node palette (set when pointer starts
     /// dragging an item, cleared on pointer release).
     pub(crate) palette_drag: Option<PaletteDrag>,
+    /// Live text filter typed into the palette search box. Empty = show all.
+    pub(crate) palette_filter: String,
     pub(crate) settings: Settings,
     /// Active top-level UI layout. Loaded from settings on launch,
     /// persisted via `set_active_layout`.
@@ -262,6 +262,7 @@ impl Default for BarEditorApp {
             props: crate::editor::PropsPanelState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
+            palette_filter: String::new(),
             settings: Settings::default(),
             active_layout: Layout::default(),
         }
@@ -745,9 +746,6 @@ impl BarEditorApp {
     /// edits and ignore the incoming heightmap. Cleared by starting a
     /// new project.
     pub fn set_inspector_heightmap(&mut self, hm: bar_data::Heightmap) {
-        if self.paint.sculpt.dirty {
-            return;
-        }
         self.paint.heightmap = Some(hm);
         self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
     }
@@ -759,14 +757,7 @@ impl BarEditorApp {
         if self.active_layout == Layout::Sculpt3D {
             return true;
         }
-        self.paint.inspector_mode == InspectorMode::Sculpt
-            && (self.dialog.show_inspector || self.paint.sculpt.dirty)
-    }
-
-    /// Which data layer the brush currently writes to. The 3D viewport
-    /// uses this to dispatch dabs to the right paint pipeline.
-    pub fn active_brush_target(&self) -> BrushTarget {
-        self.paint.brush.target
+        self.paint.inspector_mode == InspectorMode::Sculpt && self.dialog.show_inspector
     }
 
     /// Current brush radius in heightmap pixels. The 3D viewport

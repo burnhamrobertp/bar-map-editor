@@ -305,11 +305,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         active_tab: 0,
     };
 
-    Project {
-        recipe,
-        layout,
-        sculpt: Default::default(),
-    }
+    Project { recipe, layout }
 }
 
 /// Result of scanning an extracted .sd7 work directory.

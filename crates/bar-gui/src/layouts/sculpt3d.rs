@@ -1,141 +1,229 @@
-//! Sculpt3D layout — full-width 3D viewport + brush controls.
+//! Sculpt3D layout -- left layer panel + central 3D viewport.
 //!
-//! Brush strokes write directly to `app.paint.sculpt` (the project-level
-//! `SculptState`). The export pipeline merges those layers onto graph output
-//! at bundle time via `apply_sculpt_record` in `bar-engine/bundler.rs`.
+//! The layer panel derives its contents from the live node graph via
+//! `compute_sculpt_layers`. Selecting a layer sets
+//! `paint.selected_sculpt_layer`; brush strokes then write into that
+//! node's live buffer and flush to node params on stroke end.
+//!
+//! The central panel is left unclaimed here -- bar-app draws the 3D
+//! viewport there after this function returns.
 
 use eframe::egui;
+use eframe::egui::Color32;
 
-use crate::app::{BarEditorApp, BrushTarget, BrushTool};
+use crate::app::{BarEditorApp, BrushTool};
+use crate::panels::canvas::sculpt_layers::{compute_sculpt_layers, SculptLayerEntry};
 
 /// Draw the Sculpt3D layout.
-///
-/// The shell (menu bar, status bar, action bar, modals) is drawn by
-/// `dispatch::draw_active` before this is called. This function owns
-/// only the brush-controls side panel and the viewport central panel.
 pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-    // Right panel: brush controls + layer selector.
-    egui::SidePanel::right("sculpt3d_controls")
-        .min_width(200.0)
-        .max_width(280.0)
+    egui::SidePanel::left("sculpt3d_layers")
+        .min_width(220.0)
+        .max_width(300.0)
         .show(ctx, |ui| {
-            ui.add_space(4.0);
-            ui.strong("Brush");
-            ui.separator();
+            draw_layer_panel(app, ui);
+        });
+    // Central panel is left unclaimed -- bar-app fills it with the 3D viewport.
+}
 
-            // Layer selector.
-            ui.label("Layer");
-            ui.horizontal(|ui| {
-                for target in [
-                    BrushTarget::Heightmap,
-                    BrushTarget::Color,
-                    BrushTarget::Metalmap,
-                    BrushTarget::Typemap,
-                ] {
-                    ui.selectable_value(&mut app.paint.brush.target, target, target.label());
+fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    let entries = compute_sculpt_layers(&app.graph);
+
+    // --- LAYERS section ---
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.strong("Layers");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.small_button("+").clicked() {
+                add_paint_layer(app);
+            }
+        });
+    });
+    ui.separator();
+
+    if entries.is_empty() {
+        ui.weak("Add a Bundler node to enable sculpting.");
+    } else {
+        egui::ScrollArea::vertical()
+            .max_height(300.0)
+            .show(ui, |ui| {
+                for entry in &entries {
+                    draw_layer_row(app, ui, entry);
                 }
             });
-            ui.add_space(4.0);
+    }
 
-            // Tool selector.
-            ui.label("Tool");
-            ui.horizontal(|ui| {
+    ui.add_space(8.0);
+    ui.separator();
+
+    // --- TOOLS section ---
+    ui.strong("Tools");
+    ui.add_space(4.0);
+
+    let selected_kind = app
+        .paint
+        .selected_sculpt_layer
+        .and_then(|id| app.graph.get_node(id))
+        .map(|n| n.node_type.clone());
+
+    let has_terrain = app.paint.heightmap.is_some();
+
+    match selected_kind {
+        Some(bar_graph::NodeType::PaintedHeightmap) | Some(bar_graph::NodeType::Sculpt) => {
+            ui.horizontal_wrapped(|ui| {
+                let cur = app.paint.brush.tool;
                 for tool in [
                     BrushTool::Raise,
                     BrushTool::Lower,
                     BrushTool::Smooth,
                     BrushTool::Flatten,
                 ] {
-                    ui.selectable_value(&mut app.paint.brush.tool, tool, tool.label());
+                    if ui.selectable_label(cur == tool, tool.label()).clicked() {
+                        app.paint.brush.tool = tool;
+                    }
                 }
             });
-            ui.add_space(4.0);
-
-            // Brush sliders.
-            ui.add(
-                egui::Slider::new(&mut app.paint.brush.radius_px, 0.5..=96.0)
-                    .text("Radius")
-                    .logarithmic(true)
-                    .clamping(egui::SliderClamping::Always),
-            );
-            ui.add(
-                egui::Slider::new(&mut app.paint.brush.strength, 0.001..=0.2)
-                    .text("Strength")
-                    .clamping(egui::SliderClamping::Always)
-                    .logarithmic(true),
-            );
-            ui.add(
-                egui::Slider::new(&mut app.paint.brush.falloff, 0.5..=4.0)
-                    .text("Falloff")
-                    .clamping(egui::SliderClamping::Always),
-            );
-
-            // Color picker (shown only for Color target).
-            if app.paint.brush.target == BrushTarget::Color {
-                ui.add_space(4.0);
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
+            }
+        }
+        Some(bar_graph::NodeType::PaintedTexture) => {
+            ui.horizontal(|ui| {
                 ui.label("Colour");
                 let [r, g, b] = app.paint.brush.color_rgb;
-                let mut color32 = egui::Color32::from_rgb(r, g, b);
-                if ui.color_edit_button_srgba(&mut color32).changed() {
-                    app.paint.brush.color_rgb = [color32.r(), color32.g(), color32.b()];
+                let mut c = egui::Color32::from_rgb(r, g, b);
+                if ui.color_edit_button_srgba(&mut c).changed() {
+                    app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
                 }
+            });
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
             }
+        }
+        _ => {
+            ui.weak("Select a paintable layer.");
+        }
+    }
 
-            // Value slider for metal/type.
-            if matches!(
-                app.paint.brush.target,
-                BrushTarget::Metalmap | BrushTarget::Typemap
-            ) {
-                ui.add_space(4.0);
-                ui.add(
-                    egui::Slider::new(&mut app.paint.brush.paint_value, 0.0..=1.0)
-                        .text("Value")
-                        .clamping(egui::SliderClamping::Always),
-                );
-            }
+    ui.add_space(8.0);
+    ui.separator();
 
-            ui.add_space(8.0);
-            ui.separator();
-
-            // Sculpt layer status.
-            ui.strong("Layers");
-            let sculpt = &app.paint.sculpt;
-            let present = |opt: bool| if opt { "filled" } else { "empty" };
-            ui.weak(format!(
-                "Height: {}",
-                present(sculpt.height_delta.is_some())
+    // --- BRUSH sliders ---
+    ui.strong("Brush");
+    ui.add_space(4.0);
+    egui::Grid::new("sculpt_brush_params")
+        .num_columns(2)
+        .spacing([8.0, 4.0])
+        .show(ui, |ui| {
+            ui.label("Radius");
+            ui.add(crate::panels::widgets::ParamSlider::new(
+                &mut app.paint.brush.radius_px,
+                0.5,
+                96.0,
             ));
-            ui.weak(format!(
-                "Colour: {}",
-                present(sculpt.texture_overlay.is_some())
+            ui.end_row();
+            ui.label("Strength");
+            ui.add(crate::panels::widgets::ParamSlider::new(
+                &mut app.paint.brush.strength,
+                0.001,
+                0.2,
             ));
-            ui.weak(format!(
-                "Metal:  {}",
-                present(sculpt.metal_overlay.is_some())
+            ui.end_row();
+            ui.label("Falloff");
+            ui.add(crate::panels::widgets::ParamSlider::new(
+                &mut app.paint.brush.falloff,
+                0.5,
+                4.0,
             ));
-            ui.weak(format!(
-                "Type:   {}",
-                present(sculpt.type_overlay.is_some())
-            ));
-
-            ui.add_space(8.0);
-            if ui
-                .add_enabled(
-                    app.paint.sculpt.height_delta.is_some()
-                        || app.paint.sculpt.metal_overlay.is_some()
-                        || app.paint.sculpt.type_overlay.is_some()
-                        || app.paint.sculpt.texture_overlay.is_some(),
-                    egui::Button::new("Reset sculpt"),
-                )
-                .clicked()
-            {
-                app.paint.sculpt = Default::default();
-                app.mark_dirty();
-            }
+            ui.end_row();
         });
+}
 
-    // Central panel is intentionally left unclaimed here. bar-app's
-    // AppWrapper::update() claims it after self.app.update() returns and
-    // draws the 3D viewport there, which is the only place GPU resources
-    // (TerrainRenderer, render_state) are available.
+fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayerEntry) {
+    let indent_px = entry.indent as f32 * 16.0;
+    let is_selected =
+        !entry.is_compositor && app.paint.selected_sculpt_layer == Some(entry.node_id);
+    let node_id = entry.node_id;
+    let is_compositor = entry.is_compositor;
+    let is_paintable = entry.is_paintable;
+    let label = entry.label.clone();
+    let channel = entry.channel.clone();
+
+    let clicked = ui
+        .horizontal(|ui| {
+            if indent_px > 0.0 {
+                ui.add_space(indent_px);
+            }
+            paint_channel_dot(ui, &channel);
+            if is_compositor {
+                ui.weak(format!("> {}", label));
+                false
+            } else {
+                let label_text = if is_paintable {
+                    label
+                } else {
+                    format!("{} [locked]", label)
+                };
+                ui.selectable_label(is_selected, &label_text).clicked()
+            }
+        })
+        .inner;
+
+    if clicked {
+        app.paint.selected_sculpt_layer = Some(node_id);
+    }
+}
+
+fn paint_channel_dot(ui: &mut egui::Ui, channel: &str) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+    ui.painter()
+        .circle_filled(rect.center(), 4.0, channel_color(channel));
+}
+
+fn channel_color(channel: &str) -> Color32 {
+    match channel {
+        "heightmap" => Color32::from_rgb(100, 200, 100),
+        "texture" => Color32::from_rgb(180, 100, 220),
+        "metalmap" => Color32::from_rgb(220, 120, 60),
+        "typemap" => Color32::from_rgb(80, 140, 210),
+        "grassmap" => Color32::from_rgb(80, 195, 140),
+        "specular" => Color32::from_rgb(210, 195, 70),
+        "normalmap" => Color32::from_rgb(130, 90, 210),
+        _ => Color32::from_rgb(160, 160, 160),
+    }
+}
+
+fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.weak("No terrain loaded --");
+        if ui.small_button("Run preview").clicked() {
+            app.preview.run_requested = true;
+        }
+    });
+}
+
+/// Create a disconnected PaintedHeightmap node and notify the user to wire it.
+fn add_paint_layer(app: &mut BarEditorApp) {
+    use crate::state::NodeVisual;
+    use bar_graph::{Node, NodeId, NodeType};
+
+    let label = app.next_label_for("Painted Layer");
+    let node = Node::new(NodeId(0), NodeType::PaintedHeightmap, &label);
+    let id = app.graph.add_node(node);
+
+    // Place it near the top-left of the visible canvas area.
+    let pos = app.canvas.offset + egui::vec2(80.0, 80.0);
+    app.visuals.node_visuals.insert(
+        id,
+        NodeVisual {
+            position: egui::pos2(pos.x, pos.y),
+            size: egui::vec2(150.0, 80.0),
+        },
+    );
+    app.push_undo("Add paint layer");
+    app.paint.selected_sculpt_layer = Some(id);
+    app.mark_dirty();
+    app.dialog.toast = Some((
+        format!("Added '{}' -- wire it into the canvas.", label),
+        std::time::Instant::now(),
+    ));
 }

@@ -296,7 +296,6 @@ fn cmd_run(
             &recipe,
             output_dir,
             bundler_filter,
-            None,
         )
         .context("Bundler execution failed")?;
 
@@ -796,7 +795,6 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
             let _ = (width, height);
             Ok(Project {
                 recipe,
-                sculpt: Default::default(),
                 layout: EditorLayout {
                     node_positions: Map::new(),
                     node_sizes: Map::new(),

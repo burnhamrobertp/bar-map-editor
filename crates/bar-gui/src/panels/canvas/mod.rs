@@ -29,6 +29,7 @@ pub(crate) mod groups;
 pub(crate) mod layout;
 pub(crate) mod passthrough;
 pub(crate) mod render;
+pub(crate) mod sculpt_layers;
 pub(crate) mod style;
 pub(crate) mod tabs;
 

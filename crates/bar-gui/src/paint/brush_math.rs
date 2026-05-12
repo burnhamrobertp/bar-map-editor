@@ -141,40 +141,6 @@ pub(crate) fn stamp_color_dab_in_buffer(
     }
 }
 
-/// Stamp a value (metal density / quantised type id) into a live
-/// `Heightmap` cache. Mirror of `stamp_color_dab_in_buffer` for the
-/// metal/type brush path.
-pub(crate) fn stamp_value_dab_in_heightmap(
-    hm: &mut Heightmap,
-    u: f32,
-    v: f32,
-    ru: f32,
-    value: f32,
-) {
-    let w = hm.width() as f32;
-    let h = hm.height() as f32;
-    let map_dim = w.max(h);
-    let cx = (u * w).round() as i32;
-    let cy = (v * h).round() as i32;
-    let radius_px = (ru * map_dim).max(1.0);
-    let r_i = radius_px.ceil() as i32;
-    let r2 = radius_px * radius_px;
-    let x0 = (cx - r_i).max(0);
-    let y0 = (cy - r_i).max(0);
-    let x1 = (cx + r_i).min(hm.width() as i32 - 1);
-    let y1 = (cy + r_i).min(hm.height() as i32 - 1);
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let dx = (x - cx) as f32;
-            let dy = (y - cy) as f32;
-            if dx * dx + dy * dy > r2 {
-                continue;
-            }
-            let _ = hm.set(x as u32, y as u32, value.clamp(0.0, 1.0));
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

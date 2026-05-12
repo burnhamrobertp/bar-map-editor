@@ -73,6 +73,15 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("bias", ParamValue::Float(0.5)),
             ("gain", ParamValue::Float(0.5)),
         ],
+        NodeType::Mirror => vec![("mode", ParamValue::String("mirror_x".to_string()))],
+        NodeType::Terrace => vec![
+            ("step_count", ParamValue::UInt(4)),
+            ("smoothing", ParamValue::Float(0.0)),
+        ],
+        NodeType::Sharpen => vec![
+            ("radius", ParamValue::Float(1.0)),
+            ("strength", ParamValue::Float(1.0)),
+        ],
         NodeType::Displacement => vec![("strength", ParamValue::Float(0.1))],
         NodeType::NormalMap => vec![("strength", ParamValue::Float(1.0))],
         NodeType::GrassMap => vec![
@@ -102,6 +111,9 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // Strength of the local-variation ambient occlusion
             // darkening. 0 disables AO; 1.0 keeps the full effect.
             ("ao_strength", ParamValue::Float(1.0)),
+            // Amplitude of the FBM micro-detail grain applied on top of the
+            // biome gradient. 0 = flat gradient, 0.15 = subtle variation.
+            ("detail_strength", ParamValue::Float(0.15)),
         ],
         NodeType::RockSoil => vec![
             ("rock_color", ParamValue::String("807870".to_string())),
@@ -120,9 +132,52 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("ao_strength", ParamValue::Float(0.6)),
             ("detail_strength", ParamValue::Float(0.2)),
         ],
-        NodeType::TextureOverlay => vec![
+        NodeType::LayerBlend => vec![
             ("blend_mode", ParamValue::String("over".to_string())),
             ("opacity", ParamValue::Float(1.0)),
+        ],
+        NodeType::TextureWeightmap => vec![
+            ("layer_count", ParamValue::UInt(2)),
+            (
+                "priority_type",
+                ParamValue::String("weighted_blend".to_string()),
+            ),
+            // Slot 0 = highest default priority (7), slot 7 = lowest (0).
+            ("priority_0", ParamValue::Float(7.0)),
+            ("exclusion_0", ParamValue::Float(0.0)),
+            ("priority_1", ParamValue::Float(6.0)),
+            ("exclusion_1", ParamValue::Float(0.0)),
+            ("priority_2", ParamValue::Float(5.0)),
+            ("exclusion_2", ParamValue::Float(0.0)),
+            ("priority_3", ParamValue::Float(4.0)),
+            ("exclusion_3", ParamValue::Float(0.0)),
+            ("priority_4", ParamValue::Float(3.0)),
+            ("exclusion_4", ParamValue::Float(0.0)),
+            ("priority_5", ParamValue::Float(2.0)),
+            ("exclusion_5", ParamValue::Float(0.0)),
+            ("priority_6", ParamValue::Float(1.0)),
+            ("exclusion_6", ParamValue::Float(0.0)),
+            ("priority_7", ParamValue::Float(0.0)),
+            ("exclusion_7", ParamValue::Float(0.0)),
+        ],
+        NodeType::ColorRamp => vec![
+            ("stop_count", ParamValue::UInt(2)),
+            ("pos_0", ParamValue::Float(0.0)),
+            ("color_0", ParamValue::String("000000".to_string())),
+            ("pos_1", ParamValue::Float(1.0)),
+            ("color_1", ParamValue::String("FFFFFF".to_string())),
+            ("pos_2", ParamValue::Float(0.25)),
+            ("color_2", ParamValue::String("404040".to_string())),
+            ("pos_3", ParamValue::Float(0.375)),
+            ("color_3", ParamValue::String("606060".to_string())),
+            ("pos_4", ParamValue::Float(0.5)),
+            ("color_4", ParamValue::String("808080".to_string())),
+            ("pos_5", ParamValue::Float(0.625)),
+            ("color_5", ParamValue::String("A0A0A0".to_string())),
+            ("pos_6", ParamValue::Float(0.75)),
+            ("color_6", ParamValue::String("C0C0C0".to_string())),
+            ("pos_7", ParamValue::Float(0.875)),
+            ("color_7", ParamValue::String("E0E0E0".to_string())),
         ],
         NodeType::SpecularMap => vec![
             ("rock_specular", ParamValue::Float(0.6)),
@@ -241,6 +296,13 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
 /// be impossible to type.
 pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'static str]> {
     match (node_type, key) {
+        (NodeType::Mirror, "mode") => Some(&[
+            "mirror_x",
+            "mirror_y",
+            "mirror_xy",
+            "rotate_180",
+            "rotate_90_4way",
+        ]),
         (NodeType::Voronoi, "mode") => Some(&["f1", "f2", "f2_f1", "cell"]),
         (NodeType::Gradient, "direction") => Some(&["linear_x", "linear_y", "radial", "angular"]),
         (NodeType::AutoTexture, "biome") => Some(&[
@@ -252,7 +314,8 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "tundra",
             "lunar",
         ]),
-        (NodeType::TextureOverlay, "blend_mode") => Some(&["over", "multiply", "screen", "add"]),
+        (NodeType::LayerBlend, "blend_mode") => Some(&["over", "multiply", "screen", "add"]),
+        (NodeType::TextureWeightmap, "priority_type") => Some(&["weighted_blend", "priority"]),
         (NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise, "character") => {
             Some(&[
                 "rolling_hills",
@@ -282,8 +345,15 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
 pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
     matches!(
         (node_type, key),
-        (NodeType::AutoTexture, "rock_color") | (NodeType::PaintedTexture, "brush_color")
-    )
+        (NodeType::AutoTexture, "rock_color")
+            | (NodeType::RockSoil, "rock_color")
+            | (NodeType::RockSoil, "soil_color")
+            | (NodeType::Vegetation, "vegetation_color")
+            | (NodeType::Vegetation, "dry_color")
+            | (NodeType::PaintedTexture, "brush_color")
+    ) || (node_type == &NodeType::ColorRamp
+        && key.starts_with("color_")
+        && key[6..].parse::<u8>().is_ok())
 }
 
 /// Per-biome defaults for the AutoTexture params that are biome-
@@ -512,4 +582,83 @@ pub fn biome_defaults(biome: &str) -> BiomeDefaults {
             slope_power: 0.7,
         },
     }
+}
+
+/// Returns the `[min, max]` range for slider display of the given Float
+/// param, or `None` if the param should use a free-form drag-value.
+pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> {
+    use NodeType::*;
+    Some(match (node_type, key) {
+        // Noise
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "frequency") => (0.1, 32.0),
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "lacunarity") => (1.0, 4.0),
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "persistence") => (0.0, 1.0),
+        // Utility
+        (Constant, "value") => (0.0, 1.0),
+        // Filters
+        (Blur | MaskBlur, "radius") => (0.1, 20.0),
+        (Sharpen, "radius") => (0.1, 10.0),
+        (Sharpen, "strength") => (0.0, 4.0),
+        (Clamp, "min") | (Clamp, "max") => (0.0, 1.0),
+        (Terrace, "smoothing") => (0.0, 1.0),
+        (BiasGain, "bias") | (BiasGain, "gain") => (0.0, 1.0),
+        (Displacement, "strength") => (0.0, 1.0),
+        (Blend, "factor") => (0.0, 1.0),
+        (Sculpt, "scale") => (0.0, 1.0),
+        // Erosion
+        (HydraulicErosion, "erosion_rate") | (HydraulicErosion, "deposition_rate") => (0.0, 0.1),
+        (ThermalErosion, "talus_angle") => (0.0, 1.0),
+        // Select/Mask
+        (HeightSelect, "low") | (HeightSelect, "high") => (0.0, 1.0),
+        (HeightSelect, "falloff") => (0.0, 0.5),
+        (MaskThreshold, "threshold") | (MaskThreshold, "smoothness") => (0.0, 1.0),
+        // Texture
+        (AutoTexture, "water_level") => (0.0, 0.5),
+        (AutoTexture, "beach_width") => (0.0, 0.3),
+        (AutoTexture, "snow_height") => (0.5, 1.0),
+        (AutoTexture, "slope_power") => (0.0, 4.0),
+        (AutoTexture, "slope_blend")
+        | (AutoTexture, "ao_strength")
+        | (AutoTexture, "detail_strength") => (0.0, 1.0),
+        (RockSoil, "slope_threshold")
+        | (RockSoil, "slope_blend")
+        | (RockSoil, "ao_strength")
+        | (RockSoil, "detail_strength") => (0.0, 1.0),
+        (Vegetation, "altitude_max")
+        | (Vegetation, "slope_cutoff")
+        | (Vegetation, "slope_blend")
+        | (Vegetation, "ao_strength")
+        | (Vegetation, "detail_strength") => (0.0, 1.0),
+        (LayerBlend, "opacity") => (0.0, 1.0),
+        (NormalMap, "strength") => (0.0, 4.0),
+        (GrassMap, "min_height") | (GrassMap, "max_height") | (GrassMap, "max_slope") => (0.0, 1.0),
+        (GrassMap, "density") => (0.0, 2.0),
+        (GrassMap, "falloff") => (0.0, 0.5),
+        (SpecularMap, "rock_specular")
+        | (SpecularMap, "flat_specular")
+        | (SpecularMap, "water_specular")
+        | (SpecularMap, "snow_specular")
+        | (SpecularMap, "water_height")
+        | (SpecularMap, "snow_height") => (0.0, 1.0),
+        // TextureWeightmap indexed slots
+        (TextureWeightmap, k) if k.starts_with("priority_") => (0.0, 16.0),
+        (TextureWeightmap, k) if k.starts_with("exclusion_") => (0.0, 1.0),
+        // ColorRamp stop positions
+        (ColorRamp, k) if k.starts_with("pos_") => (0.0, 1.0),
+        _ => return None,
+    })
+}
+
+/// Returns the `[min, max]` range for slider display of the given UInt
+/// param, or `None` if the param should use a free-form drag-value.
+pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
+    use NodeType::*;
+    Some(match (node_type, key) {
+        (PerlinNoise | SimplexNoise | WorleyNoise | RidgedNoise, "octaves") => (1, 12),
+        (Terrace, "step_count") => (2, 32),
+        (ThermalErosion, "iterations") => (10, 1_000),
+        (TextureWeightmap, "layer_count") => (2, 8),
+        (ColorRamp, "stop_count") => (2, 8),
+        _ => return None,
+    })
 }

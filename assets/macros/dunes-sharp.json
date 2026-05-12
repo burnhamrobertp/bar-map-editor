@@ -55,12 +55,16 @@
       }
     },
     {
-      "key": "composite",
-      "type": "TextureOverlay",
-      "label": "Sand Detail",
+      "key": "tex_blend",
+      "type": "TextureWeightmap",
+      "label": "Texture Blend",
       "params": {
-        "blend_mode": { "String": "over" },
-        "opacity": { "Float": 1.0 }
+        "layer_count": { "UInt": 2 },
+        "priority_type": { "String": "priority" },
+        "priority_0": { "Float": 0.0 },
+        "exclusion_0": { "Float": 0.0 },
+        "priority_1": { "Float": 1.0 },
+        "exclusion_1": { "Float": 1.0 }
       }
     }
   ],
@@ -72,8 +76,8 @@
     { "from": "slope_map.output", "to": "auto_tex.slope" },
     { "from": "smooth.output",    "to": "rock_soil.input" },
     { "from": "slope_map.output", "to": "rock_soil.slope" },
-    { "from": "auto_tex.output",  "to": "composite.base" },
-    { "from": "rock_soil.output", "to": "composite.overlay" }
+    { "from": "auto_tex.output",  "to": "tex_blend.texture_0" },
+    { "from": "rock_soil.output", "to": "tex_blend.texture_1" }
   ],
   "subgraph": {
     "label": "Dunes - Sharp",
@@ -82,7 +86,7 @@
     "inputs": [],
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "smooth:output" },
-      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "composite:output" },
+      { "name": "texture", "label": "Texture", "kind": "Color",     "binding": "tex_blend:output" },
       { "name": "slope",   "label": "Slope",   "kind": "Heightmap", "binding": "slope_map:output" }
     ]
   },

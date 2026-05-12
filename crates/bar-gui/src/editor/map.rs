@@ -31,14 +31,14 @@ pub struct SmfLightingSnapshot {
 /// About dialog and end up in the `.barproj` recipe header.
 #[derive(Default, Clone, Debug)]
 pub struct RecipeMeta {
-    /// Optional shortname (`mapinfo.shortname`). When `None` the
-    /// bundler falls back to the project name.
+    /// Optional shortname (`mapinfo.shortname`). Omitted from mapinfo.lua when `None`.
     pub shortname: Option<String>,
-    /// Free-form description (`mapinfo.description`). Empty string is allowed.
+    /// Free-form description (`mapinfo.description`). Empty string is omitted.
     pub description: String,
-    /// Optional author. When `None` the bundler falls back to `"bar-editor"`.
+    /// Optional author. Omitted from mapinfo.lua when `None`.
     pub author: Option<String>,
-    /// Optional map version. When `None` the bundler falls back to `"1.0"`.
+    /// Optional version string. Omitted from mapinfo.lua when `None`.
+    /// When set, becomes part of the Spring archive identity: `name .. " " .. version`.
     pub version: Option<String>,
 }
 

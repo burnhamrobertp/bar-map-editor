@@ -1,26 +1,32 @@
 name: CI
 
 on:
-  # gitflow-style branching: `develop` is the active integration
-  # branch (where feature branches merge); `master` is release/stable.
-  # Both get the full CI on push and on inbound PR.
   push:
-    branches: [develop, master]
+    branches: [develop, master, "release/**"]
   pull_request:
     branches: [develop, master]
+
+# Cancel any in-progress run on the same branch when a new push arrives.
+# Saves minutes on develop where fast iteration is common.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
 
 jobs:
+  # Check and test on Linux + Windows only. macOS at 10x billing is not
+  # worth running on every push -- platform-specific macOS issues are
+  # caught by the release build when merging to master.
   check:
     name: Check (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -43,7 +49,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

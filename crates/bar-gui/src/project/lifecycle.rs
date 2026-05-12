@@ -40,8 +40,8 @@ impl BarEditorApp {
         self.project.is_dirty = false;
         self.project.map_info_file = None;
         self.map.settings = bar_project::MapSettings::default();
-        self.map.width = 256;
-        self.map.height = 256;
+        self.map.width = 513;
+        self.map.height = 513;
         self.map.min_height = 0.0;
         self.map.max_height = 800.0;
         self.map.recipe_meta = RecipeMeta::default();
@@ -91,6 +91,7 @@ impl BarEditorApp {
         self.canvas.marquee_start = None;
         self.map.dragging_spawn = None;
         self.palette_drag = None;
+        self.palette_filter.clear();
         self.project.passthrough_edit = None;
         self.dialog.pending_props_open = None;
         self.props.close();
@@ -374,11 +375,6 @@ impl BarEditorApp {
         // paths they can read.
         if let Some(project_dir) = path.as_ref().and_then(|p| p.parent()) {
             self.resolve_relative_paths(project_dir);
-        }
-
-        // Restore sculpt layers from the project's SculptRecord.
-        if let Some(project_dir) = path.as_ref().and_then(|p| p.parent()) {
-            self.unpack_sculpt_record(&project.sculpt, project_dir);
         }
 
         // Restore node positions and sizes. Build a key->id map for
@@ -1027,7 +1023,7 @@ mod session_reset_tests {
 
     use eframe::egui;
 
-    use crate::app::{BarEditorApp, BrushTarget, BrushTool, MapInfoTab, ValidationFilter};
+    use crate::app::{BarEditorApp, BrushTool, MapInfoTab, ValidationFilter};
 
     /// Stuff a default app with as many transient session-state fields
     /// as the helper is meant to clear. Used by every test below so
@@ -1037,7 +1033,6 @@ mod session_reset_tests {
         let mut app = BarEditorApp::default();
         app.push_undo("seed snapshot");
         app.paint.brush.tool = BrushTool::Lower;
-        app.paint.brush.target = BrushTarget::Color;
         app.paint.brush.color_rgb = [10, 20, 30];
         app.paint.brush.paint_value = 0.42;
         app.paint.brush_stroking = true;
@@ -1063,10 +1058,6 @@ mod session_reset_tests {
         assert!(
             matches!(app.paint.brush.tool, BrushTool::Raise),
             "brush tool defaults to Raise"
-        );
-        assert!(
-            matches!(app.paint.brush.target, BrushTarget::Heightmap),
-            "brush target defaults to Heightmap"
         );
         assert!(!app.paint.brush_stroking);
         assert_eq!(
@@ -1108,7 +1099,6 @@ mod session_reset_tests {
         assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
         assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
         assert!(!app.dialog.show_validation_panel);
-        // Project-data state populated.
         assert!(
             !app.graph.nodes().is_empty(),
             "macro should have dropped nodes onto the graph"

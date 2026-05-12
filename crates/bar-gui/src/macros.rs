@@ -17,6 +17,7 @@ use eframe::egui;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
+use crate::app::{IO_NODE_SIZE, PORT_Y_BASE, PORT_Y_STEP};
 use crate::state::{GroupRuntime, NodeVisual, SubgraphPortRuntime};
 
 /// On-disk shape of a macro. JSON-deserialised once per drop.
@@ -142,6 +143,11 @@ pub fn instantiate(
         for (k, v) in &n.params {
             node.params.insert(k.clone(), v.clone());
         }
+        if node.node_type == NodeType::TextureWeightmap {
+            if let Some(ParamValue::UInt(lc)) = node.params.get("layer_count") {
+                node.resize_texture_weightmap_ports(*lc);
+            }
+        }
         // Replace any UInt-kind `seed` parameter with a fresh
         // per-drop value. Mixed in the param key's hash so multi-
         // node macros (e.g. two noise generators feeding a Blend)
@@ -155,17 +161,20 @@ pub fn instantiate(
                 }
             }
         }
+        let n_ports = node.inputs.len().max(node.outputs.len());
+        let default_size = match node.node_type {
+            NodeType::PassThrough => egui::vec2(180.0, 200.0),
+            NodeType::Bundler => egui::vec2(210.0, 240.0),
+            _ => egui::vec2(
+                150.0,
+                (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0),
+            ),
+        };
         let id = graph.add_node(node);
         key_to_id.insert(n.key.clone(), id);
         member_ids.insert(id);
         let pos = egui::pos2(drop_pos.x + step.x * i as f32, drop_pos.y);
-        visuals.push((
-            id,
-            NodeVisual {
-                position: pos,
-                size: egui::vec2(150.0, 80.0),
-            },
-        ));
+        visuals.push((id, NodeVisual { position: pos, size: default_size }));
     }
 
     for c in &template.connections {
@@ -225,7 +234,7 @@ pub fn instantiate(
             id,
             NodeVisual {
                 position: pos,
-                size: egui::vec2(160.0, 47.0),
+                size: IO_NODE_SIZE,
             },
         ));
         // Connect the IO node's value output to the inner node port
@@ -266,7 +275,7 @@ pub fn instantiate(
             id,
             NodeVisual {
                 position: pos,
-                size: egui::vec2(160.0, 47.0),
+                size: IO_NODE_SIZE,
             },
         ));
         if let Some(binding_str) = p.binding.as_deref() {

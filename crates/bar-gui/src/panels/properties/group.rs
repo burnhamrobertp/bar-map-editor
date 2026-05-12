@@ -32,6 +32,7 @@ impl BarEditorApp {
                 .desired_width(f32::INFINITY)
                 .font(egui::TextStyle::Heading),
         );
+        crate::panels::widgets::select_all_on_focus(ui, &resp, &label_buf);
         let mut dirty = false;
         if resp.changed() {
             dirty = true;
@@ -244,21 +245,36 @@ impl BarEditorApp {
                     match (p.kind.as_str(), cur) {
                         ("Float", Some(ParamValue::Float(v))) => {
                             let mut val = v;
-                            let mut drag = egui::DragValue::new(&mut val).speed(0.01);
-                            if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                                drag = drag.range(lo..=hi);
-                            }
-                            if ui.add(drag).changed() {
+                            let changed = if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                                ui.add(crate::panels::widgets::ParamSlider::new(
+                                    &mut val, lo as f32, hi as f32,
+                                ))
+                                .changed()
+                            } else {
+                                ui.add(egui::DragValue::new(&mut val).speed(0.01)).changed()
+                            };
+                            if changed {
                                 writes.push((nid, param_name.clone(), ParamValue::Float(val)));
                             }
                         }
                         ("UInt", Some(ParamValue::UInt(v))) => {
                             let mut val = v as i64;
-                            let mut drag = egui::DragValue::new(&mut val);
-                            if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                                drag = drag.range((lo as i64)..=(hi as i64));
-                            }
-                            if ui.add(drag).changed() {
+                            let changed = if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                                let mut vf = val as f32;
+                                let r = ui
+                                    .add(
+                                        crate::panels::widgets::ParamSlider::new(
+                                            &mut vf, lo as f32, hi as f32,
+                                        )
+                                        .integer(),
+                                    )
+                                    .changed();
+                                val = vf as i64;
+                                r
+                            } else {
+                                ui.add(egui::DragValue::new(&mut val)).changed()
+                            };
+                            if changed {
                                 writes.push((
                                     nid,
                                     param_name.clone(),
@@ -310,23 +326,25 @@ impl BarEditorApp {
                                             c32.b()
                                         ));
                                     }
-                                } else if ui
-                                    .add(
+                                } else {
+                                    let r = ui.add(
                                         egui::TextEdit::singleline(&mut val)
                                             .desired_width(f32::INFINITY),
-                                    )
-                                    .changed()
-                                {
-                                    new_val = Some(val);
+                                    );
+                                    crate::panels::widgets::select_all_on_focus(ui, &r, &val);
+                                    if r.changed() {
+                                        new_val = Some(val);
+                                    }
                                 }
-                            } else if ui
-                                .add(
+                            } else {
+                                let r = ui.add(
                                     egui::TextEdit::singleline(&mut val)
                                         .desired_width(f32::INFINITY),
-                                )
-                                .changed()
-                            {
-                                new_val = Some(val);
+                                );
+                                crate::panels::widgets::select_all_on_focus(ui, &r, &val);
+                                if r.changed() {
+                                    new_val = Some(val);
+                                }
                             }
                             if let Some(nv) = new_val {
                                 let pv = ParamValue::String(nv.clone());

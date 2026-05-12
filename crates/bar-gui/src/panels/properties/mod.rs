@@ -19,11 +19,13 @@
 //! `pub(crate) fn draw(app, ...)` so the deep field access remains
 //! clean -- `&mut self` already grants what's needed.
 
+pub(crate) mod color_ramp;
 pub(crate) mod group;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
 pub(crate) mod sculpt;
+pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
 
@@ -304,6 +306,7 @@ impl BarEditorApp {
                             .desired_width(f32::INFINITY)
                             .font(egui::TextStyle::Heading),
                     );
+                    crate::panels::widgets::select_all_on_focus(ui, &edit_resp, &label_buf);
                     label_changed = edit_resp.changed();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Type:").weak());
@@ -329,6 +332,12 @@ impl BarEditorApp {
                 } else if node_type == NodeType::Sculpt {
                     ui.separator();
                     self.draw_sculpt_properties(ui, node_id, &node_params);
+                } else if node_type == NodeType::TextureWeightmap {
+                    ui.separator();
+                    self.draw_texture_weightmap_properties(ui, node_id, &node_params);
+                } else if node_type == NodeType::ColorRamp {
+                    ui.separator();
+                    self.draw_color_ramp_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.
@@ -360,10 +369,18 @@ impl BarEditorApp {
                                         ParamValue::Float(v) => {
                                             let mut val = *v;
                                             ui.label(key);
-                                            if ui
-                                                .add(egui::DragValue::new(&mut val).speed(0.01))
-                                                .changed()
+                                            let changed = if let Some((mn, mx)) =
+                                                bar_graph::param_float_range(&node_type, key)
                                             {
+                                                ui.add(crate::panels::widgets::ParamSlider::new(
+                                                    &mut val, mn, mx,
+                                                ))
+                                                .changed()
+                                            } else {
+                                                ui.add(egui::DragValue::new(&mut val).speed(0.01))
+                                                    .changed()
+                                            };
+                                            if changed {
                                                 changed_params
                                                     .push((key.clone(), ParamValue::Float(val)));
                                             }
@@ -372,13 +389,26 @@ impl BarEditorApp {
                                         ParamValue::UInt(v) => {
                                             let mut val = *v as i32;
                                             ui.label(key);
-                                            if ui
-                                                .add(egui::DragValue::new(&mut val).range(1..=20))
-                                                .changed()
+                                            let changed = if let Some((mn, mx)) =
+                                                bar_graph::param_uint_range(&node_type, key)
                                             {
+                                                let mut vf = val as f32;
+                                                let r = ui.add(
+                                                    crate::panels::widgets::ParamSlider::new(
+                                                        &mut vf, mn as f32, mx as f32,
+                                                    )
+                                                    .integer(),
+                                                );
+                                                val = vf as i32;
+                                                r.changed()
+                                            } else {
+                                                ui.add(egui::DragValue::new(&mut val).range(1..=20))
+                                                    .changed()
+                                            };
+                                            if changed {
                                                 changed_params.push((
                                                     key.clone(),
-                                                    ParamValue::UInt(val as u32),
+                                                    ParamValue::UInt(val.max(0) as u32),
                                                 ));
                                             }
                                             ui.end_row();
