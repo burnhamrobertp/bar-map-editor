@@ -85,9 +85,12 @@ impl BarVersions {
             return None;
         }
 
+        // "Beyond All Reason $VERSION" is the token the BAR lobby itself
+        // writes into its startscripts. Recoil resolves $VERSION locally
+        // from the installed game archive -- no CDN or rapid tag needed.
         let mut games = vec![BarGameVersion {
-            label: "byar:stable (rapid)".to_string(),
-            archive_name: "byar:stable".to_string(),
+            label: "Beyond All Reason (latest)".to_string(),
+            archive_name: "Beyond All Reason $VERSION".to_string(),
         }];
         games.extend(collect_games(&data_dir.join("games")));
 
@@ -105,6 +108,7 @@ impl BarVersions {
     pub fn launch_skirmish(
         &self,
         sd7_path: &Path,
+        map_internal_name: &str,
         game_idx: usize,
         engine_idx: usize,
     ) -> Result<LaunchOutcome, LaunchError> {
@@ -133,23 +137,17 @@ impl BarVersions {
             .or_else(|| self.engines.first())
             .ok_or_else(|| LaunchError::SpawnFailed("no engine version available".into()))?;
 
-        let map_name = file_name.to_string_lossy();
-        let map_stem = sd7_path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        // StartPosType=2: players click to place on the minimap during the
-        // loading screen -- always works even if the map has no defined
-        // start positions yet.
+        // MapName must match the Spring archive identity: `name .. " " .. version`
+        // from mapinfo.lua. SMFMapFile::Open also appends ".smf" to MapName
+        // when searching inside the archive, so the name must NOT include an
+        // extension (e.g. use "my_map 0.1", not "my_map.sd7").
         //
-        // MyPlayerNum + IsHost are required by the engine to initialise
-        // the local player slot; without them the game Lua crashes once
-        // loading finishes.  TeamLeader in every [TEAMn] must be a valid
-        // player number (0 = the host).
+        // StartPosType=2: players click to place on the minimap.
+        // MyPlayerNum + IsHost are required to initialise the local player slot.
+        // TeamLeader in every [TEAMn] must be a valid player number (0 = host).
         let script = format!(
             "[GAME]\n{{\n\
-            \tMapName={map_name};\n\
+            \tMapName={map_internal_name};\n\
             \tGameType={game};\n\
             \tStartPosType=2;\n\
             \tGameStartDelay=4;\n\
@@ -190,7 +188,9 @@ impl BarVersions {
             .spawn()
             .map_err(|e| LaunchError::SpawnFailed(e.to_string()))?;
 
-        Ok(LaunchOutcome::EngineStarted { map_stem })
+        Ok(LaunchOutcome::EngineStarted {
+            map_name: map_internal_name.to_string(),
+        })
     }
 }
 
@@ -239,7 +239,8 @@ fn collect_engines(engine_root: &Path) -> Vec<BarEngineVersion> {
     found.into_iter().map(|(_, v)| v).collect()
 }
 
-/// All `byar_*.sd?` archives under `<games_root>/`, newest mtime first.
+/// Game archives under `<games_root>/`, newest mtime first.
+/// Matches both the legacy `byar_*.sdz` format and the current `BAR*.sdd` format.
 fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
     let Ok(entries) = std::fs::read_dir(games_root) else {
         return Vec::new();
@@ -248,15 +249,16 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
-            if !name.starts_with("byar") {
-                return None;
-            }
             let ext = entry
                 .path()
                 .extension()
                 .map(|e| e.to_string_lossy().into_owned())
                 .unwrap_or_default();
             if ext != "sdz" && ext != "sd7" && ext != "sdd" {
+                return None;
+            }
+            let lc = name.to_lowercase();
+            if !lc.starts_with("byar") && !lc.starts_with("bar") {
                 return None;
             }
             let mtime = entry.metadata().ok()?.modified().ok()?;
@@ -279,7 +281,7 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
 
 #[derive(Debug)]
 pub enum LaunchOutcome {
-    EngineStarted { map_stem: String },
+    EngineStarted { map_name: String },
 }
 
 #[derive(Debug)]

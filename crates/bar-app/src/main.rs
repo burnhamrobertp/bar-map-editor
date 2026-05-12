@@ -319,7 +319,7 @@ struct AppWrapper {
     /// In-flight "Test in BAR" pipeline. Background thread exports the
     /// project to a temp dir and sends back the SD7 path; the main loop
     /// then copies the file into BAR's maps dir and spawns the lobby.
-    test_in_bar_rx: Option<mpsc::Receiver<Result<std::path::PathBuf, String>>>,
+    test_in_bar_rx: Option<mpsc::Receiver<Result<(std::path::PathBuf, String), String>>>,
     /// Two-phase export flow. Phase 1: when the user clicks Run, the
     /// native folder picker is spawned on a worker thread (synchronous
     /// `pick_folder` would freeze the egui main loop for the full
@@ -553,7 +553,9 @@ impl eframe::App for AppWrapper {
                 self.test_in_bar_rx = None;
                 self.export_status = bar_gui::ExportStatus::Idle;
                 match result {
-                    Ok(sd7_path) => self.finish_test_in_bar(&sd7_path),
+                    Ok((sd7_path, map_internal_name)) => {
+                        self.finish_test_in_bar(&sd7_path, &map_internal_name)
+                    }
                     Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
                 }
             }
@@ -974,7 +976,7 @@ impl AppWrapper {
         let recipe = self.app.recipe_for_export();
         let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
-        let (tx, rx) = mpsc::channel::<Result<std::path::PathBuf, String>>();
+        let (tx, rx) = mpsc::channel::<Result<(std::path::PathBuf, String), String>>();
         self.test_in_bar_rx = Some(rx);
         self.export_status = bar_gui::ExportStatus::All;
         let ctx_clone = ctx.clone();
@@ -993,7 +995,7 @@ impl AppWrapper {
                                     r.output_path.extension().and_then(|s| s.to_str())
                                         == Some("sd7")
                                 })
-                                .map(|r| Ok(r.output_path))
+                                .map(|r| Ok((r.output_path, r.map_internal_name)))
                                 .unwrap_or_else(|| Err("Bundler produced no SD7".to_string()))
                         }
                         Err(e) => Err(format!("Bundler error: {e}")),
@@ -1009,7 +1011,7 @@ impl AppWrapper {
     /// Copy the just-built SD7 into BAR's maps directory and launch the
     /// engine directly into a skirmish using the versions selected in the
     /// toolbar picker. Surfaces the result in the status bar.
-    fn finish_test_in_bar(&mut self, sd7_path: &std::path::Path) {
+    fn finish_test_in_bar(&mut self, sd7_path: &std::path::Path, map_internal_name: &str) {
         let Some(ref install) = self.bar_install else {
             self.app
                 .set_status("BAR install vanished mid-flight".to_string());
@@ -1017,10 +1019,10 @@ impl AppWrapper {
         };
         let game_idx = self.app.bar_versions.selected_game;
         let engine_idx = self.app.bar_versions.selected_engine;
-        match install.launch_skirmish(sd7_path, game_idx, engine_idx) {
-            Ok(bar_install::LaunchOutcome::EngineStarted { map_stem }) => {
+        match install.launch_skirmish(sd7_path, map_internal_name, game_idx, engine_idx) {
+            Ok(bar_install::LaunchOutcome::EngineStarted { map_name }) => {
                 self.app
-                    .set_status(format!("BAR started: skirmish on {map_stem}"));
+                    .set_status(format!("BAR started: skirmish on {map_name}"));
             }
             Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
         }

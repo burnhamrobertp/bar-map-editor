@@ -26,6 +26,10 @@ pub struct BundlerResult {
     pub output_path: PathBuf,
     /// Number of files written by the codec.
     pub files_written: usize,
+    /// Spring-internal map name: `mapinfo.lua` `name` + " " + `version` (if
+    /// set). This is what goes in the startscript `MapName=` field so the
+    /// engine can find the archive by its mapinfo identity, not its filename.
+    pub map_internal_name: String,
 }
 
 /// Discover all Bundler nodes in the graph.
@@ -230,11 +234,17 @@ fn execute_single_bundler(
         final_output_path.display()
     );
 
+    let map_internal_name = match plan.version.as_deref().filter(|v| !v.is_empty()) {
+        Some(v) => format!("{} {}", plan.map_name, v),
+        None => plan.map_name.clone(),
+    };
+
     Ok(BundlerResult {
         node_id: bundler_id,
         label: node.label.clone(),
         output_path: final_output_path,
         files_written: written.files.len(),
+        map_internal_name,
     })
 }
 
