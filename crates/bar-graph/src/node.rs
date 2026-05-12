@@ -111,6 +111,22 @@ pub enum NodeType {
     BiasGain,
     Displacement,
 
+    // Selectors (derived analysis maps)
+    /// Threshold-based selector for erosion flow/wear/deposit maps. Isolates
+    /// cells where flow intensity exceeds a threshold, with a smooth falloff.
+    /// Works on any Heightmap input but designed for erosion secondary outputs.
+    FlowSelect,
+    /// Surface curvature selector derived from the Laplacian of the heightmap.
+    /// Outputs high values on ridges/peaks (mode="ridges"), in valleys/bowls
+    /// (mode="valleys"), or a full curvature map (mode="full") where 0.5 = flat.
+    SelectConvexity,
+
+    // Generator: primitive shape heightmap
+    /// Composites up to 8 primitive shapes (ellipse / rectangle / ridge-line)
+    /// into a heightmap. Each shape has position, size, rotation, peak height,
+    /// and falloff. Shapes are composited by taking the per-pixel maximum.
+    LayoutGenerator,
+
     // Additional Combiners
     /// Selects between two heightmap inputs based on a mask threshold.
     MaskSelect,
@@ -290,11 +306,22 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Value", PortKind::Heightmap)],
         ),
 
+        NodeType::HydraulicErosion => (
+            vec![
+                Port::new("input", "Input", PortKind::Heightmap),
+                Port::new("control", "Control", PortKind::Control),
+                Port::new("mask", "Mask", PortKind::Mask),
+            ],
+            vec![
+                Port::new("output", "Output", PortKind::Heightmap),
+                Port::new("flow", "Flow", PortKind::Heightmap),
+                Port::new("wear", "Wear", PortKind::Heightmap),
+                Port::new("deposit", "Deposit", PortKind::Heightmap),
+            ],
+        ),
+
         // Filters with Control + Mask
-        NodeType::HydraulicErosion
-        | NodeType::ThermalErosion
-        | NodeType::Blur
-        | NodeType::Clamp => (
+        NodeType::ThermalErosion | NodeType::Blur | NodeType::Clamp => (
             vec![
                 Port::new("input", "Input", PortKind::Heightmap),
                 Port::new("control", "Control", PortKind::Control),
@@ -576,6 +603,21 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("mask", "Mask", PortKind::Mask),
             ],
             vec![Port::new("output", "Output", PortKind::Heightmap)],
+        ),
+
+        NodeType::FlowSelect => (
+            vec![Port::new("input", "Input", PortKind::Heightmap)],
+            vec![Port::new("output", "Mask", PortKind::Heightmap)],
+        ),
+
+        NodeType::SelectConvexity => (
+            vec![Port::new("input", "Heightmap", PortKind::Heightmap)],
+            vec![Port::new("output", "Curvature", PortKind::Heightmap)],
+        ),
+
+        NodeType::LayoutGenerator => (
+            vec![Port::new("mask", "Mask", PortKind::Mask)],
+            vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),
 
         // --- Additional Combiners ---

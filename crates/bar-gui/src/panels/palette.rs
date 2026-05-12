@@ -33,6 +33,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Gradient", NodeType::Gradient),
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
+        ("Layout Generator", NodeType::LayoutGenerator),
     ];
 
     let filters = [
@@ -73,6 +74,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let splat_maps = [
         ("Slope Map", NodeType::SlopeMap),
         ("Height Select", NodeType::HeightSelect),
+        ("Flow Select", NodeType::FlowSelect),
+        ("Select Convexity", NodeType::SelectConvexity),
         ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),
@@ -113,6 +116,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Gradient", NodeType::Gradient),
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
+        ("Layout Generator", NodeType::LayoutGenerator),
         ("Hydraulic Erosion", NodeType::HydraulicErosion),
         ("Thermal Erosion", NodeType::ThermalErosion),
         ("Blur", NodeType::Blur),
@@ -139,6 +143,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Texture Weightmap", NodeType::TextureWeightmap),
         ("Slope Map", NodeType::SlopeMap),
         ("Height Select", NodeType::HeightSelect),
+        ("Flow Select", NodeType::FlowSelect),
+        ("Select Convexity", NodeType::SelectConvexity),
         ("Terrain Splat", NodeType::TerrainSplat),
         ("Normal Map", NodeType::NormalMap),
         ("Grass Map", NodeType::GrassMap),

@@ -9,6 +9,7 @@ use bar_compute::{
 };
 use bar_data::{smt::TILE_SIZE, ColorBuffer, Heightmap, SmfMap};
 use bar_graph::{EvalError, NodeExecutor, NodeType, ParamValue, PortValue};
+use std::f32::consts::PI;
 
 /// Executor that runs node operations using CPU compute.
 /// GPU execution can be added later without changing the graph layer.
@@ -180,10 +181,13 @@ impl NodeExecutor for CpuExecutor {
                     erosion_radius: get_uint(params, "erosion_radius", 3),
                     seed: get_uint(params, "seed", 0),
                 };
-                let hm = hydraulic_erosion(&input, &params_e)
+                let result = hydraulic_erosion(&input, &params_e)
                     .map_err(|e| EvalError::Compute(e.to_string()))?;
-                let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
+                let hm = apply_modulation(&input, result.heightmap, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+                outputs.insert("flow".to_string(), PortValue::Heightmap(result.flow));
+                outputs.insert("wear".to_string(), PortValue::Heightmap(result.wear));
+                outputs.insert("deposit".to_string(), PortValue::Heightmap(result.deposit));
             }
             NodeType::ThermalErosion => {
                 let input = get_input_heightmap(inputs, "input")?;
@@ -619,6 +623,29 @@ impl NodeExecutor for CpuExecutor {
                 let strength = get_float(params, "strength", 0.1);
                 let hm = apply_displacement(&input, &displacement, strength);
                 let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::FlowSelect => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let threshold = get_float(params, "threshold", 0.2);
+                let falloff = get_float(params, "falloff", 0.15).max(1e-6);
+                let hm = apply_flow_select(&input, threshold, falloff);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::SelectConvexity => {
+                let input = get_input_heightmap(inputs, "input")?;
+                let mode = get_string(params, "mode", "ridges");
+                let strength = get_float(params, "strength", 1.0);
+                let hm = apply_select_convexity(&input, mode, strength);
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
+            NodeType::LayoutGenerator => {
+                let mask = get_optional_heightmap(inputs, "mask");
+                let shape_count = get_uint(params, "shape_count", 1).min(8) as usize;
+                let hm = apply_layout_generator(params, shape_count, width, height, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
@@ -2576,6 +2603,152 @@ fn painted_rgb_to_color_buffer(
     }
     buf
 }
+/// Threshold selector for flow/wear/deposit maps.
+/// Ramps from 0 at (threshold - falloff) to 1 at threshold.
+fn apply_flow_select(input: &Heightmap, threshold: f32, falloff: f32) -> Heightmap {
+    let w = input.width();
+    let h = input.height();
+    let lo = threshold - falloff;
+    let data: Vec<f32> = input
+        .data()
+        .iter()
+        .map(|&v| ((v - lo) / falloff).clamp(0.0, 1.0))
+        .collect();
+    Heightmap::frbar_data(w, h, data).unwrap()
+}
+
+/// Surface curvature (Laplacian) selector.
+fn apply_select_convexity(input: &Heightmap, mode: &str, strength: f32) -> Heightmap {
+    let w = input.width() as usize;
+    let h = input.height() as usize;
+    let data = input.data();
+
+    // Compute raw Laplacian, collecting its range for normalization.
+    let mut raw = vec![0.0f32; w * h];
+    let mut lo = f32::MAX;
+    let mut hi = f32::MIN;
+    for y in 0..h {
+        for x in 0..w {
+            let c = data[y * w + x];
+            let l = data[y * w + x.saturating_sub(1)];
+            let r = data[y * w + (x + 1).min(w - 1)];
+            let u = data[y.saturating_sub(1) * w + x];
+            let d = data[(y + 1).min(h - 1) * w + x];
+            // Negative = ridge/peak; positive = valley/bowl.
+            let lap = l + r + u + d - 4.0 * c;
+            raw[y * w + x] = lap;
+            if lap < lo {
+                lo = lap;
+            }
+            if lap > hi {
+                hi = lap;
+            }
+        }
+    }
+
+    let range = (hi - lo).max(1e-9);
+    let out: Vec<f32> = raw
+        .iter()
+        .map(|&lap| {
+            // Normalize lap to roughly [-1, 1] then scale by strength.
+            let norm = lap / range * 2.0 * strength;
+            match mode {
+                // High on ridges/peaks (negative Laplacian).
+                "ridges" => (-norm).clamp(0.0, 1.0),
+                // High in valleys/bowls (positive Laplacian).
+                "valleys" => norm.clamp(0.0, 1.0),
+                // Full map: 0.5 = flat, >0.5 = ridges, <0.5 = valleys.
+                _ => (-norm * 0.5 + 0.5).clamp(0.0, 1.0),
+            }
+        })
+        .collect();
+    Heightmap::frbar_data(w as u32, h as u32, out).unwrap()
+}
+
+/// Composites up to 8 primitive shapes into a heightmap.
+/// Each shape contributes via a smooth radial falloff; shapes are max-blended.
+fn apply_layout_generator(
+    params: &HashMap<String, ParamValue>,
+    shape_count: usize,
+    width: u32,
+    height: u32,
+    mask: Option<&Heightmap>,
+) -> Heightmap {
+    let mut data = vec![0.0f32; (width * height) as usize];
+
+    for i in 0..shape_count {
+        let shape_type = match params.get(&format!("type_{i}")) {
+            Some(ParamValue::String(s)) => s.as_str(),
+            _ => "ellipse",
+        };
+        let cx = get_float_k(params, &format!("x_{i}"), 0.5);
+        let cy = get_float_k(params, &format!("y_{i}"), 0.5);
+        let rx = get_float_k(params, &format!("rx_{i}"), 0.2).max(1e-4);
+        let ry = get_float_k(params, &format!("ry_{i}"), 0.2).max(1e-4);
+        let angle_deg = get_float_k(params, &format!("angle_{i}"), 0.0);
+        let peak = get_float_k(params, &format!("height_{i}"), 0.5);
+        let falloff = get_float_k(params, &format!("falloff_{i}"), 0.5).clamp(0.001, 1.0);
+        let angle_rad = angle_deg * PI / 180.0;
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+
+        for py in 0..height {
+            for px in 0..width {
+                let ux = px as f32 / (width - 1).max(1) as f32 - cx;
+                let uy = py as f32 / (height - 1).max(1) as f32 - cy;
+                // Rotate into shape-local space.
+                let lx = (ux * cos_a + uy * sin_a) / rx;
+                let ly = (-ux * sin_a + uy * cos_a) / ry;
+                // Normalized distance from centre.
+                let d = match shape_type {
+                    "rectangle" => lx.abs().max(ly.abs()),
+                    "ridge" => ly.abs(), // infinite ridge along the rotated X axis
+                    _ => (lx * lx + ly * ly).sqrt(), // ellipse
+                };
+                if d >= 1.0 {
+                    continue;
+                }
+                // Smooth falloff: cos curve from d=1-falloff (peak) to d=1 (zero).
+                let t = 1.0 - d; // 1 at centre, 0 at edge
+                let smoothed = if t >= falloff {
+                    1.0
+                } else {
+                    let s = t / falloff;
+                    s * s * (3.0 - 2.0 * s) // smoothstep
+                };
+                let v = smoothed * peak;
+                let idx = py as usize * width as usize + px as usize;
+                if v > data[idx] {
+                    data[idx] = v;
+                }
+            }
+        }
+    }
+
+    // Apply optional mask: mask=0 → output=0.
+    if let Some(m) = mask {
+        for (i, v) in data.iter_mut().enumerate() {
+            let mx = (i % width as usize) as u32;
+            let my = (i / width as usize) as u32;
+            let mw = m.width();
+            let mh = m.height();
+            let smx = (mx as f32 * mw as f32 / width as f32) as u32;
+            let smy = (my as f32 * mh as f32 / height as f32) as u32;
+            let mv = m.get(smx.min(mw - 1), smy.min(mh - 1)).unwrap_or(1.0);
+            *v *= mv;
+        }
+    }
+
+    Heightmap::frbar_data(width, height, data).unwrap()
+}
+
+fn get_float_k(params: &HashMap<String, ParamValue>, key: &str, default: f32) -> f32 {
+    match params.get(key) {
+        Some(ParamValue::Float(v)) => *v,
+        _ => default,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

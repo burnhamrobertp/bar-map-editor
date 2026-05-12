@@ -134,14 +134,30 @@ fn pcg_hash(input: u32) -> u32 {
     (word >> 22) ^ word
 }
 
+/// Secondary maps produced by hydraulic erosion in addition to the eroded heightmap.
+pub struct HydraulicErosionMaps {
+    pub heightmap: Heightmap,
+    /// Normalized flow accumulation: high where water channels ran most.
+    pub flow: Heightmap,
+    /// Normalized wear: high where rock was most aggressively eroded.
+    pub wear: Heightmap,
+    /// Normalized deposition: high where sediment settled most.
+    pub deposit: Heightmap,
+}
+
 /// Simulate hydraulic erosion on a heightmap (CPU implementation).
+/// Returns the eroded heightmap plus flow, wear, and deposit secondary maps.
 pub fn hydraulic_erosion(
     heightmap: &Heightmap,
     params: &HydraulicErosionParams,
-) -> Result<Heightmap, ErosionError> {
+) -> Result<HydraulicErosionMaps, ErosionError> {
     let w = heightmap.width();
     let h = heightmap.height();
+    let n = (w * h) as usize;
     let mut data = heightmap.data().to_vec();
+    let mut flow_accum = vec![0.0f32; n];
+    let mut wear_accum = vec![0.0f32; n];
+    let mut deposit_accum = vec![0.0f32; n];
 
     let get = |data: &[f32], x: i32, y: i32| -> f32 {
         let cx = x.clamp(0, w as i32 - 1) as usize;
@@ -163,7 +179,6 @@ pub fn hydraulic_erosion(
             }
         }
     }
-    // Normalize weights
     for entry in brush_offsets.iter_mut() {
         entry.2 /= weight_sum;
     }
@@ -171,7 +186,6 @@ pub fn hydraulic_erosion(
     let mut rng_state = params.seed;
 
     for _ in 0..params.num_droplets {
-        // Random starting position
         rng_state = pcg_hash(rng_state);
         let px_start = (rng_state as f32 / u32::MAX as f32) * (w - 1) as f32;
         rng_state = pcg_hash(rng_state);
@@ -216,7 +230,6 @@ pub fn hydraulic_erosion(
 
             let dir_len = (dir_x * dir_x + dir_y * dir_y).sqrt();
             if dir_len < 0.0001 {
-                // Random direction
                 rng_state = pcg_hash(rng_state);
                 let angle = (rng_state as f32 / u32::MAX as f32) * std::f32::consts::TAU;
                 dir_x = angle.cos();
@@ -224,6 +237,12 @@ pub fn hydraulic_erosion(
             } else {
                 dir_x /= dir_len;
                 dir_y /= dir_len;
+            }
+
+            // Accumulate flow at current cell
+            let flow_idx = iy as usize * w as usize + ix as usize;
+            if flow_idx < n {
+                flow_accum[flow_idx] += water;
             }
 
             // Move particle
@@ -250,42 +269,41 @@ pub fn hydraulic_erosion(
 
             let height_diff = new_height - old_height;
 
-            // Sediment capacity
             let capacity =
                 (-height_diff * speed * water * params.capacity_factor).max(params.min_capacity);
 
             if sediment > capacity || height_diff > 0.0 {
                 // Deposit
-                let deposit = if height_diff > 0.0 {
+                let deposit_amount = if height_diff > 0.0 {
                     sediment.min(height_diff)
                 } else {
                     (sediment - capacity) * params.deposition_rate
                 };
-                sediment -= deposit;
+                sediment -= deposit_amount;
 
-                // Deposit at cell
                 let idx = iy as usize * w as usize + ix as usize;
-                if idx < data.len() {
-                    data[idx] += deposit;
+                if idx < n {
+                    data[idx] += deposit_amount;
+                    deposit_accum[idx] += deposit_amount;
                 }
             } else {
                 // Erode
                 let erode_amount = ((capacity - sediment) * params.erosion_rate).min(-height_diff);
 
-                // Apply erosion with brush
                 for &(dx, dy, weight) in &brush_offsets {
                     let ex = ix + dx;
                     let ey = iy + dy;
                     if ex >= 0 && ex < w as i32 && ey >= 0 && ey < h as i32 {
                         let eidx = ey as usize * w as usize + ex as usize;
-                        data[eidx] -= erode_amount * weight;
+                        let worn = erode_amount * weight;
+                        data[eidx] -= worn;
+                        wear_accum[eidx] += worn;
                     }
                 }
 
                 sediment += erode_amount;
             }
 
-            // Update physics
             speed = (speed * speed + height_diff * params.gravity)
                 .max(0.0)
                 .sqrt();
@@ -299,12 +317,34 @@ pub fn hydraulic_erosion(
         }
     }
 
-    // Clamp output to [0, 1]
     for v in data.iter_mut() {
         *v = v.clamp(0.0, 1.0);
     }
 
-    Heightmap::frbar_data(w, h, data).map_err(|e| ErosionError::Heightmap(e.to_string()))
+    let normalize = |buf: Vec<f32>| -> Vec<f32> {
+        let max = buf.iter().cloned().fold(0.0f32, f32::max);
+        if max > 1e-9 {
+            buf.into_iter().map(|v| (v / max).clamp(0.0, 1.0)).collect()
+        } else {
+            buf
+        }
+    };
+
+    let hm =
+        Heightmap::frbar_data(w, h, data).map_err(|e| ErosionError::Heightmap(e.to_string()))?;
+    let flow_hm = Heightmap::frbar_data(w, h, normalize(flow_accum))
+        .map_err(|e| ErosionError::Heightmap(e.to_string()))?;
+    let wear_hm = Heightmap::frbar_data(w, h, normalize(wear_accum))
+        .map_err(|e| ErosionError::Heightmap(e.to_string()))?;
+    let deposit_hm = Heightmap::frbar_data(w, h, normalize(deposit_accum))
+        .map_err(|e| ErosionError::Heightmap(e.to_string()))?;
+
+    Ok(HydraulicErosionMaps {
+        heightmap: hm,
+        flow: flow_hm,
+        wear: wear_hm,
+        deposit: deposit_hm,
+    })
 }
 
 /// Simulate thermal erosion (weathering) on a heightmap (CPU implementation).
@@ -415,23 +455,34 @@ mod tests {
         };
 
         let result = hydraulic_erosion(&input, &params).unwrap();
-        assert_eq!(result.width(), 64);
-        assert_eq!(result.height(), 64);
+        let hm = &result.heightmap;
+        assert_eq!(hm.width(), 64);
+        assert_eq!(hm.height(), 64);
 
-        // Peak should be lower than original (erosion carves the top)
         let center = 32 * 64 + 32;
         assert!(
-            result.data()[center] < input.data()[center],
+            hm.data()[center] < input.data()[center],
             "Peak should be eroded: {} < {}",
-            result.data()[center],
+            hm.data()[center],
             input.data()[center]
         );
 
-        // Terrain should not be completely destroyed — still has some height
-        let result_max: f32 = result.data().iter().cloned().fold(0.0f32, f32::max);
+        let result_max: f32 = hm.data().iter().cloned().fold(0.0f32, f32::max);
         assert!(
             result_max > 0.3,
             "Erosion should not flatten terrain entirely: max={result_max}"
+        );
+
+        // Secondary maps should be non-trivial
+        let flow_max: f32 = result.flow.data().iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            flow_max > 0.5,
+            "Flow map should have significant values: max={flow_max}"
+        );
+        let wear_max: f32 = result.wear.data().iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            wear_max > 0.5,
+            "Wear map should have significant values: max={wear_max}"
         );
     }
 
@@ -463,8 +514,17 @@ mod tests {
         let input = make_test_heightmap();
 
         let h_result = hydraulic_erosion(&input, &HydraulicErosionParams::default()).unwrap();
-        for &v in h_result.data() {
+        for &v in h_result.heightmap.data() {
             assert!((0.0..=1.0).contains(&v), "Value out of range: {v}");
+        }
+        for &v in h_result.flow.data() {
+            assert!((0.0..=1.0).contains(&v), "Flow value out of range: {v}");
+        }
+        for &v in h_result.wear.data() {
+            assert!((0.0..=1.0).contains(&v), "Wear value out of range: {v}");
+        }
+        for &v in h_result.deposit.data() {
+            assert!((0.0..=1.0).contains(&v), "Deposit value out of range: {v}");
         }
 
         let t_result = thermal_erosion(&input, &ThermalErosionParams::default()).unwrap();

@@ -257,5 +257,8 @@ mod tests {
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
         NodeType::ColorRamp,
+        NodeType::FlowSelect,
+        NodeType::SelectConvexity,
+        NodeType::LayoutGenerator,
     ];
 }

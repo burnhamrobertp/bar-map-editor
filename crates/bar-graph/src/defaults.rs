@@ -21,6 +21,28 @@ use crate::node::{NodeType, ParamValue};
 
 /// Return the full set of default parameter values for a node type.
 pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
+    // LayoutGenerator has dynamically-named per-shape params; handle it before
+    // the static-key match below.
+    if node_type == &NodeType::LayoutGenerator {
+        let mut m = HashMap::new();
+        m.insert("shape_count".to_string(), ParamValue::UInt(1));
+        for i in 0..8usize {
+            let h = if i == 0 { 0.5 } else { 0.0 };
+            m.insert(
+                format!("type_{i}"),
+                ParamValue::String("ellipse".to_string()),
+            );
+            m.insert(format!("x_{i}"), ParamValue::Float(0.5));
+            m.insert(format!("y_{i}"), ParamValue::Float(0.5));
+            m.insert(format!("rx_{i}"), ParamValue::Float(0.2));
+            m.insert(format!("ry_{i}"), ParamValue::Float(0.2));
+            m.insert(format!("angle_{i}"), ParamValue::Float(0.0));
+            m.insert(format!("height_{i}"), ParamValue::Float(h));
+            m.insert(format!("falloff_{i}"), ParamValue::Float(0.5));
+        }
+        return m;
+    }
+
     let entries: Vec<(&str, ParamValue)> = match node_type {
         NodeType::PerlinNoise | NodeType::SimplexNoise | NodeType::WorleyNoise => vec![
             // Named character preset that drives frequency / octaves /
@@ -72,6 +94,14 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
         NodeType::BiasGain => vec![
             ("bias", ParamValue::Float(0.5)),
             ("gain", ParamValue::Float(0.5)),
+        ],
+        NodeType::FlowSelect => vec![
+            ("threshold", ParamValue::Float(0.2)),
+            ("falloff", ParamValue::Float(0.15)),
+        ],
+        NodeType::SelectConvexity => vec![
+            ("mode", ParamValue::String("ridges".to_string())),
+            ("strength", ParamValue::Float(1.0)),
         ],
         NodeType::Mirror => vec![("mode", ParamValue::String("mirror_x".to_string()))],
         NodeType::Terrace => vec![
@@ -334,6 +364,10 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
         ]),
         (NodeType::SubgraphInput | NodeType::SubgraphOutput, "kind") => {
             Some(&["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"])
+        }
+        (NodeType::SelectConvexity, "mode") => Some(&["ridges", "valleys", "full"]),
+        (NodeType::LayoutGenerator, k) if k.starts_with("type_") => {
+            Some(&["ellipse", "rectangle", "ridge"])
         }
         _ => None,
     }
@@ -645,6 +679,21 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (TextureWeightmap, k) if k.starts_with("exclusion_") => (0.0, 1.0),
         // ColorRamp stop positions
         (ColorRamp, k) if k.starts_with("pos_") => (0.0, 1.0),
+        // FlowSelect
+        (FlowSelect, "threshold") => (0.0, 1.0),
+        (FlowSelect, "falloff") => (0.0, 0.5),
+        // SelectConvexity
+        (SelectConvexity, "strength") => (0.1, 8.0),
+        // LayoutGenerator per-shape numeric params
+        (LayoutGenerator, k)
+            if matches!(
+                k.trim_end_matches(|c: char| c.is_ascii_digit()),
+                "x_" | "y_" | "rx_" | "ry_" | "height_" | "falloff_"
+            ) =>
+        {
+            (0.0, 1.0)
+        }
+        (LayoutGenerator, k) if k.starts_with("angle_") => (0.0, 360.0),
         _ => return None,
     })
 }
@@ -659,6 +708,7 @@ pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
         (ThermalErosion, "iterations") => (10, 1_000),
         (TextureWeightmap, "layer_count") => (2, 8),
         (ColorRamp, "stop_count") => (2, 8),
+        (LayoutGenerator, "shape_count") => (1, 8),
         _ => return None,
     })
 }

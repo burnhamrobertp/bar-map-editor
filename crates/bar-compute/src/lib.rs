@@ -12,8 +12,8 @@ pub mod noise;
 
 pub use device::{ComputeDevice, ComputeError, GpuContext};
 pub use erosion::{
-    hydraulic_erosion, thermal_erosion, FlowErosionParams, HydraulicErosionParams,
-    ThermalErosionParams,
+    hydraulic_erosion, thermal_erosion, FlowErosionParams, HydraulicErosionMaps,
+    HydraulicErosionParams, ThermalErosionParams,
 };
 pub use gpu_erosion::{GpuErosionError, GpuErosionPipeline};
 pub use gpu_filters::{GpuFilterError, GpuFilterPipeline};

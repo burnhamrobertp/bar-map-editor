@@ -61,7 +61,8 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Voronoi
         | NodeType::Gradient
         | NodeType::FileInput
-        | NodeType::Constant => tokens::NODE_CAT_GENERATOR,
+        | NodeType::Constant
+        | NodeType::LayoutGenerator => tokens::NODE_CAT_GENERATOR,
 
         NodeType::HydraulicErosion
         | NodeType::ThermalErosion
@@ -87,6 +88,8 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
 
         NodeType::SlopeMap
         | NodeType::HeightSelect
+        | NodeType::FlowSelect
+        | NodeType::SelectConvexity
         | NodeType::TerrainSplat
         | NodeType::AutoTexture
         | NodeType::RockSoil
