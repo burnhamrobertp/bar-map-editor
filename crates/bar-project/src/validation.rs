@@ -119,8 +119,6 @@ fn is_source_node(t: &NodeType) -> bool {
             | NodeType::FileInput
             | NodeType::Voronoi
             | NodeType::Gradient
-            | NodeType::SmfImport
-            | NodeType::SmtImport
             | NodeType::PaintedHeightmap
             | NodeType::PaintedTexture
     )

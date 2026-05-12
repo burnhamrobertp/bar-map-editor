@@ -9,6 +9,7 @@ pub mod editor;
 pub mod i18n;
 pub mod io;
 pub mod layouts;
+pub(crate) mod log;
 pub mod macros;
 pub(crate) mod paint;
 pub mod panels;

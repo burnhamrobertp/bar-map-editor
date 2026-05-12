@@ -139,6 +139,7 @@ fn execute_single_bundler(
         version: recipe.version.clone(),
         dimensions: dims,
         settings: settings.clone(),
+        features: recipe.features.clone(),
     };
 
     // Validate

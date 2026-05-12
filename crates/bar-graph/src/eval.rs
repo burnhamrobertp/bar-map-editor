@@ -12,8 +12,8 @@ pub enum EvalError {
     #[error("node {0:?} has no implementation")]
     NoImplementation(NodeId),
 
-    #[error("missing input on port {port} of node {node:?}")]
-    MissingInput { node: NodeId, port: String },
+    #[error("missing input on port {port}")]
+    MissingInput { port: String },
 
     #[error("graph error: {0}")]
     Graph(#[from] crate::engine::GraphError),
@@ -56,23 +56,28 @@ pub trait NodeExecutor: Send + Sync {
 ///
 /// `EvalError` is still returned for graph-structural failures
 /// (cycles via `topological_sort`).
-pub fn evaluate_graph(
+/// Like [`evaluate_graph`] but calls `on_progress` after each node with a
+/// formatted `[XX%] label` string. Lets callers surface per-node progress
+/// (e.g. into a log or status channel) without blocking the background thread.
+/// The callback receives a borrowed `&str`; clone/send as needed.
+pub fn evaluate_graph_with_progress(
     graph: &GraphEngine,
     executor: &dyn NodeExecutor,
     width: u32,
     height: u32,
+    on_progress: &dyn Fn(&str),
 ) -> Result<NodeOutputs, EvalError> {
     let eval_order = graph.topological_sort()?;
+    let total = eval_order.len().max(1);
     let mut outputs: NodeOutputs = HashMap::new();
 
-    for &node_id in &eval_order {
+    for (i, &node_id) in eval_order.iter().enumerate() {
         let node = graph.get_node(node_id).unwrap();
 
         // Gather inputs from upstream connections
         let mut inputs: HashMap<String, PortValue> = HashMap::new();
         for conn in graph.connections() {
             if conn.to.node_id == node_id {
-                // Find the upstream node's output
                 if let Some(upstream_outputs) = outputs.get(&conn.from.node_id) {
                     if let Some(value) = upstream_outputs.get(&conn.from.port_name) {
                         inputs.insert(conn.to.port_name.clone(), value.clone());
@@ -91,9 +96,21 @@ pub fn evaluate_graph(
                 tracing::debug!("Skipping {:?} ({:?}): {:?}", node.node_type, node_id, e);
             }
         }
+
+        let pct = (i + 1) * 100 / total;
+        on_progress(&format!("[{pct:3}%] {}", node.label));
     }
 
     Ok(outputs)
+}
+
+pub fn evaluate_graph(
+    graph: &GraphEngine,
+    executor: &dyn NodeExecutor,
+    width: u32,
+    height: u32,
+) -> Result<NodeOutputs, EvalError> {
+    evaluate_graph_with_progress(graph, executor, width, height, &|_| {})
 }
 
 /// Get the heightmap wired to the Bundler's `heightmap` port.

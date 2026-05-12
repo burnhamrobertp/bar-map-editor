@@ -149,6 +149,7 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
             height: result.height,
             map_settings,
         },
+        features: Vec::new(),
     };
 
     let layout = EditorLayout {

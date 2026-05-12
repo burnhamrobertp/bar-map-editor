@@ -2,6 +2,7 @@ use bar_graph::{GraphEngine, NodeId, NodeType, PortPlacement};
 use eframe::egui;
 use std::collections::HashMap;
 
+use crate::log::LogLevel;
 use crate::settings::Settings;
 use crate::undo::UndoHistory;
 
@@ -193,6 +194,20 @@ pub enum Layout {
     Sculpt3D,
 }
 
+impl Layout {
+    /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
+    /// Ctrl+2, etc. Extend this slice when new layouts are added.
+    pub const ALL: &'static [Layout] = &[Layout::Standard, Layout::Sculpt3D];
+
+    /// i18n key for this layout's display name.
+    pub(crate) fn i18n_key(self) -> &'static str {
+        match self {
+            Layout::Standard => "editor.menu.node_graph",
+            Layout::Sculpt3D => "editor.menu.sculpt_3d",
+        }
+    }
+}
+
 pub(crate) use crate::editor::RecipeMeta;
 
 /// Main application state for the BAR - Map Editor GUI. Field
@@ -291,8 +306,16 @@ impl BarEditorApp {
         // or when the most recent file no longer exists. Errors are
         // surfaced as a status message; we don't crash the launch.
         if app.settings.restore_last_project {
+            // Only restore .barproj files. .sd7 entries can appear in
+            // recents for the menu but should never be auto-loaded on
+            // startup -- they are import sources, not BME projects.
             if let Some(last) = app.settings.recent_files.first().cloned() {
-                if last.exists() {
+                let is_barproj = last
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .map(|e| e.eq_ignore_ascii_case("barproj"))
+                    .unwrap_or(false);
+                if is_barproj && last.exists() {
                     app.load_project(last);
                 }
             }
@@ -382,12 +405,41 @@ impl BarEditorApp {
         self.project.is_dirty = true;
     }
 
+    /// Append a message to the log buffer. Info/Warning/Error also update
+    /// the footer status bar. Debug goes to the buffer only (never shown
+    /// in the footer).
+    pub(crate) fn log(&mut self, level: LogLevel, msg: impl Into<String>) {
+        let msg = msg.into();
+        if level != LogLevel::Debug {
+            self.dialog.status_message = Some(msg.clone());
+            self.dialog.status_level = level;
+        }
+        self.dialog.log_buffer.push(level, msg);
+    }
+
+    pub(crate) fn log_info(&mut self, msg: impl Into<String>) {
+        self.log(LogLevel::Info, msg);
+    }
+
+    pub(crate) fn log_warning(&mut self, msg: impl Into<String>) {
+        self.log(LogLevel::Warning, msg);
+    }
+
+    pub(crate) fn log_error(&mut self, msg: impl Into<String>) {
+        self.log(LogLevel::Error, msg);
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn log_debug(&mut self, msg: impl Into<String>) {
+        self.log(LogLevel::Debug, msg);
+    }
+
     /// Status-bar message setter used by panels that need to
     /// surface a result without going through the toast path
     /// (e.g. "Sculpt saved to /path/to/foo.png" after the user
     /// triggers a save dialog inside the inspector).
     pub(crate) fn set_status_message(&mut self, msg: String) {
-        self.dialog.status_message = Some(msg);
+        self.log_info(msg);
     }
 
     /// True if the project has unsaved changes since the last save/load.
@@ -713,17 +765,19 @@ impl BarEditorApp {
                     ..self.map.settings.clone()
                 },
             },
+            features: self.map.features.clone(),
         }
     }
 
     /// Set a status message to show in the status bar.
     pub fn set_status(&mut self, msg: impl Into<String>) {
-        self.dialog.status_message = Some(msg.into());
+        self.log_info(msg);
     }
 
     /// Clear the status message.
     pub fn clear_status(&mut self) {
         self.dialog.status_message = None;
+        self.dialog.status_level = LogLevel::Info;
     }
 
     /// Returns a display label for the preview window title. Lives on

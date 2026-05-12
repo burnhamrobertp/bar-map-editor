@@ -60,12 +60,18 @@ pub(crate) struct NodeStyle {
 }
 
 impl NodeStyle {
-    pub(crate) fn default() -> Self {
+    pub(crate) fn from_visuals(vis: &egui::Visuals) -> Self {
+        let towards = if vis.dark_mode {
+            egui::Color32::WHITE
+        } else {
+            egui::Color32::BLACK
+        };
+        let base = vis.window_fill();
         Self {
-            bg: tokens::NODE_BG,
-            bg_sel: tokens::NODE_BG_SEL,
-            bg_pri: tokens::NODE_BG_PRI,
-            border: tokens::NODE_BORDER,
+            bg: base.lerp_to_gamma(towards, 0.12),
+            bg_sel: base.lerp_to_gamma(towards, 0.22),
+            bg_pri: base.lerp_to_gamma(towards, 0.32),
+            border: base.lerp_to_gamma(towards, 0.28),
             border_sel: tokens::NODE_BORDER_SEL,
             border_w: 1.5,
             border_w_sel: 2.0,

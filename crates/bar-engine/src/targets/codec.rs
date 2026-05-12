@@ -8,7 +8,7 @@ use super::config::TargetConfig;
 use super::dimensions::DimensionSet;
 use super::layers::LayerSet;
 use super::validation::ValidationError;
-use crate::recipe::MapSettings;
+use crate::recipe::{MapSettings, PlacedFeature};
 
 /// Files written by a codec during export.
 #[derive(Debug, Default)]
@@ -34,6 +34,8 @@ pub struct ExportPlan {
     pub dimensions: DimensionSet,
     /// Map settings (heights, atmosphere, lighting, etc.).
     pub settings: MapSettings,
+    /// Feature placements to write into the SMF feature section.
+    pub features: Vec<PlacedFeature>,
 }
 
 /// Trait for format-specific export implementations.

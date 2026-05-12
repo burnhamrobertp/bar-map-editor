@@ -17,107 +17,158 @@ use crate::recipe::{
 
 /// Convert a scanned SD7 work directory into a `Project` ready for `apply_project`.
 ///
-/// Builds the canonical five-node import pipeline (SmfImport, SmtImport,
-/// PassThrough, NormalMap, Bundler) from the scan result. The returned
-/// `Project` has no path (it has not been saved yet) and `is_dirty` will
-/// be set to `true` by the caller after installing via `apply_project`.
+/// Creates PaintedHeightmap nodes for the heightmap, metalmap, and typemap
+/// (data pre-extracted and hex-encoded by the engine layer), a PaintedTexture
+/// for the assembled SMT texture, a NormalMap, a PassThrough for ancillary
+/// files, and a Bundler. No external file dependencies remain after this.
 pub fn scan_to_project(scan: &WorkDirScan) -> Project {
     let source_x = 80.0_f32;
     let bundler_x = 700.0_f32;
-    let nm_x = (source_x + 165.0 + bundler_x) / 2.0; // 472.5
+    let nm_x = (source_x + 165.0 + bundler_x) / 2.0;
 
     let mut nodes: Vec<RecipeNode> = Vec::new();
     let mut connections: Vec<RecipeConnection> = Vec::new();
     let mut node_positions: HashMap<String, Position> = HashMap::new();
     let mut node_sizes: HashMap<String, NodeSize> = HashMap::new();
 
-    // Build the full passthrough file list. Include smf and smt so that an
-    // unedited round-trip preserves them byte-for-byte.
-    let mut passthrough_entries: Vec<(PathBuf, PathBuf)> = scan.passthrough_files.clone();
-    if let (Some(abs), Some(rel)) = (scan.smf_abs.as_ref(), scan.smf_rel.as_ref()) {
-        passthrough_entries.push((abs.clone(), rel.clone()));
-    }
-    if let (Some(abs), Some(rel)) = (scan.smt_abs.as_ref(), scan.smt_rel.as_ref()) {
-        passthrough_entries.push((abs.clone(), rel.clone()));
-    }
+    // Passthrough covers ancillary files only (mapinfo.lua, scripts, sounds,
+    // etc.). The original .smf/.smt are NOT included -- they are regenerated
+    // by the Bundler from the embedded node data below.
+    let passthrough_entries: Vec<(PathBuf, PathBuf)> = scan.passthrough_files.clone();
 
     let map_info_file: Option<String> = passthrough_entries
         .iter()
         .map(|(_, rel)| rel.to_string_lossy().replace('\\', "/"))
         .find(|p| p.eq_ignore_ascii_case("mapinfo.lua"));
 
-    // SmfImport
-    let has_smf = scan.smf_abs.is_some();
-    if let Some(ref smf_abs) = scan.smf_abs {
+    // Heightmap node (PaintedHeightmap with embedded data)
+    let has_heightmap = !scan.heightmap_hex.is_empty();
+    if has_heightmap {
         let mut params = HashMap::new();
         params.insert(
-            "path".to_string(),
-            ParamValue::String(smf_abs.to_string_lossy().to_string()),
+            "data".to_string(),
+            ParamValue::String(scan.heightmap_hex.clone()),
         );
-        params.insert("load_metalmap".to_string(), ParamValue::Bool(true));
-        params.insert("load_typemap".to_string(), ParamValue::Bool(true));
+        params.insert(
+            "resolution".to_string(),
+            ParamValue::UInt(scan.heightmap_res),
+        );
         nodes.push(RecipeNode {
-            key: "smf".to_string(),
-            node_type: NodeType::SmfImport,
-            label: "SMF Import".to_string(),
+            key: "hm".to_string(),
+            node_type: NodeType::PaintedHeightmap,
+            label: "Heightmap".to_string(),
             params,
         });
         node_positions.insert(
-            "smf".to_string(),
+            "hm".to_string(),
             Position {
                 x: source_x,
-                y: 130.0,
+                y: 80.0,
             },
         );
         node_sizes.insert(
-            "smf".to_string(),
+            "hm".to_string(),
             NodeSize {
                 width: 165.0,
-                height: 100.0,
+                height: 80.0,
             },
         );
     }
 
-    // SmtImport
-    if let Some(ref smt_abs) = scan.smt_abs {
+    // Metalmap node
+    if !scan.metalmap_hex.is_empty() {
         let mut params = HashMap::new();
         params.insert(
-            "path".to_string(),
-            ParamValue::String(smt_abs.to_string_lossy().to_string()),
+            "data".to_string(),
+            ParamValue::String(scan.metalmap_hex.clone()),
         );
-        if let Some(ref smf_abs) = scan.smf_abs {
-            params.insert(
-                "smf_path".to_string(),
-                ParamValue::String(smf_abs.to_string_lossy().to_string()),
-            );
-        }
-        if let Some((tx, ty)) = scan.tile_grid {
-            params.insert("tiles_x".to_string(), ParamValue::UInt(tx));
-            params.insert("tiles_y".to_string(), ParamValue::UInt(ty));
-        }
+        params.insert(
+            "resolution".to_string(),
+            ParamValue::UInt(scan.metalmap_res),
+        );
         nodes.push(RecipeNode {
-            key: "smt".to_string(),
-            node_type: NodeType::SmtImport,
-            label: "SMT Import".to_string(),
+            key: "metal".to_string(),
+            node_type: NodeType::PaintedHeightmap,
+            label: "Metal Map".to_string(),
             params,
         });
         node_positions.insert(
-            "smt".to_string(),
+            "metal".to_string(),
+            Position {
+                x: source_x,
+                y: 220.0,
+            },
+        );
+        node_sizes.insert(
+            "metal".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 80.0,
+            },
+        );
+    }
+
+    // Typemap node
+    if !scan.typemap_hex.is_empty() {
+        let mut params = HashMap::new();
+        params.insert(
+            "data".to_string(),
+            ParamValue::String(scan.typemap_hex.clone()),
+        );
+        params.insert("resolution".to_string(), ParamValue::UInt(scan.typemap_res));
+        nodes.push(RecipeNode {
+            key: "type".to_string(),
+            node_type: NodeType::PaintedHeightmap,
+            label: "Type Map".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "type".to_string(),
             Position {
                 x: source_x,
                 y: 360.0,
             },
         );
         node_sizes.insert(
-            "smt".to_string(),
+            "type".to_string(),
             NodeSize {
                 width: 165.0,
-                height: 100.0,
+                height: 80.0,
             },
         );
     }
 
-    // PassThrough
+    // Texture node (PaintedTexture with embedded RGB data)
+    let has_texture = !scan.texture_hex.is_empty();
+    if has_texture {
+        let mut params = HashMap::new();
+        params.insert(
+            "data".to_string(),
+            ParamValue::String(scan.texture_hex.clone()),
+        );
+        nodes.push(RecipeNode {
+            key: "tex".to_string(),
+            node_type: NodeType::PaintedTexture,
+            label: "Texture".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "tex".to_string(),
+            Position {
+                x: source_x,
+                y: 500.0,
+            },
+        );
+        node_sizes.insert(
+            "tex".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 80.0,
+            },
+        );
+    }
+
+    // PassThrough for ancillary files (mapinfo.lua, scripts, etc.)
     let has_pass = !passthrough_entries.is_empty();
     if has_pass {
         let file_list: String = passthrough_entries
@@ -140,7 +191,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             "pass".to_string(),
             Position {
                 x: source_x,
-                y: 570.0,
+                y: 640.0,
             },
         );
         node_sizes.insert(
@@ -152,8 +203,8 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         );
     }
 
-    // NormalMap (only when SMF present)
-    if has_smf {
+    // NormalMap (derives from the heightmap)
+    if has_heightmap {
         nodes.push(RecipeNode {
             key: "nm".to_string(),
             node_type: NodeType::NormalMap,
@@ -199,8 +250,8 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         );
     }
 
-    // Preview (only when SMF is present -- heightmap is required to render anything)
-    if has_smf {
+    // Preview (only when heightmap is present)
+    if has_heightmap {
         nodes.push(RecipeNode {
             key: "preview".to_string(),
             node_type: NodeType::Preview,
@@ -224,21 +275,13 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
     }
 
     // Connections
-    if has_smf {
+    if has_heightmap {
         connections.push(RecipeConnection {
-            from: "smf.heightmap".to_string(),
+            from: "hm.output".to_string(),
             to: "bundler.heightmap".to_string(),
         });
         connections.push(RecipeConnection {
-            from: "smf.metalmap".to_string(),
-            to: "bundler.metalmap".to_string(),
-        });
-        connections.push(RecipeConnection {
-            from: "smf.typemap".to_string(),
-            to: "bundler.typemap".to_string(),
-        });
-        connections.push(RecipeConnection {
-            from: "smf.heightmap".to_string(),
+            from: "hm.output".to_string(),
             to: "nm.input".to_string(),
         });
         connections.push(RecipeConnection {
@@ -246,7 +289,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             to: "bundler.normalmap".to_string(),
         });
         connections.push(RecipeConnection {
-            from: "smf.heightmap".to_string(),
+            from: "hm.output".to_string(),
             to: "preview.heightmap".to_string(),
         });
         connections.push(RecipeConnection {
@@ -254,13 +297,25 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             to: "preview.normal_map".to_string(),
         });
     }
-    if scan.smt_abs.is_some() {
+    if !scan.metalmap_hex.is_empty() {
         connections.push(RecipeConnection {
-            from: "smt.texture".to_string(),
+            from: "metal.output".to_string(),
+            to: "bundler.metalmap".to_string(),
+        });
+    }
+    if !scan.typemap_hex.is_empty() {
+        connections.push(RecipeConnection {
+            from: "type.output".to_string(),
+            to: "bundler.typemap".to_string(),
+        });
+    }
+    if has_texture {
+        connections.push(RecipeConnection {
+            from: "tex.output".to_string(),
             to: "bundler.texture".to_string(),
         });
         connections.push(RecipeConnection {
-            from: "smt.texture".to_string(),
+            from: "tex.output".to_string(),
             to: "preview.texture".to_string(),
         });
     }
@@ -293,6 +348,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             height,
             map_settings,
         },
+        features: scan.features.clone(),
     };
 
     let layout = EditorLayout {
@@ -308,6 +364,185 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
     Project { recipe, layout }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bar_graph::{NodeType, ParamValue as PV};
+    use std::path::PathBuf;
+
+    fn empty_scan(name: &str) -> WorkDirScan {
+        WorkDirScan {
+            work_dir: PathBuf::from("/tmp"),
+            map_name: name.to_string(),
+            smf_abs: None,
+            smf_rel: None,
+            smt_abs: None,
+            smt_rel: None,
+            tile_grid: None,
+            map_dims: None,
+            height_range: None,
+            passthrough_files: Vec::new(),
+            heightmap_hex: String::new(),
+            heightmap_res: 0,
+            metalmap_hex: String::new(),
+            metalmap_res: 0,
+            typemap_hex: String::new(),
+            typemap_res: 0,
+            texture_hex: String::new(),
+            texture_res: 0,
+            features: Vec::new(),
+        }
+    }
+
+    fn node_keys(p: &Project) -> Vec<&str> {
+        p.recipe.nodes.iter().map(|n| n.key.as_str()).collect()
+    }
+
+    #[test]
+    fn empty_scan_produces_only_bundler() {
+        let scan = empty_scan("test_map");
+        let p = scan_to_project(&scan);
+        assert_eq!(p.recipe.nodes.len(), 1);
+        assert_eq!(p.recipe.nodes[0].key, "bundler");
+        assert_eq!(p.recipe.nodes[0].node_type, NodeType::Bundler);
+        assert!(p.recipe.connections.is_empty());
+    }
+
+    #[test]
+    fn heightmap_only_adds_hm_nm_preview_not_others() {
+        let mut scan = empty_scan("test");
+        scan.heightmap_hex = "ff".repeat(16);
+        scan.heightmap_res = 4;
+        scan.map_dims = Some((512, 512));
+        let p = scan_to_project(&scan);
+        let keys = node_keys(&p);
+        for k in ["hm", "nm", "bundler", "preview"] {
+            assert!(keys.contains(&k), "missing: {k}");
+        }
+        for k in ["metal", "type", "tex", "pass"] {
+            assert!(!keys.contains(&k), "unexpected: {k}");
+        }
+    }
+
+    #[test]
+    fn full_scan_all_nodes_present() {
+        let mut scan = empty_scan("full");
+        scan.heightmap_hex = "ab".repeat(16);
+        scan.heightmap_res = 4;
+        scan.metalmap_hex = "cd".repeat(16);
+        scan.metalmap_res = 4;
+        scan.typemap_hex = "ef".repeat(16);
+        scan.typemap_res = 4;
+        scan.texture_hex = "012345".repeat(16);
+        scan.texture_res = 4;
+        scan.passthrough_files = vec![(PathBuf::from("/tmp/a.lua"), PathBuf::from("a.lua"))];
+        let p = scan_to_project(&scan);
+        let keys = node_keys(&p);
+        for k in [
+            "hm", "metal", "type", "tex", "nm", "pass", "bundler", "preview",
+        ] {
+            assert!(keys.contains(&k), "missing: {k}");
+        }
+    }
+
+    #[test]
+    fn connections_wire_heightmap_through_nm_to_bundler() {
+        let mut scan = empty_scan("wire");
+        scan.heightmap_hex = "aa".repeat(16);
+        scan.heightmap_res = 4;
+        let p = scan_to_project(&scan);
+        let froms: Vec<&str> = p
+            .recipe
+            .connections
+            .iter()
+            .map(|c| c.from.as_str())
+            .collect();
+        let tos: Vec<&str> = p.recipe.connections.iter().map(|c| c.to.as_str()).collect();
+        assert!(froms.contains(&"hm.output"), "hm.output not in froms");
+        assert!(
+            tos.contains(&"bundler.heightmap"),
+            "bundler.heightmap not in tos"
+        );
+        assert!(tos.contains(&"nm.input"), "nm.input not in tos");
+        assert!(
+            tos.contains(&"preview.heightmap"),
+            "preview.heightmap not in tos"
+        );
+    }
+
+    #[test]
+    fn map_name_set_in_bundler_params() {
+        let scan = empty_scan("my_cool_map");
+        let p = scan_to_project(&scan);
+        let bundler = p.recipe.nodes.iter().find(|n| n.key == "bundler").unwrap();
+        assert!(
+            matches!(
+                bundler.params.get("map_name"),
+                Some(PV::String(s)) if s == "my_cool_map"
+            ),
+            "map_name param not set correctly"
+        );
+    }
+
+    #[test]
+    fn height_range_propagates_to_map_settings() {
+        let mut scan = empty_scan("heights");
+        scan.height_range = Some((100.0, 900.0));
+        let p = scan_to_project(&scan);
+        assert_eq!(p.recipe.output.map_settings.min_height, 100.0);
+        assert_eq!(p.recipe.output.map_settings.max_height, 900.0);
+    }
+
+    #[test]
+    fn no_heightmap_skips_nm_and_preview() {
+        let mut scan = empty_scan("nohm");
+        scan.metalmap_hex = "ff".repeat(16);
+        scan.metalmap_res = 4;
+        let p = scan_to_project(&scan);
+        let keys = node_keys(&p);
+        assert!(!keys.contains(&"hm"), "unexpected hm");
+        assert!(!keys.contains(&"nm"), "unexpected nm");
+        assert!(!keys.contains(&"preview"), "unexpected preview");
+        assert!(keys.contains(&"metal"), "missing metal");
+        assert!(keys.contains(&"bundler"), "missing bundler");
+    }
+
+    #[test]
+    fn features_propagate_to_recipe() {
+        let mut scan = empty_scan("feat_test");
+        scan.features = vec![crate::recipe::PlacedFeature {
+            feature_type: "arborreal".to_string(),
+            x: 100.0,
+            y: 0.0,
+            z: 200.0,
+            angle: 1.57,
+            taken_damage: 0,
+        }];
+        let p = scan_to_project(&scan);
+        assert_eq!(p.recipe.features.len(), 1);
+        assert_eq!(p.recipe.features[0].feature_type, "arborreal");
+        assert!((p.recipe.features[0].x - 100.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn passthrough_files_create_pass_node_and_connect_to_bundler() {
+        let mut scan = empty_scan("pass");
+        scan.passthrough_files = vec![(
+            PathBuf::from("/tmp/mapinfo.lua"),
+            PathBuf::from("mapinfo.lua"),
+        )];
+        let p = scan_to_project(&scan);
+        let keys = node_keys(&p);
+        assert!(keys.contains(&"pass"), "missing pass");
+        let has_conn = p
+            .recipe
+            .connections
+            .iter()
+            .any(|c| c.from == "pass.files" && c.to == "bundler.files");
+        assert!(has_conn, "pass.files -> bundler.files connection missing");
+    }
+}
+
 /// Result of scanning an extracted .sd7 work directory.
 #[derive(Debug)]
 pub struct WorkDirScan {
@@ -315,7 +550,8 @@ pub struct WorkDirScan {
     pub work_dir: PathBuf,
     /// Map name derived from the archive filename stem.
     pub map_name: String,
-    /// Absolute path to the first `.smf` file found (if any).
+    /// Absolute path to the first `.smf` file found (if any). Kept for
+    /// PassThrough file-list construction (other callers that need the path).
     pub smf_abs: Option<PathBuf>,
     /// Archive-relative path to the `.smf` file (e.g. `maps/mymap.smf`).
     pub smf_rel: Option<PathBuf>,
@@ -325,13 +561,35 @@ pub struct WorkDirScan {
     pub smt_rel: Option<PathBuf>,
     /// Tile grid dimensions `(tiles_x, tiles_y)` read from the SMF header.
     pub tile_grid: Option<(u32, u32)>,
-    /// Heightmap pixel dimensions read from the SMF header (`map_x + 1` × `map_y + 1`).
+    /// Heightmap pixel dimensions read from the SMF header (`map_x + 1` x `map_y + 1`).
     /// `None` when no SMF file is present.
     pub map_dims: Option<(u32, u32)>,
-    /// Terrain height range from the SMF header (world units, same coordinate space as X/Z).
-    /// Used to compute an accurate vertical scale for the 3D preview.
+    /// Terrain height range from the SMF header (world units).
     /// `None` when no SMF file is present.
     pub height_range: Option<(f32, f32)>,
     /// All other files as `(absolute_path, archive_relative_path)` pairs.
+    /// Does NOT include the .smf or .smt themselves -- those are embedded
+    /// in the node data below and regenerated by the Bundler on export.
     pub passthrough_files: Vec<(PathBuf, PathBuf)>,
+
+    // Embedded node data (pre-extracted and hex-encoded by bar-engine).
+    // Empty string means the data was not available (e.g. no SMF found).
+    /// Hex-encoded u8 grayscale heightmap at `heightmap_res x heightmap_res`.
+    pub heightmap_hex: String,
+    pub heightmap_res: u32,
+
+    /// Hex-encoded u8 grayscale metalmap.
+    pub metalmap_hex: String,
+    pub metalmap_res: u32,
+
+    /// Hex-encoded u8 grayscale typemap.
+    pub typemap_hex: String,
+    pub typemap_res: u32,
+
+    /// Hex-encoded RGB (3 bytes/pixel) assembled texture at `texture_res x texture_res`.
+    pub texture_hex: String,
+    pub texture_res: u32,
+
+    /// Feature placements extracted from the SMF feature section.
+    pub features: Vec<crate::recipe::PlacedFeature>,
 }

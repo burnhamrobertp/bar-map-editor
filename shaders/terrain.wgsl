@@ -240,22 +240,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // would make the preview diverge from in-game appearance. If/when we
     // want fog, port Recoil's MapSettings-driven fog instead.
 
-    // Brush cursor ring.
+    // Brush cursor ring: 1-px AA outline, no disc fill.
     if (camera.brush_cursor.w > 0.5) {
         let cursor_xz = camera.brush_cursor.xy;
         let radius = camera.brush_cursor.z;
         let dx = in.world_position.x - cursor_xz.x;
         let dz = in.world_position.z - cursor_xz.y;
         let d = sqrt(dx * dx + dz * dz);
-        let thickness = max(radius * 0.08, 0.002);
-        let inner = radius - thickness;
-        let outer_t = smoothstep(radius, inner, d);
-        let inner_t = smoothstep(inner, inner - thickness, d);
-        let ring = clamp(outer_t - inner_t, 0.0, 1.0);
-        let disc = smoothstep(radius, inner, d) * 0.18;
-        let cursor_color = vec3<f32>(1.0, 0.85, 0.2);
-        let cursor_mix = ring * 0.85 + disc;
-        lit_color = mix(lit_color, cursor_color, clamp(cursor_mix, 0.0, 1.0));
+        // fwidth gives the world-space change in d per screen pixel, so
+        // (1.0 - abs(d - radius) / aa) is a tent that spans ~2 px and
+        // stays exactly at the brush boundary regardless of brush size.
+        let aa = max(fwidth(d), 0.0001);
+        let ring = clamp(1.0 - abs(d - radius) / aa, 0.0, 1.0);
+        let cursor_color = vec3<f32>(1.0, 0.9, 0.2);
+        lit_color = mix(lit_color, cursor_color, ring * 0.92);
     }
 
     return vec4<f32>(lit_color, 1.0);

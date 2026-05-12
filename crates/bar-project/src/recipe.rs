@@ -68,6 +68,27 @@ pub struct Recipe {
     pub connections: Vec<RecipeConnection>,
     /// Output configuration.
     pub output: OutputConfig,
+    /// Feature placements (trees, rocks, crystals, etc.).
+    /// Preserved from .sd7 import; editable in the sculpt view in a future iteration.
+    #[serde(default)]
+    pub features: Vec<PlacedFeature>,
+}
+
+/// A feature (tree, rock, crystal, etc.) placed on the map.
+///
+/// Stored as explicit placement data on `Recipe` alongside `MapSettings`,
+/// not as a graph node -- features are authored positions, not generated.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlacedFeature {
+    /// Feature type name as referenced in game data (e.g. "arborreal").
+    pub feature_type: String,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    #[serde(default)]
+    pub angle: f32,
+    #[serde(default)]
+    pub taken_damage: i16,
 }
 
 /// A node in the recipe, identified by a stable string key.
@@ -579,6 +600,7 @@ impl Recipe {
                 height: 257,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         }
     }
 }
@@ -643,6 +665,7 @@ mod tests {
                 height: 0,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
     }
@@ -675,6 +698,7 @@ mod tests {
                 to: "out.heightmap".to_string(),
             }],
             output: OutputConfig::default(),
+            features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
     }
@@ -704,6 +728,7 @@ mod tests {
             ],
             connections: vec![],
             output: OutputConfig::default(),
+            features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
     }
@@ -841,6 +866,7 @@ mod tests {
                 height: 513,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
@@ -873,9 +899,9 @@ mod tests {
             author: None,
             version: None,
             nodes: vec![
-                make_subout("sub_terrain", "Output"),  // was "Heightmap" before recompute ran
+                make_subout("sub_terrain", "Output"), // was "Heightmap" before recompute ran
                 make_subout("sub_texture", "Texture"), // was "Color"
-                make_subout("sub_slope", "Slope"),     // was "Heightmap"
+                make_subout("sub_slope", "Slope"),    // was "Heightmap"
                 RecipeNode {
                     key: "out".to_string(),
                     node_type: NodeType::Bundler,
@@ -903,6 +929,7 @@ mod tests {
                 height: 1025,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
@@ -914,28 +941,26 @@ mod tests {
         assert_eq!(graph.connections().len(), 3);
     }
 
-    /// A recipe that mirrors the SD7 import pipeline (SmfImport + Bundler)
-    /// round-trips through JSON and builds its graph cleanly.
+    /// A PaintedHeightmap -> Bundler pipeline round-trips through JSON and
+    /// builds its graph cleanly.
     #[test]
-    fn sd7_import_style_recipe_roundtrip() {
+    fn painted_heightmap_to_bundler_roundtrip() {
         let recipe = Recipe {
             schema_version: RECIPE_SCHEMA_VERSION,
-            name: "SD7 import test".to_string(),
+            name: "Import test".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
             nodes: vec![
                 RecipeNode {
-                    key: "smf".to_string(),
-                    node_type: NodeType::SmfImport,
-                    label: "SMF".to_string(),
+                    key: "hm".to_string(),
+                    node_type: NodeType::PaintedHeightmap,
+                    label: "Heightmap".to_string(),
                     params: {
                         let mut p = HashMap::new();
-                        p.insert(
-                            "path".to_string(),
-                            ParamValue::String("/tmp/test.smf".to_string()),
-                        );
+                        p.insert("data".to_string(), ParamValue::String(String::new()));
+                        p.insert("resolution".to_string(), ParamValue::UInt(512));
                         p
                     },
                 },
@@ -947,7 +972,7 @@ mod tests {
                 },
             ],
             connections: vec![RecipeConnection {
-                from: "smf.heightmap".to_string(),
+                from: "hm.output".to_string(),
                 to: "out.heightmap".to_string(),
             }],
             output: OutputConfig {
@@ -955,6 +980,7 @@ mod tests {
                 height: 513,
                 map_settings: MapSettings::default(),
             },
+            features: Vec::new(),
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();

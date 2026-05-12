@@ -13,6 +13,7 @@ use eframe::egui;
 
 use crate::app::{BarEditorApp, CanvasView, PendingAction, RecipeMeta};
 use crate::state::NodeVisual;
+use crate::t;
 
 impl BarEditorApp {
     /// Wipe every transient + per-project field so the editor is in a
@@ -39,12 +40,14 @@ impl BarEditorApp {
         self.project.loaded_name = None;
         self.project.is_dirty = false;
         self.project.map_info_file = None;
+        self.project.autosave_slot = 0;
         self.map.settings = bar_project::MapSettings::default();
         self.map.width = 513;
         self.map.height = 513;
         self.map.min_height = 0.0;
         self.map.max_height = 800.0;
         self.map.recipe_meta = RecipeMeta::default();
+        self.map.features = Vec::new();
 
         // Inspector / preview.
         self.preview.node = None;
@@ -100,6 +103,7 @@ impl BarEditorApp {
         // project would mislead the user about what just happened.
         self.dialog.toast = None;
         self.dialog.status_message = None;
+        self.dialog.status_level = crate::log::LogLevel::Info;
 
         // Preview / export state -- viewport open flag, driving node,
         // run pulses, and export status all reset together. preview_node
@@ -304,7 +308,7 @@ impl BarEditorApp {
         let project = match Project::load(&path) {
             Ok(p) => p,
             Err(e) => {
-                self.dialog.status_message = Some(format!("Load failed: {e}"));
+                self.log_error(t!("editor.project.load_failed", error = e.to_string()));
                 // If a recent-files entry pointed at a now-broken file, drop it.
                 self.settings.remove_recent(&path);
                 self.settings.save();
@@ -318,7 +322,12 @@ impl BarEditorApp {
         let display = path.display().to_string();
         self.settings.add_recent(&path);
         self.settings.save();
-        self.apply_project(project, Some(path), name, format!("Loaded: {display}"));
+        self.apply_project(
+            project,
+            Some(path),
+            name,
+            t!("editor.project.loaded", name = display),
+        );
     }
 
     /// Apply a loaded/parsed project as the current session.
@@ -339,7 +348,7 @@ impl BarEditorApp {
         let graph = match project.recipe.build_graph() {
             Ok(g) => g,
             Err(e) => {
-                self.dialog.status_message = Some(format!("Invalid project: {e}"));
+                self.log_error(format!("Invalid project: {e}"));
                 return;
             }
         };
@@ -369,6 +378,7 @@ impl BarEditorApp {
         };
         self.map.min_height = self.map.settings.min_height;
         self.map.max_height = self.map.settings.max_height;
+        self.map.features = project.recipe.features.clone();
 
         // Resolve any project-relative file paths (`bar://...`)
         // against the .barproj's directory so executors get absolute
@@ -622,9 +632,24 @@ impl BarEditorApp {
 
         self.project.path = path;
         self.project.loaded_name = Some(name);
-        self.dialog.status_message = Some(status);
+        self.log_info(status);
         self.project.is_dirty = false;
         self.project.graph_reset = true;
+
+        // Restore preview.node so sculpt layout can render immediately
+        // without the user having to open the floating preview first.
+        // reset_project() cleared it; scan the newly installed graph to
+        // get the id back. We intentionally don't set preview.open here
+        // so the floating window doesn't force-open on every load.
+        if let Some(id) = self
+            .graph
+            .nodes()
+            .values()
+            .find(|n| n.node_type == NodeType::Preview)
+            .map(|n| n.id)
+        {
+            self.preview.node = Some(id);
+        }
     }
 
     /// Open a .sd7 map archive as a new project.
@@ -640,10 +665,12 @@ impl BarEditorApp {
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| path.display().to_string());
-        self.dialog.status_message = Some(format!("Extracting {}…", map_name));
+        self.log_info(t!("editor.project.extracting", name = map_name));
 
-        self.settings.add_recent(&path);
-        self.settings.save();
+        // Intentionally NOT added to recent_files: a .sd7 is an import
+        // source, not a BME project. Adding it here causes startup restore
+        // to try (and fail) to re-open it as a .barproj. The .barproj path
+        // enters recents when the user explicitly saves.
         self.project.sd7_open_request = Some(path);
     }
 
@@ -656,7 +683,7 @@ impl BarEditorApp {
     /// Build the node graph after a successful .sd7 extraction.
     pub fn finish_open_map(&mut self, scan: bar_project::WorkDirScan) {
         let name = scan.map_name.clone();
-        let status = format!("Opened: {}", name);
+        let status = t!("editor.project.opened", name = name);
         let project = bar_project::scan_to_project(&scan);
         self.apply_project(project, None, name, status);
         // Imported project hasn't been saved yet.

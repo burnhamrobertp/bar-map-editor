@@ -273,6 +273,7 @@ fn main() -> Result<()> {
                 gpu_context,
                 render_state,
                 export_result_rx: None,
+                progress_rx: None,
                 export_status: bar_gui::ExportStatus::Idle,
                 sd7_extract_rx: None,
                 test_in_bar_rx: None,
@@ -310,6 +311,9 @@ struct AppWrapper {
     // ── Per-export communication (one-shot, not per-project) ──────────────
     /// Receiver for export thread results (Some while an export is running).
     export_result_rx: Option<mpsc::Receiver<String>>,
+    /// Per-node progress messages from the active export or test-in-bar thread.
+    /// Drained each frame and routed to the app log / status bar.
+    progress_rx: Option<mpsc::Receiver<String>>,
     /// Which bundler(s) the in-flight export is for. Set when an export
     /// begins, cleared when the result is consumed. Pushed to the GUI each
     /// frame so the bundle buttons can show busy state.
@@ -429,9 +433,26 @@ impl eframe::App for AppWrapper {
             self.app.open_path_external(path);
         }
 
+        // Drain per-node progress messages from the active export thread.
+        // Each message has the form "[XX%] NodeLabel"; routed to the status
+        // bar and log so the user can see the process is still running.
+        if let Some(ref prx) = self.progress_rx {
+            while let Ok(msg) = prx.try_recv() {
+                self.app.set_status(msg);
+            }
+        }
+
         // Poll for completed export result
         if let Some(ref rx) = self.export_result_rx {
             if let Ok(msg) = rx.try_recv() {
+                // Final drain before the result message so no progress
+                // lines are lost if both arrive in the same frame.
+                if let Some(ref prx) = self.progress_rx {
+                    while let Ok(pmsg) = prx.try_recv() {
+                        self.app.set_status(pmsg);
+                    }
+                }
+                self.progress_rx = None;
                 self.app.set_status(msg);
                 self.export_result_rx = None;
                 self.export_status = bar_gui::ExportStatus::Idle;
@@ -491,12 +512,29 @@ impl eframe::App for AppWrapper {
                     let (w, h) = self.app.map.dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
+                    let (progress_tx, progress_rx) = mpsc::channel::<String>();
+                    self.progress_rx = Some(progress_rx);
+                    self.app.set_status(bar_gui::i18n::t_args(
+                        "editor.export.generating",
+                        &[("w", &w.to_string()), ("h", &h.to_string())],
+                    ));
                     let ctx_clone = ctx.clone();
+                    let ctx_progress = ctx.clone();
                     let executor = Arc::clone(&self.executor);
                     let run_filter_label = pending.run_filter_label;
 
                     std::thread::spawn(move || {
-                        let msg = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
+                        let progress_cb = |msg: &str| {
+                            let _ = progress_tx.send(msg.to_string());
+                            ctx_progress.request_repaint();
+                        };
+                        let msg = match bar_graph::evaluate_graph_with_progress(
+                            &graph,
+                            executor.as_ref(),
+                            w,
+                            h,
+                            &progress_cb,
+                        ) {
                             Ok(outputs) => {
                                 let filter = run_filter_label.as_deref();
                                 match bar_engine::execute_bundlers(
@@ -514,7 +552,7 @@ impl eframe::App for AppWrapper {
                                         )
                                     }
                                     Ok(_) => {
-                                        "No Bundler nodes found — add a Bundler node to export"
+                                        "No Bundler nodes found -- add a Bundler node to export"
                                             .to_string()
                                     }
                                     Err(e) => format!("Export failed: {e}"),
@@ -552,6 +590,12 @@ impl eframe::App for AppWrapper {
             if let Ok(result) = rx.try_recv() {
                 self.test_in_bar_rx = None;
                 self.export_status = bar_gui::ExportStatus::Idle;
+                if let Some(ref prx) = self.progress_rx {
+                    while let Ok(pmsg) = prx.try_recv() {
+                        self.app.set_status(pmsg);
+                    }
+                }
+                self.progress_rx = None;
                 match result {
                     Ok((sd7_path, map_internal_name)) => {
                         self.finish_test_in_bar(&sd7_path, &map_internal_name)
@@ -726,12 +770,17 @@ impl eframe::App for AppWrapper {
                             &session.camera,
                             frame_borrow.as_ref(),
                         );
-                        Self::update_viewport_texture_on(
-                            &mut session.viewport_texture_id,
-                            &session.terrain_renderer,
-                            &self.render_state,
-                            ctx,
-                        );
+                        // Only expose the texture once we have real terrain
+                        // data. Registering a blank render would dismiss the
+                        // loading spinner before the first valid frame arrives.
+                        if session.current_frame.is_some() {
+                            Self::update_viewport_texture_on(
+                                &mut session.viewport_texture_id,
+                                &session.terrain_renderer,
+                                &self.render_state,
+                                ctx,
+                            );
+                        }
                     }
                 }
                 if result.is_low_res {
@@ -978,11 +1027,26 @@ impl AppWrapper {
         let executor = Arc::clone(&self.executor);
         let (tx, rx) = mpsc::channel::<Result<(std::path::PathBuf, String), String>>();
         self.test_in_bar_rx = Some(rx);
+        let (progress_tx, progress_rx) = mpsc::channel::<String>();
+        self.progress_rx = Some(progress_rx);
         self.export_status = bar_gui::ExportStatus::All;
+        self.app
+            .set_status(format!("Generating {}x{} map...", w, h));
         let ctx_clone = ctx.clone();
+        let ctx_progress = ctx.clone();
 
         std::thread::spawn(move || {
-            let result = match bar_graph::evaluate_graph(&graph, executor.as_ref(), w, h) {
+            let progress_cb = |msg: &str| {
+                let _ = progress_tx.send(msg.to_string());
+                ctx_progress.request_repaint();
+            };
+            let result = match bar_graph::evaluate_graph_with_progress(
+                &graph,
+                executor.as_ref(),
+                w,
+                h,
+                &progress_cb,
+            ) {
                 Ok(outputs) => {
                     match bar_engine::execute_bundlers(&graph, &outputs, &recipe, &temp_dir, None) {
                         Ok(results) => {
@@ -1253,13 +1317,17 @@ impl AppWrapper {
                         &session.camera,
                         frame_borrow.as_ref(),
                     );
-                    // Re-register the new texture view with egui.
-                    Self::update_viewport_texture_on(
-                        &mut session.viewport_texture_id,
-                        &session.terrain_renderer,
-                        render_state,
-                        ctx,
-                    );
+                    // Re-register the new texture view with egui only when
+                    // we have real terrain data; otherwise the loading
+                    // spinner is dismissed by a blank resize render.
+                    if session.current_frame.is_some() {
+                        Self::update_viewport_texture_on(
+                            &mut session.viewport_texture_id,
+                            &session.terrain_renderer,
+                            render_state,
+                            ctx,
+                        );
+                    }
                 }
             }
         }
