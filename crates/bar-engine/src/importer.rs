@@ -16,7 +16,9 @@ use path_slash::PathExt as _;
 use bar_graph::{NodeType, ParamValue};
 
 use crate::project::{EditorLayout, Position, Project};
-use crate::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode};
+use crate::recipe::{
+    MapSettings, OutputConfig, PlacedFeature, Recipe, RecipeConnection, RecipeNode,
+};
 
 /// Result of importing a .sd7 archive.
 pub struct ImportResult {
@@ -36,6 +38,8 @@ pub struct ImportResult {
     /// `import_sd7_to_project` extract additional MapSettings fields
     /// (gravity, tidal_strength, etc.) without re-reading the archive.
     pub mapinfo_lua: Option<String>,
+    /// Feature placements extracted from the SMF feature section.
+    pub features: Vec<PlacedFeature>,
 }
 
 /// Extract baked heightmap data from a `.sd7` archive into `output_dir`.
@@ -149,7 +153,7 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
             height: result.height,
             map_settings,
         },
-        features: Vec::new(),
+        features: result.features,
     };
 
     let layout = EditorLayout {
@@ -213,6 +217,19 @@ fn do_import(archive_path: &Path, output_dir: &Path, extract_dir: &Path) -> Resu
         .and_then(parse_mapinfo_smf_heights)
         .unwrap_or((smf.header.min_height, smf.header.max_height));
 
+    let features = smf
+        .features
+        .iter()
+        .map(|f| PlacedFeature {
+            feature_type: f.feature_type.clone(),
+            x: f.x,
+            y: f.y,
+            z: f.z,
+            angle: f.angle,
+            taken_damage: f.taken_damage,
+        })
+        .collect();
+
     Ok(ImportResult {
         map_name,
         width,
@@ -221,6 +238,7 @@ fn do_import(archive_path: &Path, output_dir: &Path, extract_dir: &Path) -> Resu
         max_height,
         heightmap_png,
         mapinfo_lua,
+        features,
     })
 }
 
@@ -559,5 +577,64 @@ local mapinfo = {
         std::fs::remove_dir_all(&dir).ok();
         let path = result.unwrap();
         assert_eq!(path.file_name().unwrap(), "mymap.smf");
+    }
+
+    #[test]
+    fn import_sd7_to_project_preserves_features() {
+        use bar_data::sd7::{SmfFeaturePlacement, SmfMap};
+
+        let tmp = std::env::temp_dir().join("om_importer_features_test");
+        std::fs::remove_dir_all(&tmp).ok();
+        let maps_dir = tmp.join("src").join("maps");
+        std::fs::create_dir_all(&maps_dir).unwrap();
+
+        let mut smf = SmfMap::new(128, 128).unwrap();
+        smf.features = vec![
+            SmfFeaturePlacement {
+                feature_type: "arborreal".to_string(),
+                x: 512.0,
+                y: 0.0,
+                z: 256.0,
+                angle: 1.57,
+                taken_damage: 0,
+            },
+            SmfFeaturePlacement {
+                feature_type: "GeoTherm_Lava_Rock".to_string(),
+                x: 100.0,
+                y: 0.0,
+                z: 200.0,
+                angle: 0.0,
+                taken_damage: 5,
+            },
+        ];
+
+        let smf_path = maps_dir.join("test.smf");
+        let mut smf_file = std::fs::File::create(&smf_path).unwrap();
+        smf.write(&mut smf_file).unwrap();
+
+        let sd7_path = tmp.join("test.sd7");
+        sevenz_rust::compress_to_path(tmp.join("src"), &sd7_path).unwrap();
+
+        let out_dir = tmp.join("out");
+        let project = import_sd7_to_project(&sd7_path, &out_dir).unwrap();
+
+        std::fs::remove_dir_all(&tmp).ok();
+
+        assert_eq!(project.recipe.features.len(), 2);
+        let arb = project
+            .recipe
+            .features
+            .iter()
+            .find(|f| f.feature_type == "arborreal")
+            .expect("arborreal feature missing");
+        assert!((arb.x - 512.0).abs() < 0.001);
+        assert!((arb.z - 256.0).abs() < 0.001);
+        let geo = project
+            .recipe
+            .features
+            .iter()
+            .find(|f| f.feature_type == "GeoTherm_Lava_Rock")
+            .expect("GeoTherm_Lava_Rock feature missing");
+        assert_eq!(geo.taken_damage, 5);
     }
 }
