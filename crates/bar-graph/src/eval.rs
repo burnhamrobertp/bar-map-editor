@@ -12,8 +12,8 @@ pub enum EvalError {
     #[error("node {0:?} has no implementation")]
     NoImplementation(NodeId),
 
-    #[error("missing input on port {port} of node {node:?}")]
-    MissingInput { node: NodeId, port: String },
+    #[error("missing input on port {port}")]
+    MissingInput { port: String },
 
     #[error("graph error: {0}")]
     Graph(#[from] crate::engine::GraphError),

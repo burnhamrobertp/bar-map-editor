@@ -408,7 +408,7 @@ pub fn param_is_color(node_type: &NodeType, key: &str) -> bool {
             | (NodeType::PaintedTexture, "brush_color")
     ) || (node_type == &NodeType::ColorRamp
         && key.starts_with("color_")
-        && key[6..].parse::<u8>().is_ok())
+        && key.get(6..).and_then(|s| s.parse::<u8>().ok()).is_some())
 }
 
 /// Per-biome defaults for the AutoTexture params that are biome-

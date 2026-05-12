@@ -194,8 +194,8 @@ impl NodeExecutor for CpuExecutor {
                 let ctrl = get_optional_heightmap(inputs, "control");
                 let mask = get_optional_heightmap(inputs, "mask");
                 let params_e = ThermalErosionParams {
-                    iterations: get_uint(params, "iterations", 50),
-                    talus_angle: get_float(params, "talus_angle", 0.004),
+                    iterations: get_uint(params, "iterations", 100),
+                    talus_angle: get_float(params, "talus_angle", 0.6),
                     erosion_rate: get_float(params, "erosion_rate", 0.5),
                 };
                 let hm = thermal_erosion(&input, &params_e)
@@ -369,7 +369,7 @@ impl NodeExecutor for CpuExecutor {
                 }
 
                 if layers.is_empty() {
-                    let out = ColorBuffer::new(256, 256).unwrap();
+                    let out = ColorBuffer::new(width, height).unwrap();
                     outputs.insert("output".to_string(), PortValue::Color(out));
                 } else {
                     let w = layers[0].tex.width();
@@ -682,17 +682,11 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
-            NodeType::MaskExpand => {
+            NodeType::MaskExpand | NodeType::MaskShrink => {
                 let input = get_input_heightmap(inputs, "input")?;
                 let radius = get_float(params, "radius", 4.0).max(0.5);
-                let hm = apply_morphology(&input, radius, true);
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
-            }
-
-            NodeType::MaskShrink => {
-                let input = get_input_heightmap(inputs, "input")?;
-                let radius = get_float(params, "radius", 4.0).max(0.5);
-                let hm = apply_morphology(&input, radius, false);
+                let expand = matches!(node_type, NodeType::MaskExpand);
+                let hm = apply_morphology(&input, radius, expand);
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
@@ -930,7 +924,6 @@ fn get_input_heightmap(
         Some(PortValue::Heightmap(hm)) => Ok(hm.clone()),
         Some(PortValue::Mask(hm)) => Ok(hm.clone()),
         _ => Err(EvalError::MissingInput {
-            node: bar_graph::NodeId(0),
             port: name.to_string(),
         }),
     }
@@ -943,7 +936,6 @@ fn get_input_color(
     match inputs.get(name) {
         Some(PortValue::Color(cb)) => Ok(cb.clone()),
         _ => Err(EvalError::MissingInput {
-            node: bar_graph::NodeId(0),
             port: name.to_string(),
         }),
     }
@@ -2522,7 +2514,7 @@ fn hex_decode_mask(s: &str) -> Vec<u8> {
 
 /// Source resolution for the `PaintedTexture` node's brush canvas.
 /// Fixed for now; could be made a param like PaintedHeightmap.
-pub const PAINTED_TEXTURE_RES: u32 = 256;
+pub(crate) const PAINTED_TEXTURE_RES: u32 = 256;
 
 /// Apply a sculpt delta buffer onto a heightmap in place.
 /// `pixels` is a flat u8 array at `src_res × src_res`: 128 = no change,
@@ -2737,13 +2729,13 @@ fn apply_layout_generator(
             Some(ParamValue::String(s)) => s.as_str(),
             _ => "ellipse",
         };
-        let cx = get_float_k(params, &format!("x_{i}"), 0.5);
-        let cy = get_float_k(params, &format!("y_{i}"), 0.5);
-        let rx = get_float_k(params, &format!("rx_{i}"), 0.2).max(1e-4);
-        let ry = get_float_k(params, &format!("ry_{i}"), 0.2).max(1e-4);
-        let angle_deg = get_float_k(params, &format!("angle_{i}"), 0.0);
-        let peak = get_float_k(params, &format!("height_{i}"), 0.5);
-        let falloff = get_float_k(params, &format!("falloff_{i}"), 0.5).clamp(0.001, 1.0);
+        let cx = get_float(params, &format!("x_{i}"), 0.5);
+        let cy = get_float(params, &format!("y_{i}"), 0.5);
+        let rx = get_float(params, &format!("rx_{i}"), 0.2).max(1e-4);
+        let ry = get_float(params, &format!("ry_{i}"), 0.2).max(1e-4);
+        let angle_deg = get_float(params, &format!("angle_{i}"), 0.0);
+        let peak = get_float(params, &format!("height_{i}"), 0.5);
+        let falloff = get_float(params, &format!("falloff_{i}"), 0.5).clamp(0.001, 1.0);
         let angle_rad = angle_deg * PI / 180.0;
         let cos_a = angle_rad.cos();
         let sin_a = angle_rad.sin();
@@ -3023,13 +3015,6 @@ fn apply_select_aspect(input: &Heightmap, direction: f32, width: f32, falloff: f
         })
         .collect();
     Heightmap::frbar_data(w as u32, h as u32, out).unwrap()
-}
-
-fn get_float_k(params: &HashMap<String, ParamValue>, key: &str, default: f32) -> f32 {
-    match params.get(key) {
-        Some(ParamValue::Float(v)) => *v,
-        _ => default,
-    }
 }
 
 #[cfg(test)]
