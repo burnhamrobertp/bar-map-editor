@@ -2,7 +2,39 @@
   "editor": {
     "app": {
       "title": "BAR - Map Editor",
-      "about": "About BAR - Map Editor"
+      "about": "About BAR - Map Editor",
+      "version": "Version %{v}",
+      "tagline_about": "Standalone map editor for Beyond All Reason."
+    },
+    "project": {
+      "load_failed": "Load failed: %{error}",
+      "loaded": "Loaded: %{name}",
+      "saved": "Saved: %{path}",
+      "save_failed": "Save failed: %{error}",
+      "extracting": "Extracting %{name}…",
+      "opened": "Opened: %{name}",
+      "autosaved": "Autosaved"
+    },
+    "prefs": {
+      "title": "Preferences",
+      "saved_to": "Saved to: %{path}",
+      "autosave": {
+        "heading": "Auto-save",
+        "enabled": "Enabled",
+        "interval_label": "Interval:",
+        "slots_label": "Slots:",
+        "slots_hint": "Number of rotating autosave files kept per project"
+      },
+      "confirmations": {
+        "heading": "Confirmations",
+        "none_suppressed": "No confirmations are currently suppressed.",
+        "suppressed_count": "%{n} confirmation type(s) suppressed via \"Don't ask again\":",
+        "clear": "Clear suppressed confirmations"
+      },
+      "startup": {
+        "heading": "Startup",
+        "restore_last": "Reopen the last project on launch"
+      }
     },
     "menu": {
       "file": "File",
@@ -19,7 +51,16 @@
       "undo": "Undo",
       "redo": "Redo",
       "auto_layout": "Auto Layout",
-      "preferences": "Preferences..."
+      "preferences": "Preferences...",
+      "view": "View",
+      "node_graph": "Node Graph",
+      "sculpt_3d": "3D Sculpt",
+      "log": "Log"
+    },
+    "log": {
+      "title": "Log",
+      "clear": "Clear",
+      "open_hint": "Open log"
     },
     "palette": {
       "heading": "Node Library"
@@ -54,6 +95,9 @@
         "name": "Dunes",
         "description": "Smooth flowing sand-dune undulations. Open mobile play."
       }
+    },
+    "export": {
+      "generating": "Generating %{w}x%{h} map..."
     },
     "toolbar": {
       "export_all": "Export all Bundler nodes",

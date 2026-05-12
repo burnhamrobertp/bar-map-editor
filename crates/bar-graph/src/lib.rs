@@ -17,11 +17,11 @@ pub use defaults::{
 };
 pub use engine::GraphEngine;
 pub use eval::{
-    evaluate_graph, get_bundler_node_heightmap, get_bundler_node_texture, get_grassmap_output,
-    get_heightmap_output, get_metalmap_output, get_node_output_color_named,
-    get_node_output_heightmap, get_node_output_heightmap_named, get_normalmap_output,
-    get_preview_heightmap, get_texture_output, get_typemap_output, EvalError, NodeExecutor,
-    NodeOutputs,
+    evaluate_graph, evaluate_graph_with_progress, get_bundler_node_heightmap,
+    get_bundler_node_texture, get_grassmap_output, get_heightmap_output, get_metalmap_output,
+    get_node_output_color_named, get_node_output_heightmap, get_node_output_heightmap_named,
+    get_normalmap_output, get_preview_heightmap, get_texture_output, get_typemap_output, EvalError,
+    NodeExecutor, NodeOutputs,
 };
 pub use node::{Node, NodeId, NodeType, ParamValue};
 pub use param_spec::{param_specs, validate_node_params, ParamError, ParamKind, ParamSpec};

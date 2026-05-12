@@ -28,6 +28,13 @@ pub struct Settings {
     #[serde(default = "default_autosave_interval")]
     pub autosave_interval_secs: u64,
 
+    /// Number of rotating autosave slots. Each slot gets its own file
+    /// (`<project>.autosave1` .. `<project>.autosave{n}`). Older slots
+    /// are overwritten in round-robin order so the most recent N writes
+    /// are always recoverable.
+    #[serde(default = "default_autosave_slot_count")]
+    pub autosave_slot_count: u32,
+
     /// Identifiers of confirmation modals the user has ticked
     /// "Don't ask again" on. The matching modal type just runs
     /// without prompting from then on. Reset via Preferences →
@@ -58,6 +65,9 @@ fn default_autosave_enabled() -> bool {
 fn default_autosave_interval() -> u64 {
     120
 }
+fn default_autosave_slot_count() -> u32 {
+    3
+}
 fn default_restore_last_project() -> bool {
     true
 }
@@ -81,6 +91,7 @@ impl Default for Settings {
             recent_files: Vec::new(),
             autosave_enabled: default_autosave_enabled(),
             autosave_interval_secs: default_autosave_interval(),
+            autosave_slot_count: default_autosave_slot_count(),
             suppressed_confirmations: HashSet::new(),
             restore_last_project: default_restore_last_project(),
             window: None,

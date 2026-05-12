@@ -9,6 +9,7 @@
 use std::time::Instant;
 
 use crate::editor::PendingPropsOpen;
+use crate::log::{LogBuffer, LogLevel};
 
 /// Outcome of the "delete group" confirmation modal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -122,6 +123,12 @@ pub struct DialogState {
     /// In-app floating text editor (Edit Map Info / future "open
     /// file" triggers). `None` when no editor is open.
     pub(crate) file_editor: Option<FileEditor>,
+    /// True when the log window is visible.
+    pub(crate) show_log: bool,
+    /// Level of the most recent status_message (drives footer color).
+    pub(crate) status_level: LogLevel,
+    /// Session-scoped ring buffer of all logged messages.
+    pub(crate) log_buffer: LogBuffer,
     /// Transient toast message shown over the canvas.
     pub toast: Option<(String, Instant)>,
     /// Status bar message -- replaces toast for non-time-bound feedback.

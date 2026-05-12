@@ -1,4 +1,4 @@
-//! Modal dialogs that aren't part of the main panel layout —
+//! Modal dialogs that aren't part of the main panel layout --
 //! Preferences, About, and (in the future) the file editor and
 //! map-info file picker. Confirm-dialog and unsaved-changes
 //! prompts stay in `app.rs` for now because they're tightly
@@ -8,6 +8,7 @@ use eframe::egui;
 
 use crate::app::BarEditorApp;
 use crate::settings::Settings;
+use crate::t;
 
 /// Render the Preferences modal when the user has opened it.
 /// No-op when `dialog.show_settings` is false.
@@ -17,20 +18,23 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
     }
     let mut open = app.dialog.show_settings;
     let mut changed = false;
-    egui::Window::new("Preferences")
+    egui::Window::new(t!("editor.prefs.title"))
         .open(&mut open)
         .resizable(false)
         .collapsible(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.heading("Auto-save");
+            ui.heading(t!("editor.prefs.autosave.heading"));
             let mut autosave_enabled = app.settings().autosave_enabled;
-            if ui.checkbox(&mut autosave_enabled, "Enabled").changed() {
+            if ui
+                .checkbox(&mut autosave_enabled, t!("editor.prefs.autosave.enabled"))
+                .changed()
+            {
                 app.settings.autosave_enabled = autosave_enabled;
                 changed = true;
             }
             ui.horizontal(|ui| {
-                ui.label("Interval:");
+                ui.label(t!("editor.prefs.autosave.interval_label"));
                 let mut secs = app.settings().autosave_interval_secs as i64;
                 if ui
                     .add(egui::Slider::new(&mut secs, 30..=600).suffix(" s"))
@@ -40,15 +44,28 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                     changed = true;
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(t!("editor.prefs.autosave.slots_label"));
+                let mut slots = app.settings().autosave_slot_count as i32;
+                if ui
+                    .add(egui::Slider::new(&mut slots, 1..=10))
+                    .on_hover_text(t!("editor.prefs.autosave.slots_hint"))
+                    .changed()
+                {
+                    app.settings.autosave_slot_count = slots.max(1) as u32;
+                    changed = true;
+                }
+            });
 
             ui.add_space(8.0);
-            ui.heading("Confirmations");
+            ui.heading(t!("editor.prefs.confirmations.heading"));
             let suppressed_count = app.settings().suppressed_confirmations.len();
             if suppressed_count == 0 {
-                ui.weak("No confirmations are currently suppressed.");
+                ui.weak(t!("editor.prefs.confirmations.none_suppressed"));
             } else {
-                ui.label(format!(
-                    "{suppressed_count} confirmation type(s) suppressed via \"Don't ask again\":"
+                ui.label(t!(
+                    "editor.prefs.confirmations.suppressed_count",
+                    n = suppressed_count.to_string()
                 ));
                 let mut keys: Vec<String> = app
                     .settings()
@@ -58,19 +75,22 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                     .collect();
                 keys.sort();
                 for k in &keys {
-                    ui.weak(format!("  • {}", crate::app::confirm_key_display_name(k)));
+                    ui.weak(format!(
+                        "  \u{2022} {}",
+                        crate::app::confirm_key_display_name(k)
+                    ));
                 }
-                if ui.button("Clear suppressed confirmations").clicked() {
+                if ui.button(t!("editor.prefs.confirmations.clear")).clicked() {
                     app.settings.suppressed_confirmations.clear();
                     changed = true;
                 }
             }
 
             ui.add_space(8.0);
-            ui.heading("Startup");
+            ui.heading(t!("editor.prefs.startup.heading"));
             let mut restore = app.settings().restore_last_project;
             if ui
-                .checkbox(&mut restore, "Reopen the last project on launch")
+                .checkbox(&mut restore, t!("editor.prefs.startup.restore_last"))
                 .changed()
             {
                 app.settings.restore_last_project = restore;
@@ -79,7 +99,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
 
             ui.add_space(12.0);
             if let Some(p) = Settings::config_path() {
-                ui.weak(format!("Saved to: {}", p.display()));
+                ui.weak(t!("editor.prefs.saved_to", path = p.display().to_string()));
             }
         });
     app.dialog.show_settings = open;
@@ -94,16 +114,16 @@ pub(crate) fn draw_about(app: &mut BarEditorApp, ctx: &egui::Context) {
         return;
     }
     let mut open = app.dialog.show_about;
-    egui::Window::new("About BAR - Map Editor")
+    egui::Window::new(t!("editor.app.about"))
         .open(&mut open)
         .resizable(false)
         .collapsible(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.heading("BAR - Map Editor");
-            ui.label(format!("Version {}", env!("CARGO_PKG_VERSION")));
+            ui.heading(t!("editor.app.title"));
+            ui.label(t!("editor.app.version", v = env!("CARGO_PKG_VERSION")));
             ui.add_space(6.0);
-            ui.label("Standalone map editor for Beyond All Reason.");
+            ui.label(t!("editor.app.tagline_about"));
             ui.add_space(6.0);
             ui.hyperlink_to(
                 "github.com/burnhamrobertp/bar-editor",

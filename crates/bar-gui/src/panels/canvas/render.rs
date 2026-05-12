@@ -606,6 +606,18 @@ impl BarEditorApp {
         }
 
         // Draw nodes
+        // Per-frame theme-aware colors shared across the node loop.
+        let port_label_col = ui.visuals().strong_text_color();
+        let (handle_idle_col, handle_active_col, io_port_ring_col) = {
+            let vis = ui.visuals();
+            let towards = if vis.dark_mode {
+                egui::Color32::WHITE
+            } else {
+                egui::Color32::BLACK
+            };
+            let neutral = vis.window_fill().lerp_to_gamma(towards, 0.35);
+            (neutral, vis.selection.bg_fill, neutral)
+        };
         let node_ids: Vec<NodeId> = self.visuals.node_visuals.keys().copied().collect();
         // (id, additive). additive=true means "Ctrl+click — toggle in
         // the multi-selection set"; false means "plain click — replace".
@@ -772,11 +784,26 @@ impl BarEditorApp {
                 let top_text_size = 18.0 * scale;
                 let bottom_text_size = 15.0 * scale;
 
-                let body_color = tokens::IO_BODY.gamma_multiply(node_fade);
+                let (io_body, io_border_base, io_label_pri, io_label_sec) = {
+                    let vis = ui.visuals();
+                    let towards = if vis.dark_mode {
+                        egui::Color32::WHITE
+                    } else {
+                        egui::Color32::BLACK
+                    };
+                    let base = vis.window_fill();
+                    (
+                        base.lerp_to_gamma(towards, 0.12),
+                        base.lerp_to_gamma(towards, 0.30),
+                        vis.text_color(),
+                        vis.weak_text_color(),
+                    )
+                };
+                let body_color = io_body.gamma_multiply(node_fade);
                 let border_color = if is_selected {
                     tokens::IO_BORDER_SEL
                 } else {
-                    tokens::IO_BORDER.gamma_multiply(node_fade)
+                    io_border_base.gamma_multiply(node_fade)
                 };
                 let border_width = if is_selected { 2.0 } else { 1.5 };
                 let mid_y = node_rect.center().y;
@@ -838,17 +865,17 @@ impl BarEditorApp {
                     egui::Align2::LEFT_TOP,
                     top_text,
                     egui::FontId::proportional(top_text_size),
-                    tokens::IO_LABEL_PRI,
+                    io_label_pri,
                 );
                 painter.text(
                     egui::pos2(text_left, text_top + top_text_size + line_gap),
                     egui::Align2::LEFT_TOP,
                     bottom_text,
                     egui::FontId::proportional(bottom_text_size),
-                    tokens::IO_LABEL_SEC,
+                    io_label_sec,
                 );
             } else {
-                let ns = NodeStyle::default();
+                let ns = NodeStyle::from_visuals(ui.visuals());
                 // Node background — slightly lighter when in the multi-
                 // selection, even lighter for the primary so the user can
                 // tell which one's properties are showing.
@@ -928,12 +955,10 @@ impl BarEditorApp {
                     port_resp.hovered(),
                 );
                 if is_io {
-                    // Spec: 1 px outline around the port circle in
-                    // `#1F2933` so it reads against the chevron.
                     painter.circle_stroke(
                         port_pos,
                         port_radius,
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(0x1F, 0x29, 0x33)),
+                        egui::Stroke::new(1.0, io_port_ring_col),
                     );
                 }
                 if !is_io {
@@ -943,7 +968,7 @@ impl BarEditorApp {
                             egui::Align2::LEFT_CENTER,
                             &input.label,
                             egui::FontId::proportional(10.0),
-                            egui::Color32::LIGHT_GRAY,
+                            port_label_col,
                         );
                     } else {
                         // Top / Bottom ports skip the inline label; show tooltip
@@ -1042,7 +1067,7 @@ impl BarEditorApp {
                         egui::Align2::RIGHT_CENTER,
                         &output.label,
                         egui::FontId::proportional(10.0),
-                        egui::Color32::LIGHT_GRAY,
+                        port_label_col,
                     );
                 }
                 // Begin a connection only when the port's own response
@@ -1431,9 +1456,9 @@ impl BarEditorApp {
                         handle_rect,
                         2.0,
                         if handle_active {
-                            egui::Color32::from_rgb(160, 200, 255)
+                            handle_active_col
                         } else {
-                            egui::Color32::from_rgb(70, 80, 100)
+                            handle_idle_col
                         },
                     );
                 }

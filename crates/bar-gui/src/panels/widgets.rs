@@ -2,13 +2,11 @@
 
 use eframe::egui;
 
-use super::tokens;
-
 const INPUT_H: f32 = 18.0;
-const INPUT_W: f32 = 52.0;
 const BAR_H: f32 = 8.0;
-const V_GAP: f32 = 2.0;
 const HANDLE_W: f32 = 8.0;
+const INPUT_W_DEFAULT: f32 = 52.0;
+const BAR_INPUT_GAP: f32 = 4.0;
 
 /// Select all text in a `TextEdit` when it first gains focus.
 pub(crate) fn select_all_on_focus(ui: &mut egui::Ui, resp: &egui::Response, text: &str) {
@@ -44,16 +42,21 @@ fn snap(v: f32, min: f32, max: f32, integer: bool) -> f32 {
 
 // ── ParamSlider ───────────────────────────────────────────────────────────────
 
-/// Numeric parameter slider: text input (right) + drag bar (below).
+/// Numeric parameter slider: single-row layout.
 ///
-///   [          label spacing   | [text input] ]   <- INPUT_H
-///   [=== filled ===[ handle ]==============]      <- BAR_H
+///   [optional label]  [======bar======[handle]=======]  [text input]
+///
+/// The bar and text input share the row height (`INPUT_H`). The bar fills
+/// whatever space is left after the optional label and the text input.
+/// Label and input width are independently configurable via the builder.
 pub(crate) struct ParamSlider<'a> {
     value: &'a mut f32,
     min: f32,
     max: f32,
     precision: usize,
     integer: bool,
+    label: Option<&'a str>,
+    input_width: f32,
 }
 
 impl<'a> ParamSlider<'a> {
@@ -64,6 +67,8 @@ impl<'a> ParamSlider<'a> {
             max,
             precision: 3,
             integer: false,
+            label: None,
+            input_width: INPUT_W_DEFAULT,
         }
     }
 
@@ -72,30 +77,73 @@ impl<'a> ParamSlider<'a> {
         self.precision = 0;
         self
     }
+
+    #[allow(dead_code)]
+    pub fn label(mut self, text: &'a str) -> Self {
+        self.label = Some(text);
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn input_width(mut self, w: f32) -> Self {
+        self.input_width = w;
+        self
+    }
+
+    #[allow(dead_code)]
+    pub fn precision(mut self, p: usize) -> Self {
+        self.precision = p;
+        self
+    }
 }
 
 impl<'a> egui::Widget for ParamSlider<'a> {
     fn ui(self, ui: &mut egui::Ui) -> egui::Response {
         let id = ui.next_auto_id();
         let avail_w = ui.available_width().max(60.0);
-        let total_h = INPUT_H + V_GAP + BAR_H;
 
-        // Reserve the full widget rect so the cursor advances past it.
         let (outer_rect, _) =
-            ui.allocate_exact_size(egui::vec2(avail_w, total_h), egui::Sense::hover());
+            ui.allocate_exact_size(egui::vec2(avail_w, INPUT_H), egui::Sense::hover());
 
-        // Sub-rects.
-        let te_rect = egui::Rect::from_min_size(
-            egui::pos2(outer_rect.right() - INPUT_W, outer_rect.top()),
-            egui::vec2(INPUT_W, INPUT_H),
-        );
+        // Label portion -- capped at 40% of available width so bar always gets space.
+        let label_w = if self.label.is_some() {
+            (avail_w * 0.40)
+                .min(avail_w - self.input_width - BAR_INPUT_GAP - 30.0)
+                .max(0.0)
+        } else {
+            0.0
+        };
+        let input_w = self
+            .input_width
+            .min(avail_w - label_w - BAR_INPUT_GAP)
+            .max(20.0);
+        let bar_w = (avail_w - label_w - input_w - BAR_INPUT_GAP).max(10.0);
+
         let bar_rect = egui::Rect::from_min_size(
-            egui::pos2(outer_rect.left(), outer_rect.top() + INPUT_H + V_GAP),
-            egui::vec2(avail_w, BAR_H),
+            egui::pos2(
+                outer_rect.left() + label_w,
+                outer_rect.center().y - BAR_H / 2.0,
+            ),
+            egui::vec2(bar_w, BAR_H),
+        );
+        let te_rect = egui::Rect::from_min_size(
+            egui::pos2(outer_rect.right() - input_w, outer_rect.top()),
+            egui::vec2(input_w, INPUT_H),
         );
 
-        // ---- Text input -----------------------------------------------
+        // ---- Optional label -----------------------------------------------
+        if let Some(text) = self.label {
+            let lc = ui.visuals().text_color();
+            ui.painter_at(outer_rect).text(
+                egui::pos2(outer_rect.left(), outer_rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                text,
+                egui::FontId::proportional(13.0),
+                lc,
+            );
+        }
 
+        // ---- Text input ---------------------------------------------------
         let te_id = id.with("te");
         let buf_id = id.with("buf");
 
@@ -111,6 +159,24 @@ impl<'a> egui::Widget for ParamSlider<'a> {
 
         let te_resp = ui.put(te_rect, egui::TextEdit::singleline(&mut buf).id(te_id));
         select_all_on_focus(ui, &te_resp, &buf);
+
+        // Border painted after the TextEdit so it sits on top of egui's
+        // own widget frame. Derived from visuals for light/dark correctness.
+        let border_col = {
+            let vis = ui.visuals();
+            let towards = if vis.dark_mode {
+                egui::Color32::WHITE
+            } else {
+                egui::Color32::BLACK
+            };
+            vis.window_fill().lerp_to_gamma(towards, 0.35)
+        };
+        ui.painter_at(te_rect).rect_stroke(
+            te_rect,
+            egui::CornerRadius::same(2),
+            egui::Stroke::new(1.0, border_col),
+            egui::StrokeKind::Inside,
+        );
         ui.data_mut(|d| d.insert_temp::<String>(buf_id, buf.clone()));
 
         let mut changed = false;
@@ -125,8 +191,7 @@ impl<'a> egui::Widget for ParamSlider<'a> {
             });
         }
 
-        // ---- Slider bar -----------------------------------------------
-
+        // ---- Slider bar ---------------------------------------------------
         let range = self.max - self.min;
         let t = if range > 1e-9 {
             ((*self.value - self.min) / range).clamp(0.0, 1.0)
@@ -147,18 +212,34 @@ impl<'a> egui::Widget for ParamSlider<'a> {
         if ui.is_rect_visible(bar_rect) {
             let painter = ui.painter_at(bar_rect);
             let rounding = egui::CornerRadius::same(3);
-            painter.rect_filled(bar_rect, rounding, tokens::SLIDER_BG);
+            let vis = ui.visuals();
+            let slider_bg = vis.widgets.inactive.bg_fill;
+            let slider_fill = vis.selection.bg_fill;
+            // Handle: dark blue at rest, full selection blue on hover.
+            let handle_base = slider_fill.lerp_to_gamma(egui::Color32::BLACK, 0.30);
+            let handle_hot = slider_fill;
+            let is_handle_hovered = ui.rect_contains_pointer(handle_rect);
+
+            painter.rect_filled(bar_rect, rounding, slider_bg);
             if t > 0.001 {
                 let fill =
                     egui::Rect::from_min_max(bar_rect.min, egui::pos2(handle_cx, bar_rect.max.y));
-                painter.rect_filled(fill, rounding, tokens::SLIDER_FILL);
+                painter.rect_filled(fill, rounding, slider_fill);
             }
-            let handle_col = if ui.rect_contains_pointer(handle_rect) {
-                tokens::SLIDER_HANDLE_HOT
+            let handle_col = if is_handle_hovered {
+                handle_hot
             } else {
-                tokens::SLIDER_HANDLE
+                handle_base
             };
             painter.rect_filled(handle_rect, egui::CornerRadius::same(2), handle_col);
+            if is_handle_hovered {
+                painter.rect_stroke(
+                    handle_rect,
+                    egui::CornerRadius::same(2),
+                    egui::Stroke::new(1.0, handle_hot.lerp_to_gamma(egui::Color32::WHITE, 0.4)),
+                    egui::StrokeKind::Outside,
+                );
+            }
         }
 
         let bar_resp = ui.interact(bar_rect, id.with("bar"), egui::Sense::click_and_drag());
