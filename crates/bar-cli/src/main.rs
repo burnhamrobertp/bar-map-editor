@@ -290,14 +290,9 @@ fn cmd_run(
             .context("Failed to evaluate graph")?;
 
         // Execute bundlers
-        let bundler_results = bar_engine::execute_bundlers(
-            &graph,
-            &results,
-            &recipe,
-            output_dir,
-            bundler_filter,
-        )
-        .context("Bundler execution failed")?;
+        let bundler_results =
+            bar_engine::execute_bundlers(&graph, &results, &recipe, output_dir, bundler_filter)
+                .context("Bundler execution failed")?;
 
         let elapsed = start.elapsed();
         if bundler_results.is_empty() {

@@ -873,9 +873,9 @@ mod tests {
             author: None,
             version: None,
             nodes: vec![
-                make_subout("sub_terrain", "Output"),  // was "Heightmap" before recompute ran
+                make_subout("sub_terrain", "Output"), // was "Heightmap" before recompute ran
                 make_subout("sub_texture", "Texture"), // was "Color"
-                make_subout("sub_slope", "Slope"),     // was "Heightmap"
+                make_subout("sub_slope", "Slope"),    // was "Heightmap"
                 RecipeNode {
                     key: "out".to_string(),
                     node_type: NodeType::Bundler,

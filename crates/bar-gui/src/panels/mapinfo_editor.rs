@@ -316,11 +316,15 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                     crate::panels::widgets::select_all_on_focus(ui, &wr, &ws);
                                     ui.data_mut(|d| d.insert_temp(wid, ws.clone()));
                                     if wr.lost_focus() {
-                                        let nv = ws.trim().parse::<u32>()
+                                        let nv = ws
+                                            .trim()
+                                            .parse::<u32>()
                                             .map(|v| v.clamp(1, 512))
                                             .unwrap_or(wv);
                                         *w = nv * 64 + 1;
-                                        if nv != wv { dirty = true; }
+                                        if nv != wv {
+                                            dirty = true;
+                                        }
                                         ui.data_mut(|d| d.insert_temp(wid, nv.to_string()));
                                     }
                                     ui.label("x");
@@ -334,11 +338,15 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                     crate::panels::widgets::select_all_on_focus(ui, &hr, &hs);
                                     ui.data_mut(|d| d.insert_temp(hid, hs.clone()));
                                     if hr.lost_focus() {
-                                        let nv = hs.trim().parse::<u32>()
+                                        let nv = hs
+                                            .trim()
+                                            .parse::<u32>()
                                             .map(|v| v.clamp(1, 512))
                                             .unwrap_or(hv);
                                         *h = nv * 64 + 1;
-                                        if nv != hv { dirty = true; }
+                                        if nv != hv {
+                                            dirty = true;
+                                        }
                                         ui.data_mut(|d| d.insert_temp(hid, nv.to_string()));
                                     }
                                 });

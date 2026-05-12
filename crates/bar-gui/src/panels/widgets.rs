@@ -14,10 +14,12 @@ const HANDLE_W: f32 = 8.0;
 pub(crate) fn select_all_on_focus(ui: &mut egui::Ui, resp: &egui::Response, text: &str) {
     if resp.gained_focus() {
         if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), resp.id) {
-            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
-                egui::text::CCursor::new(0),
-                egui::text::CCursor::new(text.chars().count()),
-            )));
+            state
+                .cursor
+                .set_char_range(Some(egui::text::CCursorRange::two(
+                    egui::text::CCursor::new(0),
+                    egui::text::CCursor::new(text.chars().count()),
+                )));
             egui::TextEdit::store_state(ui.ctx(), resp.id, state);
         }
     }
@@ -33,7 +35,11 @@ fn fmt_val(v: f32, integer: bool, precision: usize) -> String {
 
 fn snap(v: f32, min: f32, max: f32, integer: bool) -> f32 {
     let c = v.clamp(min, max);
-    if integer { c.round() } else { c }
+    if integer {
+        c.round()
+    } else {
+        c
+    }
 }
 
 // ── ParamSlider ───────────────────────────────────────────────────────────────
@@ -96,10 +102,7 @@ impl<'a> egui::Widget for ParamSlider<'a> {
         // Keep the buffer in sync with the live value while not editing.
         if !ui.memory(|m| m.has_focus(te_id)) {
             ui.data_mut(|d| {
-                d.insert_temp::<String>(
-                    buf_id,
-                    fmt_val(*self.value, self.integer, self.precision),
-                )
+                d.insert_temp::<String>(buf_id, fmt_val(*self.value, self.integer, self.precision))
             });
         }
         let mut buf: String = ui
@@ -118,10 +121,7 @@ impl<'a> egui::Widget for ParamSlider<'a> {
             }
             // Reformat to canonical representation after commit.
             ui.data_mut(|d| {
-                d.insert_temp::<String>(
-                    buf_id,
-                    fmt_val(*self.value, self.integer, self.precision),
-                )
+                d.insert_temp::<String>(buf_id, fmt_val(*self.value, self.integer, self.precision))
             });
         }
 
@@ -149,10 +149,8 @@ impl<'a> egui::Widget for ParamSlider<'a> {
             let rounding = egui::CornerRadius::same(3);
             painter.rect_filled(bar_rect, rounding, tokens::SLIDER_BG);
             if t > 0.001 {
-                let fill = egui::Rect::from_min_max(
-                    bar_rect.min,
-                    egui::pos2(handle_cx, bar_rect.max.y),
-                );
+                let fill =
+                    egui::Rect::from_min_max(bar_rect.min, egui::pos2(handle_cx, bar_rect.max.y));
                 painter.rect_filled(fill, rounding, tokens::SLIDER_FILL);
             }
             let handle_col = if ui.rect_contains_pointer(handle_rect) {
