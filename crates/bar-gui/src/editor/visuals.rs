@@ -232,10 +232,12 @@ impl BarEditorApp {
             // that had a connection this frame.
             let synced_nids: std::collections::HashSet<NodeId> =
                 io_kind_syncs.iter().map(|(nid, _, _)| *nid).collect();
-            for (nid, kind_display, port_kind) in io_kind_syncs {
+            for (nid, _kind_display, port_kind) in io_kind_syncs {
                 if let Some(node) = self.graph.get_node_mut(nid) {
-                    node.params
-                        .insert("kind".to_string(), ParamValue::String(kind_display));
+                    node.params.insert(
+                        "kind".to_string(),
+                        ParamValue::String(format!("{:?}", port_kind)),
+                    );
                     node.set_io_port_kind(port_kind);
                 }
             }

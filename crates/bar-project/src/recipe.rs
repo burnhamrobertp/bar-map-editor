@@ -456,6 +456,12 @@ impl Recipe {
                     node.resize_texture_weightmap_ports(*lc);
                 }
             }
+            if matches!(
+                node.node_type,
+                NodeType::SubgraphInput | NodeType::SubgraphOutput
+            ) {
+                node.sync_subgraph_io_kind();
+            }
             let id = graph.add_node(node);
             key_to_id.insert(&recipe_node.key, id);
         }
@@ -796,5 +802,164 @@ mod tests {
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
         assert_eq!(loaded.schema_version, RECIPE_SCHEMA_VERSION);
+    }
+
+    // Recipe round-trip scenarios: these mirror the three ways a user
+    // creates or opens a project in the editor.
+
+    /// A manually-built recipe (no preset, no SD7) round-trips through
+    /// JSON and can have its graph evaluated without errors.
+    #[test]
+    fn manual_project_recipe_roundtrip() {
+        let recipe = Recipe {
+            schema_version: RECIPE_SCHEMA_VERSION,
+            name: "Manual test".to_string(),
+            shortname: None,
+            description: String::new(),
+            author: None,
+            version: None,
+            nodes: vec![
+                RecipeNode {
+                    key: "noise".to_string(),
+                    node_type: NodeType::PerlinNoise,
+                    label: "Noise".to_string(),
+                    params: HashMap::new(),
+                },
+                RecipeNode {
+                    key: "out".to_string(),
+                    node_type: NodeType::Bundler,
+                    label: String::new(),
+                    params: HashMap::new(),
+                },
+            ],
+            connections: vec![RecipeConnection {
+                from: "noise.output".to_string(),
+                to: "out.heightmap".to_string(),
+            }],
+            output: OutputConfig {
+                width: 513,
+                height: 513,
+                map_settings: MapSettings::default(),
+            },
+        };
+        let json = recipe.to_json().unwrap();
+        let loaded = Recipe::from_json(&json).unwrap();
+        let graph = loaded.build_graph().unwrap();
+        assert_eq!(graph.nodes().len(), 2);
+        assert_eq!(graph.connections().len(), 1);
+    }
+
+    /// Preset project with semantic kind strings (display labels rather than
+    /// PortKind names) round-trips and builds without IncompatiblePorts.
+    #[test]
+    fn preset_project_semantic_kind_roundtrip() {
+        // SubgraphOutput kind params written as display labels ("Texture",
+        // "Output", "Slope") must survive load via the io_value_bypass path.
+        let make_subout = |key: &str, kind: &str| RecipeNode {
+            key: key.to_string(),
+            node_type: NodeType::SubgraphOutput,
+            label: String::new(),
+            params: {
+                let mut p = HashMap::new();
+                p.insert("kind".to_string(), ParamValue::String(kind.to_string()));
+                p
+            },
+        };
+        let recipe = Recipe {
+            schema_version: RECIPE_SCHEMA_VERSION,
+            name: "Alpine 8x8".to_string(),
+            shortname: None,
+            description: String::new(),
+            author: None,
+            version: None,
+            nodes: vec![
+                make_subout("sub_terrain", "Output"),  // was "Heightmap" before recompute ran
+                make_subout("sub_texture", "Texture"), // was "Color"
+                make_subout("sub_slope", "Slope"),     // was "Heightmap"
+                RecipeNode {
+                    key: "out".to_string(),
+                    node_type: NodeType::Bundler,
+                    label: String::new(),
+                    params: HashMap::new(),
+                },
+            ],
+            connections: vec![
+                RecipeConnection {
+                    from: "sub_terrain.value".to_string(),
+                    to: "out.heightmap".to_string(),
+                },
+                RecipeConnection {
+                    from: "sub_texture.value".to_string(),
+                    to: "out.texture".to_string(),
+                },
+                RecipeConnection {
+                    from: "sub_slope.value".to_string(),
+                    to: "out.normalmap".to_string(),
+                },
+            ],
+            // Simulates the user changing width/height before saving.
+            output: OutputConfig {
+                width: 1025,
+                height: 1025,
+                map_settings: MapSettings::default(),
+            },
+        };
+        let json = recipe.to_json().unwrap();
+        let loaded = Recipe::from_json(&json).unwrap();
+        // Verify size change survives the round-trip.
+        assert_eq!(loaded.output.width, 1025);
+        assert_eq!(loaded.output.height, 1025);
+        // Must not error with IncompatiblePorts despite semantic kind strings.
+        let graph = loaded.build_graph().unwrap();
+        assert_eq!(graph.connections().len(), 3);
+    }
+
+    /// A recipe that mirrors the SD7 import pipeline (SmfImport + Bundler)
+    /// round-trips through JSON and builds its graph cleanly.
+    #[test]
+    fn sd7_import_style_recipe_roundtrip() {
+        let recipe = Recipe {
+            schema_version: RECIPE_SCHEMA_VERSION,
+            name: "SD7 import test".to_string(),
+            shortname: None,
+            description: String::new(),
+            author: None,
+            version: None,
+            nodes: vec![
+                RecipeNode {
+                    key: "smf".to_string(),
+                    node_type: NodeType::SmfImport,
+                    label: "SMF".to_string(),
+                    params: {
+                        let mut p = HashMap::new();
+                        p.insert(
+                            "path".to_string(),
+                            ParamValue::String("/tmp/test.smf".to_string()),
+                        );
+                        p
+                    },
+                },
+                RecipeNode {
+                    key: "out".to_string(),
+                    node_type: NodeType::Bundler,
+                    label: String::new(),
+                    params: HashMap::new(),
+                },
+            ],
+            connections: vec![RecipeConnection {
+                from: "smf.heightmap".to_string(),
+                to: "out.heightmap".to_string(),
+            }],
+            output: OutputConfig {
+                width: 513,
+                height: 513,
+                map_settings: MapSettings::default(),
+            },
+        };
+        let json = recipe.to_json().unwrap();
+        let loaded = Recipe::from_json(&json).unwrap();
+        let graph = loaded.build_graph().unwrap();
+        assert_eq!(graph.nodes().len(), 2);
+        assert_eq!(graph.connections().len(), 1);
     }
 }
