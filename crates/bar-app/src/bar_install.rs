@@ -172,7 +172,18 @@ impl BarVersions {
         std::fs::write(&script_path, &script)
             .map_err(|e| LaunchError::SpawnFailed(format!("write startscript: {e}")))?;
 
+        // Run the engine from its own directory. Spring/Recoil resolves
+        // package paths (packages/, pool/) relative to the executable
+        // location; launching from a foreign CWD causes the VFS to miss
+        // game content archives (e.g. "beyond all reason 0.01"), which
+        // manifests as a content_error crash at game-start.
+        let engine_dir = engine
+            .exe
+            .parent()
+            .ok_or_else(|| LaunchError::SpawnFailed("engine exe has no parent dir".into()))?;
+
         std::process::Command::new(&engine.exe)
+            .current_dir(engine_dir)
             .arg("--write-dir")
             .arg(&self.data_dir)
             .arg(&script_path)
