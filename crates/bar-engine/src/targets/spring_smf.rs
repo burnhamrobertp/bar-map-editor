@@ -222,17 +222,20 @@ impl ExportCodec for SpringSmfCodec {
             tracing::info!("Wrote SMF: {}", smf_path.display());
         }
 
-        // Write SMT (texture tiles) — generate height-based fallback if none provided
+        // Write SMT (texture tiles) — generate height-based fallback if none provided.
+        // The SMF tile grid is (sq_x * texels_per_square / tile_size) × (sq_y * texels_per_square / tile_size).
+        // The texture must be exactly sq_x*texels_per_square wide so the SMT tile count matches.
+        // The graph evaluates at heightmap resolution (~sq_x+1), so we always resize here.
+        let tex_target_w = sq_x * config.codec_params.texels_per_square;
+        let tex_target_h = sq_y * config.codec_params.texels_per_square;
         let smt_path = maps_dir.join(format!("{}.smt", map_name));
         if let Some(ref texture) = layers.texture {
             let file = File::create(&smt_path)?;
             let mut writer = BufWriter::new(file);
-            write_smt(&mut writer, texture)?;
+            let scaled = texture.resize(tex_target_w, tex_target_h);
+            write_smt(&mut writer, &scaled)?;
         } else if let Some(ref heightmap) = layers.heightmap {
-            // Generate a basic height-tinted fallback texture so BAR can load the map
-            let tex_w = sq_x * config.codec_params.texels_per_square;
-            let tex_h = sq_y * config.codec_params.texels_per_square;
-            let fallback = generate_fallback_texture(heightmap, tex_w, tex_h);
+            let fallback = generate_fallback_texture(heightmap, tex_target_w, tex_target_h);
             let file = File::create(&smt_path)?;
             let mut writer = BufWriter::new(file);
             write_smt(&mut writer, &fallback)?;
