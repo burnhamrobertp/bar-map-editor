@@ -163,11 +163,12 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let mut drag_start: Option<PaletteDrag> = None;
 
     // Search box -- always visible at the top of the palette.
-    ui.add(
+    let search_resp = ui.add(
         egui::TextEdit::singleline(&mut app.palette_filter)
             .hint_text("Search nodes...")
             .desired_width(f32::INFINITY),
     );
+    crate::panels::widgets::select_all_on_focus(ui, &search_resp, &app.palette_filter);
     ui.add_space(4.0);
 
     let filter = app.palette_filter.to_lowercase();

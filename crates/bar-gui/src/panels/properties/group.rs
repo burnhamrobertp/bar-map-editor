@@ -32,6 +32,7 @@ impl BarEditorApp {
                 .desired_width(f32::INFINITY)
                 .font(egui::TextStyle::Heading),
         );
+        crate::panels::widgets::select_all_on_focus(ui, &resp, &label_buf);
         let mut dirty = false;
         if resp.changed() {
             dirty = true;
@@ -325,23 +326,25 @@ impl BarEditorApp {
                                             c32.b()
                                         ));
                                     }
-                                } else if ui
-                                    .add(
+                                } else {
+                                    let r = ui.add(
                                         egui::TextEdit::singleline(&mut val)
                                             .desired_width(f32::INFINITY),
-                                    )
-                                    .changed()
-                                {
-                                    new_val = Some(val);
+                                    );
+                                    crate::panels::widgets::select_all_on_focus(ui, &r, &val);
+                                    if r.changed() {
+                                        new_val = Some(val);
+                                    }
                                 }
-                            } else if ui
-                                .add(
+                            } else {
+                                let r = ui.add(
                                     egui::TextEdit::singleline(&mut val)
                                         .desired_width(f32::INFINITY),
-                                )
-                                .changed()
-                            {
-                                new_val = Some(val);
+                                );
+                                crate::panels::widgets::select_all_on_focus(ui, &r, &val);
+                                if r.changed() {
+                                    new_val = Some(val);
+                                }
                             }
                             if let Some(nv) = new_val {
                                 let pv = ParamValue::String(nv.clone());

@@ -306,6 +306,7 @@ impl BarEditorApp {
                             .desired_width(f32::INFINITY)
                             .font(egui::TextStyle::Heading),
                     );
+                    crate::panels::widgets::select_all_on_focus(ui, &edit_resp, &label_buf);
                     label_changed = edit_resp.changed();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Type:").weak());

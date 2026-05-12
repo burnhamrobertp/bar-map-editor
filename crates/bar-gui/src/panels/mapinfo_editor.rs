@@ -137,7 +137,9 @@ fn edit_optional_string(
             let edit = egui::TextEdit::singleline(&mut buf)
                 .desired_width(220.0)
                 .hint_text(placeholder);
-            if ui.add(edit).changed() {
+            let edit_resp = ui.add(edit);
+            crate::panels::widgets::select_all_on_focus(ui, &edit_resp, &buf);
+            if edit_resp.changed() {
                 let trimmed = buf.trim();
                 let new_value = if trimmed.is_empty() {
                     None
@@ -267,7 +269,13 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                 |ui| {
                                     let edit = egui::TextEdit::singleline(&mut meta.description)
                                         .desired_width(220.0);
-                                    if ui.add(edit).changed() {
+                                    let edit_resp = ui.add(edit);
+                                    crate::panels::widgets::select_all_on_focus(
+                                        ui,
+                                        &edit_resp,
+                                        &meta.description,
+                                    );
+                                    if edit_resp.changed() {
                                         dirty = true;
                                     }
                                 },
@@ -305,6 +313,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                         [30.0, 18.0],
                                         egui::TextEdit::singleline(&mut ws).id(wid),
                                     );
+                                    crate::panels::widgets::select_all_on_focus(ui, &wr, &ws);
                                     ui.data_mut(|d| d.insert_temp(wid, ws.clone()));
                                     if wr.lost_focus() {
                                         let nv = ws.trim().parse::<u32>()
@@ -322,6 +331,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                         [30.0, 18.0],
                                         egui::TextEdit::singleline(&mut hs).id(hid),
                                     );
+                                    crate::panels::widgets::select_all_on_focus(ui, &hr, &hs);
                                     ui.data_mut(|d| d.insert_temp(hid, hs.clone()));
                                     if hr.lost_focus() {
                                         let nv = hs.trim().parse::<u32>()
