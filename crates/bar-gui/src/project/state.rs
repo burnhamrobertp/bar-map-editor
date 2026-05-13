@@ -48,6 +48,9 @@ pub struct ProjectState {
     /// successful compile. Cleared by `bar-app` after `compile_project`
     /// succeeds.
     pub compile_dirty: bool,
+    /// Pulsed `true` when features are populated from a new project load
+    /// (barproj or sd7). `bar-app` consumes this to trigger S3O model loading.
+    pub features_changed: bool,
     /// Timestamp of the last successful compile in this session. `None`
     /// until the user has compiled at least once.
     pub compiled_at: Option<Instant>,

@@ -554,6 +554,7 @@ dependencies = [
  "bar-project",
  "criterion",
  "directories",
+ "flate2",
  "image",
  "path-slash",
  "pollster",

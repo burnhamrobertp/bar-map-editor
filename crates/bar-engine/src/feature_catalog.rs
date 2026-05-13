@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! BAR game archive feature catalog.
 //!
-//! Reads `gamedata/featuredata.lua` and `features/*.lua` from a BAR game
-//! archive (.sdz = ZIP, .sdd = directory on disk) and builds a flat lookup
-//! table keyed by lowercase feature type name.  Used by the 3D previewer to
-//! decide tint color: green for known types, orange placeholder for unknown.
+//! Reads `features/*.lua` from a BAR game archive (.sdz = ZIP, .sdd =
+//! directory on disk) or from the Spring rapid pool alongside a .sdd install.
+//! The rapid pool stores game content downloaded by the BAR launcher in
+//! `data/pool/<xx>/<yyyyyy>.gz` (gzip-compressed), indexed by SDP manifests
+//! in `data/packages/*.sdp` (also gzip-compressed binary records).
 
 use std::collections::HashMap;
 use std::io::Read;
@@ -36,6 +37,26 @@ impl FeatureCatalog {
     /// Comparison is case-insensitive.
     pub fn is_known(&self, feature_type: &str) -> bool {
         self.features.contains_key(&feature_type.to_lowercase())
+    }
+
+    /// Merge another catalog into this one. Entries in `other` do not
+    /// overwrite existing keys so the game-level catalog wins on conflict.
+    pub fn merge(&mut self, other: FeatureCatalog) {
+        for (k, v) in other.features {
+            self.features.entry(k).or_insert(v);
+        }
+    }
+
+    /// Load feature definitions from a plain directory (not an archive).
+    /// Scans `dir/features/*.lua` and `dir/gamedata/featuredata.lua`.
+    pub fn from_dir(dir: &Path) -> Self {
+        let mut catalog = Self::default();
+        for path in find_feature_lua_in_dir(dir) {
+            if let Ok(content) = std::fs::read_to_string(&path) {
+                parse_feature_lua(&content, &mut catalog.features);
+            }
+        }
+        catalog
     }
 
     /// Load a catalog from a BAR game archive.
@@ -82,6 +103,11 @@ impl FeatureCatalog {
                         parse_feature_lua(&content, &mut catalog.features);
                     }
                 }
+                // BAR.sdd is a launcher stub; actual game content lives in
+                // the rapid pool at <sdd>../../pool/ and <sdd>../../packages/.
+                if let Some(data_dir) = archive.parent().and_then(|p| p.parent()) {
+                    load_from_rapid_pool(data_dir, &mut catalog.features);
+                }
             }
             _ => {}
         }
@@ -123,6 +149,83 @@ pub fn read_file_from_archive(archive: &std::path::Path, internal_path: &str) ->
         }
         _ => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// Rapid pool reader
+// ---------------------------------------------------------------------------
+
+/// Parse all SDP manifests in `data_dir/packages/` and load any
+/// `features/*.lua` files they reference from `data_dir/pool/`.
+fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureDef>) {
+    use flate2::read::GzDecoder;
+
+    let packages_dir = data_dir.join("packages");
+    let pool_dir = data_dir.join("pool");
+    if !packages_dir.is_dir() || !pool_dir.is_dir() {
+        return;
+    }
+
+    let Ok(pkg_entries) = std::fs::read_dir(&packages_dir) else {
+        return;
+    };
+
+    // Collect (path, md5_hex) for each features/*.lua across all SDPs.
+    // Multiple SDPs may reference the same file (same MD5 = same content).
+    let mut seen_md5: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for entry in pkg_entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("sdp") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else {
+            continue;
+        };
+        let mut decoder = GzDecoder::new(bytes.as_slice());
+        let mut data = Vec::new();
+        if decoder.read_to_end(&mut data).is_err() {
+            continue;
+        }
+
+        let mut pos = 0usize;
+        while pos < data.len() {
+            let name_len = data[pos] as usize;
+            pos += 1;
+            if name_len == 0 || pos + name_len + 16 + 4 + 4 > data.len() {
+                break;
+            }
+            let name = std::str::from_utf8(&data[pos..pos + name_len])
+                .unwrap_or("")
+                .to_string();
+            pos += name_len;
+            let md5 = &data[pos..pos + 16];
+            pos += 16 + 4 + 4; // skip md5, crc32, size
+
+            if !is_feature_lua(&name) {
+                continue;
+            }
+            let md5_hex = md5.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            if !seen_md5.insert(md5_hex.clone()) {
+                continue; // already loaded this exact file
+            }
+
+            // Pool path: pool/<first2>/<rest30>.gz
+            let pool_file = pool_dir
+                .join(&md5_hex[..2])
+                .join(format!("{}.gz", &md5_hex[2..]));
+            let Ok(pool_bytes) = std::fs::read(&pool_file) else {
+                continue;
+            };
+            let mut lua_decoder = GzDecoder::new(pool_bytes.as_slice());
+            let mut content = String::new();
+            if lua_decoder.read_to_string(&mut content).is_ok() {
+                parse_feature_lua(&content, features);
+            }
+        }
+    }
+
+    tracing::info!("Rapid pool: loaded {} feature defs", features.len());
 }
 
 fn is_feature_lua(name: &str) -> bool {

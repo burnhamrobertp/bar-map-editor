@@ -782,6 +782,11 @@ impl BarEditorApp {
         self.log_info(msg);
     }
 
+    /// Log a message at an explicit level. Used by the tracing bridge in bar-app.
+    pub fn log_at(&mut self, level: crate::LogLevel, msg: impl Into<String>) {
+        self.log(level, msg);
+    }
+
     /// Clear the status message.
     pub fn clear_status(&mut self) {
         self.dialog.status_message = None;

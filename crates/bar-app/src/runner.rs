@@ -3,6 +3,8 @@
 
 use std::sync::{mpsc, Arc};
 
+use tracing::Level;
+
 use anyhow::Result;
 use bar_compute::GpuContext;
 use bar_engine::{CpuExecutor, FeatureCatalog, HybridExecutor};
@@ -36,13 +38,28 @@ pub struct AppRunner {
     pub feature_catalog: Option<FeatureCatalog>,
     pub catalog_rx: Option<mpsc::Receiver<FeatureCatalog>>,
     pub catalog_archive_path: Option<std::path::PathBuf>,
+    /// Work directory from the last SD7 extraction; contains map-specific
+    /// feature defs and S3O models not in the game archive.
+    pub map_work_dir: Option<std::path::PathBuf>,
     /// Receives parsed S3O meshes from the background model-loader threads.
     /// Each item is `(lowercase_feature_type_name, mesh)`.
     pub model_rx: Option<mpsc::Receiver<(String, bar_data::S3oMesh)>>,
+    /// Receives forwarded tracing events from the AppLogLayer for display in the BME log.
+    pub log_rx: mpsc::Receiver<(Level, String)>,
 }
 
 impl eframe::App for AppRunner {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // Drain forwarded tracing events into the BME log buffer.
+        while let Ok((level, msg)) = self.log_rx.try_recv() {
+            let bme_level = match level {
+                Level::ERROR => bar_gui::LogLevel::Error,
+                Level::WARN => bar_gui::LogLevel::Warning,
+                _ => bar_gui::LogLevel::Info,
+            };
+            self.app.log_at(bme_level, msg);
+        }
+
         if self.pending_maximize {
             self.pending_maximize = false;
             ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
@@ -384,88 +401,55 @@ impl eframe::App for AppRunner {
             }
         }
         if let Some(ref rx) = self.catalog_rx {
-            if let Ok(catalog) = rx.try_recv() {
+            if let Ok(mut catalog) = rx.try_recv() {
                 self.catalog_rx = None;
-                tracing::info!(count = catalog.features.len(), "Feature catalog loaded");
-
-                // For each unique feature type present in the map, start a background
-                // thread to extract and parse its S3O model from the game archive.
-                if let Some(ref archive) = self.catalog_archive_path {
-                    let unique_types: std::collections::HashSet<String> = self
-                        .app
-                        .map
-                        .features
-                        .iter()
-                        .map(|f| f.feature_type.to_lowercase())
-                        .collect();
-                    let to_load: Vec<(String, String)> = unique_types
-                        .iter()
-                        .filter_map(|name| {
-                            let def = catalog.features.get(name)?;
-                            if def.object.is_empty() {
-                                return None;
-                            }
-                            // object field is either bare name or includes extension.
-                            let obj = &def.object;
-                            let path = if obj.contains('.') {
-                                format!("objects3d/{obj}")
-                            } else {
-                                format!("objects3d/{obj}.s3o")
-                            };
-                            Some((name.clone(), path))
-                        })
-                        .collect();
-                    if !to_load.is_empty() {
-                        let (tx, rx) = mpsc::channel::<(String, bar_data::S3oMesh)>();
-                        self.model_rx = Some(rx);
-                        let archive = archive.clone();
-                        let ctx_clone = ctx.clone();
-                        std::thread::spawn(move || {
-                            let mut loaded = 0usize;
-                            for (name, path) in to_load {
-                                if let Some(data) =
-                                    bar_engine::read_file_from_archive(&archive, &path)
-                                {
-                                    match bar_data::parse_s3o(&data) {
-                                        Ok(mesh) => {
-                                            loaded += 1;
-                                            if tx.send((name.clone(), mesh)).is_err() {
-                                                break;
-                                            }
-                                            ctx_clone.request_repaint();
-                                        }
-                                        Err(e) => {
-                                            tracing::debug!(
-                                                feature = %name,
-                                                path = %path,
-                                                err = %e,
-                                                "S3O parse failed"
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                            tracing::info!(loaded, "S3O model loading complete");
-                        });
+                // Merge map-level defs that arrived before the game catalog.
+                if let Some(ref work_dir) = self.map_work_dir {
+                    let map_catalog = FeatureCatalog::from_dir(work_dir);
+                    if !map_catalog.is_empty() {
+                        catalog.merge(map_catalog);
                     }
                 }
-
+                self.app.set_status(format!(
+                    "Feature catalog: {} definitions",
+                    catalog.features.len()
+                ));
                 self.feature_catalog = Some(catalog);
+                self.spawn_model_loader(ctx);
                 self.layout_manager.mark_features_dirty();
             }
         }
 
+        // Barproj open: features_changed is pulsed by apply_project; trigger model loading.
+        if self.app.project.features_changed {
+            self.app.project.features_changed = false;
+            self.model_rx = None; // cancel prior loader for a different map
+            self.spawn_model_loader(ctx);
+        }
+
         // Poll loaded S3O models; upload each one to the feature renderer.
         let mut any_model_loaded = false;
+        let mut model_loader_done = false;
         if let Some(ref rx) = self.model_rx {
-            while let Ok((name, mesh)) = rx.try_recv() {
-                tracing::debug!(feature = %name, verts = mesh.vertices.len(), "S3O model loaded");
-                if let Some(ref gpu) = self.gpu_context {
-                    self.layout_manager
-                        .load_feature_mesh(&gpu.device, &name, &mesh);
-                    any_model_loaded = true;
+            loop {
+                match rx.try_recv() {
+                    Ok((name, mesh)) => {
+                        if let Some(ref gpu) = self.gpu_context {
+                            self.layout_manager
+                                .load_feature_mesh(&gpu.device, &name, &mesh);
+                            any_model_loaded = true;
+                        }
+                    }
+                    Err(mpsc::TryRecvError::Empty) => break,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        model_loader_done = true;
+                        break;
+                    }
                 }
             }
+        }
+        if model_loader_done {
+            self.model_rx = None;
         }
         if any_model_loaded {
             self.layout_manager.mark_features_dirty();
@@ -475,8 +459,26 @@ impl eframe::App for AppRunner {
         if let Some(ref rx) = self.sd7_extract_rx {
             match rx.try_recv() {
                 Ok(Ok(scan)) => {
+                    let work_dir = scan.work_dir.clone();
+                    self.map_work_dir = Some(work_dir.clone());
+                    // Merge map-specific feature defs into the game catalog while
+                    // we still have both. If the game catalog isn't loaded yet, the
+                    // merge happens in spawn_model_loader via map_work_dir.
+                    if let Some(ref mut catalog) = self.feature_catalog {
+                        let map_catalog = FeatureCatalog::from_dir(&work_dir);
+                        if !map_catalog.is_empty() {
+                            tracing::info!(
+                                count = map_catalog.features.len(),
+                                "Merged map-level feature definitions"
+                            );
+                            catalog.merge(map_catalog);
+                        }
+                    }
                     self.app.finish_open_map(scan);
+                    self.app.project.features_changed = false; // handled here, not by the generic poll below
                     self.sd7_extract_rx = None;
+                    self.model_rx = None;
+                    self.spawn_model_loader(ctx);
                 }
                 Ok(Err(e)) => {
                     self.app.set_status(format!("Failed to open: {e}"));
@@ -517,6 +519,88 @@ impl eframe::App for AppRunner {
 }
 
 impl AppRunner {
+    /// Spawn the background S3O model loader for all feature types in the current
+    /// map that have a catalog entry with a non-empty object field.
+    /// No-op if the catalog is not loaded, the archive path is unknown, or
+    /// a loader is already running (model_rx is Some).
+    fn spawn_model_loader(&mut self, ctx: &egui::Context) {
+        if self.model_rx.is_some() {
+            return;
+        }
+        let (catalog, archive) = match (&self.feature_catalog, &self.catalog_archive_path) {
+            (Some(c), Some(a)) => (c, a),
+            _ => return,
+        };
+        let unique_types: std::collections::HashSet<String> = self
+            .app
+            .map
+            .features
+            .iter()
+            .map(|f| f.feature_type.to_lowercase())
+            .collect();
+        let to_load: Vec<(String, String)> = unique_types
+            .iter()
+            .filter_map(|name| {
+                let def = catalog.features.get(name)?;
+                if def.object.is_empty() {
+                    return None;
+                }
+                let obj = &def.object;
+                let path = if obj.contains('.') {
+                    format!("objects3d/{obj}")
+                } else {
+                    format!("objects3d/{obj}.s3o")
+                };
+                Some((name.clone(), path))
+            })
+            .collect();
+        if to_load.is_empty() {
+            self.app.set_status(format!(
+                "Feature catalog loaded ({} entries); no models matched map features",
+                catalog.features.len()
+            ));
+            return;
+        }
+        self.app
+            .set_status(format!("Loading {} feature models...", to_load.len()));
+        let (tx, rx) = mpsc::channel::<(String, bar_data::S3oMesh)>();
+        self.model_rx = Some(rx);
+        let archive = archive.clone();
+        let work_dir = self.map_work_dir.clone();
+        let ctx_clone = ctx.clone();
+        std::thread::spawn(move || {
+            let mut loaded = 0usize;
+            for (name, path) in to_load {
+                let data = bar_engine::read_file_from_archive(&archive, &path).or_else(|| {
+                    work_dir.as_ref().and_then(|wd| {
+                        std::fs::read(wd.join(path.replace('/', std::path::MAIN_SEPARATOR_STR)))
+                            .ok()
+                    })
+                });
+                if let Some(data) = data {
+                    match bar_data::parse_s3o(&data) {
+                        Ok(mesh) => {
+                            loaded += 1;
+                            if tx.send((name.clone(), mesh)).is_err() {
+                                break;
+                            }
+                            ctx_clone.request_repaint();
+                        }
+                        Err(e) => {
+                            tracing::debug!(
+                                feature = %name,
+                                path = %path,
+                                err = %e,
+                                "S3O parse failed"
+                            );
+                        }
+                    }
+                }
+            }
+            tracing::info!(loaded, "S3O model loading complete");
+        });
+    }
+
     fn start_test_in_bar(&mut self, ctx: &egui::Context) {
         if self.bar_install.is_none() {
             self.app.set_status(

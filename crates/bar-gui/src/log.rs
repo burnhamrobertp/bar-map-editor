@@ -4,7 +4,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub(crate) enum LogLevel {
+pub enum LogLevel {
     #[default]
     Info,
     Debug,

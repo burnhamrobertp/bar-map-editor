@@ -98,23 +98,34 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.heading(t!("editor.prefs.game.heading"));
             ui.weak(t!("editor.prefs.game.hint"));
             ui.add_space(4.0);
+            ui.label(t!("editor.prefs.game.archive_label"));
             ui.horizontal(|ui| {
-                ui.label(t!("editor.prefs.game.archive_label"));
-                let display = app
+                let mut path_str = app
                     .settings()
                     .selected_game_archive
                     .as_deref()
-                    .and_then(|p| p.file_name())
-                    .and_then(|n| n.to_str())
-                    .unwrap_or(&t!("editor.prefs.game.none"))
-                    .to_string();
-                ui.weak(&display);
-            });
-            ui.horizontal(|ui| {
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut path_str)
+                        .hint_text(t!("editor.prefs.game.none"))
+                        .desired_width(320.0),
+                );
+                if response.lost_focus() {
+                    let trimmed = path_str.trim();
+                    if trimmed.is_empty() {
+                        app.settings.selected_game_archive = None;
+                    } else {
+                        app.settings.selected_game_archive =
+                            Some(std::path::PathBuf::from(trimmed));
+                    }
+                    changed = true;
+                }
                 if ui.button(t!("editor.prefs.game.browse")).clicked() {
-                    let picked = rfd::FileDialog::new()
-                        .add_filter("BAR game archive", &["sdz", "sd7", "sdd"])
-                        .pick_file();
+                    // pick_folder lets the user select .sdd directories (which
+                    // pick_file would navigate into instead of selecting).
+                    // For .sdz/.sd7 files, paste the path directly in the field.
+                    let picked = rfd::FileDialog::new().pick_folder();
                     if let Some(path) = picked {
                         app.settings.selected_game_archive = Some(path);
                         changed = true;

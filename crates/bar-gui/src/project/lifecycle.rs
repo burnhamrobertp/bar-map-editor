@@ -334,6 +334,9 @@ impl BarEditorApp {
         self.map.min_height = self.map.settings.min_height;
         self.map.max_height = self.map.settings.max_height;
         self.map.features = project.recipe.features.clone();
+        if !self.map.features.is_empty() {
+            self.project.features_changed = true;
+        }
 
         // Resolve any project-relative file paths (`bar://...`) against the
         // .barproj directory so executors get absolute paths they can read.

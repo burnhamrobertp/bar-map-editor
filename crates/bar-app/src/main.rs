@@ -1,18 +1,28 @@
+mod app_log_layer;
 mod bar_install;
 mod layout_manager;
 mod runner;
 mod viewport;
 
+use std::sync::mpsc;
+
 use anyhow::Result;
 use bar_compute::GpuContext;
+use tracing::Level;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 use runner::{make_executor, AppRunner};
 
 fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
+    let (log_tx, log_rx) = mpsc::channel::<(Level, String)>();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        ))
+        .with(
+            app_log_layer::AppLogLayer::new(log_tx)
+                .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
         )
         .init();
 
@@ -138,7 +148,9 @@ fn main() -> Result<()> {
                 feature_catalog: None,
                 catalog_rx: None,
                 catalog_archive_path: None,
+                map_work_dir: None,
                 model_rx: None,
+                log_rx,
             }))
         }),
     )

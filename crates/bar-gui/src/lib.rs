@@ -9,7 +9,7 @@ pub mod editor;
 pub mod i18n;
 pub mod io;
 pub mod layouts;
-pub(crate) mod log;
+pub mod log;
 pub mod macros;
 pub(crate) mod paint;
 pub mod panels;
@@ -20,5 +20,6 @@ pub mod undo;
 
 pub use app::{BarEditorApp, ExportStatus, Layout, SmfLightingSnapshot};
 pub use io::ParentWindow;
+pub use log::LogLevel;
 pub use settings::{Settings, WindowState};
 pub use undo::{Snapshot, UndoHistory};

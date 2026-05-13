@@ -76,6 +76,7 @@ toml = "0.8"
 
 # Archiving
 zip = "2"
+flate2 = "1"
 walkdir = "2"
 sevenz-rust = "0.6"
 

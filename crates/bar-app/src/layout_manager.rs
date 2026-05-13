@@ -145,11 +145,11 @@ impl LayoutManager {
         }
 
         // Feature instances: rebuild when dirty or when a new heightmap arrives.
-        // The initial build fires before the first eval completes (heightmap = None),
-        // so we also track heightmap_rev and rebuild once the heightmap is available.
+        // Skip until the first eval completes -- without a heightmap the fallback
+        // height (range midpoint) causes visible floating on non-flat maps.
         let hm_rev = app.paint.heightmap_rev;
         let needs_feature_rebuild = slot.eval.features_dirty || slot.eval.last_hm_rev != hm_rev;
-        if needs_feature_rebuild {
+        if needs_feature_rebuild && app.paint.heightmap.is_some() {
             if let (Some(ref mut renderer), Some(ref gpu)) =
                 (&mut slot.core.terrain_renderer, gpu_context)
             {
@@ -409,8 +409,10 @@ fn apply_preview_result(
     };
 
     if let Some(heightmap) = result.heightmap {
+        // Always update app.paint.heightmap so features can sample terrain height
+        // on the low-res pass. The high-res pass overwrites it with full resolution.
+        app.set_inspector_heightmap(heightmap.clone());
         if !result.is_low_res {
-            app.set_inspector_heightmap(heightmap.clone());
             if let Some(ref tex) = result.texture {
                 app.paint.color_buffer = Some(tex.clone());
             }
