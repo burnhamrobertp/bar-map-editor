@@ -25,7 +25,7 @@ No new crates. Natural homes for each piece:
 
 ## Milestones
 
-### M1: Placeholder-only rendering (no game data, no model loading)
+### M1: Placeholder-only rendering (no game data, no model loading) -- COMPLETE
 
 All features render as solid colored unit boxes at correct world positions. No
 catalog, no `.s3o`. Does not require a BAR installation to be configured.
@@ -61,7 +61,7 @@ Work items:
 **Placeholder color:** solid magenta/orange. Wireframe is not used -- `PolygonMode::Line`
 is not supported on all WGPU backends (Metal in particular).
 
-### M2: Game version selection and feature catalog
+### M2: Game version selection and feature catalog -- COMPLETE
 
 Catalog loaded from the selected game archive. Known vs unknown feature types
 visually differentiated (different tint). Validation panel warns on unknown types.
@@ -103,7 +103,7 @@ Work items:
 - Reload triggered when `selected_game_archive` changes in settings.
 - Validation: features with no catalog match emit warnings in the validation panel.
 
-### M3: S3O model loading and rendering
+### M3: S3O model loading and rendering -- COMPLETE
 
 Recognized feature types render their actual `.s3o` models from the game archive.
 Unknown types retain the placeholder box.
