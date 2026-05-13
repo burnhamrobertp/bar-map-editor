@@ -628,6 +628,54 @@ fn cmd_preview(
     if let Some(ref tex) = texture {
         renderer.update_albedo(&gpu.device, &gpu.queue, tex);
     }
+
+    // Build and upload feature instances using the same coordinate math as
+    // build_feature_instances in bar-app.
+    {
+        use bar_render::FeatureInstance;
+        use glam::{Mat4, Quat, Vec3};
+
+        let pw = (w as f32 - 1.0).max(1.0);
+        let ph = (h as f32 - 1.0).max(1.0);
+        let pm = pw.max(ph);
+        let xe = (0.5 * pw / pm).min(0.5);
+        let ze = (0.5 * ph / pm).min(0.5);
+        let height_range = (max_h - min_h).abs().max(1.0);
+        let hs = (height_range / (pm * 8.0)).max(0.005);
+        let box_scale = 0.015_f32;
+
+        let instances: Vec<FeatureInstance> = project
+            .recipe
+            .features
+            .iter()
+            .map(|f| {
+                let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
+                let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+                let ry = if f.y.abs() < 0.01 {
+                    box_scale
+                } else {
+                    ((f.y - min_h) / height_range) * hs
+                };
+                let transform = Mat4::from_scale_rotation_translation(
+                    Vec3::splat(box_scale),
+                    Quat::from_rotation_y(-f.angle.to_radians()),
+                    Vec3::new(rx, ry, rz),
+                );
+                let cols = transform.to_cols_array_2d();
+                FeatureInstance {
+                    col0: cols[0],
+                    col1: cols[1],
+                    col2: cols[2],
+                    col3: cols[3],
+                    tint: [1.0, 0.5, 0.0, 1.0],
+                }
+            })
+            .collect();
+
+        println!("Feature instances: {}", instances.len());
+        renderer.update_feature_instances(&gpu.device, &instances);
+    }
+
     let frame = bar_render::PreviewFrame {
         height_scale,
         x_extent,

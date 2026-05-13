@@ -1654,16 +1654,23 @@ fn build_feature_instances(
     let hs = (height_range / (pm * 8.0)).max(0.005);
     // Box half-size in render-space: ~4 elmos per side so boxes are visible
     // without swamping smaller maps.
-    let box_scale = 4.0 / (pm * 8.0);
+    // Fixed 1.5% of render space -- visible as a distinct colored marker at any
+    // typical camera distance without overwhelming the terrain shape.
+    let box_scale = 0.015_f32;
 
     features
         .iter()
         .map(|f| {
             let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
             let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
-            // Spring snaps features to terrain Y at runtime; stored Y is often 0.
-            // Place boxes at the spring-zero elevation until M1 verification.
-            let ry = ((f.y - min_h) / height_range) * hs;
+            // Spring snaps features to terrain Y at runtime so stored y is 0
+            // for surface-placed objects. Render at box_scale above the render-space
+            // floor (y = 0 = world height min_h) so the box sits above the terrain base.
+            let ry = if f.y.abs() < 0.01 {
+                box_scale
+            } else {
+                ((f.y - min_h) / height_range) * hs
+            };
 
             // Spring angle: degrees CCW from +Z around Y axis. Negate to match
             // render-space handedness.
