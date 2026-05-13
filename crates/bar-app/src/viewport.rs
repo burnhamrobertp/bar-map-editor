@@ -261,14 +261,12 @@ fn draw_viewport_body(
                 let elapsed = core.started_at.elapsed().as_secs_f32();
                 let frame = core.current_frame.as_ref().map(|f| f.as_frame(elapsed));
                 renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
-                if core.current_frame.is_some() {
-                    update_viewport_texture(
-                        &mut core.viewport_texture_id,
-                        &core.terrain_renderer,
-                        render_state,
-                        ctx,
-                    );
-                }
+                update_viewport_texture(
+                    &mut core.viewport_texture_id,
+                    &core.terrain_renderer,
+                    render_state,
+                    ctx,
+                );
             }
         }
     }
