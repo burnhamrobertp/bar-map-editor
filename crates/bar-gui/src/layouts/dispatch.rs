@@ -29,5 +29,6 @@ pub fn draw_active(app: &mut BarEditorApp, ctx: &egui::Context, frame: &mut efra
     match app.active_layout() {
         Layout::Standard => super::standard::draw(app, ctx, frame),
         Layout::Sculpt3D => super::sculpt3d::draw(app, ctx, frame),
+        Layout::Preview => super::preview::draw(app, ctx, frame),
     }
 }

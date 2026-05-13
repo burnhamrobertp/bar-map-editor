@@ -137,6 +137,10 @@ struct Session {
     /// True while the feature instance buffer needs rebuilding.
     /// Starts true so the first render after a project load uploads instances.
     features_dirty: bool,
+    /// True after a successful BC1 texture upload for the Preview layout.
+    /// Cleared when leaving Preview or when a new compile completes, so the
+    /// texture is reloaded once on the next Preview entry.
+    bc1_loaded: bool,
 }
 
 impl Session {
@@ -166,6 +170,7 @@ impl Session {
             started_at: Instant::now(),
             force_refresh_requested: false,
             features_dirty: true,
+            bc1_loaded: false,
         }
     }
 }
@@ -250,6 +255,10 @@ fn main() -> Result<()> {
                 .as_ref()
                 .map(|rs| GpuContext::from_existing(rs.device.clone(), rs.queue.clone()));
 
+            // Propagate BC support flag to the GUI so the Preview layout can
+            // show an error message when BC1 textures are unavailable.
+            app.supports_bc = gpu_context.as_ref().map(|c| c.supports_bc).unwrap_or(false);
+
             // Create HybridExecutor if GPU available, otherwise use CPU only
             let executor: Arc<dyn NodeExecutor + Send + Sync> = if let Some(ref ctx) = gpu_context {
                 tracing::info!("Using HybridExecutor (GPU-accelerated noise)");
@@ -320,6 +329,77 @@ struct PendingExportDir {
     /// filter `execute_bundlers`. Captured up front so a node rename
     /// or deletion mid-flow doesn't change which bundle gets exported.
     run_filter_label: Option<String>,
+}
+
+/// Load the compiled native-resolution BC1 texture into the session renderer.
+///
+/// Returns `true` when successfully uploaded. On any failure (missing files,
+/// parse errors, no renderer) returns `false` without panicking.
+fn load_compiled_bc1(
+    project_dir: Option<&std::path::Path>,
+    recipe_name: &str,
+    session: &mut Session,
+    gpu: &GpuContext,
+) -> bool {
+    let Some(project_dir) = project_dir else {
+        return false;
+    };
+    let pkg = match bar_engine::PackageDir::open(project_dir) {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    let Some(fp) = pkg.read_fingerprint() else {
+        return false;
+    };
+
+    let tiles_x = if fp.tiles_x > 0 {
+        fp.tiles_x
+    } else {
+        fp.map_x / 4
+    };
+    let tiles_y = if fp.tiles_y > 0 {
+        fp.tiles_y
+    } else {
+        fp.map_y / 4
+    };
+    if tiles_x == 0 || tiles_y == 0 {
+        return false;
+    }
+
+    let smt_path = pkg.compiled_smt_path(recipe_name);
+    let idx_path = pkg.compiled_tile_index_path();
+
+    let tile_pool = match std::fs::File::open(&smt_path)
+        .and_then(|mut f| bar_data::read_smt_raw(&mut f).map_err(std::io::Error::other))
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(err = %e, "Preview BC1: failed to read compiled SMT");
+            return false;
+        }
+    };
+    let tile_indices: Vec<i32> = match std::fs::read(&idx_path) {
+        Ok(bytes) => bytes
+            .chunks_exact(4)
+            .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect(),
+        Err(e) => {
+            tracing::warn!(err = %e, "Preview BC1: failed to read tile index");
+            return false;
+        }
+    };
+
+    let bc1 = bar_data::assemble_bc1_linear(&tile_pool, &tile_indices, tiles_x, tiles_y);
+    if let Some(ref mut renderer) = session.terrain_renderer {
+        renderer.upload_bc1_texture(&gpu.device, &gpu.queue, &bc1, tiles_x * 32, tiles_y * 32);
+        tracing::info!(
+            tiles_x,
+            tiles_y,
+            "Preview BC1: uploaded native-resolution texture"
+        );
+        return true;
+    }
+    false
 }
 
 struct AppWrapper {
@@ -499,6 +579,11 @@ impl eframe::App for AppWrapper {
                     self.app.preview.compile_running = false;
                     self.compile_result_rx = None;
                     self.app.set_status("Compile complete");
+                    // Allow the Preview layout to reload the BC1 texture now that
+                    // a fresh compile is available.
+                    if let Some(ref mut s) = self.session {
+                        s.bc1_loaded = false;
+                    }
                 }
                 Ok(Err(e)) => {
                     self.app.preview.compile_running = false;
@@ -812,6 +897,40 @@ impl eframe::App for AppWrapper {
                 );
                 renderer.update_feature_instances(&gpu.device, &instances);
                 session.features_dirty = false;
+            }
+        }
+
+        // ── Preview layout BC1 texture management ─────────────────────────
+        // When in the Preview layout, load the compiled BC1 texture once.
+        // When leaving, force a re-eval so the working-res RGBA texture returns.
+        {
+            let in_preview = self.app.active_layout() == bar_gui::Layout::Preview;
+            if in_preview && self.app.preview.take_bc_texture_requested() && !session.bc1_loaded {
+                let project_dir = self.app.project.path.clone();
+                let recipe_name = self.app.recipe_for_export().name;
+                let supports_bc = self
+                    .gpu_context
+                    .as_ref()
+                    .map(|g| g.supports_bc)
+                    .unwrap_or(false);
+                if supports_bc {
+                    let loaded = load_compiled_bc1(
+                        project_dir.as_deref(),
+                        &recipe_name,
+                        session,
+                        self.gpu_context.as_ref().unwrap(),
+                    );
+                    if loaded {
+                        self.app
+                            .set_status("Preview: native-resolution BC1 texture loaded");
+                    }
+                }
+                session.bc1_loaded = true;
+            } else if !in_preview && session.bc1_loaded {
+                session.bc1_loaded = false;
+                session.last_low_res_key = u64::MAX;
+                session.last_high_res_key = u64::MAX;
+                session.current_frame = None;
             }
         }
 

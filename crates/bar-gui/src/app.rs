@@ -192,18 +192,22 @@ pub enum Layout {
     /// export pipeline merges them onto graph output at bundle
     /// time.
     Sculpt3D,
+    /// Read-only 3D viewport showing the compiled native-resolution
+    /// BC1 texture. Available only when a compile has been run.
+    Preview,
 }
 
 impl Layout {
     /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
     /// Ctrl+2, etc. Extend this slice when new layouts are added.
-    pub const ALL: &'static [Layout] = &[Layout::Standard, Layout::Sculpt3D];
+    pub const ALL: &'static [Layout] = &[Layout::Standard, Layout::Sculpt3D, Layout::Preview];
 
     /// i18n key for this layout's display name.
     pub(crate) fn i18n_key(self) -> &'static str {
         match self {
             Layout::Standard => "editor.menu.node_graph",
             Layout::Sculpt3D => "editor.menu.sculpt_3d",
+            Layout::Preview => "editor.menu.preview",
         }
     }
 }
@@ -248,6 +252,9 @@ pub struct BarEditorApp {
     /// Active top-level UI layout. Loaded from settings on launch,
     /// persisted via `set_active_layout`.
     pub(crate) active_layout: Layout,
+    /// Set by `bar-app` from `GpuContext::supports_bc` on startup. Tells
+    /// the Preview layout whether BC1 texture upload is available.
+    pub supports_bc: bool,
 }
 
 impl Default for BarEditorApp {
@@ -280,6 +287,7 @@ impl Default for BarEditorApp {
             palette_filter: String::new(),
             settings: Settings::default(),
             active_layout: Layout::default(),
+            supports_bc: false,
         }
     }
 }

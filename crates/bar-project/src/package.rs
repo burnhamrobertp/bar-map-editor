@@ -145,6 +145,12 @@ pub struct Fingerprint {
     /// Map dimensions at compile time (map_x = output.width - 1).
     pub map_x: u32,
     pub map_y: u32,
+    /// Tile grid dimensions for the compiled SMT (tiles_x = map_x/4, etc.).
+    /// Zero when the fingerprint was written before this field was added.
+    #[serde(default)]
+    pub tiles_x: u32,
+    #[serde(default)]
+    pub tiles_y: u32,
     /// Size and mtime of each asset file that was live at compile time.
     pub assets: HashMap<String, AssetStat>,
 }
@@ -154,6 +160,18 @@ pub struct Fingerprint {
 pub struct AssetStat {
     pub size: u64,
     pub mtime_secs: u64,
+}
+
+fn sanitize_filename(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// FNV-64 hash (no external dep).
@@ -242,6 +260,18 @@ impl PackageDir {
 
     pub fn compiled_dir(&self) -> PathBuf {
         self.root.join("compiled")
+    }
+
+    /// Absolute path to the compiled SMT for a given recipe name.
+    /// Sanitizes the name to be filesystem-safe (alphanumeric, `-`, `_` only).
+    pub fn compiled_smt_path(&self, recipe_name: &str) -> PathBuf {
+        self.compiled_dir()
+            .join(format!("{}.smt", sanitize_filename(recipe_name)))
+    }
+
+    /// Absolute path to the compiled tile index file.
+    pub fn compiled_tile_index_path(&self) -> PathBuf {
+        self.compiled_dir().join("tile_index.bin")
     }
 
     /// True when `compiled/fingerprint.json` exists.

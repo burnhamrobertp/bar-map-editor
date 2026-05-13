@@ -80,6 +80,10 @@ pub struct PreviewState {
     pub compile_requested: bool,
     /// True while a compile is running. Set by `bar-app`.
     pub compile_running: bool,
+    /// Set to `true` for one frame when the Preview layout wants bar-app
+    /// to load the compiled SMT as a BC1 GPU texture. Consumed via
+    /// `take_bc_texture_requested`.
+    pub bc_texture_requested: bool,
 }
 
 impl PreviewState {
@@ -123,6 +127,11 @@ impl PreviewState {
     /// Consume the one-frame "compile" pulse.
     pub fn take_compile_requested(&mut self) -> bool {
         std::mem::take(&mut self.compile_requested)
+    }
+
+    /// Consume the one-frame "load BC1 texture" pulse.
+    pub fn take_bc_texture_requested(&mut self) -> bool {
+        std::mem::take(&mut self.bc_texture_requested)
     }
 
     /// Reset to defaults. Called by `BarEditorApp::reset_session_state`
