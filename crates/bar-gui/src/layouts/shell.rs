@@ -11,10 +11,10 @@ use eframe::egui;
 use std::time::Instant;
 
 use crate::app::{
-    paint_bar_icon, paint_busy_dot, paint_export_icon, paint_inspector_icon, paint_map_info_icon,
-    paint_mapinfo_form_icon, paint_startbox_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
-    ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab, PendingAction,
-    UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_bar_icon, paint_compile_icon, paint_export_icon, paint_inspector_icon,
+    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon, BarEditorApp, ConfirmAction,
+    ConfirmDialog, ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab,
+    PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::io::is_text_file;
 use crate::panels::log::level_color;
@@ -964,10 +964,9 @@ impl BarEditorApp {
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, 5.0, bg);
                         paint_export_icon(&painter, rect, egui::Color32::WHITE);
-                        if busy {
-                            // Tiny corner spinner so the busy state reads clearly.
-                            paint_busy_dot(&painter, rect, ui.input(|i| i.time));
-                        }
+                    }
+                    if busy {
+                        crate::layouts::preview::draw_animated_border(ui, rect);
                     }
 
                     let tooltip = if busy {
@@ -990,10 +989,28 @@ impl BarEditorApp {
                     let compile_running = self.preview.compile_running;
                     let compile_dirty = self.project.compile_dirty;
                     let can_compile = !compile_running && !any_running;
-                    let compile_resp = ui.add_enabled(can_compile, egui::Button::new("\u{2699}"));
-                    let compile_rect = compile_resp.rect;
-                    if compile_resp.clicked() && can_compile {
-                        self.preview.compile_requested = true;
+                    let compile_sense = if can_compile {
+                        egui::Sense::click()
+                    } else {
+                        egui::Sense::hover()
+                    };
+                    let (compile_rect, compile_resp) =
+                        ui.allocate_exact_size(btn_size, compile_sense);
+                    if ui.is_rect_visible(compile_rect) {
+                        let bg = if compile_running {
+                            tokens::BTN_COMPILE_BUSY
+                        } else if !can_compile {
+                            tokens::BTN_COMPILE_BLOCKED
+                        } else if compile_resp.is_pointer_button_down_on() {
+                            tokens::BTN_COMPILE_PRESS
+                        } else if compile_resp.hovered() {
+                            tokens::BTN_COMPILE_HOVER
+                        } else {
+                            tokens::BTN_COMPILE_NORMAL
+                        };
+                        let painter = ui.painter_at(compile_rect);
+                        painter.rect_filled(compile_rect, 5.0, bg);
+                        paint_compile_icon(&painter, compile_rect, egui::Color32::WHITE);
                     }
                     let hover = if compile_running {
                         "Compiling...".to_string()
@@ -1009,7 +1026,11 @@ impl BarEditorApp {
                     } else {
                         "Compile".to_string()
                     };
+                    let compile_clicked = compile_resp.clicked();
                     compile_resp.on_hover_text(hover);
+                    if !compile_running && compile_clicked {
+                        self.preview.compile_requested = true;
+                    }
                     if compile_running {
                         crate::layouts::preview::draw_animated_border(ui, compile_rect);
                     }

@@ -117,6 +117,12 @@ pub const BTN_SPAWNS_NORMAL: Color32 = Color32::from_rgb(75, 100, 125);
 pub const BTN_SPAWNS_HOVER: Color32 = Color32::from_rgb(95, 120, 150);
 pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
 
+pub const BTN_COMPILE_NORMAL: Color32 = Color32::from_rgb(38, 95, 115);
+pub const BTN_COMPILE_HOVER: Color32 = Color32::from_rgb(52, 118, 140);
+pub const BTN_COMPILE_PRESS: Color32 = Color32::from_rgb(28, 75, 90);
+pub const BTN_COMPILE_BUSY: Color32 = Color32::from_rgb(50, 80, 95);
+pub const BTN_COMPILE_BLOCKED: Color32 = Color32::from_rgb(30, 55, 65);
+
 // ── Param slider ─────────────────────────────────────────────────────────────
 pub const SLIDER_BG: Color32 = Color32::from_rgb(28, 30, 40);
 pub const SLIDER_FILL: Color32 = Color32::from_rgb(55, 95, 165);

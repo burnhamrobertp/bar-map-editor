@@ -187,6 +187,33 @@ pub(crate) fn paint_inspector_icon(
     );
 }
 
+/// Lightning bolt for the Compile toolbar button.
+pub(crate) fn paint_compile_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    // Two filled triangles forming a Z-shape (lightning bolt).
+    // Upper half: top-right corner down to the center notch.
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx + 4.0, cy - 8.0),
+            egui::pos2(cx - 4.5, cy + 0.5),
+            egui::pos2(cx + 1.5, cy + 0.5),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+    // Lower half: center notch down to bottom-left corner.
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 1.5, cy - 0.5),
+            egui::pos2(cx - 4.0, cy + 8.0),
+            egui::pos2(cx + 4.5, cy - 0.5),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Rotating dot in the top-right corner of a button rect to signal a running
 /// operation. `time` is `ui.input(|i| i.time)` in seconds.
 pub(crate) fn paint_busy_dot(painter: &egui::Painter, rect: egui::Rect, time: f64) {
