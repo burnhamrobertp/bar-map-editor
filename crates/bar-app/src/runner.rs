@@ -36,6 +36,9 @@ pub struct AppRunner {
     pub feature_catalog: Option<FeatureCatalog>,
     pub catalog_rx: Option<mpsc::Receiver<FeatureCatalog>>,
     pub catalog_archive_path: Option<std::path::PathBuf>,
+    /// Receives parsed S3O meshes from the background model-loader threads.
+    /// Each item is `(lowercase_feature_type_name, mesh)`.
+    pub model_rx: Option<mpsc::Receiver<(String, bar_data::S3oMesh)>>,
 }
 
 impl eframe::App for AppRunner {
@@ -366,6 +369,7 @@ impl eframe::App for AppRunner {
         let desired_archive = self.app.settings().selected_game_archive.clone();
         if desired_archive != self.catalog_archive_path {
             self.catalog_rx = None;
+            self.model_rx = None;
             self.feature_catalog = None;
             self.catalog_archive_path = desired_archive.clone();
             if let Some(archive) = desired_archive {
@@ -383,9 +387,88 @@ impl eframe::App for AppRunner {
             if let Ok(catalog) = rx.try_recv() {
                 self.catalog_rx = None;
                 tracing::info!(count = catalog.features.len(), "Feature catalog loaded");
+
+                // For each unique feature type present in the map, start a background
+                // thread to extract and parse its S3O model from the game archive.
+                if let Some(ref archive) = self.catalog_archive_path {
+                    let unique_types: std::collections::HashSet<String> = self
+                        .app
+                        .map
+                        .features
+                        .iter()
+                        .map(|f| f.feature_type.to_lowercase())
+                        .collect();
+                    let to_load: Vec<(String, String)> = unique_types
+                        .iter()
+                        .filter_map(|name| {
+                            let def = catalog.features.get(name)?;
+                            if def.object.is_empty() {
+                                return None;
+                            }
+                            // object field is either bare name or includes extension.
+                            let obj = &def.object;
+                            let path = if obj.contains('.') {
+                                format!("objects3d/{obj}")
+                            } else {
+                                format!("objects3d/{obj}.s3o")
+                            };
+                            Some((name.clone(), path))
+                        })
+                        .collect();
+                    if !to_load.is_empty() {
+                        let (tx, rx) = mpsc::channel::<(String, bar_data::S3oMesh)>();
+                        self.model_rx = Some(rx);
+                        let archive = archive.clone();
+                        let ctx_clone = ctx.clone();
+                        std::thread::spawn(move || {
+                            let mut loaded = 0usize;
+                            for (name, path) in to_load {
+                                if let Some(data) =
+                                    bar_engine::read_file_from_archive(&archive, &path)
+                                {
+                                    match bar_data::parse_s3o(&data) {
+                                        Ok(mesh) => {
+                                            loaded += 1;
+                                            if tx.send((name.clone(), mesh)).is_err() {
+                                                break;
+                                            }
+                                            ctx_clone.request_repaint();
+                                        }
+                                        Err(e) => {
+                                            tracing::debug!(
+                                                feature = %name,
+                                                path = %path,
+                                                err = %e,
+                                                "S3O parse failed"
+                                            );
+                                        }
+                                    }
+                                }
+                            }
+                            tracing::info!(loaded, "S3O model loading complete");
+                        });
+                    }
+                }
+
                 self.feature_catalog = Some(catalog);
                 self.layout_manager.mark_features_dirty();
             }
+        }
+
+        // Poll loaded S3O models; upload each one to the feature renderer.
+        let mut any_model_loaded = false;
+        if let Some(ref rx) = self.model_rx {
+            while let Ok((name, mesh)) = rx.try_recv() {
+                tracing::debug!(feature = %name, verts = mesh.vertices.len(), "S3O model loaded");
+                if let Some(ref gpu) = self.gpu_context {
+                    self.layout_manager
+                        .load_feature_mesh(&gpu.device, &name, &mesh);
+                    any_model_loaded = true;
+                }
+            }
+        }
+        if any_model_loaded {
+            self.layout_manager.mark_features_dirty();
         }
 
         // Poll SD7 extraction.

@@ -155,7 +155,11 @@ impl LayoutManager {
             {
                 let (w, h) = app.map.dimensions();
                 let (min_h, max_h) = app.map.height_range();
-                let instances = build_feature_instances(
+                let loaded: std::collections::HashSet<String> = renderer
+                    .feature_renderer_mut()
+                    .map(|fr| fr.loaded_model_names().map(|s| s.to_string()).collect())
+                    .unwrap_or_default();
+                let (groups, unknowns) = build_feature_instances(
                     &app.map.features,
                     w,
                     h,
@@ -163,8 +167,9 @@ impl LayoutManager {
                     max_h,
                     feature_catalog,
                     app.paint.heightmap.as_ref(),
+                    &loaded,
                 );
-                renderer.update_feature_instances(&gpu.device, &instances);
+                renderer.update_feature_instances(&gpu.device, &groups, &unknowns);
                 slot.eval.features_dirty = false;
                 slot.eval.last_hm_rev = hm_rev;
             }
@@ -335,6 +340,20 @@ impl LayoutManager {
     pub fn mark_features_dirty(&mut self) {
         if let Some(ref mut slot) = self.sculpt3d {
             slot.eval.features_dirty = true;
+        }
+    }
+
+    /// Upload an S3O model to the Sculpt3D slot's feature renderer.
+    pub fn load_feature_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        mesh: &bar_data::S3oMesh,
+    ) {
+        if let Some(ref mut slot) = self.sculpt3d {
+            if let Some(ref mut renderer) = slot.core.terrain_renderer {
+                renderer.load_feature_mesh(device, name, mesh);
+            }
         }
     }
 

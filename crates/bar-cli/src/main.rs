@@ -691,7 +691,7 @@ fn cmd_preview(
             .collect();
 
         println!("Feature instances: {}", instances.len());
-        renderer.update_feature_instances(&gpu.device, &instances);
+        renderer.update_feature_instances(&gpu.device, &Default::default(), &instances);
     }
 
     let frame = bar_render::PreviewFrame {

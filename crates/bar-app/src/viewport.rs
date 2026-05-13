@@ -632,6 +632,17 @@ pub fn eval_preview(
 
 // ── Feature instance building ─────────────────────────────────────────────────
 
+/// Build feature instance transforms, grouped by feature type.
+///
+/// Returns `(model_groups, unknowns)`:
+/// - `model_groups`: instances for feature types that have a loaded S3O model,
+///   keyed by lowercase feature type name. Scale is `1/(pm*8)` (one Spring elmo
+///   = one render unit).
+/// - `unknowns`: instances for feature types without a loaded model, rendered
+///   with the placeholder box. Scale is footprint-based.
+///
+/// `loaded_model_names` is the set of lowercase feature type names for which
+/// `FeatureRenderer::load_mesh` has been called.
 pub fn build_feature_instances(
     features: &[PlacedFeature],
     w: u32,
@@ -640,7 +651,11 @@ pub fn build_feature_instances(
     max_h: f32,
     catalog: Option<&bar_engine::FeatureCatalog>,
     heightmap: Option<&bar_data::Heightmap>,
-) -> Vec<FeatureInstance> {
+    loaded_model_names: &std::collections::HashSet<String>,
+) -> (
+    std::collections::HashMap<String, Vec<FeatureInstance>>,
+    Vec<FeatureInstance>,
+) {
     use glam::{Mat4, Quat, Vec3};
 
     let pw = (w as f32 - 1.0).max(1.0);
@@ -650,45 +665,74 @@ pub fn build_feature_instances(
     let ze = (0.5 * ph / pm).min(0.5);
     let height_range = (max_h - min_h).abs().max(1.0);
     let hs = (height_range / (pm * 8.0)).max(0.005);
+    // Uniform elmo-to-render scale: same factor as hs but without height_range.
+    let elmo_scale = (1.0 / (pm * 8.0)).max(1e-6_f32);
     let default_footprint = 2.0_f32;
 
-    features
-        .iter()
-        .map(|f| {
-            let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
-            let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+    let mut groups: std::collections::HashMap<String, Vec<FeatureInstance>> =
+        std::collections::HashMap::new();
+    let mut unknowns: Vec<FeatureInstance> = Vec::new();
 
+    for f in features {
+        let lower = f.feature_type.to_lowercase();
+
+        let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
+        let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+
+        let h_render = if let Some(hm) = heightmap {
+            let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
+            let hz = (f.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
+            hm.get(hx as u32, hz as u32).unwrap_or(0.0) * hs
+        } else {
+            hs * 0.5
+        };
+        let ry = if f.y.abs() < 0.01 {
+            h_render
+        } else {
+            ((f.y - min_h) / height_range) * hs
+        };
+
+        let rot = Quat::from_rotation_y(-f.angle.to_radians());
+
+        let inst = if loaded_model_names.contains(&lower) {
+            // Real S3O model: uniform scale in Spring elmos.
+            let transform = Mat4::from_scale_rotation_translation(
+                Vec3::splat(elmo_scale),
+                rot,
+                Vec3::new(rx, ry, rz),
+            );
+            let cols = transform.to_cols_array_2d();
+            let inst = FeatureInstance {
+                col0: cols[0],
+                col1: cols[1],
+                col2: cols[2],
+                col3: cols[3],
+                tint: [0.2, 0.9, 0.2, 1.0], // green = known model
+            };
+            groups.entry(lower).or_default().push(inst);
+            continue;
+        } else {
+            // Placeholder box: footprint-based scale.
             let (fp_x, fp_z) = catalog
-                .and_then(|cat| cat.features.get(&f.feature_type.to_lowercase()))
+                .and_then(|cat| cat.features.get(&lower))
                 .map(|def| (def.footprint_x.max(1) as f32, def.footprint_z.max(1) as f32))
                 .unwrap_or((default_footprint, default_footprint));
             let sx = fp_x / pm;
             let sz = fp_z / pm;
             let sy = sx.max(sz);
-
-            let h_render = if let Some(hm) = heightmap {
-                let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
-                let hz =
-                    (f.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
-                hm.get(hx as u32, hz as u32).unwrap_or(0.0) * hs
-            } else {
-                hs * 0.5
-            };
-            let ry = if f.y.abs() < 0.01 {
-                h_render
-            } else {
-                ((f.y - min_h) / height_range) * hs
-            };
-
             let transform = Mat4::from_scale_rotation_translation(
                 Vec3::new(sx, sy, sz),
-                Quat::from_rotation_y(-f.angle.to_radians()),
+                rot,
                 Vec3::new(rx, ry, rz),
             );
             let cols = transform.to_cols_array_2d();
-            let tint = match catalog {
-                Some(cat) if cat.is_known(&f.feature_type) => [0.2, 0.9, 0.2, 1.0],
-                _ => [1.0, 0.5, 0.0, 1.0],
+            let tint = if catalog
+                .map(|c| c.is_known(&f.feature_type))
+                .unwrap_or(false)
+            {
+                [0.2, 0.9, 0.2, 1.0] // green = catalog-known (no model yet)
+            } else {
+                [1.0, 0.5, 0.0, 1.0] // orange = unknown type
             };
             FeatureInstance {
                 col0: cols[0],
@@ -697,8 +741,11 @@ pub fn build_feature_instances(
                 col3: cols[3],
                 tint,
             }
-        })
-        .collect()
+        };
+        unknowns.push(inst);
+    }
+
+    (groups, unknowns)
 }
 
 // ── BC1 texture loading ───────────────────────────────────────────────────────

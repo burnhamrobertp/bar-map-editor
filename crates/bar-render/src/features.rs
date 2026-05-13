@@ -1,20 +1,19 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! Feature placeholder renderer.
+//! Feature renderer -- placeholder boxes (M1) and real S3O models (M3).
 //!
-//! Renders placed map features (trees, rocks, geo-thermal vents, etc.) as
-//! solid orange unit boxes at correct world positions. No game assets or
-//! model data are required -- this is the M1 placeholder pass.
+//! Unknown feature types render as solid orange unit boxes. Known types with
+//! loaded S3O models render their actual geometry.
+//!
+//! All draws share one pipeline and one render pass (LoadOp::Load so the
+//! terrain depth buffer correctly occludes features).
 
+use std::collections::HashMap;
+
+use bar_data::S3oVertex;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
-/// Per-vertex data for the placeholder cube mesh.
-#[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
-pub struct FeatureVertex {
-    pub position: [f32; 3],
-    pub normal: [f32; 3],
-}
+// ── Per-instance data ─────────────────────────────────────────────────────────
 
 /// Per-instance GPU data: column-major 4x4 model transform + RGBA tint.
 /// 80 bytes total; 16-byte aligned.
@@ -30,9 +29,13 @@ pub struct FeatureInstance {
 
 const _: () = assert!(std::mem::size_of::<FeatureInstance>() == 80);
 
+// ── Vertex buffer layout (shared by placeholder cube and S3O models) ──────────
+
+/// Shared vertex layout: 32 bytes (position 12 + normal 12 + uv 8).
+/// `S3oVertex` has this exact layout. Placeholder cube verts get dummy UVs.
 fn vertex_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     wgpu::VertexBufferLayout {
-        array_stride: std::mem::size_of::<FeatureVertex>() as wgpu::BufferAddress,
+        array_stride: std::mem::size_of::<S3oVertex>() as wgpu::BufferAddress,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[
             wgpu::VertexAttribute {
@@ -83,14 +86,16 @@ fn instance_buffer_layout() -> wgpu::VertexBufferLayout<'static> {
     }
 }
 
-/// Unit cube with bottom face at Y=0, top face at Y=1.
-/// Each face has 4 unique vertices with face normals (24 verts total).
-fn unit_cube_verts() -> [FeatureVertex; 24] {
+// ── Placeholder cube geometry ─────────────────────────────────────────────────
+
+/// Unit cube with bottom face at Y=0. Vertices are `S3oVertex` with dummy UVs.
+fn unit_cube_verts() -> [S3oVertex; 24] {
     macro_rules! v {
-        ([$px:literal, $py:literal, $pz:literal], [$nx:literal, $ny:literal, $nz:literal]) => {
-            FeatureVertex {
-                position: [$px, $py, $pz],
-                normal: [$nx, $ny, $nz],
+        ($p:expr, $n:expr) => {
+            S3oVertex {
+                position: $p,
+                normal: $n,
+                uv: [0.0, 0.0],
             }
         };
     }
@@ -143,17 +148,32 @@ fn unit_cube_indices() -> [u16; 36] {
     idx
 }
 
-/// Renders all map features as placeholder unit boxes.
-///
-/// Shares the camera uniform bind group (group 0) with `TerrainRenderer`.
-/// Draws in a separate render pass after terrain using `LoadOp::Load` so
-/// terrain depth correctly occludes features.
-pub struct FeatureRenderer {
-    pipeline: wgpu::RenderPipeline,
+// ── Named mesh storage ────────────────────────────────────────────────────────
+
+struct FeatureMesh {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
+    num_indices: u32,
     instance_buffer: Option<wgpu::Buffer>,
-    pub(crate) instance_count: u32,
+    instance_count: u32,
+}
+
+// ── FeatureRenderer ───────────────────────────────────────────────────────────
+
+/// Renders all map features, either as placeholder unit boxes or as real S3O
+/// models when `load_mesh` has been called for that feature type.
+///
+/// Shares the camera uniform bind group (group 0) with `TerrainRenderer`.
+/// All geometry is drawn in a single render pass (LoadOp::Load on color + depth).
+pub struct FeatureRenderer {
+    pipeline: wgpu::RenderPipeline,
+    // Placeholder cube geometry
+    placeholder_vb: wgpu::Buffer,
+    placeholder_ib: wgpu::Buffer,
+    placeholder_instances: Option<wgpu::Buffer>,
+    placeholder_count: u32,
+    // Real S3O meshes keyed by lowercase feature type name
+    meshes: HashMap<String, FeatureMesh>,
 }
 
 impl FeatureRenderer {
@@ -216,47 +236,117 @@ impl FeatureRenderer {
 
         let verts = unit_cube_verts();
         let inds = unit_cube_indices();
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("feature_vb"),
+        let placeholder_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("feature_placeholder_vb"),
             contents: bytemuck::cast_slice(&verts),
             usage: wgpu::BufferUsages::VERTEX,
         });
-        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("feature_ib"),
+        let placeholder_ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("feature_placeholder_ib"),
             contents: bytemuck::cast_slice(&inds),
             usage: wgpu::BufferUsages::INDEX,
         });
 
         Self {
             pipeline,
-            vertex_buffer,
-            index_buffer,
-            instance_buffer: None,
-            instance_count: 0,
+            placeholder_vb,
+            placeholder_ib,
+            placeholder_instances: None,
+            placeholder_count: 0,
+            meshes: HashMap::new(),
         }
     }
 
-    /// Rebuild the GPU instance buffer from the given slice.
-    /// Pass an empty slice to hide all features.
-    pub fn update_instances(&mut self, device: &wgpu::Device, instances: &[FeatureInstance]) {
-        if instances.is_empty() {
-            self.instance_buffer = None;
-            self.instance_count = 0;
-            return;
-        }
-        self.instance_buffer = Some(
-            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("feature_instance_buffer"),
-                contents: bytemuck::cast_slice(instances),
-                usage: wgpu::BufferUsages::VERTEX,
-            }),
+    /// Upload a real S3O model for a named feature type.
+    /// If a model already exists for this name it is replaced.
+    pub fn load_mesh(&mut self, device: &wgpu::Device, name: &str, mesh: &bar_data::S3oMesh) {
+        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("feature_vb_{name}")),
+            contents: bytemuck::cast_slice(&mesh.vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let ib = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some(&format!("feature_ib_{name}")),
+            contents: bytemuck::cast_slice(&mesh.indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        self.meshes.insert(
+            name.to_lowercase(),
+            FeatureMesh {
+                vertex_buffer: vb,
+                index_buffer: ib,
+                num_indices: mesh.indices.len() as u32,
+                instance_buffer: None,
+                instance_count: 0,
+            },
         );
-        self.instance_count = instances.len() as u32;
     }
 
-    /// Record a feature render pass into `encoder` using `LoadOp::Load` on
-    /// both color and depth so prior terrain geometry occludes features.
-    /// No-ops when no instances have been uploaded.
+    /// True if a real S3O model has been loaded for this feature type.
+    pub fn has_model(&self, feature_type: &str) -> bool {
+        self.meshes.contains_key(&feature_type.to_lowercase())
+    }
+
+    /// Names of all feature types with loaded S3O models.
+    pub fn loaded_model_names(&self) -> impl Iterator<Item = &str> {
+        self.meshes.keys().map(|s| s.as_str())
+    }
+
+    /// Upload grouped instance data.
+    ///
+    /// - `groups`: instances for feature types that have a loaded S3O model,
+    ///   keyed by lowercase feature type name.
+    /// - `unknowns`: instances for feature types with no loaded model;
+    ///   rendered with the placeholder cube.
+    pub fn update_instances_grouped(
+        &mut self,
+        device: &wgpu::Device,
+        groups: &HashMap<String, Vec<FeatureInstance>>,
+        unknowns: &[FeatureInstance],
+    ) {
+        // Placeholder instances.
+        if unknowns.is_empty() {
+            self.placeholder_instances = None;
+            self.placeholder_count = 0;
+        } else {
+            self.placeholder_instances = Some(device.create_buffer_init(
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("feature_placeholder_inst"),
+                    contents: bytemuck::cast_slice(unknowns),
+                    usage: wgpu::BufferUsages::VERTEX,
+                },
+            ));
+            self.placeholder_count = unknowns.len() as u32;
+        }
+
+        // Per-model instances.
+        for (name, mesh) in &mut self.meshes {
+            let instances = groups.get(name).map(|v| v.as_slice()).unwrap_or(&[]);
+            if instances.is_empty() {
+                mesh.instance_buffer = None;
+                mesh.instance_count = 0;
+            } else {
+                mesh.instance_buffer = Some(device.create_buffer_init(
+                    &wgpu::util::BufferInitDescriptor {
+                        label: Some(&format!("feature_inst_{name}")),
+                        contents: bytemuck::cast_slice(instances),
+                        usage: wgpu::BufferUsages::VERTEX,
+                    },
+                ));
+                mesh.instance_count = instances.len() as u32;
+            }
+        }
+    }
+
+    /// Total number of feature instances (across all meshes + placeholders).
+    pub fn total_instance_count(&self) -> u32 {
+        let model_total: u32 = self.meshes.values().map(|m| m.instance_count).sum();
+        model_total + self.placeholder_count
+    }
+
+    /// Record all feature draw calls into `encoder`, sharing `output_view` and
+    /// `depth_view` with the terrain pass (LoadOp::Load keeps terrain depth).
+    /// No-ops if there are no instances to draw.
     pub fn draw(
         &self,
         encoder: &mut wgpu::CommandEncoder,
@@ -264,10 +354,7 @@ impl FeatureRenderer {
         depth_view: &wgpu::TextureView,
         camera_bg: &wgpu::BindGroup,
     ) {
-        let Some(ref inst_buf) = self.instance_buffer else {
-            return;
-        };
-        if self.instance_count == 0 {
+        if self.total_instance_count() == 0 {
             return;
         }
 
@@ -295,9 +382,29 @@ impl FeatureRenderer {
 
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, camera_bg, &[]);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        pass.set_vertex_buffer(1, inst_buf.slice(..));
-        pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-        pass.draw_indexed(0..36, 0, 0..self.instance_count);
+
+        // Draw real S3O models.
+        for mesh in self.meshes.values() {
+            let Some(ref inst_buf) = mesh.instance_buffer else {
+                continue;
+            };
+            if mesh.instance_count == 0 {
+                continue;
+            }
+            pass.set_vertex_buffer(0, mesh.vertex_buffer.slice(..));
+            pass.set_vertex_buffer(1, inst_buf.slice(..));
+            pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..mesh.num_indices, 0, 0..mesh.instance_count);
+        }
+
+        // Draw placeholder boxes for unknown feature types.
+        if let Some(ref inst_buf) = self.placeholder_instances {
+            if self.placeholder_count > 0 {
+                pass.set_vertex_buffer(0, self.placeholder_vb.slice(..));
+                pass.set_vertex_buffer(1, inst_buf.slice(..));
+                pass.set_index_buffer(self.placeholder_ib.slice(..), wgpu::IndexFormat::Uint16);
+                pass.draw_indexed(0..36, 0, 0..self.placeholder_count);
+            }
+        }
     }
 }

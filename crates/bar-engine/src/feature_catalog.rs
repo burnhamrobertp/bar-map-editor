@@ -90,6 +90,41 @@ impl FeatureCatalog {
     }
 }
 
+/// Read one named file from an `.sdz`/`.sd7` (ZIP) or `.sdd` (directory) game archive.
+/// Returns `None` if the file is not found or cannot be read.
+pub fn read_file_from_archive(archive: &std::path::Path, internal_path: &str) -> Option<Vec<u8>> {
+    let ext = archive
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_lowercase())
+        .unwrap_or_default();
+
+    match ext.as_str() {
+        "sdz" | "sd7" => {
+            let file = std::fs::File::open(archive).ok()?;
+            let mut zip = zip::ZipArchive::new(file).ok()?;
+            // Case-insensitive search (BAR archives use inconsistent case).
+            let names: Vec<String> = (0..zip.len())
+                .filter_map(|i| zip.by_index(i).ok().map(|e| e.name().to_string()))
+                .collect();
+            let matched = names
+                .iter()
+                .find(|n| n.eq_ignore_ascii_case(internal_path))?
+                .clone();
+            let mut entry = zip.by_name(&matched).ok()?;
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut entry, &mut buf).ok()?;
+            Some(buf)
+        }
+        "sdd" => {
+            // Directory archive: just join the path.
+            let path = archive.join(internal_path.replace('/', std::path::MAIN_SEPARATOR_STR));
+            std::fs::read(&path).ok()
+        }
+        _ => None,
+    }
+}
+
 fn is_feature_lua(name: &str) -> bool {
     let lower = name.to_lowercase();
     lower == "gamedata/featuredata.lua"

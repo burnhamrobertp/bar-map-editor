@@ -138,6 +138,7 @@ fn main() -> Result<()> {
                 feature_catalog: None,
                 catalog_rx: None,
                 catalog_archive_path: None,
+                model_rx: None,
             }))
         }),
     )

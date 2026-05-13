@@ -1918,14 +1918,27 @@ impl TerrainRenderer {
         self.feature_renderer.as_mut()
     }
 
-    /// Upload a new set of feature instances.
+    /// Upload an S3O model for a named feature type.
+    pub fn load_feature_mesh(
+        &mut self,
+        device: &wgpu::Device,
+        name: &str,
+        mesh: &bar_data::S3oMesh,
+    ) {
+        if let Some(ref mut fr) = self.feature_renderer {
+            fr.load_mesh(device, name, mesh);
+        }
+    }
+
+    /// Upload grouped feature instances.
     pub fn update_feature_instances(
         &mut self,
         device: &wgpu::Device,
-        instances: &[crate::features::FeatureInstance],
+        groups: &std::collections::HashMap<String, Vec<crate::features::FeatureInstance>>,
+        unknowns: &[crate::features::FeatureInstance],
     ) {
         if let Some(ref mut fr) = self.feature_renderer {
-            fr.update_instances(device, instances);
+            fr.update_instances_grouped(device, groups, unknowns);
         }
     }
 
