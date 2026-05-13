@@ -294,74 +294,83 @@ impl SmfMap {
         // Read tilesmap section to get SMT filename and tile index map.
         // Section layout: numTileFiles:i32, numTiles:i32,
         //   then per file: numTilesInFile:i32 + null-terminated filename,
-        //   then tile_indices:[i32; tiles_x * tiles_y].
+        //   then tile_indices:[i32; numTiles].
+        // Use the stored numTiles from the header (not a re-derived count) to match
+        // exactly what the engine wrote. Failures here are non-fatal -- we can still
+        // import heightmap/metalmap/typemap without the tile data.
         let mut smt_filename = String::new();
         let mut tile_indices = Vec::new();
         if header.tilesmap_ptr > 0 {
-            reader.seek(SeekFrom::Start(header.tilesmap_ptr as u64))?;
-            let num_tile_files = read_i32(reader)?.max(0) as usize;
-            let _total_tiles = read_i32(reader)?;
+            let tile_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(header.tilesmap_ptr as u64))?;
+                let num_tile_files = read_i32(reader)?.max(0) as usize;
+                let total_tiles = read_i32(reader)?.max(0) as usize;
 
-            for _ in 0..num_tile_files {
-                let _tiles_in_file = read_i32(reader)?;
-                // Null-terminated filename
-                let mut name_bytes = Vec::new();
-                let mut b = [0u8; 1];
-                loop {
-                    reader.read_exact(&mut b)?;
-                    if b[0] == 0 {
-                        break;
+                for _ in 0..num_tile_files {
+                    let _tiles_in_file = read_i32(reader)?;
+                    let mut name_bytes = Vec::new();
+                    let mut b = [0u8; 1];
+                    loop {
+                        reader.read_exact(&mut b)?;
+                        if b[0] == 0 {
+                            break;
+                        }
+                        name_bytes.push(b[0]);
                     }
-                    name_bytes.push(b[0]);
+                    if smt_filename.is_empty() {
+                        smt_filename = String::from_utf8_lossy(&name_bytes).into_owned();
+                    }
                 }
-                if smt_filename.is_empty() {
-                    smt_filename = String::from_utf8_lossy(&name_bytes).into_owned();
-                }
-            }
 
-            // Tile index map dimensions
-            let tile_res = (header.tile_size / header.square_size).max(1) as u32;
-            let tiles_x = header.map_x as u32 / tile_res;
-            let tiles_y = header.map_y as u32 / tile_res;
-            let num_indices = (tiles_x * tiles_y) as usize;
-            tile_indices.reserve(num_indices);
-            for _ in 0..num_indices {
-                tile_indices.push(read_i32(reader)?);
+                tile_indices.reserve(total_tiles);
+                for _ in 0..total_tiles {
+                    tile_indices.push(read_i32(reader)?);
+                }
+                Ok(())
+            })();
+            if let Err(e) = tile_result {
+                tracing::warn!(error = %e, "SMF tile section unreadable; tile data skipped");
             }
         }
 
-        // Read feature section
+        // Read feature section. Non-fatal: features are optional for map import.
         let mut features = Vec::new();
         if header.featuremap_ptr > 0 {
-            reader.seek(SeekFrom::Start(header.featuremap_ptr as u64))?;
-            let num_types = read_i32(reader)?.max(0) as usize;
-            let num_feature_records = read_i32(reader)?.max(0) as usize;
+            let feat_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(header.featuremap_ptr as u64))?;
+                let num_types = read_i32(reader)?.max(0) as usize;
+                let num_feature_records = read_i32(reader)?.max(0) as usize;
 
-            let mut type_names: Vec<String> = Vec::with_capacity(num_types);
-            for _ in 0..num_types {
-                let mut name_buf = [0u8; 256];
-                reader.read_exact(&mut name_buf)?;
-                let end = name_buf.iter().position(|&b| b == 0).unwrap_or(256);
-                type_names.push(String::from_utf8_lossy(&name_buf[..end]).into_owned());
-            }
+                let mut type_names: Vec<String> = Vec::with_capacity(num_types);
+                for _ in 0..num_types {
+                    let mut name_buf = [0u8; 256];
+                    reader.read_exact(&mut name_buf)?;
+                    let end = name_buf.iter().position(|&b| b == 0).unwrap_or(256);
+                    type_names.push(String::from_utf8_lossy(&name_buf[..end]).into_owned());
+                }
 
-            for _ in 0..num_feature_records {
-                let type_idx = read_i32(reader)?.max(0) as usize;
-                let x = read_f32(reader)?;
-                let y = read_f32(reader)?;
-                let z = read_f32(reader)?;
-                let angle = read_f32(reader)?;
-                let taken_damage = read_i16(reader)?;
-                let _pad = read_i16(reader)?;
-                let feature_type = type_names.get(type_idx).cloned().unwrap_or_default();
-                features.push(SmfFeaturePlacement {
-                    feature_type,
-                    x,
-                    y,
-                    z,
-                    angle,
-                    taken_damage,
-                });
+                for _ in 0..num_feature_records {
+                    let type_idx = read_i32(reader)?.max(0) as usize;
+                    let x = read_f32(reader)?;
+                    let y = read_f32(reader)?;
+                    let z = read_f32(reader)?;
+                    let angle = read_f32(reader)?;
+                    let taken_damage = read_i16(reader)?;
+                    let _pad = read_i16(reader)?;
+                    let feature_type = type_names.get(type_idx).cloned().unwrap_or_default();
+                    features.push(SmfFeaturePlacement {
+                        feature_type,
+                        x,
+                        y,
+                        z,
+                        angle,
+                        taken_damage,
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(e) = feat_result {
+                tracing::warn!(error = %e, "SMF feature section unreadable; features skipped");
             }
         }
 

@@ -120,9 +120,18 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
     )?;
 
     // Read SMF: extract header metadata plus heightmap/metalmap/typemap pixel data.
+    if smf_abs.is_none() {
+        tracing::warn!("No .smf file found in extracted .sd7 archive");
+    }
     let smf_data = smf_abs.as_ref().and_then(|abs| {
         let file = std::fs::File::open(abs).ok()?;
-        bar_data::SmfMap::read(&mut std::io::BufReader::new(file)).ok()
+        match bar_data::SmfMap::read(&mut std::io::BufReader::new(file)) {
+            Ok(map) => Some(map),
+            Err(e) => {
+                tracing::warn!(path = %abs.display(), error = %e, "Failed to read SMF; map data nodes will be missing");
+                None
+            }
+        }
     });
 
     let (tile_grid, map_dims, header_range) = smf_data
