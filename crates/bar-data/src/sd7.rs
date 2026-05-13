@@ -341,12 +341,20 @@ impl SmfMap {
                 let num_types = read_i32(reader)?.max(0) as usize;
                 let num_feature_records = read_i32(reader)?.max(0) as usize;
 
+                // Feature type names are null-terminated variable-length strings
+                // (not fixed 256-byte buffers as older docs suggest).
                 let mut type_names: Vec<String> = Vec::with_capacity(num_types);
                 for _ in 0..num_types {
-                    let mut name_buf = [0u8; 256];
-                    reader.read_exact(&mut name_buf)?;
-                    let end = name_buf.iter().position(|&b| b == 0).unwrap_or(256);
-                    type_names.push(String::from_utf8_lossy(&name_buf[..end]).into_owned());
+                    let mut name_bytes = Vec::new();
+                    let mut b = [0u8; 1];
+                    loop {
+                        reader.read_exact(&mut b)?;
+                        if b[0] == 0 {
+                            break;
+                        }
+                        name_bytes.push(b[0]);
+                    }
+                    type_names.push(String::from_utf8_lossy(&name_bytes).into_owned());
                 }
 
                 for _ in 0..num_feature_records {
