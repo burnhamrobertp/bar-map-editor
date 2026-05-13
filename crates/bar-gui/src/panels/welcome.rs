@@ -108,11 +108,12 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let btn_w = 200.0_f32;
     let btn_h = 44.0_f32;
     let gap = 16.0_f32;
-    let pair_w = btn_w * 2.0 + gap;
+    let pair_w = btn_w * 3.0 + gap * 2.0;
     let avail = child.available_width();
     let lpad = ((avail - pair_w) * 0.5).max(0.0);
     let mut clicked_blank = false;
     let mut clicked_open = false;
+    let mut clicked_import = false;
     child.horizontal(|ui| {
         ui.add_space(lpad);
         if ui
@@ -137,6 +138,16 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             .clicked()
         {
             clicked_open = true;
+        }
+        ui.add_space(gap);
+        if ui
+            .add_sized(
+                [btn_w, btn_h],
+                egui::Button::new(egui::RichText::new(t!("editor.welcome.import_sd7")).size(15.0)),
+            )
+            .clicked()
+        {
+            clicked_import = true;
         }
     });
 
@@ -173,6 +184,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     }
     if clicked_open {
         app.welcome_open_dialog();
+    }
+    if clicked_import {
+        app.import_sd7_dialog_async();
     }
     if let Some(macro_name) = to_drop {
         app.start_with_macro(macro_name);

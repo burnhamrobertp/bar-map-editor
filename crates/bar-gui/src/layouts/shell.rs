@@ -377,6 +377,10 @@ impl BarEditorApp {
                             self.open_file_dialog_async();
                             ui.close_menu();
                         }
+                        if ui.button(t!("editor.menu.import_sd7")).clicked() {
+                            self.import_sd7_dialog_async();
+                            ui.close_menu();
+                        }
                         let mut recent_pick: Option<std::path::PathBuf> = None;
                         let recent_empty = self.settings.recent_files.is_empty();
                         ui.add_enabled_ui(!recent_empty, |ui| {
