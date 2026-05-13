@@ -10,6 +10,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use bar_data::{generate_minimap_dxt1, write_smt, ColorBuffer, SmfFeaturePlacement, SmfMap};
+use bar_project::PackageDir;
 
 use super::codec::{ExportCodec, ExportPlan, WrittenFiles};
 use super::config::TargetConfig;
@@ -224,22 +225,55 @@ impl ExportCodec for SpringSmfCodec {
         }
 
         // Write SMT (texture tiles) — generate height-based fallback if none provided.
-        // The SMF tile grid is (sq_x * texels_per_square / tile_size) × (sq_y * texels_per_square / tile_size).
-        // The texture must be exactly sq_x*texels_per_square wide so the SMT tile count matches.
-        // The graph evaluates at heightmap resolution (~sq_x+1), so we always resize here.
+        // When a compiled SMT exists and is current, copy it directly instead of
+        // re-encoding at working resolution (avoids both the resize and DXT1 encode).
         let tex_target_w = sq_x * config.codec_params.texels_per_square;
         let tex_target_h = sq_y * config.codec_params.texels_per_square;
         let smt_path = maps_dir.join(format!("{}.smt", map_name));
-        if let Some(ref texture) = layers.texture {
-            let file = File::create(&smt_path)?;
-            let mut writer = BufWriter::new(file);
-            let scaled = texture.resize(tex_target_w, tex_target_h);
-            write_smt(&mut writer, &scaled)?;
-        } else if let Some(ref heightmap) = layers.heightmap {
-            let fallback = generate_fallback_texture(heightmap, tex_target_w, tex_target_h);
-            let file = File::create(&smt_path)?;
-            let mut writer = BufWriter::new(file);
-            write_smt(&mut writer, &fallback)?;
+
+        let used_compiled = if let Some(ref proj_dir) = plan.project_dir {
+            if let Ok(pkg) = PackageDir::open(proj_dir) {
+                let recipe_json = std::fs::read_to_string(pkg.recipe_path()).unwrap_or_default();
+                if !pkg.is_stale(&recipe_json, sq_x, sq_y) {
+                    let compiled_smt = pkg.compiled_smt_path(map_name);
+                    if compiled_smt.exists() {
+                        fs::copy(&compiled_smt, &smt_path).with_context(|| {
+                            format!(
+                                "Failed to copy compiled SMT {} -> {}",
+                                compiled_smt.display(),
+                                smt_path.display()
+                            )
+                        })?;
+                        tracing::info!(
+                            "Bundle: used compiled SMT (skipped re-encode): {}",
+                            compiled_smt.display()
+                        );
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        if !used_compiled {
+            if let Some(ref texture) = layers.texture {
+                let file = File::create(&smt_path)?;
+                let mut writer = BufWriter::new(file);
+                let scaled = texture.resize(tex_target_w, tex_target_h);
+                write_smt(&mut writer, &scaled)?;
+            } else if let Some(ref heightmap) = layers.heightmap {
+                let fallback = generate_fallback_texture(heightmap, tex_target_w, tex_target_h);
+                let file = File::create(&smt_path)?;
+                let mut writer = BufWriter::new(file);
+                write_smt(&mut writer, &fallback)?;
+            }
         }
         written.files.push(format!("maps/{}.smt", map_name));
         tracing::info!("Wrote SMT: {}", smt_path.display());
@@ -905,6 +939,7 @@ mod tests {
             dimensions: dims,
             settings: MapSettings::default(),
             features: Vec::new(),
+            project_dir: None,
         };
         let layers = LayerSet::default(); // no layers
 
@@ -926,6 +961,7 @@ mod tests {
             dimensions: codec.compute_dimensions(&config, 257, 257),
             settings,
             features: Vec::new(),
+            project_dir: None,
         }
     }
 

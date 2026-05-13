@@ -621,6 +621,7 @@ pub fn export_with_target(
         dimensions: dims,
         settings: settings.clone(),
         features: recipe.features.clone(),
+        project_dir: None,
     };
 
     // Validate

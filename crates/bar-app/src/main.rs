@@ -687,6 +687,7 @@ impl eframe::App for AppWrapper {
                     let ctx_progress = ctx.clone();
                     let executor = Arc::clone(&self.executor);
                     let run_filter_label = pending.run_filter_label;
+                    let export_project_dir = self.app.project.path.clone();
 
                     std::thread::spawn(move || {
                         let progress_cb = |msg: &str| {
@@ -710,6 +711,7 @@ impl eframe::App for AppWrapper {
                                     &recipe,
                                     &output_dir,
                                     filter,
+                                    export_project_dir.as_deref(),
                                 ) {
                                     Ok(results) if !results.is_empty() => {
                                         format!(
@@ -1315,6 +1317,7 @@ impl AppWrapper {
             .set_status(format!("Generating {}x{} map...", w, h));
         let ctx_clone = ctx.clone();
         let ctx_progress = ctx.clone();
+        let test_project_dir = self.app.project.path.clone();
 
         std::thread::spawn(move || {
             let progress_cb = |msg: &str| {
@@ -1331,7 +1334,14 @@ impl AppWrapper {
                 &progress_cb,
             ) {
                 Ok(outputs) => {
-                    match bar_engine::execute_bundlers(&graph, &outputs, &recipe, &temp_dir, None) {
+                    match bar_engine::execute_bundlers(
+                        &graph,
+                        &outputs,
+                        &recipe,
+                        &temp_dir,
+                        None,
+                        test_project_dir.as_deref(),
+                    ) {
                         Ok(results) => {
                             // Pick the first SD7 produced. Bundlers can
                             // emit several, but for "Test in BAR" we

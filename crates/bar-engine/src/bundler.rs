@@ -43,12 +43,17 @@ pub fn find_bundler_nodes(graph: &GraphEngine) -> Vec<NodeId> {
 }
 
 /// Execute all bundler nodes (or a specific one by label).
+///
+/// `project_dir` is the absolute path to the `.barproj` directory, passed
+/// through to the codec so it can fast-path compiled assets (e.g. skip
+/// re-encoding the SMT when a current compiled copy exists).
 pub fn execute_bundlers(
     graph: &GraphEngine,
     outputs: &NodeOutputs,
     recipe: &Recipe,
     output_dir: &Path,
     filter_label: Option<&str>,
+    project_dir: Option<&Path>,
 ) -> Result<Vec<BundlerResult>> {
     let bundler_ids = find_bundler_nodes(graph);
     let mut results = Vec::new();
@@ -63,8 +68,9 @@ pub fn execute_bundlers(
             }
         }
 
-        let result = execute_single_bundler(graph, outputs, bundler_id, recipe, output_dir)
-            .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
+        let result =
+            execute_single_bundler(graph, outputs, bundler_id, recipe, output_dir, project_dir)
+                .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
 
         results.push(result);
     }
@@ -79,6 +85,7 @@ fn execute_single_bundler(
     bundler_id: NodeId,
     recipe: &Recipe,
     output_dir: &Path,
+    project_dir: Option<&Path>,
 ) -> Result<BundlerResult> {
     let width = recipe.output.width;
     let height = recipe.output.height;
@@ -140,6 +147,7 @@ fn execute_single_bundler(
         dimensions: dims,
         settings: settings.clone(),
         features: recipe.features.clone(),
+        project_dir: project_dir.map(|p| p.to_path_buf()),
     };
 
     // Validate
