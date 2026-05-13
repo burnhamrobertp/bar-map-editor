@@ -732,7 +732,18 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
         Some("sd7") => {
             let scan = bar_engine::extract_sd7_to_work_dir(path)
                 .with_context(|| format!("Failed to extract {}", path.display()))?;
-            Ok(bar_engine::scan_to_project(&scan))
+            let (project, pending_assets) = bar_engine::scan_to_project(&scan);
+            // Write pending binary assets to temp so executors can read them.
+            if !pending_assets.is_empty() {
+                let temp_dir = std::env::temp_dir().join("bar-editor-assets");
+                for asset in &pending_assets {
+                    let ap = temp_dir.join(format!("{}.bin", asset.id.0));
+                    if let Err(e) = bar_engine::write_asset_file(&ap, asset.header, &asset.data) {
+                        eprintln!("Warning: failed to write temp asset: {e}");
+                    }
+                }
+            }
+            Ok(project)
         }
         _ => bar_engine::Project::load(path)
             .with_context(|| format!("Failed to load {}", path.display())),
@@ -764,6 +775,28 @@ fn resolve_relative_paths_in_graph(graph: &mut bar_graph::GraphEngine, project_d
                 if r != s {
                     node.params
                         .insert((*key).to_string(), ParamValue::String(r));
+                }
+            }
+        }
+        if matches!(
+            node.node_type,
+            NodeType::PaintedHeightmap | NodeType::PaintedTexture | NodeType::Sculpt
+        ) {
+            if let Some(ParamValue::String(id)) = node.params.get("asset_id").cloned() {
+                if !id.is_empty() {
+                    // Try project assets dir first, then temp dir.
+                    let project_asset = project_dir.join("assets").join(format!("{id}.bin"));
+                    let path_str = if project_asset.exists() {
+                        project_asset.to_string_lossy().into_owned()
+                    } else {
+                        std::env::temp_dir()
+                            .join("bar-editor-assets")
+                            .join(format!("{id}.bin"))
+                            .to_string_lossy()
+                            .into_owned()
+                    };
+                    node.params
+                        .insert("asset_path".to_string(), ParamValue::String(path_str));
                 }
             }
         }

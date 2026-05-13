@@ -10,18 +10,36 @@ use std::path::PathBuf;
 
 use bar_graph::{NodeType, ParamValue};
 
+use crate::package::{AssetHeader, AssetId, AssetKind};
 use crate::project::{EditorLayout, NodeSize, Position, Project};
 use crate::recipe::{
     MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, RECIPE_SCHEMA_VERSION,
 };
 
-/// Convert a scanned SD7 work directory into a `Project` ready for `apply_project`.
+/// A binary asset produced during SD7 import that must be written to the
+/// project's `assets/` directory before the project can be evaluated.
+pub struct PendingAsset {
+    /// Key of the recipe node this asset belongs to.
+    pub node_key: String,
+    /// Stable identifier stored in the node's `asset_id` param.
+    pub id: AssetId,
+    /// Pixel format + dimensions.
+    pub header: AssetHeader,
+    /// Raw pixel bytes.
+    pub data: Vec<u8>,
+}
+
+/// Convert a scanned SD7 work directory into a `Project` ready for `apply_project`
+/// plus a list of binary assets that the caller must write to the project directory.
 ///
-/// Creates PaintedHeightmap nodes for the heightmap, metalmap, and typemap
-/// (data pre-extracted and hex-encoded by the engine layer), a PaintedTexture
-/// for the assembled SMT texture, a NormalMap, a PassThrough for ancillary
-/// files, and a Bundler. No external file dependencies remain after this.
-pub fn scan_to_project(scan: &WorkDirScan) -> Project {
+/// Creates PaintedHeightmap nodes for the heightmap, metalmap, and typemap,
+/// a PaintedTexture for the assembled SMT texture, a NormalMap, a PassThrough
+/// for ancillary files, and a Bundler.
+///
+/// The returned `PendingAsset` list must be written to `<proj_dir>/assets/<id>.bin`
+/// before the graph can be evaluated; until then the executor will produce
+/// empty outputs for those nodes.
+pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>) {
     let source_x = 80.0_f32;
     let bundler_x = 700.0_f32;
     let nm_x = (source_x + 165.0 + bundler_x) / 2.0;
@@ -30,6 +48,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
     let mut connections: Vec<RecipeConnection> = Vec::new();
     let mut node_positions: HashMap<String, Position> = HashMap::new();
     let mut node_sizes: HashMap<String, NodeSize> = HashMap::new();
+    let mut pending: Vec<PendingAsset> = Vec::new();
 
     // Passthrough covers ancillary files only (mapinfo.lua, scripts, sounds,
     // etc.). The original .smf/.smt are NOT included -- they are regenerated
@@ -41,111 +60,99 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         .map(|(_, rel)| rel.to_string_lossy().replace('\\', "/"))
         .find(|p| p.eq_ignore_ascii_case("mapinfo.lua"));
 
-    // Heightmap node (PaintedHeightmap with embedded data)
-    let has_heightmap = !scan.heightmap_hex.is_empty();
-    if has_heightmap {
+    // Helper: add a PaintedHeightmap node backed by a binary asset.
+    let add_hm = |key: &str,
+                  label: &str,
+                  y: f32,
+                  data: &[u8],
+                  res: u32,
+                  nodes: &mut Vec<RecipeNode>,
+                  positions: &mut HashMap<String, Position>,
+                  sizes: &mut HashMap<String, NodeSize>,
+                  pending: &mut Vec<PendingAsset>| {
+        let id = AssetId::new();
         let mut params = HashMap::new();
-        params.insert(
-            "data".to_string(),
-            ParamValue::String(scan.heightmap_hex.clone()),
-        );
-        params.insert(
-            "resolution".to_string(),
-            ParamValue::UInt(scan.heightmap_res),
-        );
+        params.insert("asset_id".to_string(), ParamValue::String(id.0.clone()));
+        params.insert("resolution".to_string(), ParamValue::UInt(res));
         nodes.push(RecipeNode {
-            key: "hm".to_string(),
+            key: key.to_string(),
             node_type: NodeType::PaintedHeightmap,
-            label: "Heightmap".to_string(),
+            label: label.to_string(),
             params,
         });
-        node_positions.insert(
-            "hm".to_string(),
-            Position {
-                x: source_x,
-                y: 80.0,
-            },
-        );
-        node_sizes.insert(
-            "hm".to_string(),
+        positions.insert(key.to_string(), Position { x: source_x, y });
+        sizes.insert(
+            key.to_string(),
             NodeSize {
                 width: 165.0,
                 height: 80.0,
             },
+        );
+        pending.push(PendingAsset {
+            node_key: key.to_string(),
+            id,
+            header: AssetHeader {
+                kind: AssetKind::GrayscaleU8,
+                width: res,
+                height: res,
+            },
+            data: data.to_vec(),
+        });
+    };
+
+    // Heightmap node
+    let has_heightmap = !scan.heightmap_data.is_empty();
+    if has_heightmap {
+        add_hm(
+            "hm",
+            "Heightmap",
+            80.0,
+            &scan.heightmap_data,
+            scan.heightmap_res,
+            &mut nodes,
+            &mut node_positions,
+            &mut node_sizes,
+            &mut pending,
         );
     }
 
     // Metalmap node
-    if !scan.metalmap_hex.is_empty() {
-        let mut params = HashMap::new();
-        params.insert(
-            "data".to_string(),
-            ParamValue::String(scan.metalmap_hex.clone()),
-        );
-        params.insert(
-            "resolution".to_string(),
-            ParamValue::UInt(scan.metalmap_res),
-        );
-        nodes.push(RecipeNode {
-            key: "metal".to_string(),
-            node_type: NodeType::PaintedHeightmap,
-            label: "Metal Map".to_string(),
-            params,
-        });
-        node_positions.insert(
-            "metal".to_string(),
-            Position {
-                x: source_x,
-                y: 220.0,
-            },
-        );
-        node_sizes.insert(
-            "metal".to_string(),
-            NodeSize {
-                width: 165.0,
-                height: 80.0,
-            },
+    if !scan.metalmap_data.is_empty() {
+        add_hm(
+            "metal",
+            "Metal Map",
+            220.0,
+            &scan.metalmap_data,
+            scan.metalmap_res,
+            &mut nodes,
+            &mut node_positions,
+            &mut node_sizes,
+            &mut pending,
         );
     }
 
     // Typemap node
-    if !scan.typemap_hex.is_empty() {
-        let mut params = HashMap::new();
-        params.insert(
-            "data".to_string(),
-            ParamValue::String(scan.typemap_hex.clone()),
-        );
-        params.insert("resolution".to_string(), ParamValue::UInt(scan.typemap_res));
-        nodes.push(RecipeNode {
-            key: "type".to_string(),
-            node_type: NodeType::PaintedHeightmap,
-            label: "Type Map".to_string(),
-            params,
-        });
-        node_positions.insert(
-            "type".to_string(),
-            Position {
-                x: source_x,
-                y: 360.0,
-            },
-        );
-        node_sizes.insert(
-            "type".to_string(),
-            NodeSize {
-                width: 165.0,
-                height: 80.0,
-            },
+    if !scan.typemap_data.is_empty() {
+        add_hm(
+            "type",
+            "Type Map",
+            360.0,
+            &scan.typemap_data,
+            scan.typemap_res,
+            &mut nodes,
+            &mut node_positions,
+            &mut node_sizes,
+            &mut pending,
         );
     }
 
-    // Texture node (PaintedTexture with embedded RGB data)
-    let has_texture = !scan.texture_hex.is_empty();
+    // Texture node (PaintedTexture backed by a binary asset)
+    let has_texture = !scan.texture_data.is_empty();
     if has_texture {
+        let id = AssetId::new();
+        let tex_res = scan.texture_res;
         let mut params = HashMap::new();
-        params.insert(
-            "data".to_string(),
-            ParamValue::String(scan.texture_hex.clone()),
-        );
+        params.insert("asset_id".to_string(), ParamValue::String(id.0.clone()));
         nodes.push(RecipeNode {
             key: "tex".to_string(),
             node_type: NodeType::PaintedTexture,
@@ -166,9 +173,21 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
                 height: 80.0,
             },
         );
+        pending.push(PendingAsset {
+            node_key: "tex".to_string(),
+            id,
+            header: AssetHeader {
+                kind: AssetKind::RgbU8,
+                width: tex_res,
+                height: tex_res,
+            },
+            data: scan.texture_data.clone(),
+        });
     }
 
     // PassThrough for ancillary files (mapinfo.lua, scripts, etc.)
+    // Absolute paths point into the work dir; the GUI save flow copies
+    // them into <proj_dir>/passthrough/ on first save.
     let has_pass = !passthrough_entries.is_empty();
     if has_pass {
         let file_list: String = passthrough_entries
@@ -297,13 +316,13 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
             to: "preview.normal_map".to_string(),
         });
     }
-    if !scan.metalmap_hex.is_empty() {
+    if !scan.metalmap_data.is_empty() {
         connections.push(RecipeConnection {
             from: "metal.output".to_string(),
             to: "bundler.metalmap".to_string(),
         });
     }
-    if !scan.typemap_hex.is_empty() {
+    if !scan.typemap_data.is_empty() {
         connections.push(RecipeConnection {
             from: "type.output".to_string(),
             to: "bundler.typemap".to_string(),
@@ -361,7 +380,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> Project {
         active_tab: 0,
     };
 
-    Project { recipe, layout }
+    (Project { recipe, layout }, pending)
 }
 
 #[cfg(test)]
@@ -382,13 +401,13 @@ mod tests {
             map_dims: None,
             height_range: None,
             passthrough_files: Vec::new(),
-            heightmap_hex: String::new(),
+            heightmap_data: Vec::new(),
             heightmap_res: 0,
-            metalmap_hex: String::new(),
+            metalmap_data: Vec::new(),
             metalmap_res: 0,
-            typemap_hex: String::new(),
+            typemap_data: Vec::new(),
             typemap_res: 0,
-            texture_hex: String::new(),
+            texture_data: Vec::new(),
             texture_res: 0,
             features: Vec::new(),
         }
@@ -398,23 +417,34 @@ mod tests {
         p.recipe.nodes.iter().map(|n| n.key.as_str()).collect()
     }
 
+    fn has_asset_id(p: &Project, node_key: &str) -> bool {
+        p.recipe
+            .nodes
+            .iter()
+            .find(|n| n.key == node_key)
+            .and_then(|n| n.params.get("asset_id"))
+            .map(|v| matches!(v, PV::String(s) if !s.is_empty()))
+            .unwrap_or(false)
+    }
+
     #[test]
     fn empty_scan_produces_only_bundler() {
         let scan = empty_scan("test_map");
-        let p = scan_to_project(&scan);
+        let (p, pending) = scan_to_project(&scan);
         assert_eq!(p.recipe.nodes.len(), 1);
         assert_eq!(p.recipe.nodes[0].key, "bundler");
         assert_eq!(p.recipe.nodes[0].node_type, NodeType::Bundler);
         assert!(p.recipe.connections.is_empty());
+        assert!(pending.is_empty());
     }
 
     #[test]
     fn heightmap_only_adds_hm_nm_preview_not_others() {
         let mut scan = empty_scan("test");
-        scan.heightmap_hex = "ff".repeat(16);
+        scan.heightmap_data = vec![0xffu8; 16];
         scan.heightmap_res = 4;
         scan.map_dims = Some((512, 512));
-        let p = scan_to_project(&scan);
+        let (p, pending) = scan_to_project(&scan);
         let keys = node_keys(&p);
         for k in ["hm", "nm", "bundler", "preview"] {
             assert!(keys.contains(&k), "missing: {k}");
@@ -422,35 +452,38 @@ mod tests {
         for k in ["metal", "type", "tex", "pass"] {
             assert!(!keys.contains(&k), "unexpected: {k}");
         }
+        assert_eq!(pending.len(), 1);
+        assert!(has_asset_id(&p, "hm"));
     }
 
     #[test]
     fn full_scan_all_nodes_present() {
         let mut scan = empty_scan("full");
-        scan.heightmap_hex = "ab".repeat(16);
+        scan.heightmap_data = vec![0xabu8; 16];
         scan.heightmap_res = 4;
-        scan.metalmap_hex = "cd".repeat(16);
+        scan.metalmap_data = vec![0xcdu8; 16];
         scan.metalmap_res = 4;
-        scan.typemap_hex = "ef".repeat(16);
+        scan.typemap_data = vec![0xefu8; 16];
         scan.typemap_res = 4;
-        scan.texture_hex = "012345".repeat(16);
+        scan.texture_data = vec![0x01u8; 48]; // RGB: 16 pixels * 3 bytes
         scan.texture_res = 4;
         scan.passthrough_files = vec![(PathBuf::from("/tmp/a.lua"), PathBuf::from("a.lua"))];
-        let p = scan_to_project(&scan);
+        let (p, pending) = scan_to_project(&scan);
         let keys = node_keys(&p);
         for k in [
             "hm", "metal", "type", "tex", "nm", "pass", "bundler", "preview",
         ] {
             assert!(keys.contains(&k), "missing: {k}");
         }
+        assert_eq!(pending.len(), 4); // hm, metal, type, tex
     }
 
     #[test]
     fn connections_wire_heightmap_through_nm_to_bundler() {
         let mut scan = empty_scan("wire");
-        scan.heightmap_hex = "aa".repeat(16);
+        scan.heightmap_data = vec![0xaau8; 16];
         scan.heightmap_res = 4;
-        let p = scan_to_project(&scan);
+        let (p, _) = scan_to_project(&scan);
         let froms: Vec<&str> = p
             .recipe
             .connections
@@ -473,7 +506,7 @@ mod tests {
     #[test]
     fn map_name_set_in_bundler_params() {
         let scan = empty_scan("my_cool_map");
-        let p = scan_to_project(&scan);
+        let (p, _) = scan_to_project(&scan);
         let bundler = p.recipe.nodes.iter().find(|n| n.key == "bundler").unwrap();
         assert!(
             matches!(
@@ -488,7 +521,7 @@ mod tests {
     fn height_range_propagates_to_map_settings() {
         let mut scan = empty_scan("heights");
         scan.height_range = Some((100.0, 900.0));
-        let p = scan_to_project(&scan);
+        let (p, _) = scan_to_project(&scan);
         assert_eq!(p.recipe.output.map_settings.min_height, 100.0);
         assert_eq!(p.recipe.output.map_settings.max_height, 900.0);
     }
@@ -496,9 +529,9 @@ mod tests {
     #[test]
     fn no_heightmap_skips_nm_and_preview() {
         let mut scan = empty_scan("nohm");
-        scan.metalmap_hex = "ff".repeat(16);
+        scan.metalmap_data = vec![0xffu8; 16];
         scan.metalmap_res = 4;
-        let p = scan_to_project(&scan);
+        let (p, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         assert!(!keys.contains(&"hm"), "unexpected hm");
         assert!(!keys.contains(&"nm"), "unexpected nm");
@@ -518,7 +551,7 @@ mod tests {
             angle: 1.57,
             taken_damage: 0,
         }];
-        let p = scan_to_project(&scan);
+        let (p, _) = scan_to_project(&scan);
         assert_eq!(p.recipe.features.len(), 1);
         assert_eq!(p.recipe.features[0].feature_type, "arborreal");
         assert!((p.recipe.features[0].x - 100.0).abs() < 0.001);
@@ -531,7 +564,7 @@ mod tests {
             PathBuf::from("/tmp/mapinfo.lua"),
             PathBuf::from("mapinfo.lua"),
         )];
-        let p = scan_to_project(&scan);
+        let (p, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         assert!(keys.contains(&"pass"), "missing pass");
         let has_conn = p
@@ -572,22 +605,23 @@ pub struct WorkDirScan {
     /// in the node data below and regenerated by the Bundler on export.
     pub passthrough_files: Vec<(PathBuf, PathBuf)>,
 
-    // Embedded node data (pre-extracted and hex-encoded by bar-engine).
-    // Empty string means the data was not available (e.g. no SMF found).
-    /// Hex-encoded u8 grayscale heightmap at `heightmap_res x heightmap_res`.
-    pub heightmap_hex: String,
+    // Binary pixel data extracted from the SMF/SMT. Empty Vec means the data
+    // was not available (e.g. no SMF found). Written to asset files by the
+    // caller; never embedded in recipe.json.
+    /// Raw u8 grayscale heightmap at `heightmap_res x heightmap_res`.
+    pub heightmap_data: Vec<u8>,
     pub heightmap_res: u32,
 
-    /// Hex-encoded u8 grayscale metalmap.
-    pub metalmap_hex: String,
+    /// Raw u8 grayscale metalmap.
+    pub metalmap_data: Vec<u8>,
     pub metalmap_res: u32,
 
-    /// Hex-encoded u8 grayscale typemap.
-    pub typemap_hex: String,
+    /// Raw u8 grayscale typemap.
+    pub typemap_data: Vec<u8>,
     pub typemap_res: u32,
 
-    /// Hex-encoded RGB (3 bytes/pixel) assembled texture at `texture_res x texture_res`.
-    pub texture_hex: String,
+    /// Raw RGB (3 bytes/pixel) assembled texture at `texture_res x texture_res`.
+    pub texture_data: Vec<u8>,
     pub texture_res: u32,
 
     /// Feature placements extracted from the SMF feature section.

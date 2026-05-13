@@ -40,7 +40,6 @@ impl BarEditorApp {
         self.project.loaded_name = None;
         self.project.is_dirty = false;
         self.project.map_info_file = None;
-        self.project.autosave_slot = 0;
         self.map.settings = bar_project::MapSettings::default();
         self.map.width = 513;
         self.map.height = 513;
@@ -380,10 +379,11 @@ impl BarEditorApp {
         self.map.max_height = self.map.settings.max_height;
         self.map.features = project.recipe.features.clone();
 
-        // Resolve any project-relative file paths (`bar://...`)
-        // against the .barproj's directory so executors get absolute
-        // paths they can read.
-        if let Some(project_dir) = path.as_ref().and_then(|p| p.parent()) {
+        // Resolve any project-relative file paths (`bar://...`) against the
+        // .barproj directory so executors get absolute paths they can read.
+        // `path` IS the project directory (not a file inside it), so use it
+        // directly rather than calling .parent().
+        if let Some(project_dir) = path.as_ref() {
             self.resolve_relative_paths(project_dir);
         }
 
@@ -684,8 +684,31 @@ impl BarEditorApp {
     pub fn finish_open_map(&mut self, scan: bar_project::WorkDirScan) {
         let name = scan.map_name.clone();
         let status = t!("editor.project.opened", name = name);
-        let project = bar_project::scan_to_project(&scan);
+        let (project, pending_assets) = bar_project::scan_to_project(&scan);
         self.apply_project(project, None, name, status);
+        // Write pending binary assets to a temp dir so executors can read
+        // them before the user has saved the project to a .barproj directory.
+        if !pending_assets.is_empty() {
+            let temp_dir = std::env::temp_dir().join("bar-editor-assets");
+            for asset in &pending_assets {
+                let path = temp_dir.join(format!("{}.bin", asset.id.0));
+                if let Err(e) = bar_project::write_asset_file(&path, asset.header, &asset.data) {
+                    tracing::warn!(error = %e, "Failed to write temp asset");
+                    continue;
+                }
+                let path_str = path.to_string_lossy().into_owned();
+                for (_, node) in self.graph.nodes_mut() {
+                    if let Some(bar_graph::ParamValue::String(aid)) = node.params.get("asset_id") {
+                        if *aid == asset.id.0 {
+                            node.params.insert(
+                                "asset_path".to_string(),
+                                bar_graph::ParamValue::String(path_str.clone()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
         // Imported project hasn't been saved yet.
         self.project.is_dirty = true;
         // Auto-open the 3D preview at the Preview node.

@@ -121,15 +121,13 @@ impl BarEditorApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let parent = self.parent_window();
         std::thread::spawn(move || {
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("Open")
-                .add_filter("Supported Files", &["barproj", "sd7"])
-                .add_filter("BAR Map Editor Project", &["barproj"])
-                .add_filter("Spring Map Archive", &["sd7"]);
+            let mut dialog = rfd::FileDialog::new().set_title("Open Project (.barproj folder)");
             if let Some(parent) = &parent {
                 dialog = dialog.set_parent(parent);
             }
-            let path = dialog.pick_file();
+            // .barproj projects are directories; use pick_folder.
+            // .sd7 files can be opened via drag-drop or File > Import.
+            let path = dialog.pick_folder();
             let _ = tx.send(path);
         });
         self.project.pending_open_rx = Some(rx);

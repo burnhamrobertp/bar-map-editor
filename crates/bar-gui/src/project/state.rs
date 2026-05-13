@@ -27,10 +27,6 @@ pub struct ProjectState {
     /// Timestamp of the last successful autosave, used as the gate
     /// for the autosave-interval timer.
     pub last_autosave_at: Option<Instant>,
-    /// Next slot index (0-based) to write to on autosave. Increments
-    /// modulo `settings.autosave_slot_count` each write. Reset to 0
-    /// when a new project is opened so slot rotation restarts cleanly.
-    pub autosave_slot: u32,
     /// Bundle path (archive-relative, forward slashes) of the file
     /// the user has designated as the project's map-info file. None
     /// means the user hasn't picked one yet.

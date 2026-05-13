@@ -7,7 +7,6 @@
 //! preserves any in-place edits the user has made between sessions.
 
 use std::collections::hash_map::DefaultHasher;
-use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -149,45 +148,45 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         .and_then(|s| crate::importer::parse_mapinfo_smf_heights(&s));
     let height_range = mapinfo_override.or(header_range);
 
-    // Extract and embed heightmap, metalmap, typemap as hex-encoded u8 grids.
+    // Extract heightmap, metalmap, typemap as raw u8 grids (no hex encoding).
     // PaintedHeightmap supports up to 512; downsample to the largest power-of-2 <= 512.
     const MAX_RES: u32 = 512;
 
-    let (heightmap_hex, heightmap_res) = smf_data
+    let (heightmap_data, heightmap_res) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.heightmap_size();
             let target = largest_pow2_leq(w.min(h).min(MAX_RES));
             let pixels = downsample_f32_to_u8_square(smf.heightmap.data(), w, h, target);
-            (hex_encode(&pixels), target)
+            (pixels, target)
         })
         .unwrap_or_default();
 
-    let (metalmap_hex, metalmap_res) = smf_data
+    let (metalmap_data, metalmap_res) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.metalmap_size();
             let target = largest_pow2_leq(w.min(h).min(MAX_RES));
             let pixels = downsample_u8_to_square(&smf.metalmap, w, h, target);
-            (hex_encode(&pixels), target)
+            (pixels, target)
         })
         .unwrap_or_default();
 
-    let (typemap_hex, typemap_res) = smf_data
+    let (typemap_data, typemap_res) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.typemap_size();
             let target = largest_pow2_leq(w.min(h).min(MAX_RES));
             let pixels = downsample_u8_to_square(&smf.typemap, w, h, target);
-            (hex_encode(&pixels), target)
+            (pixels, target)
         })
         .unwrap_or_default();
 
-    // Assemble SMT texture into a 512x512 RGB hex blob for PaintedTexture.
+    // Assemble SMT texture as raw RGB bytes for PaintedTexture.
     const TEX_RES: u32 = 512;
-    let (texture_hex, texture_res) =
+    let (texture_data, texture_res) =
         if let (Some(smt_path), Some(smf)) = (smt_abs.as_ref(), smf_data.as_ref()) {
-            let result: Option<(String, u32)> = (|| {
+            let result: Option<(Vec<u8>, u32)> = (|| {
                 let file = std::fs::File::open(smt_path).ok()?;
                 let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file)).ok()?;
                 let (tiles_x, tiles_y) = smf.header.tile_grid_size();
@@ -208,11 +207,11 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
                 );
                 // Drop the alpha channel; PaintedTexture expects RGB (3 bytes/pixel).
                 let rgb: Vec<u8> = rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-                Some((hex_encode(&rgb), TEX_RES))
+                Some((rgb, TEX_RES))
             })();
             result.unwrap_or_default()
         } else {
-            (String::new(), 0)
+            (Vec::new(), 0)
         };
 
     // Features: merge SMF-embedded features with Lua FeaturePlacer placements.
@@ -259,25 +258,16 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         map_dims,
         height_range,
         passthrough_files,
-        heightmap_hex,
+        heightmap_data,
         heightmap_res,
-        metalmap_hex,
+        metalmap_data,
         metalmap_res,
-        typemap_hex,
+        typemap_data,
         typemap_res,
-        texture_hex,
+        texture_data,
         texture_res,
         features,
     })
-}
-
-/// Encode bytes as lowercase hex (2 chars per byte).
-fn hex_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len() * 2);
-    for &b in data {
-        let _ = write!(out, "{:02x}", b);
-    }
-    out
 }
 
 /// Largest power of 2 that is <= `n`. Returns 1 for n == 0.
@@ -433,22 +423,6 @@ fn extract_lua_number(line: &str, key: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_encode_empty() {
-        assert_eq!(hex_encode(&[]), "");
-    }
-
-    #[test]
-    fn hex_encode_zero_and_max_bytes() {
-        assert_eq!(hex_encode(&[0x00]), "00");
-        assert_eq!(hex_encode(&[0xff]), "ff");
-    }
-
-    #[test]
-    fn hex_encode_multi_byte_lowercase() {
-        assert_eq!(hex_encode(&[0x0a, 0xb0, 0xff]), "0ab0ff");
-    }
 
     #[test]
     fn largest_pow2_leq_zero_returns_one() {

@@ -1,9 +1,9 @@
 //! Pure path-handling helpers used by project save/load:
 //!
-//! - `bar://...` project-relative URL scheme (so `.barproj` files stay
-//!   portable when copied to a new directory).
-//! - Asset packing: copy external files into `<stem>.assets/` and
-//!   rewrite param values to `bar://` URLs.
+//! - `bar://...` project-relative URL scheme (so `.barproj` directories stay
+//!   portable when copied to a new location).
+//! - Asset packing: copy external files into the project's `assets/` or
+//!   `passthrough/` subdirectory and rewrite param values to `bar://` URLs.
 //! - PassThrough file-list parse / pack / resolve.
 //!
 //! Functions here are pure: they take params + paths, return new
@@ -45,20 +45,14 @@ pub(crate) fn path_is_inside(candidate: &str, dir: &std::path::Path) -> bool {
     canon_p.starts_with(canon_d)
 }
 
-/// Build the project-relative form of an asset's path under `<stem>.assets/`.
-/// `bundle_subdir` is "maps" or "" -- it's the subfolder under .assets/ where
-/// this kind of asset lives.
-pub(crate) fn project_relative_for(
-    bundle_subdir: &str,
-    file_name: &str,
-    project_stem: &str,
-) -> String {
-    let assets = format!("{project_stem}.assets");
-    if bundle_subdir.is_empty() {
-        format!("{PROJECT_RELATIVE_PREFIX}{assets}/{file_name}")
-    } else {
-        format!("{PROJECT_RELATIVE_PREFIX}{assets}/{bundle_subdir}/{file_name}")
-    }
+/// Build a project-relative `bar://assets/<file_name>` URL.
+pub(crate) fn asset_url(file_name: &str) -> String {
+    format!("{PROJECT_RELATIVE_PREFIX}assets/{file_name}")
+}
+
+/// Build a project-relative `bar://passthrough/<bundle>` URL.
+pub(crate) fn passthrough_url(bundle: &str) -> String {
+    format!("{PROJECT_RELATIVE_PREFIX}passthrough/{bundle}")
 }
 
 /// Resolve a path that might be project-relative (`bar://...`) against the
@@ -72,16 +66,15 @@ pub(crate) fn resolve_project_path(value: &str, project_dir: &std::path::Path) -
     }
 }
 
-/// If the param holds an external file path, copy the file into
-/// `<assets_dir>/<bundle_subdir>/` and rewrite the param to a project-relative
-/// `bar://` URL. No-op for missing keys, empty strings, or paths already
-/// inside the project directory.
+/// If the param holds an external file path, copy it into `assets_dir` and
+/// rewrite the param to a `bar://assets/<file>` URL. No-op for missing keys,
+/// empty strings, or paths already inside the project directory.
 pub(crate) fn pack_path_param(
     params: &mut HashMap<String, ParamValue>,
     key: &str,
     project_dir: &std::path::Path,
     assets_dir: &std::path::Path,
-    bundle_subdir: &str,
+    _bundle_subdir: &str,
 ) -> Result<(), String> {
     let Some(ParamValue::String(s)) = params.get(key).cloned() else {
         return Ok(());
@@ -90,7 +83,7 @@ pub(crate) fn pack_path_param(
         return Ok(());
     }
     if path_is_inside(&s, project_dir) {
-        return Ok(()); // already local
+        return Ok(());
     }
     let src = std::path::PathBuf::from(&s);
     let file_name = src
@@ -98,14 +91,9 @@ pub(crate) fn pack_path_param(
         .and_then(|n| n.to_str())
         .ok_or_else(|| format!("Invalid file name in '{s}'"))?
         .to_string();
-    let dest_dir = if bundle_subdir.is_empty() {
-        assets_dir.to_path_buf()
-    } else {
-        assets_dir.join(bundle_subdir)
-    };
-    std::fs::create_dir_all(&dest_dir)
-        .map_err(|e| format!("Cannot create assets dir {}: {e}", dest_dir.display()))?;
-    let dest = dest_dir.join(&file_name);
+    std::fs::create_dir_all(assets_dir)
+        .map_err(|e| format!("Cannot create assets dir {}: {e}", assets_dir.display()))?;
+    let dest = assets_dir.join(&file_name);
     if !dest.exists() || !files_equal(&src, &dest) {
         std::fs::copy(&src, &dest).map_err(|e| {
             format!(
@@ -115,39 +103,21 @@ pub(crate) fn pack_path_param(
             )
         })?;
     }
-    let stem = project_dir
-        .file_name() // dir name doesn't help; we need project stem
-        .and_then(|s| s.to_str())
-        .unwrap_or("");
-    // Derive project stem from the assets_dir name ("<stem>.assets").
-    let project_stem = assets_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.strip_suffix(".assets"))
-        .unwrap_or(stem)
-        .to_string();
-    let new_value = project_relative_for(bundle_subdir, &file_name, &project_stem);
-    params.insert(key.to_string(), ParamValue::String(new_value));
+    params.insert(key.to_string(), ParamValue::String(asset_url(&file_name)));
     Ok(())
 }
 
 /// Pack a PassThrough node's `files` param. Each line is `abs|bundle_path`;
-/// we copy `abs` to `<assets_dir>/<bundle_path>` and rewrite the line to
-/// `bar://<stem>.assets/<bundle_path>|<bundle_path>`.
+/// we copy `abs` to `<passthrough_dir>/<bundle_path>` and rewrite the line to
+/// `bar://passthrough/<bundle_path>|<bundle_path>`.
 pub(crate) fn pack_passthrough_files(
     params: &mut HashMap<String, ParamValue>,
     project_dir: &std::path::Path,
-    assets_dir: &std::path::Path,
+    passthrough_dir: &std::path::Path,
 ) -> Result<(), String> {
     let Some(ParamValue::String(s)) = params.get("files").cloned() else {
         return Ok(());
     };
-    let project_stem = assets_dir
-        .file_name()
-        .and_then(|s| s.to_str())
-        .and_then(|s| s.strip_suffix(".assets"))
-        .unwrap_or("")
-        .to_string();
     let mut new_lines = Vec::new();
     for line in s.lines() {
         let mut parts = line.splitn(2, '|');
@@ -163,7 +133,7 @@ pub(crate) fn pack_passthrough_files(
             new_lines.push(format!("{abs}|{bundle}"));
             continue;
         }
-        let dest = assets_dir.join(&bundle);
+        let dest = passthrough_dir.join(&bundle);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Cannot create {}: {e}", parent.display()))?;
@@ -178,8 +148,7 @@ pub(crate) fn pack_passthrough_files(
                 )
             })?;
         }
-        let new_abs = format!("{PROJECT_RELATIVE_PREFIX}{project_stem}.assets/{bundle}");
-        new_lines.push(format!("{new_abs}|{bundle}"));
+        new_lines.push(format!("{}|{bundle}", passthrough_url(&bundle)));
     }
     params.insert(
         "files".to_string(),
@@ -230,6 +199,46 @@ pub(crate) fn resolve_passthrough_files(
     if changed {
         params.insert("files".to_string(), ParamValue::String(out.join("\n")));
     }
+}
+
+/// Pack a painted node's binary asset. If `asset_path` points outside
+/// `assets_dir` (e.g. during "Save As" to a different location), copies the
+/// `.bin` file into `assets_dir` and updates `asset_path` to the new location.
+/// No-op when the asset is already inside the project or not yet set.
+pub(crate) fn pack_painted_asset(
+    params: &mut HashMap<String, ParamValue>,
+    _project_dir: &std::path::Path,
+    assets_dir: &std::path::Path,
+) -> Result<(), String> {
+    let asset_id = match params.get("asset_id") {
+        Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => return Ok(()),
+    };
+    let asset_path = match params.get("asset_path") {
+        Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => return Ok(()),
+    };
+    if path_is_inside(&asset_path, assets_dir) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(assets_dir)
+        .map_err(|e| format!("Cannot create assets dir {}: {e}", assets_dir.display()))?;
+    let src = std::path::Path::new(&asset_path);
+    let dest = assets_dir.join(format!("{asset_id}.bin"));
+    if !dest.exists() || !files_equal(src, &dest) {
+        std::fs::copy(src, &dest).map_err(|e| {
+            format!(
+                "Failed to copy asset {} -> {}: {e}",
+                src.display(),
+                dest.display()
+            )
+        })?;
+    }
+    params.insert(
+        "asset_path".to_string(),
+        ParamValue::String(dest.to_string_lossy().into_owned()),
+    );
+    Ok(())
 }
 
 /// Cheap "are these files identical" check by length first, then content.

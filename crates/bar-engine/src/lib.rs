@@ -20,6 +20,7 @@ pub mod recipe;
 pub mod targets;
 
 pub use bar_project::scan_to_project;
+pub use bar_project::{write_asset_file, AssetHeader, PendingAsset};
 pub use bundler::{execute_bundlers, find_bundler_nodes, BundlerResult};
 pub use executor::CpuExecutor;
 pub use export::{

@@ -493,9 +493,8 @@ impl NodeExecutor for CpuExecutor {
             }
 
             NodeType::PaintedHeightmap => {
-                let data_str = get_string(params, "data", "");
                 let src_res = get_uint(params, "resolution", 256).max(1);
-                let pixels = hex_decode_mask(data_str);
+                let pixels = read_asset_bytes(get_string(params, "asset_path", ""));
                 let hm = painted_grayscale_to_heightmap(pixels, src_res, width, height);
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
@@ -503,12 +502,12 @@ impl NodeExecutor for CpuExecutor {
             NodeType::Sculpt => {
                 let input = get_input_heightmap(inputs, "input")?;
                 let mask = get_optional_heightmap(inputs, "mask");
-                let data_str = get_string(params, "data", "");
+                let asset_path = get_string(params, "asset_path", "");
                 let mut sculpted = input.clone();
-                if !data_str.is_empty() {
+                if !asset_path.is_empty() {
                     let src_res = get_uint(params, "resolution", 256).max(1);
                     let scale = get_float(params, "scale", 0.5);
-                    let pixels = hex_decode_mask(data_str);
+                    let pixels = read_asset_bytes(asset_path);
                     apply_sculpt_delta(&mut sculpted, &pixels, src_res, scale);
                 }
                 // Mask confines sculpt delta to specific areas (mask=0: original, mask=1: sculpted)
@@ -516,8 +515,7 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::PaintedTexture => {
-                let data_str = get_string(params, "data", "");
-                let pixels = hex_decode_mask(data_str);
+                let pixels = read_asset_bytes(get_string(params, "asset_path", ""));
                 let tex = painted_rgb_to_color_buffer(pixels, PAINTED_TEXTURE_RES, width, height);
                 outputs.insert("output".to_string(), PortValue::Color(tex));
             }
@@ -2408,21 +2406,20 @@ fn apply_chooser(a: &Heightmap, b: &Heightmap, mask: &Heightmap) -> Heightmap {
     Heightmap::frbar_data(w, h, data).unwrap()
 }
 
-/// Decode a hex-encoded painted mask string into pixel bytes.
-/// Non-hex characters are skipped. Returns empty Vec on empty/invalid input.
-fn hex_decode_mask(s: &str) -> Vec<u8> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        let hi = (bytes[i] as char).to_digit(16);
-        let lo = (bytes[i + 1] as char).to_digit(16);
-        if let (Some(h), Some(l)) = (hi, lo) {
-            out.push((h << 4 | l) as u8);
-        }
-        i += 2;
+/// Read raw pixel bytes from a binary asset file at `path`.
+/// Returns empty Vec on empty path or any I/O error; the executor treats
+/// empty data as "no paint" and produces a flat/zero output.
+fn read_asset_bytes(path: &str) -> Vec<u8> {
+    if path.is_empty() {
+        return Vec::new();
     }
-    out
+    match bar_project::read_asset_file(std::path::Path::new(path)) {
+        Ok((_header, data)) => data,
+        Err(e) => {
+            tracing::warn!(path, error = %e, "Failed to read asset file");
+            Vec::new()
+        }
+    }
 }
 
 /// Source resolution for the `PaintedTexture` node's brush canvas.
