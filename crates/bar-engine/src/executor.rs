@@ -21,9 +21,14 @@ impl NodeExecutor for CpuExecutor {
         node_type: &NodeType,
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
-        width: u32,
-        height: u32,
+        hm_width: u32,
+        hm_height: u32,
+        tex_width: u32,
+        tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
+        // Heightmap nodes use hm_width/hm_height throughout; re-bind so
+        // all existing references below compile without change.
+        let (width, height) = (hm_width, hm_height);
         let mut outputs = HashMap::new();
 
         match node_type {
@@ -312,6 +317,7 @@ impl NodeExecutor for CpuExecutor {
                     ctrl.as_ref(),
                     mask.as_ref(),
                 );
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -322,6 +328,7 @@ impl NodeExecutor for CpuExecutor {
                 let color = generate_rock_soil(&input, slope.as_ref(), params);
                 let color =
                     apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -332,6 +339,7 @@ impl NodeExecutor for CpuExecutor {
                 let color = generate_vegetation(&input, slope.as_ref(), params);
                 let color =
                     apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -369,7 +377,7 @@ impl NodeExecutor for CpuExecutor {
                 }
 
                 if layers.is_empty() {
-                    let out = ColorBuffer::new(width, height).unwrap();
+                    let out = ColorBuffer::new(tex_width, tex_height).unwrap();
                     outputs.insert("output".to_string(), PortValue::Color(out));
                 } else {
                     let w = layers[0].tex.width();
@@ -447,6 +455,7 @@ impl NodeExecutor for CpuExecutor {
                 let color = apply_color_ramp(&input, params);
                 let color =
                     apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -459,6 +468,7 @@ impl NodeExecutor for CpuExecutor {
                 // Neutral normal = flat surface [0.5, 0.5, 1.0, 1.0] in tangent space
                 let color =
                     apply_color_modulation([0.5, 0.5, 1.0, 1.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
             NodeType::GrassMap => {
@@ -529,7 +539,7 @@ impl NodeExecutor for CpuExecutor {
                         }
                     }
                 };
-                let tex = painted_rgb_to_color_buffer(pixels, src_res, width, height);
+                let tex = painted_rgb_to_color_buffer(pixels, src_res, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(tex));
             }
 
@@ -838,6 +848,17 @@ fn sample_color_nn(tex: &ColorBuffer, ox: u32, oy: u32, ow: u32, oh: u32) -> [f3
     let sy = ((oy as f32 / oh as f32) * tex.height() as f32) as u32;
     tex.get(sx.min(tex.width() - 1), sy.min(tex.height() - 1))
         .unwrap_or([0.0; 4])
+}
+
+/// Resize a ColorBuffer to (tw, th) only when dimensions differ.
+/// Bridge nodes (heightmap-in, color-out) generate at hm dims then call this
+/// to match the working/compile texture resolution.
+fn resize_color_to_tex(cb: ColorBuffer, tw: u32, th: u32) -> ColorBuffer {
+    if cb.width() == tw && cb.height() == th {
+        cb
+    } else {
+        cb.resize(tw, th)
+    }
 }
 
 fn get_input_heightmap(
@@ -2963,7 +2984,7 @@ mod tests {
         }
         let inputs = HashMap::from([("heightmap".to_string(), PortValue::Heightmap(hm.clone()))]);
         let result = executor
-            .execute(&NodeType::Preview, &HashMap::new(), &inputs, 8, 8)
+            .execute(&NodeType::Preview, &HashMap::new(), &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result
             .get("heightmap")
@@ -2984,7 +3005,15 @@ mod tests {
         // (Preview only re-emits what it received.)
         let executor = CpuExecutor;
         let result = executor
-            .execute(&NodeType::Preview, &HashMap::new(), &HashMap::new(), 8, 8)
+            .execute(
+                &NodeType::Preview,
+                &HashMap::new(),
+                &HashMap::new(),
+                8,
+                8,
+                8,
+                8,
+            )
             .unwrap();
         assert!(result.is_empty());
     }
@@ -3005,7 +3034,7 @@ mod tests {
         )]);
         let inputs = HashMap::new();
         let result = executor
-            .execute(&NodeType::PassThrough, &params, &inputs, 1, 1)
+            .execute(&NodeType::PassThrough, &params, &inputs, 1, 1, 1, 1)
             .unwrap();
         let PortValue::FileList(list) = result.get("files").unwrap() else {
             panic!("Expected FileList output");
@@ -3025,7 +3054,7 @@ mod tests {
         ]);
         let inputs = HashMap::new();
         let result = executor
-            .execute(&NodeType::PerlinNoise, &params, &inputs, 64, 64)
+            .execute(&NodeType::PerlinNoise, &params, &inputs, 64, 64, 64, 64)
             .unwrap();
 
         let output = result.get("output").unwrap();
@@ -3070,7 +3099,7 @@ mod tests {
             )
             .unwrap();
 
-        let results = bar_graph::evaluate_graph(&graph, &executor, 64, 64).unwrap();
+        let results = bar_graph::evaluate_graph(&graph, &executor, 64, 64, 64, 64).unwrap();
         let hm = bar_graph::get_heightmap_output(&graph, &results).unwrap();
 
         assert_eq!(hm.width(), 64);
@@ -3095,7 +3124,7 @@ mod tests {
         let params = HashMap::from([("factor".to_string(), ParamValue::Float(0.5))]);
 
         let result = executor
-            .execute(&NodeType::Blend, &params, &inputs, 4, 4)
+            .execute(&NodeType::Blend, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         let output = result.get("output").unwrap();
         match output {
@@ -3115,7 +3144,7 @@ mod tests {
             ("mode".to_string(), ParamValue::String("f1".to_string())),
         ]);
         let result = executor
-            .execute(&NodeType::Voronoi, &params, &HashMap::new(), 64, 64)
+            .execute(&NodeType::Voronoi, &params, &HashMap::new(), 64, 64, 64, 64)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3138,7 +3167,7 @@ mod tests {
             ParamValue::String("vertical".to_string()),
         )]);
         let result = executor
-            .execute(&NodeType::Gradient, &params, &HashMap::new(), 8, 8)
+            .execute(&NodeType::Gradient, &params, &HashMap::new(), 8, 8, 8, 8)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3159,7 +3188,7 @@ mod tests {
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
 
         let result = executor
-            .execute(&NodeType::Normalize, &HashMap::new(), &inputs, 8, 8)
+            .execute(&NodeType::Normalize, &HashMap::new(), &inputs, 8, 8, 8, 8)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3186,7 +3215,7 @@ mod tests {
         ]);
 
         let result = executor
-            .execute(&NodeType::BiasGain, &params, &inputs, 4, 4)
+            .execute(&NodeType::BiasGain, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3217,7 +3246,7 @@ mod tests {
         ]);
 
         let result = executor
-            .execute(&NodeType::MaskSelect, &HashMap::new(), &inputs, 4, 4)
+            .execute(&NodeType::MaskSelect, &HashMap::new(), &inputs, 4, 4, 4, 4)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3304,7 +3333,7 @@ mod tests {
             ("mask".to_string(), PortValue::Mask(mask)),
         ]);
         let result = executor
-            .execute(&NodeType::Add, &HashMap::new(), &inputs, 2, 2)
+            .execute(&NodeType::Add, &HashMap::new(), &inputs, 2, 2, 2, 2)
             .unwrap();
         let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
             panic!("expected heightmap")
@@ -3328,7 +3357,7 @@ mod tests {
             ("mask".to_string(), PortValue::Mask(mask)),
         ]);
         let result = executor
-            .execute(&NodeType::Blend, &params, &inputs, 2, 2)
+            .execute(&NodeType::Blend, &params, &inputs, 2, 2, 2, 2)
             .unwrap();
         let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
             panic!("expected heightmap")
@@ -3357,7 +3386,15 @@ mod tests {
         let params = HashMap::from([("iterations".to_string(), ParamValue::UInt(2000))]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::HydraulicErosion, &params, &inputs, 64, 64)
+            .execute(
+                &NodeType::HydraulicErosion,
+                &params,
+                &inputs,
+                64,
+                64,
+                64,
+                64,
+            )
             .unwrap();
         for port in ["output", "flow", "wear", "deposit"] {
             let val = result.get(port).expect(port);
@@ -3382,7 +3419,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::FlowSelect, &params, &inputs, 8, 1)
+            .execute(&NodeType::FlowSelect, &params, &inputs, 8, 1, 8, 1)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3416,7 +3453,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::SelectConvexity, &params, &inputs, 16, 16)
+            .execute(&NodeType::SelectConvexity, &params, &inputs, 16, 16, 16, 16)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3450,7 +3487,15 @@ mod tests {
         params.insert("height_0".to_string(), ParamValue::Float(0.8));
         params.insert("falloff_0".to_string(), ParamValue::Float(0.5));
         let result = executor
-            .execute(&NodeType::LayoutGenerator, &params, &HashMap::new(), 32, 32)
+            .execute(
+                &NodeType::LayoutGenerator,
+                &params,
+                &HashMap::new(),
+                32,
+                32,
+                32,
+                32,
+            )
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3476,7 +3521,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm.clone()))]);
         let result = executor
-            .execute(&NodeType::Transform, &params, &inputs, 4, 4)
+            .execute(&NodeType::Transform, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3506,7 +3551,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm.clone()))]);
         let result = executor
-            .execute(&NodeType::Transform, &params, &inputs, 8, 1)
+            .execute(&NodeType::Transform, &params, &inputs, 8, 1, 8, 1)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3534,7 +3579,7 @@ mod tests {
             ("warp_y".to_string(), PortValue::Heightmap(neutral)),
         ]);
         let result = executor
-            .execute(&NodeType::Warp, &params, &inputs, 4, 4)
+            .execute(&NodeType::Warp, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3572,7 +3617,7 @@ mod tests {
             ("warp_y".to_string(), PortValue::Heightmap(wy)),
         ]);
         let result = executor
-            .execute(&NodeType::Warp, &params, &inputs, 8, 8)
+            .execute(&NodeType::Warp, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3599,7 +3644,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::Stratify, &params, &inputs, 8, 1)
+            .execute(&NodeType::Stratify, &params, &inputs, 8, 1, 8, 1)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3623,7 +3668,7 @@ mod tests {
         let params = HashMap::from([("radius".to_string(), ParamValue::Float(1.5))]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::MaskExpand, &params, &inputs, 8, 8)
+            .execute(&NodeType::MaskExpand, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3655,7 +3700,7 @@ mod tests {
         let params = HashMap::from([("radius".to_string(), ParamValue::Float(1.5))]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::MaskShrink, &params, &inputs, 8, 8)
+            .execute(&NodeType::MaskShrink, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3684,7 +3729,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8)
+            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3711,7 +3756,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8)
+            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");

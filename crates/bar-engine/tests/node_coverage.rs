@@ -70,7 +70,7 @@ fn run(
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
-    executor.execute(&nt, &params, inputs, W, H).unwrap()
+    executor.execute(&nt, &params, inputs, W, H, W, H).unwrap()
 }
 
 fn out_hm(outputs: &HashMap<String, PortValue>, port: &str) -> Heightmap {

@@ -23,8 +23,15 @@ pub fn export_smf(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let heightmap = get_heightmap_output(graph, &results)
         .context("No heightmap output node found — add a Heightmap Output node to the graph")?;
@@ -101,8 +108,15 @@ pub fn export_heightmap_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let heightmap = get_heightmap_output(graph, &results)
         .context("No heightmap output node found — add a Heightmap Output node to the graph")?;
@@ -140,8 +154,15 @@ pub fn export_smt(
     height: u32,
     path: &Path,
 ) -> Result<(Vec<i32>, u32)> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let texture = get_texture_output(graph, &results)
         .context("No texture output found — add an Auto Texture → Bundler chain")?;
@@ -164,8 +185,15 @@ pub fn export_texture_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let texture = get_texture_output(graph, &results)
         .context("No texture output found — add an Auto Texture → Bundler chain")?;
@@ -184,8 +212,15 @@ pub fn export_normalmap_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let normalmap = get_normalmap_output(graph, &results).context(
         "No normal map output — connect a NormalMap node to the Bundler's normalmap port",
@@ -205,8 +240,15 @@ pub fn export_grassmap_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let grassmap = get_grassmap_output(graph, &results)
         .context("No grass map output — connect a GrassMap node to the Bundler's grassmap port")?;
@@ -261,8 +303,15 @@ pub fn export_sd7_directory(
     let maps_dir = output_dir.join("maps");
     fs::create_dir_all(&maps_dir)?;
 
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let heightmap = get_heightmap_output(graph, &results)
         .context("No heightmap output — add a Heightmap Output node")?;
@@ -538,8 +587,15 @@ pub fn export_with_target(
     })?;
 
     // Evaluate graph
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     // Build layer set
     let layers = LayerSet {

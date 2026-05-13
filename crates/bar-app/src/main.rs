@@ -561,6 +561,8 @@ impl eframe::App for AppWrapper {
                             executor.as_ref(),
                             w,
                             h,
+                            (w - 1) * 8,
+                            (h - 1) * 8,
                             &progress_cb,
                         ) {
                             Ok(outputs) => {
@@ -920,18 +922,27 @@ impl eframe::App for AppWrapper {
             let preview_node_id = self.app.preview.node();
             let session_id = session.session_id;
 
-            // Pass 1 — low-res (128 px): fires immediately when any preview
-            // input changes. Allowed to run even while a stale high-res thread
-            // is still in flight; the stale result will be discarded by the
-            // session_id + cache_key guard.
+            // Working texture resolution: native capped at 4096. For maps
+            // smaller than 512 mapsquares, native < 4096 and no capping occurs.
+            const TEXTURE_WORKING_RES_CAP: u32 = 4096;
+            let tex_w = ((w - 1) * 8).clamp(1, TEXTURE_WORKING_RES_CAP);
+            let tex_h = ((h - 1) * 8).clamp(1, TEXTURE_WORKING_RES_CAP);
+            // Low-res tex: 25% of working res, min 512 (useful enough for macro preview).
+            const LOW_RES_MIN: u32 = 512;
+            let low_tex_w = (tex_w / 4).max(LOW_RES_MIN).min(tex_w);
+            let low_tex_h = (tex_h / 4).max(LOW_RES_MIN).min(tex_h);
+            // Scale hm proportionally to low tex.
+            let low_hm_scale = low_tex_w as f32 / tex_w as f32;
+            let low_hm_w = ((w as f32 * low_hm_scale).round() as u32).max(1);
+            let low_hm_h = ((h as f32 * low_hm_scale).round() as u32).max(1);
+
+            // Pass 1 — low-res: fires immediately when any preview input changes.
+            // Allowed to run even while a stale high-res thread is still in flight;
+            // the stale result will be discarded by the session_id + cache_key guard.
             let needs_low_res =
                 current_key != session.last_low_res_key && current_key != session.last_high_res_key;
 
             if needs_low_res && !session.low_res_pending {
-                // Scale down to ~128 in the short dimension, preserving aspect ratio.
-                let scale = 128.0 / w.min(h).max(1) as f32;
-                let low_w = ((w as f32 * scale).round() as u32).max(1);
-                let low_h = ((h as f32 * scale).round() as u32).max(1);
                 let graph = self.app.graph().clone();
                 let tx = session.preview_tx.clone();
                 let ctx_clone = ctx.clone();
@@ -939,8 +950,15 @@ impl eframe::App for AppWrapper {
 
                 session.low_res_pending = true;
                 std::thread::spawn(move || {
-                    let (heightmap, texture) =
-                        eval_preview(&graph, executor.as_ref(), low_w, low_h, preview_node_id);
+                    let (heightmap, texture) = eval_preview(
+                        &graph,
+                        executor.as_ref(),
+                        low_hm_w,
+                        low_hm_h,
+                        low_tex_w,
+                        low_tex_h,
+                        preview_node_id,
+                    );
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -958,8 +976,8 @@ impl eframe::App for AppWrapper {
                 });
             }
 
-            // Pass 2 — high-res (512 px): spawned once the low-res is done and a
-            // short cooldown has elapsed so rapid edits don't queue expensive renders.
+            // Pass 2 — high-res: spawned once the low-res is done and a short
+            // cooldown has elapsed so rapid edits don't queue expensive renders.
             let needs_high_res = current_key != session.last_high_res_key;
             let cooldown_done = session
                 .low_res_completed_at
@@ -978,8 +996,15 @@ impl eframe::App for AppWrapper {
 
                 session.high_res_pending = true;
                 std::thread::spawn(move || {
-                    let (heightmap, texture) =
-                        eval_preview(&graph, executor.as_ref(), w, h, preview_node_id);
+                    let (heightmap, texture) = eval_preview(
+                        &graph,
+                        executor.as_ref(),
+                        w,
+                        h,
+                        tex_w,
+                        tex_h,
+                        preview_node_id,
+                    );
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -1130,6 +1155,8 @@ impl AppWrapper {
                 executor.as_ref(),
                 w,
                 h,
+                (w - 1) * 8,
+                (h - 1) * 8,
                 &progress_cb,
             ) {
                 Ok(outputs) => {
@@ -1609,11 +1636,13 @@ impl AppWrapper {
 fn eval_preview(
     graph: &bar_graph::GraphEngine,
     executor: &dyn NodeExecutor,
-    width: u32,
-    height: u32,
+    hm_width: u32,
+    hm_height: u32,
+    tex_width: u32,
+    tex_height: u32,
     preview_node_id: Option<bar_graph::NodeId>,
 ) -> (Option<bar_data::Heightmap>, Option<bar_data::ColorBuffer>) {
-    let result = match evaluate_graph(graph, executor, width, height) {
+    let result = match evaluate_graph(graph, executor, hm_width, hm_height, tex_width, tex_height) {
         Ok(outputs) => outputs,
         Err(_) => return (None, None),
     };

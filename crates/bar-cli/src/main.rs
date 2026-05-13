@@ -286,7 +286,7 @@ fn cmd_run(
     let bundler_nodes = bar_engine::find_bundler_nodes(&graph);
     if !bundler_nodes.is_empty() || bundler_filter.is_some() {
         // Evaluate graph first
-        let results = bar_graph::evaluate_graph(&graph, &executor, w, h)
+        let results = bar_graph::evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
             .context("Failed to evaluate graph")?;
 
         // Execute bundlers
@@ -537,7 +537,7 @@ fn cmd_preview(
     // Evaluate via the CPU executor — mirrors GUI's preview path which
     // (in headless mode) uses CpuExecutor too.
     let executor = CpuExecutor;
-    let outputs = evaluate_graph(&graph, &executor, w, h)
+    let outputs = evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
         .map_err(|e| anyhow::anyhow!("Graph evaluation failed: {e:?}"))?;
 
     // Find the heightmap and (optionally) the texture wired to the first
