@@ -253,6 +253,12 @@ pub struct BarEditorApp {
     /// Set by `bar-app` from `GpuContext::supports_bc` on startup. Tells
     /// the Preview layout whether BC1 texture upload is available.
     pub supports_bc: bool,
+    /// Sorted list of feature type names from the loaded catalog.
+    /// Populated by `bar-app` when the feature catalog is loaded.
+    pub feature_palette_names: Vec<String>,
+    /// Feature type currently selected in the feature palette for placement.
+    /// When Some, clicking on the 3D terrain places a feature of this type.
+    pub selected_feature_type: Option<String>,
 }
 
 impl Default for BarEditorApp {
@@ -286,6 +292,8 @@ impl Default for BarEditorApp {
             settings: Settings::default(),
             active_layout: Layout::default(),
             supports_bc: false,
+            feature_palette_names: Vec::new(),
+            selected_feature_type: None,
         }
     }
 }

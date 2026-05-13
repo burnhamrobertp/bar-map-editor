@@ -147,6 +147,10 @@ impl LayoutManager {
         // Feature instances: rebuild when dirty or when a new heightmap arrives.
         // Skip until the first eval completes -- without a heightmap the fallback
         // height (range midpoint) causes visible floating on non-flat maps.
+        if app.map.features_placement_dirty {
+            app.map.features_placement_dirty = false;
+            slot.eval.features_dirty = true;
+        }
         let hm_rev = app.paint.heightmap_rev;
         let needs_feature_rebuild = slot.eval.features_dirty || slot.eval.last_hm_rev != hm_rev;
         if needs_feature_rebuild && app.paint.heightmap.is_some() {

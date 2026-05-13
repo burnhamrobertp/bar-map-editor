@@ -410,10 +410,12 @@ impl eframe::App for AppRunner {
                         catalog.merge(map_catalog);
                     }
                 }
-                self.app.set_status(format!(
-                    "Feature catalog: {} definitions",
-                    catalog.features.len()
-                ));
+                let count = catalog.features.len();
+                let mut names: Vec<String> = catalog.features.keys().cloned().collect();
+                names.sort();
+                self.app.feature_palette_names = names;
+                self.app
+                    .set_status(format!("Feature catalog: {count} definitions"));
                 self.feature_catalog = Some(catalog);
                 self.spawn_model_loader(ctx);
                 self.layout_manager.mark_features_dirty();
@@ -473,6 +475,9 @@ impl eframe::App for AppRunner {
                             );
                             catalog.merge(map_catalog);
                         }
+                        let mut names: Vec<String> = catalog.features.keys().cloned().collect();
+                        names.sort();
+                        self.app.feature_palette_names = names;
                     }
                     self.app.finish_open_map(scan);
                     self.app.project.features_changed = false; // handled here, not by the generic poll below

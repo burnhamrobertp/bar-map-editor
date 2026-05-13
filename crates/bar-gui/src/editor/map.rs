@@ -64,9 +64,11 @@ pub struct MapState {
     /// Index of the spawn marker currently being dragged in the 2D
     /// inspector (None if no drag in progress).
     pub dragging_spawn: Option<usize>,
-    /// Feature placements preserved from the last .sd7 import.
-    /// Editable in the sculpt view in a future iteration.
+    /// Feature placements (imported from .sd7 and/or placed by the user).
     pub features: Vec<PlacedFeature>,
+    /// Set to true when features are added/removed via the placement tool.
+    /// Consumed by the layout manager to trigger a GPU instance rebuild.
+    pub features_placement_dirty: bool,
 }
 
 impl MapState {

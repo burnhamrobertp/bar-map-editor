@@ -136,6 +136,59 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             ));
             ui.end_row();
         });
+
+    ui.add_space(8.0);
+    ui.separator();
+    draw_feature_palette(app, ui);
+}
+
+fn draw_feature_palette(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.strong("Features");
+        if app.selected_feature_type.is_some() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("x")
+                    .on_hover_text("Cancel placement")
+                    .clicked()
+                {
+                    app.selected_feature_type = None;
+                }
+            });
+        }
+    });
+    ui.add_space(4.0);
+
+    if app.feature_palette_names.is_empty() {
+        ui.weak("No feature catalog loaded.");
+        ui.weak("Set a game archive in Preferences.");
+        return;
+    }
+
+    if let Some(ref sel) = app.selected_feature_type.clone() {
+        ui.label(format!("Placing: {sel}"));
+        ui.weak("Click on terrain to place.");
+        ui.add_space(4.0);
+    }
+
+    egui::ScrollArea::vertical()
+        .id_salt("feature_palette_scroll")
+        .max_height(200.0)
+        .show(ui, |ui| {
+            let names = app.feature_palette_names.clone();
+            for name in &names {
+                let selected = app.selected_feature_type.as_deref() == Some(name.as_str());
+                if ui.selectable_label(selected, name).clicked() {
+                    if selected {
+                        app.selected_feature_type = None;
+                    } else {
+                        app.selected_feature_type = Some(name.clone());
+                        // Deselect sculpt layer so brush doesn't fire.
+                        app.paint.selected_sculpt_layer = None;
+                    }
+                }
+            }
+        });
 }
 
 fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayerEntry) {

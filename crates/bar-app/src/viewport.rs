@@ -438,10 +438,51 @@ fn handle_camera_input(
         renderer.set_brush_cursor(cursor_world);
     }
 
+    // Feature placement: primary click (no drag) places a feature at terrain pick.
+    let feature_type = app.selected_feature_type.clone();
+    if let Some(ref feature_type) = feature_type {
+        if response.clicked_by(egui::PointerButton::Primary) {
+            if let Some(uv) = cursor_uv {
+                if let Some(hm) = app.paint.heightmap.as_ref() {
+                    if let Some(renderer) = core.terrain_renderer.as_ref() {
+                        let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                        if let Some(pick) = pick_terrain(
+                            &core.camera,
+                            aspect,
+                            uv,
+                            hm,
+                            x_extent,
+                            z_extent,
+                            height_scale,
+                        ) {
+                            let (map_w, map_h) = app.map.dimensions();
+                            // Convert renderer world coords to Spring world units.
+                            // Renderer: x in [-x_extent, x_extent], z in [-z_extent, z_extent].
+                            // Spring: x in [0, map_w * 8], z in [0, map_h * 8].
+                            let spring_x =
+                                (pick.world.x / x_extent + 1.0) * 0.5 * map_w.max(1) as f32 * 8.0;
+                            let spring_z =
+                                (pick.world.z / z_extent + 1.0) * 0.5 * map_h.max(1) as f32 * 8.0;
+                            app.map.features.push(PlacedFeature {
+                                feature_type: feature_type.clone(),
+                                x: spring_x,
+                                y: 0.0,
+                                z: spring_z,
+                                angle: 0.0,
+                                taken_damage: 0,
+                            });
+                            app.map.features_placement_dirty = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     if response.dragged_by(egui::PointerButton::Primary) {
         if sculpt_active {
             apply_sculpt_dab_at_cursor(core, gpu_context, response, ctx, app);
-        } else {
+        } else if feature_type.is_none() {
             let delta = response.drag_delta();
             core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
             camera_changed = true;
