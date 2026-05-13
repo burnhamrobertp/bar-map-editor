@@ -145,6 +145,77 @@ pub fn read_smt<R: Read>(reader: &mut R) -> Result<Vec<Vec<u8>>, SmtError> {
     Ok(tiles)
 }
 
+/// Read the SMT tile pool as raw compressed DXT1 bytes (base level only).
+///
+/// Unlike [`read_smt`], this does not decode to RGBA. Each returned Vec is
+/// exactly [`DXT1_TILE_BYTES`] bytes -- the base-level DXT1 data suitable
+/// for upload to a `Bc1RgbaUnorm` GPU texture.
+pub fn read_smt_raw<R: Read>(reader: &mut R) -> Result<Vec<Vec<u8>>, SmtError> {
+    let mut magic = [0u8; 16];
+    reader.read_exact(&mut magic)?;
+    let mut buf4 = [0u8; 4];
+    reader.read_exact(&mut buf4)?; // version
+    reader.read_exact(&mut buf4)?;
+    let num_tiles = i32::from_le_bytes(buf4).max(0) as usize;
+    reader.read_exact(&mut buf4)?; // tile_size (should be 32)
+    reader.read_exact(&mut buf4)?; // compression type (1 = DXT1)
+    let mut tiles = Vec::with_capacity(num_tiles);
+    for _ in 0..num_tiles {
+        let mut raw = vec![0u8; SMALL_TILE_SIZE];
+        reader.read_exact(&mut raw)?;
+        raw.truncate(DXT1_TILE_BYTES);
+        tiles.push(raw);
+    }
+    Ok(tiles)
+}
+
+/// Assemble a flat linear BC1 image from a tile pool and tile index.
+///
+/// Each element of `tile_pool` must be exactly [`DXT1_TILE_BYTES`] bytes
+/// (base-level DXT1 for a 32x32 tile). `tile_indices` maps (ty*tiles_x + tx)
+/// to a tile pool index. The returned bytes are suitable for upload to a
+/// `Bc1RgbaUnorm` wgpu texture of size `(tiles_x*32) x (tiles_y*32)`.
+pub fn assemble_bc1_linear(
+    tile_pool: &[Vec<u8>],
+    tile_indices: &[i32],
+    tiles_x: u32,
+    tiles_y: u32,
+) -> Vec<u8> {
+    const BLOCKS_PER_TILE: usize = 8; // 32 / 4
+    const BYTES_PER_BLOCK: usize = 8;
+    const BYTES_PER_TILE_BLOCK_ROW: usize = BLOCKS_PER_TILE * BYTES_PER_BLOCK; // 64
+
+    let tx_usize = tiles_x as usize;
+    let ty_usize = tiles_y as usize;
+    let blocks_per_image_row = tx_usize * BLOCKS_PER_TILE;
+    let total_bytes = tx_usize * ty_usize * DXT1_TILE_BYTES;
+    let mut out = vec![0u8; total_bytes];
+    let empty = vec![0u8; DXT1_TILE_BYTES];
+
+    for ty in 0..ty_usize {
+        for tx in 0..tx_usize {
+            let idx_pos = ty * tx_usize + tx;
+            let tile_idx = tile_indices.get(idx_pos).copied().unwrap_or(0).max(0) as usize;
+            let tile = tile_pool.get(tile_idx).unwrap_or(&empty);
+            let tile_bytes: &[u8] = if tile.len() >= DXT1_TILE_BYTES {
+                &tile[..DXT1_TILE_BYTES]
+            } else {
+                &empty
+            };
+
+            for br in 0..BLOCKS_PER_TILE {
+                let src = br * BYTES_PER_TILE_BLOCK_ROW;
+                let dst_row = ty * BLOCKS_PER_TILE + br;
+                let dst_col = tx * BLOCKS_PER_TILE;
+                let dst = (dst_row * blocks_per_image_row + dst_col) * BYTES_PER_BLOCK;
+                out[dst..dst + BYTES_PER_TILE_BLOCK_ROW]
+                    .copy_from_slice(&tile_bytes[src..src + BYTES_PER_TILE_BLOCK_ROW]);
+            }
+        }
+    }
+    out
+}
+
 // --------------------------------------------------------------------------
 // DXT1 compressor (existing)
 // --------------------------------------------------------------------------

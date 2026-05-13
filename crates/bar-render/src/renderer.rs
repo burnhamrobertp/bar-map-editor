@@ -1136,6 +1136,44 @@ impl TerrainRenderer {
         self.rebuild_material_bind_group(device);
     }
 
+    /// Upload a pre-assembled flat linear BC1/DXT1 image as the albedo texture.
+    ///
+    /// `bc1_data` must be in row-major BC1 block order covering `width x height`
+    /// pixels (both must be multiples of 4). The device must have been created
+    /// with `TEXTURE_COMPRESSION_BC` enabled -- check `GpuContext::supports_bc`
+    /// before calling.
+    pub fn upload_bc1_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        bc1_data: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        let tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("albedo_bc1"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            bc1_data,
+        );
+        self.albedo_texture = tex;
+        self.has_albedo = true;
+        self.rebuild_material_bind_group(device);
+    }
+
     /// Replace the metalmap texture from a `Heightmap` (values 0..1).
     pub fn update_metalmap(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, hm: &Heightmap) {
         let data: Vec<u8> = (0..hm.height())
