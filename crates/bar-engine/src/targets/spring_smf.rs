@@ -234,9 +234,12 @@ impl ExportCodec for SpringSmfCodec {
         let used_compiled = if let Some(ref proj_dir) = plan.project_dir {
             if let Ok(pkg) = PackageDir::open(proj_dir) {
                 let recipe_json = std::fs::read_to_string(pkg.recipe_path()).unwrap_or_default();
-                if !pkg.is_stale(&recipe_json, sq_x, sq_y) {
+                let stale = pkg.is_stale(&recipe_json, sq_x, sq_y);
+                tracing::debug!(stale, sq_x, sq_y, "Codec: compiled SMT staleness check");
+                if !stale {
                     let compiled_smt = pkg.compiled_smt_path(map_name);
                     if compiled_smt.exists() {
+                        tracing::debug!(src = %compiled_smt.display(), dst = %smt_path.display(), "Codec: copying compiled SMT");
                         fs::copy(&compiled_smt, &smt_path).with_context(|| {
                             format!(
                                 "Failed to copy compiled SMT {} -> {}",
@@ -250,12 +253,15 @@ impl ExportCodec for SpringSmfCodec {
                         );
                         true
                     } else {
+                        tracing::debug!(path = %compiled_smt.display(), "Codec: compiled SMT not found on disk -- will re-encode");
                         false
                     }
                 } else {
+                    tracing::debug!("Codec: compiled SMT is stale -- will re-encode");
                     false
                 }
             } else {
+                tracing::debug!("Codec: no project dir -- compiled SMT fast-path unavailable");
                 false
             }
         } else {

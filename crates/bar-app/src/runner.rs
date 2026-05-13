@@ -223,17 +223,71 @@ impl eframe::App for AppRunner {
                             let _ = progress_tx.send(msg.to_string());
                             ctx_progress.request_repaint();
                         };
+                        let map_x = w - 1;
+                        let map_y = h - 1;
+                        tracing::info!(
+                            map_x,
+                            map_y,
+                            "Bundle: evaluating graph at native resolution"
+                        );
                         let msg = match bar_graph::evaluate_graph_with_progress(
                             &graph,
                             executor.as_ref(),
                             w,
                             h,
-                            (w - 1) * 8,
-                            (h - 1) * 8,
+                            map_x * 8,
+                            map_y * 8,
                             &progress_cb,
                         ) {
                             Ok(outputs) => {
+                                // Auto-recompile when compiled state is stale so the bundler
+                                // can copy the compiled SMT directly rather than re-encoding.
+                                if let Some(ref proj_dir) = export_project_dir {
+                                    match bar_engine::PackageDir::open(proj_dir) {
+                                        Ok(pkg) => {
+                                            let recipe_json =
+                                                std::fs::read_to_string(pkg.recipe_path())
+                                                    .unwrap_or_default();
+                                            let stale = pkg.is_stale(&recipe_json, map_x, map_y);
+                                            tracing::debug!(
+                                                stale,
+                                                map_x,
+                                                map_y,
+                                                "Bundle: compiled state staleness check"
+                                            );
+                                            if stale {
+                                                tracing::info!("Bundle: compiled output stale -- recompiling before packaging");
+                                                progress_cb("Bundle: recompiling stale output");
+                                                if let Err(e) = bar_engine::compile_from_outputs(
+                                                    proj_dir,
+                                                    &graph,
+                                                    &outputs,
+                                                    &recipe,
+                                                    bar_engine::CompileDims {
+                                                        map_x,
+                                                        map_y,
+                                                        tex_w: map_x * 8,
+                                                        tex_h: map_y * 8,
+                                                    },
+                                                    &progress_cb,
+                                                ) {
+                                                    tracing::warn!(err = %e, "Bundle: auto-recompile failed -- bundler will re-encode texture");
+                                                } else {
+                                                    tracing::info!(
+                                                        "Bundle: auto-recompile complete"
+                                                    );
+                                                }
+                                            } else {
+                                                tracing::info!("Bundle: compiled output is current -- skipping recompile");
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::debug!(err = %e, "Bundle: cannot open package dir -- skipping compiled SMT fast-path");
+                                        }
+                                    }
+                                }
                                 let filter = run_filter_label.as_deref();
+                                tracing::info!("Bundle: packaging");
                                 match bar_engine::execute_bundlers(
                                     &graph,
                                     &outputs,
@@ -242,11 +296,18 @@ impl eframe::App for AppRunner {
                                     filter,
                                     export_project_dir.as_deref(),
                                 ) {
-                                    Ok(results) if !results.is_empty() => format!(
-                                        "Exported {} bundle(s) to {}",
-                                        results.len(),
-                                        output_dir.display()
-                                    ),
+                                    Ok(results) if !results.is_empty() => {
+                                        tracing::info!(
+                                            count = results.len(),
+                                            dest = %output_dir.display(),
+                                            "Bundle: complete"
+                                        );
+                                        format!(
+                                            "Exported {} bundle(s) to {}",
+                                            results.len(),
+                                            output_dir.display()
+                                        )
+                                    }
                                     Ok(_) => {
                                         "No Bundler nodes found -- add a Bundler node to export"
                                             .to_string()

@@ -56,6 +56,56 @@ pub fn compile_project(
     )
     .context("Graph evaluation failed")?;
 
+    compile_from_outputs(
+        project_dir,
+        graph,
+        &outputs,
+        recipe,
+        CompileDims {
+            map_x,
+            map_y,
+            tex_w,
+            tex_h,
+        },
+        on_progress,
+    )
+}
+
+/// Dimensions required by `compile_from_outputs`.
+pub struct CompileDims {
+    pub map_x: u32,
+    pub map_y: u32,
+    pub tex_w: u32,
+    pub tex_h: u32,
+}
+
+/// Write compiled output from already-evaluated graph outputs.
+///
+/// Used by the bundle runner to avoid double-evaluating the graph when
+/// auto-recompiling before packaging.
+pub fn compile_from_outputs(
+    project_dir: &Path,
+    graph: &GraphEngine,
+    outputs: &NodeOutputs,
+    recipe: &Recipe,
+    dims: CompileDims,
+    on_progress: &dyn Fn(&str),
+) -> Result<()> {
+    let CompileDims {
+        map_x,
+        map_y,
+        tex_w,
+        tex_h,
+    } = dims;
+    tracing::debug!(
+        map_x,
+        map_y,
+        tex_w,
+        tex_h,
+        project = %project_dir.display(),
+        "Compile: writing output from evaluated graph"
+    );
+
     let pkg = PackageDir::open(project_dir).context("Cannot open project package")?;
     let compiled_dir = pkg.compiled_dir();
     std::fs::create_dir_all(&compiled_dir)
@@ -67,11 +117,15 @@ pub fn compile_project(
     // with no intervening color processing.
     let (tiles_x, tiles_y, tile_indices) =
         match try_direct_smt_copy(graph, &smt_path).unwrap_or(None) {
-            Some(info) => info,
+            Some(info) => {
+                tracing::debug!("Compile: used direct ImportedTexture block copy for SMT");
+                info
+            }
             None => {
                 // Full encode path: pull texture from graph outputs.
                 on_progress("[95%] Encoding texture to DXT1");
-                let color = find_texture_output(graph, &outputs).context(
+                tracing::debug!(tex_w, tex_h, "Compile: encoding texture to DXT1");
+                let color = find_texture_output(graph, outputs).context(
                     "No texture output found -- wire a texture node to the Bundler's texture port",
                 )?;
 
@@ -80,6 +134,7 @@ pub fn compile_project(
                         .with_context(|| format!("Cannot create {}", smt_path.display()))?,
                 );
                 write_smt(&mut writer, &color).context("Failed to encode SMT")?;
+                tracing::debug!(path = %smt_path.display(), "Compile: SMT written");
 
                 // write_smt produces sequential tiles: tiles_x = tex_w/32, tiles_y = tex_h/32.
                 let tx = tex_w / 32;
@@ -89,6 +144,7 @@ pub fn compile_project(
             }
         };
 
+    tracing::debug!(tiles_x, tiles_y, "Compile: writing tile index");
     on_progress("[97%] Writing tile index");
     let idx_path = pkg.compiled_tile_index_path();
     let idx_bytes: Vec<u8> = tile_indices.iter().flat_map(|&i| i.to_le_bytes()).collect();
@@ -96,13 +152,21 @@ pub fn compile_project(
         .with_context(|| format!("Cannot write {}", idx_path.display()))?;
 
     on_progress("[97%] Writing heightmap");
-    if let Some(hm) = get_preview_heightmap(graph, &outputs) {
+    if let Some(hm) = get_preview_heightmap(graph, outputs) {
+        tracing::debug!(
+            w = hm.width(),
+            h = hm.height(),
+            "Compile: writing heightmap.bin"
+        );
         let hm_path = pkg.compiled_heightmap_path();
         write_heightmap_bin(&hm_path, &hm)?;
+    } else {
+        tracing::debug!("Compile: no preview heightmap available -- heightmap.bin not written");
     }
 
     on_progress("[99%] Writing fingerprint");
     write_fingerprint(&pkg, recipe, map_x, map_y, tiles_x, tiles_y, project_dir)?;
+    tracing::info!(map_x, map_y, tiles_x, tiles_y, "Compile: complete");
     on_progress("[100%] Compile complete");
     Ok(())
 }
