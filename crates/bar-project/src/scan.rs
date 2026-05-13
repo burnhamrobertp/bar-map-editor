@@ -350,30 +350,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         );
     }
 
-    // Preview (only when heightmap is present)
-    if has_heightmap {
-        nodes.push(RecipeNode {
-            key: "preview".to_string(),
-            node_type: NodeType::Preview,
-            label: "3D Preview".to_string(),
-            params: HashMap::new(),
-        });
-        node_positions.insert(
-            "preview".to_string(),
-            Position {
-                x: bundler_x,
-                y: 540.0,
-            },
-        );
-        node_sizes.insert(
-            "preview".to_string(),
-            NodeSize {
-                width: 165.0,
-                height: 150.0,
-            },
-        );
-    }
-
     // Connections
     if has_heightmap {
         connections.push(RecipeConnection {
@@ -387,14 +363,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         connections.push(RecipeConnection {
             from: "nm.output".to_string(),
             to: "bundler.normalmap".to_string(),
-        });
-        connections.push(RecipeConnection {
-            from: "hm.output".to_string(),
-            to: "preview.heightmap".to_string(),
-        });
-        connections.push(RecipeConnection {
-            from: "nm.output".to_string(),
-            to: "preview.normal_map".to_string(),
         });
     }
     if !scan.metalmap_data.is_empty() {
@@ -413,10 +381,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         connections.push(RecipeConnection {
             from: "tex.output".to_string(),
             to: "bundler.texture".to_string(),
-        });
-        connections.push(RecipeConnection {
-            from: "tex.output".to_string(),
-            to: "preview.texture".to_string(),
         });
     }
     if has_pass {

@@ -292,7 +292,6 @@ mod tests {
         NodeType::FileReference,
         // Source nodes
         NodeType::PassThrough,
-        NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
     ];

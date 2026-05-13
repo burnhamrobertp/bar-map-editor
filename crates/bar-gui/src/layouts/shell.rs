@@ -722,10 +722,6 @@ impl BarEditorApp {
                             let _ = self.graph.remove_node(*node_id);
                             self.visuals.node_visuals.remove(node_id);
                             self.remove_node_from_group(*node_id);
-                            if self.preview.node == Some(*node_id) {
-                                self.preview.node = None;
-                                self.preview.open = false;
-                            }
                         }
                         self.project.passthrough_edit = None;
                         self.clear_selection();

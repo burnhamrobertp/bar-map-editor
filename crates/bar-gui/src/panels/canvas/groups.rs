@@ -548,11 +548,5 @@ impl BarEditorApp {
                 self.visuals.node_to_group.insert(id, scope);
             }
         }
-        // Auto-open the 3D preview when a Bundler is created so the user
-        // immediately sees the viewport associated with this export node.
-        if node_type == NodeType::Bundler {
-            self.preview.open = true;
-            self.preview.node = Some(id);
-        }
     }
 }

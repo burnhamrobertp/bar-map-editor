@@ -635,10 +635,6 @@ impl BarEditorApp {
             let _ = self.graph.remove_node(*nid);
             self.visuals.node_visuals.remove(nid);
             self.remove_node_from_group(*nid);
-            if self.preview.node == Some(*nid) {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
         }
         self.project.passthrough_edit = None;
         self.clear_selection();
@@ -660,10 +656,6 @@ impl BarEditorApp {
             let _ = self.graph.remove_node(*node_id);
             self.visuals.node_visuals.remove(node_id);
             self.remove_node_from_group(*node_id);
-            if self.preview.node == Some(*node_id) {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
         }
         self.project.passthrough_edit = None;
         self.clear_selection();
@@ -727,18 +719,19 @@ impl BarEditorApp {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
-        // Hash the upstream subgraph of the preview node so that changes
-        // to disconnected nodes don't trigger a re-render.
-        if let Some(pn) = self.preview.node {
-            self.graph.upstream_content_hash(pn).hash(&mut h);
+        // Hash upstream of the first Bundler so disconnected nodes
+        // don't trigger a re-render; fall back to full graph revision.
+        let bundler_id = self
+            .graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.node_type == bar_graph::NodeType::Bundler)
+            .map(|(id, _)| *id);
+        if let Some(bn) = bundler_id {
+            self.graph.upstream_content_hash(bn).hash(&mut h);
         } else {
             self.graph.revision().hash(&mut h);
         }
-        self.preview
-            .node
-            .map(|n| n.0)
-            .unwrap_or(u64::MAX)
-            .hash(&mut h);
         self.map.width.hash(&mut h);
         self.map.height.hash(&mut h);
         self.map.min_height.to_bits().hash(&mut h);
@@ -793,17 +786,6 @@ impl BarEditorApp {
     pub fn clear_status(&mut self) {
         self.dialog.status_message = None;
         self.dialog.status_level = LogLevel::Info;
-    }
-
-    /// Returns a display label for the preview window title. Lives on
-    /// `BarEditorApp` (rather than `PreviewState`) because it needs the
-    /// node label out of `self.graph`.
-    pub fn preview_node_label(&self) -> String {
-        self.preview
-            .node()
-            .and_then(|id| self.graph.get_node(id))
-            .map(|n| format!("3D Preview — {}", n.label))
-            .unwrap_or_else(|| "3D Preview".to_string())
     }
 
     /// Push the latest evaluated heightmap so the 2D inspector can show

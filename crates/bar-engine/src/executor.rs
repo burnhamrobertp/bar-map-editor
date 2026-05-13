@@ -128,33 +128,6 @@ impl NodeExecutor for CpuExecutor {
                 let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
-            NodeType::Preview => {
-                // Preview is a real node: its executor receives
-                // upstream values via its declared input ports
-                // exactly like any other node. We pass them
-                // through into the runtime output map under the
-                // same names so the 3D viewport can read them via
-                // the standard `outputs[node_id][port_name]`
-                // accessor — no special "find Preview nodes
-                // globally and inspect their incoming wires"
-                // pathway. The node has no declared output ports
-                // (nothing downstream consumes it), but its
-                // runtime output map is what the viewport reads
-                // from, the same way the viewport for any node
-                // would.
-                if let Some(v) = inputs.get("heightmap") {
-                    outputs.insert("heightmap".to_string(), v.clone());
-                }
-                if let Some(v) = inputs.get("texture") {
-                    outputs.insert("texture".to_string(), v.clone());
-                }
-                if let Some(v) = inputs.get("normal_map") {
-                    outputs.insert("normal_map".to_string(), v.clone());
-                }
-                if let Some(v) = inputs.get("specular_map") {
-                    outputs.insert("specular_map".to_string(), v.clone());
-                }
-            }
 
             NodeType::SubgraphInput | NodeType::SubgraphOutput => {
                 // Both subgraph IO nodes are pure passthrough — the
@@ -3023,58 +2996,6 @@ fn apply_select_aspect(input: &Heightmap, direction: f32, width: f32, falloff: f
 mod tests {
     use super::*;
     use bar_graph::{GraphEngine, Node, NodeId, PortId};
-
-    #[test]
-    fn preview_node_passes_inputs_through_as_outputs() {
-        // Preview is a real node: its executor takes upstream
-        // values via its declared input ports and re-emits them as
-        // runtime outputs under the same names. That's what lets
-        // the 3D viewport read its data via the standard
-        // `outputs[node_id][port_name]` accessor — same shape any
-        // consumer uses for any other node, no special-case
-        // "global ingest" path.
-        let executor = CpuExecutor;
-        let mut hm = Heightmap::new(8, 8).unwrap();
-        for y in 0..8 {
-            for x in 0..8 {
-                hm.set(x, y, ((x * 7 + y) as f32) / 100.0).unwrap();
-            }
-        }
-        let inputs = HashMap::from([("heightmap".to_string(), PortValue::Heightmap(hm.clone()))]);
-        let result = executor
-            .execute(&NodeType::Preview, &HashMap::new(), &inputs, 8, 8, 8, 8)
-            .unwrap();
-        let PortValue::Heightmap(out) = result
-            .get("heightmap")
-            .expect("Preview should re-emit `heightmap` from its input")
-        else {
-            panic!("expected Heightmap port value");
-        };
-        for y in 0..8 {
-            for x in 0..8 {
-                assert!((out.get(x, y).unwrap() - hm.get(x, y).unwrap()).abs() < 1e-6);
-            }
-        }
-    }
-
-    #[test]
-    fn preview_node_emits_no_unrequested_ports() {
-        // With no inputs supplied, the runtime output map is empty.
-        // (Preview only re-emits what it received.)
-        let executor = CpuExecutor;
-        let result = executor
-            .execute(
-                &NodeType::Preview,
-                &HashMap::new(),
-                &HashMap::new(),
-                8,
-                8,
-                8,
-                8,
-            )
-            .unwrap();
-        assert!(result.is_empty());
-    }
 
     #[test]
     fn test_passthrough_normalises_backslash_bundle_paths() {

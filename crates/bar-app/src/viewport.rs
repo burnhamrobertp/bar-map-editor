@@ -512,7 +512,6 @@ pub fn eval_preview(
     hm_height: u32,
     tex_width: u32,
     tex_height: u32,
-    preview_node_id: Option<bar_graph::NodeId>,
 ) -> (Option<bar_data::Heightmap>, Option<bar_data::ColorBuffer>) {
     let result = match bar_graph::evaluate_graph(
         graph, executor, hm_width, hm_height, tex_width, tex_height,
@@ -521,19 +520,8 @@ pub fn eval_preview(
         Err(_) => return (None, None),
     };
 
-    let Some(pid) = preview_node_id else {
-        return (None, None);
-    };
-    let is_preview = graph
-        .get_node(pid)
-        .map(|n| n.node_type == bar_graph::NodeType::Preview)
-        .unwrap_or(false);
-    if !is_preview {
-        return (None, None);
-    }
-
-    let hm = bar_graph::get_node_output_heightmap_named(&result, pid, "heightmap");
-    let tex = bar_graph::get_node_output_color_named(&result, pid, "texture");
+    let hm = bar_graph::get_preview_heightmap(graph, &result);
+    let tex = bar_graph::get_texture_output(graph, &result);
     (hm, tex)
 }
 

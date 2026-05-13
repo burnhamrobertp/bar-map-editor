@@ -450,7 +450,6 @@ fn spawn_eval_passes(
     let water_y = wy;
     let x_extent = xe;
     let z_extent = ze;
-    let preview_node_id = app.preview.node();
     let session_id = slot.core.session_id;
 
     const TEXTURE_WORKING_RES_CAP: u32 = 4096;
@@ -480,7 +479,6 @@ fn spawn_eval_passes(
                 low_hm_h,
                 low_tex_w,
                 low_tex_h,
-                preview_node_id,
             );
             let _ = tx.send(PreviewResult {
                 heightmap,
@@ -514,8 +512,7 @@ fn spawn_eval_passes(
         let exec = Arc::clone(executor);
         slot.eval.high_res_pending = true;
         std::thread::spawn(move || {
-            let (heightmap, texture) =
-                eval_preview(&graph, exec.as_ref(), w, h, tex_w, tex_h, preview_node_id);
+            let (heightmap, texture) = eval_preview(&graph, exec.as_ref(), w, h, tex_w, tex_h);
             let _ = tx.send(PreviewResult {
                 heightmap,
                 texture,

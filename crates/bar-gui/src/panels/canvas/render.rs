@@ -737,17 +737,11 @@ impl BarEditorApp {
                 .filter(|p| matches!(PortPlacement::for_input(p.kind), PortPlacement::Left))
                 .count();
             let n_ports = left_input_count.max(node_outputs.len());
-            let footer_h_allowance = if node_type == NodeType::Preview {
-                22.0
-            } else {
-                0.0
-            };
             let (node_min_h, node_min_w) = if is_io {
                 (28.0_f32, 90.0_f32)
             } else {
                 (
-                    (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0 + footer_h_allowance)
-                        .max(60.0),
+                    (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0),
                     100.0_f32,
                 )
             };
@@ -1090,30 +1084,13 @@ impl BarEditorApp {
                 draw_passthrough_body(&painter, node_rect, files);
             }
 
-            // Bundler layout:
-            //   • Export button  — top-right, 44×36, same as toolbar
-            //   • Preview footer — full-width bar at the bottom (styled like an
-            // Bundler carries an Export button. Preview nodes carry
-            // an "Open" footer that pops the 3D viewport. The two
-            // are no longer co-located on the same node — Bundler is
-            // for export only; the Preview node is the sole driver
-            // of the 3D viewport (see Stage N).
-            let has_open_footer = node_type == NodeType::Preview;
+            // Bundler: Export button — top-right, 44x36.
             let has_export_button = node_type == NodeType::Bundler;
             let export_rect: Option<egui::Rect> = if has_export_button {
                 let btn = egui::vec2(44.0, 36.0);
                 Some(egui::Rect::from_min_size(
                     egui::pos2(node_rect.max.x - 6.0 - btn.x, node_rect.min.y + 26.0),
                     btn,
-                ))
-            } else {
-                None
-            };
-            let open_footer_rect: Option<egui::Rect> = if has_open_footer {
-                let footer_h = 22.0_f32;
-                Some(egui::Rect::from_min_size(
-                    egui::pos2(node_rect.min.x, node_rect.max.y - footer_h),
-                    egui::vec2(node_rect.width(), footer_h),
                 ))
             } else {
                 None
@@ -1143,37 +1120,6 @@ impl BarEditorApp {
                 }
             }
 
-            // Paint the Preview node's "Open" footer.
-            if let Some(footer_rect) = open_footer_rect {
-                let ptr = ui.ctx().pointer_latest_pos();
-                let open_hov = ptr.is_some_and(|p| footer_rect.contains(p));
-                let footer_bg = if open_hov {
-                    egui::Color32::from_rgb(22, 148, 178)
-                } else {
-                    egui::Color32::from_rgb(15, 110, 140)
-                };
-                painter.rect_filled(
-                    footer_rect,
-                    egui::CornerRadius {
-                        nw: 0,
-                        ne: 0,
-                        sw: 4,
-                        se: 4,
-                    },
-                    footer_bg,
-                );
-                // "Open" reads as "open the viewport" — the Preview
-                // node IS the preview, the footer just exposes the
-                // viewport panel.
-                painter.text(
-                    footer_rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    "Open",
-                    egui::FontId::proportional(11.0),
-                    egui::Color32::WHITE,
-                );
-            }
-
             // ── Interaction ──────────────────────────────────────────────────────────
             // Node interact is registered FIRST.  Button interacts are registered
             // SECOND so that egui gives them higher priority when clicks land on them.
@@ -1186,11 +1132,8 @@ impl BarEditorApp {
                 egui::Sense::click_and_drag(),
             );
 
-            // Button interactions — registered AFTER node so they
-            // capture clicks first. Export and Open are independent
-            // affordances on different node types now.
+            // Button interactions — registered AFTER node so they capture clicks first.
             let mut run_clicked = false;
-            let mut open_clicked = false;
             if let Some(export_rect) = export_rect {
                 let any_running = self.preview.export_status.is_running();
                 let busy_self = self.preview.export_status.affects(*node_id);
@@ -1215,23 +1158,13 @@ impl BarEditorApp {
                     .on_hover_text(run_tooltip);
                 run_clicked = !any_running && run_resp.clicked();
             }
-            if let Some(footer_rect) = open_footer_rect {
-                let prev_resp = ui
-                    .interact(
-                        footer_rect,
-                        egui::Id::new(("preview_open", node_id.0)),
-                        egui::Sense::click(),
-                    )
-                    .on_hover_text("Open the 3D viewport");
-                open_clicked = prev_resp.clicked();
-            }
 
             // Node selection — only when neither action button was
             // clicked. Also arm the contextual Properties panel: the
             // click is the user's intent to "look at" this node;
             // the 100 ms hover gate filters out accidental clicks on
             // the way to dragging.
-            if node_response.clicked() && !run_clicked && !open_clicked {
+            if node_response.clicked() && !run_clicked {
                 let additive = ui.ctx().input(|i| i.modifiers.ctrl || i.modifiers.command);
                 new_selection = Some((*node_id, additive));
                 // Ctrl-click is "build a multi-selection", not "look
@@ -1412,13 +1345,6 @@ impl BarEditorApp {
                 }
             }
 
-            if open_clicked {
-                self.preview.open = true;
-                // The Preview node IS the viewport target; clicking
-                // its footer just opens the panel and re-targets it
-                // in case multiple Preview nodes exist in the graph.
-                self.preview.node = Some(*node_id);
-            }
             if run_clicked && self.validate_before_export("Bundle") {
                 self.preview.run_bundler_node = Some(*node_id);
             }

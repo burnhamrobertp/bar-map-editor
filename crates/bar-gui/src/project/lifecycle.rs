@@ -48,10 +48,6 @@ impl BarEditorApp {
         self.map.recipe_meta = RecipeMeta::default();
         self.map.features = Vec::new();
 
-        // Inspector / preview.
-        self.preview.node = None;
-        self.preview.open = false;
-
         // Signal renderers to flush stale GPU resources.
         self.project.graph_reset = true;
 
@@ -104,10 +100,7 @@ impl BarEditorApp {
         self.dialog.status_message = None;
         self.dialog.status_level = crate::log::LogLevel::Info;
 
-        // Preview / export state -- viewport open flag, driving node,
-        // run pulses, and export status all reset together. preview_node
-        // is cleared earlier in this function (it depends on the graph,
-        // which the project replacement clobbers).
+        // Preview / export state -- run pulses and export status all reset together.
         self.preview.reset();
 
         // Canvas viewport — pan offset and the cached canvas rect
@@ -128,14 +121,9 @@ impl BarEditorApp {
     pub(crate) fn do_new_project(&mut self) {
         self.reset_project();
 
-        // Drop the two terminal nodes every project ends with: a
-        // Bundler for export and a Preview for the 3D viewport.
-        // Both are placed near the right edge of the visible canvas
-        // so the user can build their pipeline left-to-right toward
-        // these sinks. Layout reused by the welcome screen's
-        // "Blank Project" path so all entry points produce
-        // identical starting state.
-        let (bundler_pos, preview_pos) = self.starter_terminal_positions();
+        // Drop the Bundler terminal node near the right edge of the canvas
+        // so the user can build their pipeline left-to-right.
+        let bundler_pos = self.starter_bundler_position();
         let bundler_id = self
             .graph
             .add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
@@ -146,52 +134,31 @@ impl BarEditorApp {
                 size: egui::vec2(210.0, 240.0),
             },
         );
-        let preview_id = self
-            .graph
-            .add_node(Node::new(NodeId(0), NodeType::Preview, "3D Preview"));
-        self.visuals.node_visuals.insert(
-            preview_id,
-            NodeVisual {
-                position: preview_pos,
-                size: egui::vec2(180.0, 150.0),
-            },
-        );
-        self.preview.node = Some(preview_id);
     }
 
-    /// Where to place the Bundler / Preview terminal nodes on a
-    /// fresh project. Anchors to the right edge of the most-recent
-    /// canvas rect (so the user can build left-to-right toward the
-    /// sinks); falls back to a sensible default when the canvas
-    /// hasn't been laid out yet.
-    pub(crate) fn starter_terminal_positions(&self) -> (egui::Pos2, egui::Pos2) {
+    /// Where to place the Bundler terminal node on a fresh project.
+    /// Anchors to the right edge of the most-recent canvas rect so
+    /// the user can build their pipeline left-to-right.
+    pub(crate) fn starter_bundler_position(&self) -> egui::Pos2 {
         let bundler_size = egui::vec2(210.0, 240.0);
-        let preview_size = egui::vec2(180.0, 150.0);
         let margin = 40.0_f32;
-        let gap = 60.0_f32;
         let canvas_w = if self.canvas.rect_last.is_positive() {
             self.canvas.rect_last.width()
         } else {
-            // Welcome → Blank Project on first launch can fire
+            // Welcome -> Blank Project on first launch can fire
             // before any canvas frame has run; pick a width that
             // matches the typical default viewport.
             1100.0
         };
         let right_x = canvas_w - margin;
         let bundler_x = right_x - bundler_size.x;
-        let preview_x = right_x - preview_size.x;
-        let top_y = 80.0;
-        let bundler_pos = egui::pos2(bundler_x, top_y);
-        let preview_pos = egui::pos2(preview_x, top_y + bundler_size.y + gap);
-        (bundler_pos, preview_pos)
+        egui::pos2(bundler_x, 80.0)
     }
 
-    /// Drop the default terminal nodes (Bundler + 3D Preview) onto
-    /// an empty graph — the welcome panel's "Empty graph" entry
-    /// point. Lives in `BarEditorApp` because it touches private
-    /// fields directly; the panel calls it through this shim.
+    /// Drop the Bundler terminal node onto an empty graph -- the
+    /// welcome panel's "Empty graph" entry point.
     pub(crate) fn welcome_blank_project(&mut self) {
-        let (bundler_pos, preview_pos) = self.starter_terminal_positions();
+        let bundler_pos = self.starter_bundler_position();
         let bundler_id = self
             .graph
             .add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
@@ -202,17 +169,6 @@ impl BarEditorApp {
                 size: egui::vec2(210.0, 240.0),
             },
         );
-        let preview_id = self
-            .graph
-            .add_node(Node::new(NodeId(0), NodeType::Preview, "3D Preview"));
-        self.visuals.node_visuals.insert(
-            preview_id,
-            NodeVisual {
-                position: preview_pos,
-                size: egui::vec2(180.0, 150.0),
-            },
-        );
-        self.preview.node = Some(preview_id);
         self.project.is_dirty = true;
     }
 
@@ -635,21 +591,6 @@ impl BarEditorApp {
         self.log_info(status);
         self.project.is_dirty = false;
         self.project.graph_reset = true;
-
-        // Restore preview.node so sculpt layout can render immediately
-        // without the user having to open the floating preview first.
-        // reset_project() cleared it; scan the newly installed graph to
-        // get the id back. We intentionally don't set preview.open here
-        // so the floating window doesn't force-open on every load.
-        if let Some(id) = self
-            .graph
-            .nodes()
-            .values()
-            .find(|n| n.node_type == NodeType::Preview)
-            .map(|n| n.id)
-        {
-            self.preview.node = Some(id);
-        }
     }
 
     /// Open a .sd7 map archive as a new project.
@@ -746,17 +687,6 @@ impl BarEditorApp {
         }
         // Imported project hasn't been saved yet.
         self.project.is_dirty = true;
-        // Auto-open the 3D preview at the Preview node.
-        if let Some(id) = self
-            .graph
-            .nodes()
-            .values()
-            .find(|n| n.node_type == NodeType::Preview)
-            .map(|n| n.id)
-        {
-            self.preview.node = Some(id);
-            self.preview.open = true;
-        }
     }
 
     /// Pick a default label for a new entity of the given base type
@@ -800,13 +730,10 @@ impl BarEditorApp {
 
         self.reset_project();
 
-        // Right-edge placement for the terminal nodes; drop the
-        // macro to the left of them so wires read left-to-right.
-        let (bundler_pos, preview_pos) = self.starter_terminal_positions();
-        let macro_pos = egui::pos2(
-            (bundler_pos.x.min(preview_pos.x) - 320.0).max(40.0),
-            bundler_pos.y + 60.0,
-        );
+        // Right-edge placement for the terminal node; drop the
+        // macro to the left of it so wires read left-to-right.
+        let bundler_pos = self.starter_bundler_position();
+        let macro_pos = egui::pos2((bundler_pos.x - 320.0).max(40.0), bundler_pos.y + 60.0);
         self.instantiate_macro(macro_name, macro_pos);
 
         // The macro's IO nodes were just added to a fresh group;
@@ -836,28 +763,11 @@ impl BarEditorApp {
             },
         );
 
-        // Preview — drives the 3D viewport. Separate sink so a
-        // half-wired Bundler can't be mistaken for a working
-        // preview.
-        let mut preview = Node::new(NodeId(0), NodeType::Preview, "3D Preview");
-        preview.label = "3D Preview".to_string();
-        let preview_id = self.graph.add_node(preview);
-        self.visuals.node_visuals.insert(
-            preview_id,
-            NodeVisual {
-                position: preview_pos,
-                size: egui::vec2(180.0, 150.0),
-            },
-        );
-        self.preview.open = true;
-        self.preview.node = Some(preview_id);
-
-        // Wire each subgraph output to BOTH the Bundler (for
-        // export) and the Preview (for the viewport). Macro IO
+        // Wire each subgraph output to the Bundler. Macro IO
         // nodes are unnamed by default, so we route by *kind*:
-        // the first Heightmap port goes to the bundler/preview
-        // heightmap input, the first Color port goes to texture,
-        // etc. Subsequent ports of the same kind are skipped --
+        // the first Heightmap port goes to the bundler heightmap
+        // input, the first Color port goes to texture, etc.
+        // Subsequent ports of the same kind are skipped --
         // there's only one Bundler.heightmap to fill.
         // Collect subgraph outputs with their name so we can distinguish
         // "terrain" from "slope" (both are Heightmap kind).
@@ -909,18 +819,6 @@ impl BarEditorApp {
                     port_name: port_name.to_string(),
                 },
             );
-            if matches!(port_name, "heightmap" | "texture") {
-                let _ = self.graph.connect(
-                    PortId {
-                        node_id: src_id,
-                        port_name: src_port,
-                    },
-                    PortId {
-                        node_id: preview_id,
-                        port_name: port_name.to_string(),
-                    },
-                );
-            }
         }
 
         // Auto-fill the rest of the Bundler's inputs so the preset

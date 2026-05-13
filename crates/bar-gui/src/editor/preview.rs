@@ -1,8 +1,7 @@
 //! Preview-and-export state owned by `BarEditorApp`.
 //!
-//! Tracks which node drives the 3D viewport, whether the viewport is
-//! visible, and the one-frame "run" / "test in BAR" pulses that
-//! `bar-app` polls each frame to kick off background export jobs.
+//! Tracks one-frame "run" / "test in BAR" / "compile" pulses that
+//! `bar-app` polls each frame to kick off background jobs.
 //!
 //! These all reset to defaults on project switch (cleared by
 //! `BarEditorApp::reset_session_state` via `PreviewState::reset`).
@@ -58,11 +57,6 @@ impl ExportStatus {
 /// Grouped editor preview / export state. See module docs.
 #[derive(Default, Debug, Clone)]
 pub struct PreviewState {
-    /// Is the preview window open?
-    pub open: bool,
-    /// Which node feeds the 3D viewport. `None` => the renderer shows
-    /// the empty/no-mesh state.
-    pub node: Option<NodeId>,
     /// Set to `true` for one frame when the user clicks the toolbar
     /// "Run" button. `bar-app` consumes this via `take_run_requested`.
     pub run_requested: bool,
@@ -87,19 +81,6 @@ pub struct PreviewState {
 }
 
 impl PreviewState {
-    /// Whether the preview window is currently open.
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn set_open(&mut self, v: bool) {
-        self.open = v;
-    }
-
-    pub fn node(&self) -> Option<NodeId> {
-        self.node
-    }
-
     /// Consume the one-frame "run" pulse. Returns `true` once after
     /// the user clicks Run, then resets.
     pub fn take_run_requested(&mut self) -> bool {
