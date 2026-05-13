@@ -64,7 +64,6 @@ fn draw_info_bar(app: &mut BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
                 ui.label(age);
             }
         } else {
-            // Compiled on disk but not in this session (no compiled_at timestamp).
             if app.project.compile_dirty {
                 ui.colored_label(egui::Color32::from_rgb(220, 160, 40), "Out of date");
             } else {
@@ -76,27 +75,82 @@ fn draw_info_bar(app: &mut BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
             let running = app.preview.compile_running;
             let any_running = running || app.preview.export_status().is_running();
 
+            let tooltip = if is_compiled { "Recompile" } else { "Compile" };
+            let response = ui
+                .add_enabled(!any_running, egui::Button::new("\u{2699}"))
+                .on_hover_text(tooltip);
+            if response.clicked() {
+                app.preview.compile_requested = true;
+            }
             if running {
-                ui.weak("Compiling...");
-            } else {
-                let label = if app.project.compile_dirty || !is_compiled {
-                    if is_compiled {
-                        "Recompile"
-                    } else {
-                        "Compile"
-                    }
-                } else {
-                    "Recompile"
-                };
-                if ui
-                    .add_enabled(!any_running, egui::Button::new(label))
-                    .clicked()
-                {
-                    app.preview.compile_requested = true;
-                }
+                draw_animated_border(ui, response.rect);
             }
         });
     });
+}
+
+/// Draw a bright segment travelling clockwise around `rect` to indicate activity.
+fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
+    let time = ui.input(|i| i.time) as f32;
+    let phase = (time * 0.75).fract();
+
+    let rect = rect.expand(2.0);
+    let w = rect.width();
+    let h = rect.height();
+    let perimeter = 2.0 * (w + h);
+    let segment_len = perimeter * 0.4;
+    let head = phase * perimeter;
+
+    let painter = ui.painter();
+
+    // Dim base outline so the button has a visible border even between frames.
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(80, 140, 255, 50)),
+        egui::StrokeKind::Outside,
+    );
+
+    // Travelling glow: N short segments fading from head to tail.
+    let steps = 36usize;
+    for i in 0..steps {
+        let t0 = (head - segment_len * (i as f32 / steps as f32)).rem_euclid(perimeter);
+        let t1 = (head - segment_len * ((i + 1) as f32 / steps as f32)).rem_euclid(perimeter);
+        // Skip the one segment that wraps around the 0/perimeter seam --
+        // it would otherwise draw a diagonal across the rect.
+        if t0 < t1 {
+            continue;
+        }
+        let p0 = perimeter_point(rect, t0 / perimeter);
+        let p1 = perimeter_point(rect, t1 / perimeter);
+        let alpha = ((1.0 - i as f32 / steps as f32) * 230.0) as u8;
+        painter.line_segment(
+            [p0, p1],
+            egui::Stroke::new(
+                2.0,
+                egui::Color32::from_rgba_unmultiplied(120, 180, 255, alpha),
+            ),
+        );
+    }
+
+    ui.ctx().request_repaint();
+}
+
+/// Map `t` in [0, 1) to a point on the perimeter of `rect`, clockwise from
+/// the top-left corner.
+fn perimeter_point(rect: egui::Rect, t: f32) -> egui::Pos2 {
+    let w = rect.width();
+    let h = rect.height();
+    let pos = t * 2.0 * (w + h);
+    if pos < w {
+        egui::pos2(rect.left() + pos, rect.top())
+    } else if pos < w + h {
+        egui::pos2(rect.right(), rect.top() + pos - w)
+    } else if pos < 2.0 * w + h {
+        egui::pos2(rect.right() - (pos - w - h), rect.bottom())
+    } else {
+        egui::pos2(rect.left(), rect.bottom() - (pos - 2.0 * w - h))
+    }
 }
 
 fn draw_placeholder(app: &BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
