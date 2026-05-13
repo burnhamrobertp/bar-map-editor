@@ -1652,11 +1652,10 @@ fn build_feature_instances(
     let ze = (0.5 * ph / pm).min(0.5);
     let height_range = (max_h - min_h).abs().max(1.0);
     let hs = (height_range / (pm * 8.0)).max(0.005);
-    // Box half-size in render-space: ~4 elmos per side so boxes are visible
-    // without swamping smaller maps.
-    // Fixed 1.5% of render space -- visible as a distinct colored marker at any
-    // typical camera distance without overwhelming the terrain shape.
-    let box_scale = 0.015_f32;
+    // Box half-size in render-space, scaled proportionally to the map so
+    // features appear roughly 60 elmos across regardless of map dimensions.
+    // Clamped so boxes are always legible on tiny maps and never swamp terrain.
+    let box_scale = (60.0_f32 / (pm * 8.0)).clamp(0.003, 0.012);
 
     features
         .iter()

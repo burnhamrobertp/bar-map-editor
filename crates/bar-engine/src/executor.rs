@@ -515,8 +515,21 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::PaintedTexture => {
-                let pixels = read_asset_bytes(get_string(params, "asset_path", ""));
-                let tex = painted_rgb_to_color_buffer(pixels, PAINTED_TEXTURE_RES, width, height);
+                let path = get_string(params, "asset_path", "");
+                // Read the header to get actual stored dimensions -- imported
+                // textures can be any resolution, not just PAINTED_TEXTURE_RES.
+                let (src_res, pixels) = if path.is_empty() {
+                    (PAINTED_TEXTURE_RES, Vec::new())
+                } else {
+                    match bar_project::read_asset_file(std::path::Path::new(path)) {
+                        Ok((header, data)) => (header.width.max(1), data),
+                        Err(e) => {
+                            tracing::warn!(path, error = %e, "Failed to read texture asset");
+                            (PAINTED_TEXTURE_RES, Vec::new())
+                        }
+                    }
+                };
+                let tex = painted_rgb_to_color_buffer(pixels, src_res, width, height);
                 outputs.insert("output".to_string(), PortValue::Color(tex));
             }
 

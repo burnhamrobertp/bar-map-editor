@@ -642,7 +642,7 @@ fn cmd_preview(
         let ze = (0.5 * ph / pm).min(0.5);
         let height_range = (max_h - min_h).abs().max(1.0);
         let hs = (height_range / (pm * 8.0)).max(0.005);
-        let box_scale = 0.015_f32;
+        let box_scale = (60.0_f32 / (pm * 8.0)).clamp(0.003, 0.012);
 
         let instances: Vec<FeatureInstance> = project
             .recipe
