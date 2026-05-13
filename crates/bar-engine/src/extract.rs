@@ -183,8 +183,8 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         })
         .unwrap_or_default();
 
-    // Assemble SMT texture into a 256x256 RGB hex blob for PaintedTexture.
-    const TEX_RES: u32 = 256;
+    // Assemble SMT texture into a 512x512 RGB hex blob for PaintedTexture.
+    const TEX_RES: u32 = 512;
     let (texture_hex, texture_res) =
         if let (Some(smt_path), Some(smf)) = (smt_abs.as_ref(), smf_data.as_ref()) {
             let result: Option<(String, u32)> = (|| {
@@ -215,7 +215,11 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
             (String::new(), 0)
         };
 
-    let features: Vec<bar_project::recipe::PlacedFeature> = smf_data
+    // Features: merge SMF-embedded features with Lua FeaturePlacer placements.
+    // Modern BAR maps store the bulk of their features in
+    // mapconfig/featureplacer/set.lua; the SMF section often has only a handful
+    // of legacy entries (or none).
+    let mut features: Vec<bar_project::recipe::PlacedFeature> = smf_data
         .as_ref()
         .map(|smf| {
             smf.features
@@ -231,6 +235,18 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
                 .collect()
         })
         .unwrap_or_default();
+
+    let set_lua = work_dir
+        .join("mapconfig")
+        .join("featureplacer")
+        .join("set.lua");
+    if set_lua.exists() {
+        if let Ok(content) = std::fs::read_to_string(&set_lua) {
+            let lua_features = parse_feature_placer_set(&content);
+            tracing::info!(count = lua_features.len(), "Parsed FeaturePlacer set.lua");
+            features.extend(lua_features);
+        }
+    }
 
     Ok(WorkDirScan {
         work_dir,
@@ -357,6 +373,61 @@ fn scan_dir_recursive(
         }
     }
     Ok(())
+}
+
+/// Parse a Spring FeaturePlacer `set.lua` and return placed features.
+///
+/// Each feature line looks like:
+/// `{ name = "oak_holly_b1", x = 10576, z = 4819, rot = -8813 },`
+///
+/// Coordinates are Spring world units (elmos). `rot` is encoded as an integer
+/// in the range [-32768, 32768] where 32768 corresponds to pi radians (the
+/// Spring 15-bit half-turn convention). We convert to degrees for storage.
+fn parse_feature_placer_set(content: &str) -> Vec<bar_project::recipe::PlacedFeature> {
+    let mut features = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+
+        let name = extract_lua_string(line, "name");
+        let x = extract_lua_number(line, "x");
+        let z = extract_lua_number(line, "z");
+        let rot = extract_lua_number(line, "rot");
+
+        if let (Some(name), Some(x), Some(z)) = (name, x, z) {
+            let angle_deg = rot.unwrap_or(0.0) * 180.0 / 32768.0;
+            features.push(bar_project::recipe::PlacedFeature {
+                feature_type: name,
+                x,
+                y: 0.0,
+                z,
+                angle: angle_deg,
+                taken_damage: 0,
+            });
+        }
+    }
+
+    features
+}
+
+fn extract_lua_string(line: &str, key: &str) -> Option<String> {
+    let pat = format!("{key} = \"");
+    let start = line.find(&pat)? + pat.len();
+    let end = line[start..].find('"')? + start;
+    Some(line[start..end].to_string())
+}
+
+fn extract_lua_number(line: &str, key: &str) -> Option<f32> {
+    let pat = format!("{key} = ");
+    let start = line.find(&pat)? + pat.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-' && c != '.')
+        .unwrap_or(rest.len());
+    rest[..end].parse::<f32>().ok()
 }
 
 #[cfg(test)]
