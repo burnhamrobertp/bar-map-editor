@@ -58,7 +58,15 @@ fn bench_cpu_executor_noise(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("perlin", size), &size, |b, &size| {
             b.iter(|| {
                 executor
-                    .execute(&NodeType::PerlinNoise, &params, &inputs, size, size)
+                    .execute(
+                        &NodeType::PerlinNoise,
+                        &params,
+                        &inputs,
+                        size,
+                        size,
+                        size,
+                        size,
+                    )
                     .unwrap()
             });
         });

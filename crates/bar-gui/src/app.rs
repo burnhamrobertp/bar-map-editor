@@ -9,8 +9,8 @@ use crate::undo::UndoHistory;
 // Re-export icon painters so that `use crate::app::*` in panel modules keeps
 // finding them after they moved to panels/icons.rs.
 pub(crate) use crate::panels::icons::{
-    draw_io_icon, paint_bar_icon, paint_busy_dot, paint_export_icon, paint_inspector_icon,
-    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
+    draw_io_icon, paint_bar_icon, paint_busy_dot, paint_compile_icon, paint_export_icon,
+    paint_inspector_icon, paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.
@@ -181,29 +181,31 @@ pub use crate::editor::ExportStatus;
 /// + a match arm in `layouts::dispatch::draw_active`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Layout {
-    /// Today's editor: top toolbar, left palette, centre canvas,
-    /// right contextual properties, bottom status bar, with
-    /// floating windows for inspector / map info / validation /
-    /// settings / about.
+    /// Node graph editor: left palette, central canvas, contextual
+    /// properties, floating dialogs. No 3D viewport -- switch to
+    /// Sculpt3D or use a future split layout for side-by-side editing.
     #[default]
-    Standard,
-    /// Full-width 3D viewport with brush controls on the right.
+    NodeGraph,
+    /// Full-width 3D viewport with brush controls on the left.
     /// Writes brush strokes to `SculptState` directly; the
-    /// export pipeline merges them onto graph output at bundle
-    /// time.
+    /// export pipeline merges them onto graph output at bundle time.
     Sculpt3D,
+    /// Read-only 3D viewport showing the compiled native-resolution
+    /// BC1 texture. Available only when a compile has been run.
+    Preview,
 }
 
 impl Layout {
     /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
     /// Ctrl+2, etc. Extend this slice when new layouts are added.
-    pub const ALL: &'static [Layout] = &[Layout::Standard, Layout::Sculpt3D];
+    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Sculpt3D, Layout::Preview];
 
     /// i18n key for this layout's display name.
     pub(crate) fn i18n_key(self) -> &'static str {
         match self {
-            Layout::Standard => "editor.menu.node_graph",
+            Layout::NodeGraph => "editor.menu.node_graph",
             Layout::Sculpt3D => "editor.menu.sculpt_3d",
+            Layout::Preview => "editor.menu.preview",
         }
     }
 }
@@ -248,6 +250,9 @@ pub struct BarEditorApp {
     /// Active top-level UI layout. Loaded from settings on launch,
     /// persisted via `set_active_layout`.
     pub(crate) active_layout: Layout,
+    /// Set by `bar-app` from `GpuContext::supports_bc` on startup. Tells
+    /// the Preview layout whether BC1 texture upload is available.
+    pub supports_bc: bool,
 }
 
 impl Default for BarEditorApp {
@@ -280,6 +285,7 @@ impl Default for BarEditorApp {
             palette_filter: String::new(),
             settings: Settings::default(),
             active_layout: Layout::default(),
+            supports_bc: false,
         }
     }
 }
@@ -411,6 +417,7 @@ impl BarEditorApp {
     /// Mark the project as dirty (unsaved changes pending).
     pub(crate) fn mark_dirty(&mut self) {
         self.project.is_dirty = true;
+        self.project.compile_dirty = true;
     }
 
     /// Append a message to the log buffer. Info/Warning/Error also update
@@ -628,10 +635,6 @@ impl BarEditorApp {
             let _ = self.graph.remove_node(*nid);
             self.visuals.node_visuals.remove(nid);
             self.remove_node_from_group(*nid);
-            if self.preview.node == Some(*nid) {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
         }
         self.project.passthrough_edit = None;
         self.clear_selection();
@@ -653,10 +656,6 @@ impl BarEditorApp {
             let _ = self.graph.remove_node(*node_id);
             self.visuals.node_visuals.remove(node_id);
             self.remove_node_from_group(*node_id);
-            if self.preview.node == Some(*node_id) {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
         }
         self.project.passthrough_edit = None;
         self.clear_selection();
@@ -720,18 +719,19 @@ impl BarEditorApp {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
-        // Hash the upstream subgraph of the preview node so that changes
-        // to disconnected nodes don't trigger a re-render.
-        if let Some(pn) = self.preview.node {
-            self.graph.upstream_content_hash(pn).hash(&mut h);
+        // Hash upstream of the first Bundler so disconnected nodes
+        // don't trigger a re-render; fall back to full graph revision.
+        let bundler_id = self
+            .graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.node_type == bar_graph::NodeType::Bundler)
+            .map(|(id, _)| *id);
+        if let Some(bn) = bundler_id {
+            self.graph.upstream_content_hash(bn).hash(&mut h);
         } else {
             self.graph.revision().hash(&mut h);
         }
-        self.preview
-            .node
-            .map(|n| n.0)
-            .unwrap_or(u64::MAX)
-            .hash(&mut h);
         self.map.width.hash(&mut h);
         self.map.height.hash(&mut h);
         self.map.min_height.to_bits().hash(&mut h);
@@ -788,17 +788,6 @@ impl BarEditorApp {
         self.dialog.status_level = LogLevel::Info;
     }
 
-    /// Returns a display label for the preview window title. Lives on
-    /// `BarEditorApp` (rather than `PreviewState`) because it needs the
-    /// node label out of `self.graph`.
-    pub fn preview_node_label(&self) -> String {
-        self.preview
-            .node()
-            .and_then(|id| self.graph.get_node(id))
-            .map(|n| format!("3D Preview — {}", n.label))
-            .unwrap_or_else(|| "3D Preview".to_string())
-    }
-
     /// Push the latest evaluated heightmap so the 2D inspector can show
     /// it as a backdrop. Cheap when called every frame: only stores a
     /// clone and bumps a revision counter; the texture re-upload happens
@@ -845,9 +834,7 @@ impl eframe::App for BarEditorApp {
 }
 
 impl BarEditorApp {
-    /// The currently selected top-level UI layout. Today only
-    /// `Layout::Standard` exists; future variants are surfaced via
-    /// the toolbar layout-switcher and persisted in user settings.
+    /// The currently selected top-level UI layout.
     pub fn active_layout(&self) -> Layout {
         self.active_layout
     }

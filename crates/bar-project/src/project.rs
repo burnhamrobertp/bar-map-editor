@@ -179,29 +179,49 @@ impl Project {
         }
     }
 
-    /// Serialize to pretty-printed JSON.
-    pub fn to_json(&self) -> Result<String> {
-        serde_json::to_string_pretty(self).context("Failed to serialize project")
+    /// Serialize the recipe to pretty-printed JSON (no layout, no binary blobs).
+    pub fn recipe_to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(&self.recipe).context("Failed to serialize recipe")
     }
 
-    /// Deserialize from JSON.
-    pub fn from_json(json: &str) -> Result<Self> {
-        serde_json::from_str(json).context("Failed to parse project JSON")
+    /// Serialize the layout to pretty-printed JSON.
+    pub fn layout_to_json(&self) -> Result<String> {
+        serde_json::to_string_pretty(&self.layout).context("Failed to serialize layout")
     }
 
-    /// Save project to a file path.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        let json = self.to_json()?;
-        std::fs::write(path, &json)
-            .with_context(|| format!("Failed to write project to {}", path.display()))?;
+    /// Save to a `.barproj` package directory. Writes `recipe.json` and
+    /// `layout.json` inside `dir`. Binary assets are NOT written here --
+    /// the caller (GUI save flow) is responsible for writing asset files
+    /// to `<dir>/assets/` before calling this.
+    pub fn save(&self, dir: &Path) -> Result<()> {
+        std::fs::create_dir_all(dir).with_context(|| format!("Cannot create {}", dir.display()))?;
+        let recipe_json = self.recipe_to_json()?;
+        std::fs::write(dir.join("recipe.json"), &recipe_json)
+            .with_context(|| format!("Failed to write recipe.json in {}", dir.display()))?;
+        let layout_json = self.layout_to_json()?;
+        std::fs::write(dir.join("layout.json"), &layout_json)
+            .with_context(|| format!("Failed to write layout.json in {}", dir.display()))?;
         Ok(())
     }
 
-    /// Load project from a file path.
-    pub fn load(path: &Path) -> Result<Self> {
-        let json = std::fs::read_to_string(path)
-            .with_context(|| format!("Cannot read {}", path.display()))?;
-        Self::from_json(&json)
+    /// Load from a `.barproj` package directory. Reads `recipe.json` and
+    /// optionally `layout.json` (defaults to empty layout if absent).
+    pub fn load(dir: &Path) -> Result<Self> {
+        let recipe_json = std::fs::read_to_string(dir.join("recipe.json"))
+            .with_context(|| format!("Cannot read recipe.json in {}", dir.display()))?;
+        let recipe: Recipe =
+            serde_json::from_str(&recipe_json).context("Failed to parse recipe.json")?;
+
+        let layout_path = dir.join("layout.json");
+        let layout = if layout_path.exists() {
+            let layout_json = std::fs::read_to_string(&layout_path)
+                .with_context(|| format!("Cannot read layout.json in {}", dir.display()))?;
+            serde_json::from_str(&layout_json).context("Failed to parse layout.json")?
+        } else {
+            EditorLayout::default()
+        };
+
+        Ok(Self { recipe, layout })
     }
 }
 
@@ -264,16 +284,16 @@ mod tests {
         let recipe = Recipe::sample();
         let project = Project::from_recipe(recipe);
 
-        let dir = std::env::temp_dir().join("bar_project_test");
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("test.barproj");
+        let base = std::env::temp_dir().join("bar_project_test");
+        let pkg_dir = base.join("test.barproj");
+        let _ = std::fs::remove_dir_all(&pkg_dir);
 
-        project.save(&path).unwrap();
-        let loaded = Project::load(&path).unwrap();
+        project.save(&pkg_dir).unwrap();
+        let loaded = Project::load(&pkg_dir).unwrap();
 
         assert_eq!(loaded.recipe.name, project.recipe.name);
         assert_eq!(loaded.recipe.nodes.len(), project.recipe.nodes.len());
 
-        std::fs::remove_dir_all(&dir).ok();
+        std::fs::remove_dir_all(&base).ok();
     }
 }

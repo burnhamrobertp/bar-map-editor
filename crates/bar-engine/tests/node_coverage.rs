@@ -70,7 +70,7 @@ fn run(
         .iter()
         .map(|(k, v)| (k.to_string(), v.clone()))
         .collect();
-    executor.execute(&nt, &params, inputs, W, H).unwrap()
+    executor.execute(&nt, &params, inputs, W, H, W, H).unwrap()
 }
 
 fn out_hm(outputs: &HashMap<String, PortValue>, port: &str) -> Heightmap {
@@ -270,6 +270,14 @@ fn painted_texture_with_empty_data_emits_color_buffer() {
         ("brush_color", ParamValue::String("8B7355".to_string())),
     ];
     let outputs = run(NodeType::PaintedTexture, p, &empty_inputs());
+    let cb = out_color(&outputs, "output");
+    assert_color_dims(&cb);
+}
+
+#[test]
+fn imported_texture_with_no_paths_emits_empty_color_buffer() {
+    // No asset_path / tile_index_path set -- executor falls back to an empty ColorBuffer.
+    let outputs = run(NodeType::ImportedTexture, &[], &empty_inputs());
     let cb = out_color(&outputs, "output");
     assert_color_dims(&cb);
 }

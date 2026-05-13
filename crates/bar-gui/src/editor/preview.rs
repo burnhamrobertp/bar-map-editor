@@ -1,8 +1,7 @@
 //! Preview-and-export state owned by `BarEditorApp`.
 //!
-//! Tracks which node drives the 3D viewport, whether the viewport is
-//! visible, and the one-frame "run" / "test in BAR" pulses that
-//! `bar-app` polls each frame to kick off background export jobs.
+//! Tracks one-frame "run" / "test in BAR" / "compile" pulses that
+//! `bar-app` polls each frame to kick off background jobs.
 //!
 //! These all reset to defaults on project switch (cleared by
 //! `BarEditorApp::reset_session_state` via `PreviewState::reset`).
@@ -58,11 +57,6 @@ impl ExportStatus {
 /// Grouped editor preview / export state. See module docs.
 #[derive(Default, Debug, Clone)]
 pub struct PreviewState {
-    /// Is the preview window open?
-    pub open: bool,
-    /// Which node feeds the 3D viewport. `None` => the renderer shows
-    /// the empty/no-mesh state.
-    pub node: Option<NodeId>,
     /// Set to `true` for one frame when the user clicks the toolbar
     /// "Run" button. `bar-app` consumes this via `take_run_requested`.
     pub run_requested: bool,
@@ -75,22 +69,18 @@ pub struct PreviewState {
     /// Live export busy-state. Set by `bar-app` to gate the run buttons
     /// in the GUI.
     pub export_status: ExportStatus,
+    /// Set to `true` for one frame when the user clicks "Compile".
+    /// `bar-app` consumes via `take_compile_requested`.
+    pub compile_requested: bool,
+    /// True while a compile is running. Set by `bar-app`.
+    pub compile_running: bool,
+    /// Set to `true` for one frame when the Preview layout wants bar-app
+    /// to load the compiled SMT as a BC1 GPU texture. Consumed via
+    /// `take_bc_texture_requested`.
+    pub bc_texture_requested: bool,
 }
 
 impl PreviewState {
-    /// Whether the preview window is currently open.
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn set_open(&mut self, v: bool) {
-        self.open = v;
-    }
-
-    pub fn node(&self) -> Option<NodeId> {
-        self.node
-    }
-
     /// Consume the one-frame "run" pulse. Returns `true` once after
     /// the user clicks Run, then resets.
     pub fn take_run_requested(&mut self) -> bool {
@@ -113,6 +103,16 @@ impl PreviewState {
 
     pub fn set_export_status(&mut self, s: ExportStatus) {
         self.export_status = s;
+    }
+
+    /// Consume the one-frame "compile" pulse.
+    pub fn take_compile_requested(&mut self) -> bool {
+        std::mem::take(&mut self.compile_requested)
+    }
+
+    /// Consume the one-frame "load BC1 texture" pulse.
+    pub fn take_bc_texture_requested(&mut self) -> bool {
+        std::mem::take(&mut self.bc_texture_requested)
     }
 
     /// Reset to defaults. Called by `BarEditorApp::reset_session_state`

@@ -11,10 +11,10 @@ use eframe::egui;
 use std::time::Instant;
 
 use crate::app::{
-    paint_bar_icon, paint_busy_dot, paint_export_icon, paint_inspector_icon, paint_map_info_icon,
-    paint_mapinfo_form_icon, paint_startbox_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
-    ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab, PendingAction,
-    UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_bar_icon, paint_compile_icon, paint_export_icon, paint_inspector_icon,
+    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon, BarEditorApp, ConfirmAction,
+    ConfirmDialog, ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab,
+    PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::io::is_text_file;
 use crate::panels::log::level_color;
@@ -377,6 +377,10 @@ impl BarEditorApp {
                             self.open_file_dialog_async();
                             ui.close_menu();
                         }
+                        if ui.button(t!("editor.menu.import_sd7")).clicked() {
+                            self.import_sd7_dialog_async();
+                            ui.close_menu();
+                        }
                         let mut recent_pick: Option<std::path::PathBuf> = None;
                         let recent_empty = self.settings.recent_files.is_empty();
                         ui.add_enabled_ui(!recent_empty, |ui| {
@@ -478,7 +482,7 @@ impl BarEditorApp {
                         // Auto Layout — only meaningful on the NodeGraph layout.
                         if ui
                             .add_enabled(
-                                self.has_project() && self.active_layout == Layout::Standard,
+                                self.has_project() && self.active_layout == Layout::NodeGraph,
                                 egui::Button::new(t!("editor.menu.auto_layout")),
                             )
                             .clicked()
@@ -718,10 +722,6 @@ impl BarEditorApp {
                             let _ = self.graph.remove_node(*node_id);
                             self.visuals.node_visuals.remove(node_id);
                             self.remove_node_from_group(*node_id);
-                            if self.preview.node == Some(*node_id) {
-                                self.preview.node = None;
-                                self.preview.open = false;
-                            }
                         }
                         self.project.passthrough_edit = None;
                         self.clear_selection();
@@ -960,10 +960,9 @@ impl BarEditorApp {
                         let painter = ui.painter_at(rect);
                         painter.rect_filled(rect, 5.0, bg);
                         paint_export_icon(&painter, rect, egui::Color32::WHITE);
-                        if busy {
-                            // Tiny corner spinner so the busy state reads clearly.
-                            paint_busy_dot(&painter, rect, ui.input(|i| i.time));
-                        }
+                    }
+                    if busy {
+                        crate::layouts::preview::draw_animated_border(ui, rect);
                     }
 
                     let tooltip = if busy {
@@ -979,6 +978,57 @@ impl BarEditorApp {
                         && self.validate_before_export("Bundle all")
                     {
                         self.preview.run_requested = true;
+                    }
+
+                    // Compile button
+                    ui.add_space(4.0);
+                    let compile_running = self.preview.compile_running;
+                    let compile_dirty = self.project.compile_dirty;
+                    let can_compile = !compile_running && !any_running;
+                    let compile_sense = if can_compile {
+                        egui::Sense::click()
+                    } else {
+                        egui::Sense::hover()
+                    };
+                    let (compile_rect, compile_resp) =
+                        ui.allocate_exact_size(btn_size, compile_sense);
+                    if ui.is_rect_visible(compile_rect) {
+                        let bg = if compile_running {
+                            tokens::BTN_COMPILE_BUSY
+                        } else if !can_compile {
+                            tokens::BTN_COMPILE_BLOCKED
+                        } else if compile_resp.is_pointer_button_down_on() {
+                            tokens::BTN_COMPILE_PRESS
+                        } else if compile_resp.hovered() {
+                            tokens::BTN_COMPILE_HOVER
+                        } else {
+                            tokens::BTN_COMPILE_NORMAL
+                        };
+                        let painter = ui.painter_at(compile_rect);
+                        painter.rect_filled(compile_rect, 5.0, bg);
+                        paint_compile_icon(&painter, compile_rect, egui::Color32::WHITE);
+                    }
+                    let hover = if compile_running {
+                        "Compiling...".to_string()
+                    } else if let Some(compiled_at) = self.project.compiled_at {
+                        let secs = compiled_at.elapsed().as_secs();
+                        let age = if secs < 60 {
+                            format!("{secs}s ago")
+                        } else {
+                            format!("{}m ago", secs / 60)
+                        };
+                        let suffix = if compile_dirty { " (out of date)" } else { "" };
+                        format!("Compile -- last compiled {age}{suffix}")
+                    } else {
+                        "Compile".to_string()
+                    };
+                    let compile_clicked = compile_resp.clicked();
+                    compile_resp.on_hover_text(hover);
+                    if !compile_running && compile_clicked {
+                        self.preview.compile_requested = true;
+                    }
+                    if compile_running {
+                        crate::layouts::preview::draw_animated_border(ui, compile_rect);
                     }
 
                     // Edit Map Info button — opens the project's designated map

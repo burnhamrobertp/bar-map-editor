@@ -187,6 +187,33 @@ pub(crate) fn paint_inspector_icon(
     );
 }
 
+/// Lightning bolt for the Compile toolbar button.
+pub(crate) fn paint_compile_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    // Two filled triangles forming a Z-shape (lightning bolt).
+    // Upper half: top-right corner down to the center notch.
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx + 4.0, cy - 8.0),
+            egui::pos2(cx - 4.5, cy + 0.5),
+            egui::pos2(cx + 1.5, cy + 0.5),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+    // Lower half: center notch down to bottom-left corner.
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(cx - 1.5, cy - 0.5),
+            egui::pos2(cx - 4.0, cy + 8.0),
+            egui::pos2(cx + 4.5, cy - 0.5),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Rotating dot in the top-right corner of a button rect to signal a running
 /// operation. `time` is `ui.input(|i| i.time)` in seconds.
 pub(crate) fn paint_busy_dot(painter: &egui::Painter, rect: egui::Rect, time: f64) {
@@ -200,6 +227,224 @@ pub(crate) fn paint_busy_dot(painter: &egui::Painter, rect: egui::Rect, time: f6
         let alpha = 240u8.saturating_sub(i as u8 * 80);
         painter.circle_filled(pos, radius, egui::Color32::from_white_alpha(alpha));
     }
+}
+
+/// Circular arrow (refresh) icon.
+pub fn paint_refresh_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let r = (rect.height().min(rect.width()) * 0.38).max(3.0);
+    let stroke = egui::Stroke::new(1.5, color);
+    const STEPS: usize = 18;
+    let start = std::f32::consts::FRAC_PI_3;
+    let end = start + std::f32::consts::PI * 1.5;
+    let pts: Vec<egui::Pos2> = (0..=STEPS)
+        .map(|i| {
+            let a = start + (end - start) * i as f32 / STEPS as f32;
+            egui::pos2(cx + r * a.cos(), cy + r * a.sin())
+        })
+        .collect();
+    for w in pts.windows(2) {
+        painter.line_segment([w[0], w[1]], stroke);
+    }
+    let tip = *pts.last().unwrap();
+    let prev = pts[pts.len() - 2];
+    let dx = tip.x - prev.x;
+    let dy = tip.y - prev.y;
+    let len = (dx * dx + dy * dy).sqrt().max(0.001);
+    let (nx, ny) = (dx / len, dy / len);
+    let (px, py) = (-ny, nx);
+    let arm = r * 0.45;
+    painter.line_segment(
+        [
+            tip,
+            egui::pos2(
+                tip.x - nx * arm + px * arm * 0.5,
+                tip.y - ny * arm + py * arm * 0.5,
+            ),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            tip,
+            egui::pos2(
+                tip.x - nx * arm - px * arm * 0.5,
+                tip.y - ny * arm - py * arm * 0.5,
+            ),
+        ],
+        stroke,
+    );
+}
+
+/// X mark for error severity.
+pub(crate) fn paint_severity_error(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let r = (rect.height().min(rect.width()) * 0.35).max(2.0);
+    let stroke = egui::Stroke::new(2.0, color);
+    painter.line_segment(
+        [egui::pos2(cx - r, cy - r), egui::pos2(cx + r, cy + r)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx + r, cy - r), egui::pos2(cx - r, cy + r)],
+        stroke,
+    );
+}
+
+/// Triangle with exclamation mark for warning severity.
+pub(crate) fn paint_severity_warning(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let half = (rect.height().min(rect.width()) * 0.45).max(3.0);
+    painter.add(egui::Shape::closed_line(
+        vec![
+            egui::pos2(cx, cy - half),
+            egui::pos2(cx + half * 0.866, cy + half * 0.5),
+            egui::pos2(cx - half * 0.866, cy + half * 0.5),
+        ],
+        egui::Stroke::new(1.5, color),
+    ));
+    let top = cy - half * 0.25;
+    let bot = cy + half * 0.15;
+    painter.line_segment(
+        [egui::pos2(cx, top), egui::pos2(cx, bot)],
+        egui::Stroke::new(1.5, color),
+    );
+    painter.circle_filled(egui::pos2(cx, cy + half * 0.38), 0.9, color);
+}
+
+/// Circle with 'i' for info severity.
+pub(crate) fn paint_severity_info(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let r = (rect.height().min(rect.width()) * 0.42).max(3.0);
+    painter.circle_stroke(egui::pos2(cx, cy), r, egui::Stroke::new(1.5, color));
+    painter.circle_filled(egui::pos2(cx, cy - r * 0.38), 1.0, color);
+    painter.line_segment(
+        [egui::pos2(cx, cy - r * 0.1), egui::pos2(cx, cy + r * 0.42)],
+        egui::Stroke::new(1.5, color),
+    );
+}
+
+/// Folder icon for directory headers.
+pub(crate) fn paint_folder_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let w = rect.width().min(14.0);
+    let h = rect.height().min(12.0);
+    let body = egui::Rect::from_min_max(
+        egui::pos2(cx - w * 0.5, cy - h * 0.2),
+        egui::pos2(cx + w * 0.5, cy + h * 0.5),
+    );
+    painter.rect_stroke(
+        body,
+        1.0,
+        egui::Stroke::new(1.5, color),
+        egui::StrokeKind::Inside,
+    );
+    let tab = egui::Rect::from_min_max(
+        egui::pos2(cx - w * 0.5, cy - h * 0.5),
+        egui::pos2(cx - w * 0.5 + w * 0.38, cy - h * 0.2),
+    );
+    painter.rect_filled(tab, 1.0, color);
+}
+
+/// Diagonal pencil icon for edit actions.
+pub(crate) fn paint_pencil_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.5, color);
+    let size = (rect.height().min(rect.width()) * 0.36).max(2.0);
+    let tip = egui::pos2(cx - size, cy + size);
+    let top = egui::pos2(cx + size * 0.7, cy - size * 0.7);
+    // Perpendicular offset for shaft width (45-degree pencil)
+    let (px, py) = (0.707_f32 * 1.5, -0.707_f32 * 1.5);
+    // Two shaft edges
+    painter.line_segment(
+        [
+            egui::pos2(top.x + px, top.y + py),
+            egui::pos2(tip.x + px, tip.y + py),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(top.x - px, top.y - py),
+            egui::pos2(tip.x - px, tip.y - py),
+        ],
+        stroke,
+    );
+    // Eraser cap at top
+    painter.line_segment(
+        [
+            egui::pos2(top.x + px, top.y + py),
+            egui::pos2(top.x - px, top.y - py),
+        ],
+        egui::Stroke::new(2.0, color),
+    );
+    // Tip lines converging to point
+    painter.line_segment([egui::pos2(tip.x + px, tip.y + py), tip], stroke);
+    painter.line_segment([egui::pos2(tip.x - px, tip.y - py), tip], stroke);
+}
+
+/// Large X for cancel/drop indicators (called directly on a painter with explicit position).
+pub(crate) fn paint_cancel_x(
+    painter: &egui::Painter,
+    center: egui::Pos2,
+    radius: f32,
+    color: egui::Color32,
+) {
+    let stroke = egui::Stroke::new(2.5, color);
+    painter.line_segment(
+        [
+            egui::pos2(center.x - radius, center.y - radius),
+            egui::pos2(center.x + radius, center.y + radius),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(center.x + radius, center.y - radius),
+            egui::pos2(center.x - radius, center.y + radius),
+        ],
+        stroke,
+    );
+}
+
+/// Filled triangle for collapsible section headers. Points down when open, right when closed.
+pub(crate) fn paint_triangle_arrow(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    open: bool,
+    color: egui::Color32,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let half = (rect.height().min(rect.width()) * 0.38).max(2.0);
+    let pts = if open {
+        vec![
+            egui::pos2(cx - half, cy - half * 0.55),
+            egui::pos2(cx + half, cy - half * 0.55),
+            egui::pos2(cx, cy + half * 0.7),
+        ]
+    } else {
+        vec![
+            egui::pos2(cx - half * 0.55, cy - half),
+            egui::pos2(cx + half * 0.7, cy),
+            egui::pos2(cx - half * 0.55, cy + half),
+        ]
+    };
+    painter.add(egui::Shape::convex_polygon(pts, color, egui::Stroke::NONE));
 }
 
 /// Arrow-in-frame icon for SubgraphInput / SubgraphOutput nodes.

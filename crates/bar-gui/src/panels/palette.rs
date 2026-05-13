@@ -100,10 +100,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 
     let sculpt = [("2D Sculpt", NodeType::Sculpt)];
 
-    let output = [
-        ("Preview", NodeType::Preview),
-        ("Bundler", NodeType::Bundler),
-    ];
+    let output = [("Bundler", NodeType::Bundler)];
 
     let sources = [
         ("Pass-Through", NodeType::PassThrough),
@@ -167,7 +164,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Expand", NodeType::MaskExpand),
         ("Mask Shrink", NodeType::MaskShrink),
         ("2D Sculpt", NodeType::Sculpt),
-        ("Preview", NodeType::Preview),
         ("Bundler", NodeType::Bundler),
         ("Pass-Through", NodeType::PassThrough),
         ("File Reference", NodeType::FileReference),

@@ -50,7 +50,8 @@
       "help": "Help",
       "new_project": "New Project",
       "new_from_preset": "New from Preset",
-      "open": "Open...",
+      "open": "Open Project...",
+      "import_sd7": "Import SD7...",
       "open_recent": "Open Recent",
       "clear_recent": "Clear Recent Files",
       "save_project": "Save Project",
@@ -79,7 +80,8 @@
       "use_this": "Use this →",
       "or": "Or",
       "blank_project": "Blank Project",
-      "open_project": "Open Project / SD7…",
+      "open_project": "Open Project...",
+      "import_sd7": "Import SD7...",
       "recent": "Recent ▾"
     },
     "templates": {

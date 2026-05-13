@@ -131,12 +131,6 @@ impl BarEditorApp {
         self.visuals.node_to_group = snap.state.node_to_group;
         self.visuals.next_group_id = snap.state.next_group_id;
         self.clear_selection();
-        if let Some(pn) = self.preview.node {
-            if self.graph.get_node(pn).is_none() {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
-        }
     }
 
     /// Perform undo.

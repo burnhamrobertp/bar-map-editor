@@ -605,10 +605,8 @@ fn check_orphaned_nodes(graph: &GraphEngine, out: &mut Vec<Finding>) {
         .iter()
         .filter(|(id, n)| {
             !reachable.contains(id)
-                // Bundlers are seeds; Preview is an intentional sink that is
-                // decoupled from the export pipeline by design.
+                // Bundlers are seeds (reachability starts from them).
                 && n.node_type != NodeType::Bundler
-                && n.node_type != NodeType::Preview
         })
         .map(|(_, n)| n.label.clone())
         .collect();

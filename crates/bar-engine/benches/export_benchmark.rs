@@ -68,7 +68,7 @@ fn bench_graph_evaluation(c: &mut Criterion) {
             BenchmarkId::new("noise_to_bundler", size),
             &size,
             |b, &size| {
-                b.iter(|| evaluate_graph(&graph, &executor, size, size).unwrap());
+                b.iter(|| evaluate_graph(&graph, &executor, size, size, size, size).unwrap());
             },
         );
     }
@@ -104,8 +104,8 @@ fn bench_full_export(c: &mut Criterion) {
                 features: Vec::new(),
             };
             b.iter(|| {
-                let outputs = evaluate_graph(&graph, &executor, size, size).unwrap();
-                let _ = execute_bundlers(&graph, &outputs, &recipe, &tmp, None);
+                let outputs = evaluate_graph(&graph, &executor, size, size, size, size).unwrap();
+                let _ = execute_bundlers(&graph, &outputs, &recipe, &tmp, None, None);
             });
         });
     }

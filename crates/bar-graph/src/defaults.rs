@@ -239,16 +239,15 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("snow_height", ParamValue::Float(0.85)),
         ],
         NodeType::Sculpt => vec![
-            // Hex-encoded flat u8 delta buffer (one byte per pixel).
+            // UUID of the binary asset holding the u8 delta buffer.
             // 128 = no change; 0 = maximum subtract; 255 = maximum add.
             // Empty string means no deltas applied -- node is a pure passthrough.
-            // Format and encoding identical to PaintedHeightmap.
-            ("data", ParamValue::String(String::new())),
-            // Canvas resolution. Same power-of-two choices as PaintedHeightmap.
-            // Locked once the user has painted (non-empty data).
+            ("asset_id", ParamValue::String(String::new())),
+            // Absolute path injected at load time; never persisted.
+            ("asset_path", ParamValue::String(String::new())),
+            // Canvas resolution.
             ("resolution", ParamValue::UInt(256)),
             // Max delta magnitude: delta_applied = (v - 128) / 128 * scale.
-            // 0.5 = max +-50% change relative to the input value.
             ("scale", ParamValue::Float(0.5)),
         ],
         NodeType::Bundler => vec![
@@ -265,22 +264,22 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("bundle_path", ParamValue::String(String::new())),
         ],
         NodeType::PaintedHeightmap => vec![
-            // Hex-encoded greyscale pixel grid (each pixel is one u8).
-            // Empty until the user paints. The buffer is sized to
-            // `resolution × resolution` on first paint.
-            ("data", ParamValue::String(String::new())),
+            // UUID of the binary asset file holding the greyscale pixel grid.
+            // Empty until the user paints for the first time.
+            ("asset_id", ParamValue::String(String::new())),
+            // Absolute path injected at load time; never persisted.
+            ("asset_path", ParamValue::String(String::new())),
             // Canvas resolution. Power-of-two values map cleanly to
-            // BAR's 64-px square grid. 256 is the practical default —
-            // smaller (64, 128) for masks, larger (512) for primary
-            // hand-drawn terrain.
+            // BAR's 64-px square grid.
             ("resolution", ParamValue::UInt(256)),
         ],
         NodeType::PaintedTexture => vec![
-            // Hex-encoded RGB pixel grid (3 bytes per pixel). Empty
-            // until the user paints. Resolution is fixed at 256.
-            ("data", ParamValue::String(String::new())),
-            // Current brush colour as packed 0xRRGGBB. Lives in the
-            // node so the most-recent colour persists across edits.
+            // UUID of the binary asset file holding the RGB pixel grid.
+            // Empty until the user paints for the first time.
+            ("asset_id", ParamValue::String(String::new())),
+            // Absolute path injected at load time; never persisted.
+            ("asset_path", ParamValue::String(String::new())),
+            // Current brush colour as packed 0xRRGGBB.
             ("brush_color", ParamValue::String("8B7355".to_string())),
         ],
         NodeType::Voronoi => vec![

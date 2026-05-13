@@ -100,6 +100,12 @@ pub enum NodeType {
     /// as the Bundler's texture input or for compositing with derived
     /// textures. Resolution is fixed at 256 for now.
     PaintedTexture,
+    /// An imported Spring Map Texture (.smt) stored in the project's
+    /// asset directory. Outputs a Color buffer assembled from the SMT
+    /// tile atlas at the requested texture resolution. Source-only node;
+    /// no inputs. Runtime params `asset_path` and `tile_index_path` are
+    /// injected at load time and stripped before save.
+    ImportedTexture,
 
     // Additional Generators
     FileInput,
@@ -165,12 +171,6 @@ pub enum NodeType {
     /// Holds all extra files from an extracted .sd7 that should pass through to the bundler
     /// without processing (lua configs, sounds, textures, etc.).
     PassThrough,
-    /// Mid-pipeline tap point. Pure passthrough — its heightmap output
-    /// equals its heightmap input. Exists to give the user an explicit
-    /// "show me what the map looks like here" anchor that can be
-    /// targeted by the 3D viewport without committing to making the
-    /// surrounding subgraph a Bundler.
-    Preview,
     /// External input boundary of a SubGraph. Placeable only inside a
     /// subgraph. From OUTSIDE the collapsed subgraph it appears as one
     /// external input port on the collapsed block; from INSIDE it
@@ -366,22 +366,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
-        // Preview is a terminal sink — drives the 3D viewport but
-        // produces nothing downstream. Heightmap is required (no
-        // mesh = nothing to draw); texture / normal_map / specular_map
-        // are optional layers the renderer composites on top.
-        // Decoupled from the Bundler on purpose: export and preview
-        // are separate concerns.
-        NodeType::Preview => (
-            vec![
-                Port::new("heightmap", "Heightmap", PortKind::Heightmap),
-                Port::new("texture", "Texture", PortKind::Color),
-                Port::new("normal_map", "Normal Map", PortKind::Color),
-                Port::new("specular_map", "Specular Map", PortKind::Heightmap),
-            ],
-            vec![],
-        ),
-
         // Combiners
         NodeType::Blend => (
             vec![
@@ -542,6 +526,10 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         // map. Output is a Color buffer suitable for the Bundler's
         // texture input.
         NodeType::PaintedTexture => (
+            vec![],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::ImportedTexture => (
             vec![],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),

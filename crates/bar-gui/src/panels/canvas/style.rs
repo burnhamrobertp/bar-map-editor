@@ -117,9 +117,8 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
 
         NodeType::Bundler | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
 
-        NodeType::PassThrough => tokens::NODE_CAT_SOURCE,
+        NodeType::PassThrough | NodeType::ImportedTexture => tokens::NODE_CAT_SOURCE,
 
-        NodeType::Preview => tokens::NODE_CAT_PREVIEW,
         // Distinct dark teal — boundary markers, not generators/filters/combiners.
         NodeType::SubgraphInput | NodeType::SubgraphOutput => tokens::NODE_CAT_IO,
     }

@@ -1,6 +1,6 @@
 //! Export codec trait: the interface for format-specific export logic.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -36,6 +36,10 @@ pub struct ExportPlan {
     pub settings: MapSettings,
     /// Feature placements to write into the SMF feature section.
     pub features: Vec<PlacedFeature>,
+    /// Absolute path to the `.barproj` directory, when available. Used by
+    /// codecs to fast-path compiled assets (e.g. skip re-encoding the SMT
+    /// when a current compiled copy exists).
+    pub project_dir: Option<PathBuf>,
 }
 
 /// Trait for format-specific export implementations.

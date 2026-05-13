@@ -102,8 +102,15 @@ pub fn run(
         .build_graph()
         .context("Recipe graph construction failed")?;
     let executor = CpuExecutor;
-    let outputs = evaluate_graph(&graph, &executor, width, height)
-        .map_err(|e| anyhow!("Graph evaluation failed: {e:?}"))?;
+    let outputs = evaluate_graph(
+        &graph,
+        &executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .map_err(|e| anyhow!("Graph evaluation failed: {e:?}"))?;
 
     // Pull the heightmap out of the bundler input.
     let bundler_id = bar_engine::find_bundler_nodes(&graph)

@@ -27,7 +27,6 @@ pub const NODE_CAT_TEXTURE: Color32 = Color32::from_rgb(140, 80, 160);
 pub const NODE_CAT_MASK: Color32 = Color32::from_rgb(120, 120, 60);
 pub const NODE_CAT_BUNDLER: Color32 = Color32::from_rgb(200, 130, 50);
 pub const NODE_CAT_SOURCE: Color32 = Color32::from_rgb(50, 160, 160);
-pub const NODE_CAT_PREVIEW: Color32 = Color32::from_rgb(150, 150, 200);
 pub const NODE_CAT_IO: Color32 = Color32::from_rgb(40, 110, 130);
 
 // ── Node body state colours ──────────────────────────────────────────────────
@@ -116,6 +115,12 @@ pub const BTN_MAPSET_PRESS: Color32 = Color32::from_rgb(80, 60, 95);
 pub const BTN_SPAWNS_NORMAL: Color32 = Color32::from_rgb(75, 100, 125);
 pub const BTN_SPAWNS_HOVER: Color32 = Color32::from_rgb(95, 120, 150);
 pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
+
+pub const BTN_COMPILE_NORMAL: Color32 = Color32::from_rgb(38, 95, 115);
+pub const BTN_COMPILE_HOVER: Color32 = Color32::from_rgb(52, 118, 140);
+pub const BTN_COMPILE_PRESS: Color32 = Color32::from_rgb(28, 75, 90);
+pub const BTN_COMPILE_BUSY: Color32 = Color32::from_rgb(50, 80, 95);
+pub const BTN_COMPILE_BLOCKED: Color32 = Color32::from_rgb(30, 55, 65);
 
 // ── Param slider ─────────────────────────────────────────────────────────────
 pub const SLIDER_BG: Color32 = Color32::from_rgb(28, 30, 40);

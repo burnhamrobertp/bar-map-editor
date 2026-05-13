@@ -201,15 +201,16 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         ui.visuals().weak_text_color()
                     };
                     let sev = findings_index.tab(tab_id);
-                    let label_text = match sev {
-                        Some(_) => format!("\u{25CF} {text}"),
-                        None => text.to_string(),
-                    };
-                    let mut rich = egui::RichText::new(label_text).strong().color(color);
+                    let mut rich = egui::RichText::new(text).strong().color(color);
                     if let Some(s) = sev {
                         rich = rich.color(severity_color(s));
                     }
                     let resp = ui.add(egui::Label::new(rich).sense(egui::Sense::click()));
+                    if let Some(s) = sev {
+                        let dot_center = egui::pos2(resp.rect.left() - 6.0, resp.rect.center().y);
+                        ui.painter()
+                            .circle_filled(dot_center, 2.5, severity_color(s));
+                    }
                     if resp.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                         if !active {

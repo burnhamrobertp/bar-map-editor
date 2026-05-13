@@ -75,10 +75,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                     .collect();
                 keys.sort();
                 for k in &keys {
-                    ui.weak(format!(
-                        "  \u{2022} {}",
-                        crate::app::confirm_key_display_name(k)
-                    ));
+                    ui.weak(format!("  - {}", crate::app::confirm_key_display_name(k)));
                 }
                 if ui.button(t!("editor.prefs.confirmations.clear")).clicked() {
                     app.settings.suppressed_confirmations.clear();

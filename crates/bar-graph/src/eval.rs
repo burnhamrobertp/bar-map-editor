@@ -34,8 +34,10 @@ pub trait NodeExecutor: Send + Sync {
         node_type: &NodeType,
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
-        width: u32,
-        height: u32,
+        hm_width: u32,
+        hm_height: u32,
+        tex_width: u32,
+        tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError>;
 }
 
@@ -63,8 +65,10 @@ pub trait NodeExecutor: Send + Sync {
 pub fn evaluate_graph_with_progress(
     graph: &GraphEngine,
     executor: &dyn NodeExecutor,
-    width: u32,
-    height: u32,
+    hm_width: u32,
+    hm_height: u32,
+    tex_width: u32,
+    tex_height: u32,
     on_progress: &dyn Fn(&str),
 ) -> Result<NodeOutputs, EvalError> {
     let eval_order = graph.topological_sort()?;
@@ -88,7 +92,15 @@ pub fn evaluate_graph_with_progress(
 
         // Execute the node. Per-node failures are localised: the
         // failing node produces nothing; everything else proceeds.
-        match executor.execute(&node.node_type, &node.params, &inputs, width, height) {
+        match executor.execute(
+            &node.node_type,
+            &node.params,
+            &inputs,
+            hm_width,
+            hm_height,
+            tex_width,
+            tex_height,
+        ) {
             Ok(node_outputs) => {
                 outputs.insert(node_id, node_outputs);
             }
@@ -107,10 +119,20 @@ pub fn evaluate_graph_with_progress(
 pub fn evaluate_graph(
     graph: &GraphEngine,
     executor: &dyn NodeExecutor,
-    width: u32,
-    height: u32,
+    hm_width: u32,
+    hm_height: u32,
+    tex_width: u32,
+    tex_height: u32,
 ) -> Result<NodeOutputs, EvalError> {
-    evaluate_graph_with_progress(graph, executor, width, height, &|_| {})
+    evaluate_graph_with_progress(
+        graph,
+        executor,
+        hm_width,
+        hm_height,
+        tex_width,
+        tex_height,
+        &|_| {},
+    )
 }
 
 /// Get the heightmap wired to the Bundler's `heightmap` port.
@@ -315,9 +337,12 @@ mod tests {
             node_type: &NodeType,
             _params: &HashMap<String, ParamValue>,
             inputs: &HashMap<String, PortValue>,
-            width: u32,
-            height: u32,
+            hm_width: u32,
+            hm_height: u32,
+            _tex_width: u32,
+            _tex_height: u32,
         ) -> Result<HashMap<String, PortValue>, EvalError> {
+            let (width, height) = (hm_width, hm_height);
             let mut outputs = HashMap::new();
 
             match node_type {
@@ -367,7 +392,7 @@ mod tests {
             .unwrap();
 
         let executor = TestExecutor;
-        let results = evaluate_graph(&graph, &executor, 64, 64).unwrap();
+        let results = evaluate_graph(&graph, &executor, 64, 64, 64, 64).unwrap();
 
         // Both nodes should have outputs
         assert!(results.contains_key(&noise_id));

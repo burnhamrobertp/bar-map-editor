@@ -62,6 +62,9 @@ raw-window-handle = "0.6"
 # Platform directories
 directories = "6"
 
+# UUID generation for asset identifiers
+uuid = { version = "1", features = ["v4"] }
+
 # Math
 glam = "0.29"
 
