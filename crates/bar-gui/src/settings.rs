@@ -57,6 +57,12 @@ pub struct Settings {
     /// files that pre-date this field.
     #[serde(default)]
     pub active_layout: crate::app::Layout,
+
+    /// Path to the BAR game archive (.sdz or .sdd) used to build
+    /// the feature type catalog. Set automatically on first launch
+    /// when a BAR install is detected; user can override via Preferences.
+    #[serde(default)]
+    pub selected_game_archive: Option<PathBuf>,
 }
 
 fn default_autosave_enabled() -> bool {
@@ -96,6 +102,7 @@ impl Default for Settings {
             restore_last_project: default_restore_last_project(),
             window: None,
             active_layout: crate::app::Layout::default(),
+            selected_game_archive: None,
         }
     }
 }

@@ -8,7 +8,7 @@ use tracing_subscriber::EnvFilter;
 
 use bar_compute::GpuContext;
 use bar_engine::recipe::PlacedFeature;
-use bar_engine::{CpuExecutor, HybridExecutor};
+use bar_engine::{CpuExecutor, FeatureCatalog, HybridExecutor};
 use bar_graph::{evaluate_graph, NodeExecutor};
 use bar_render::{pick_terrain, Camera, FeatureInstance, TerrainRenderer, TerrainUpdateParams};
 
@@ -272,6 +272,18 @@ fn main() -> Result<()> {
                     versions.engines.iter().map(|e| e.label.clone()).collect();
             }
 
+            // Auto-detect a game archive for the feature catalog if the user
+            // has not already configured one. Pick the first locally installed
+            // archive (skipping the synthetic "latest" rapid entry which has no path).
+            if saved_settings.selected_game_archive.is_none() {
+                if let Some(path) = bar_install
+                    .as_ref()
+                    .and_then(|v| v.games.iter().find_map(|g| g.path.clone()))
+                {
+                    app.set_game_archive(path);
+                }
+            }
+
             Ok(Box::new(AppWrapper {
                 app,
                 executor,
@@ -288,6 +300,9 @@ fn main() -> Result<()> {
                 next_session_id: 1,
                 pending_maximize: default_maximized,
                 has_shown_window: false,
+                feature_catalog: None,
+                catalog_rx: None,
+                catalog_archive_path: None,
             }))
         }),
     )
@@ -356,6 +371,14 @@ struct AppWrapper {
     /// window hidden (see `with_visible(false)` in `main`) so the
     /// OS-default white background doesn't flash before egui paints.
     has_shown_window: bool,
+    /// Feature type catalog built from the selected BAR game archive.
+    /// `None` until the background load completes or no archive is configured.
+    feature_catalog: Option<FeatureCatalog>,
+    /// Background catalog load receiver. `Some` while a load is in flight.
+    catalog_rx: Option<mpsc::Receiver<FeatureCatalog>>,
+    /// Archive path used to build the current `feature_catalog`. Compared
+    /// each frame against `settings.selected_game_archive` to detect changes.
+    catalog_archive_path: Option<std::path::PathBuf>,
 }
 
 impl eframe::App for AppWrapper {
@@ -617,6 +640,40 @@ impl eframe::App for AppWrapper {
         // Run the GUI (menus, node palette, properties, status bar)
         self.app.update(ctx, frame);
 
+        // ── Feature catalog: detect archive change, poll background load ─────
+        // When the selected game archive changes (settings edit or auto-detect),
+        // spawn a background thread to parse the Lua feature definitions. On
+        // completion, store the catalog and mark features dirty so the render
+        // instances are rebuilt with updated tints.
+        let desired_archive = self.app.settings().selected_game_archive.clone();
+        if desired_archive != self.catalog_archive_path {
+            // Archive changed -- cancel any in-flight load (just drop the rx).
+            self.catalog_rx = None;
+            self.feature_catalog = None;
+            self.catalog_archive_path = desired_archive.clone();
+            if let Some(archive) = desired_archive {
+                let (tx, rx) = mpsc::channel::<FeatureCatalog>();
+                self.catalog_rx = Some(rx);
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    let catalog = FeatureCatalog::from_archive(&archive);
+                    let _ = tx.send(catalog);
+                    ctx_clone.request_repaint();
+                });
+            }
+        }
+        if let Some(ref rx) = self.catalog_rx {
+            if let Ok(catalog) = rx.try_recv() {
+                self.catalog_rx = None;
+                tracing::info!(count = catalog.features.len(), "Feature catalog loaded");
+                self.feature_catalog = Some(catalog);
+                // Rebuild feature instances with updated tints.
+                if let Some(ref mut session) = self.session {
+                    session.features_dirty = true;
+                }
+            }
+        }
+
         // Poll for completed SD7 extraction
         if let Some(ref rx) = self.sd7_extract_rx {
             match rx.try_recv() {
@@ -690,7 +747,14 @@ impl eframe::App for AppWrapper {
             {
                 let (w, h) = self.app.map.dimensions();
                 let (min_h, max_h) = self.app.map.height_range();
-                let instances = build_feature_instances(&self.app.map.features, w, h, min_h, max_h);
+                let instances = build_feature_instances(
+                    &self.app.map.features,
+                    w,
+                    h,
+                    min_h,
+                    max_h,
+                    self.feature_catalog.as_ref(),
+                );
                 renderer.update_feature_instances(&gpu.device, &instances);
                 session.features_dirty = false;
             }
@@ -1577,6 +1641,7 @@ fn build_feature_instances(
     h: u32,
     min_h: f32,
     max_h: f32,
+    catalog: Option<&FeatureCatalog>,
 ) -> Vec<FeatureInstance> {
     use glam::{Mat4, Quat, Vec3};
 
@@ -1608,12 +1673,17 @@ fn build_feature_instances(
                 Vec3::new(rx, ry, rz),
             );
             let cols = transform.to_cols_array_2d();
+            // Green = recognized type from catalog; orange = unknown placeholder.
+            let tint = match catalog {
+                Some(cat) if cat.is_known(&f.feature_type) => [0.2, 0.9, 0.2, 1.0],
+                _ => [1.0, 0.5, 0.0, 1.0],
+            };
             FeatureInstance {
                 col0: cols[0],
                 col1: cols[1],
                 col2: cols[2],
                 col3: cols[3],
-                tint: [1.0, 0.5, 0.0, 1.0], // solid orange placeholder
+                tint,
             }
         })
         .collect()

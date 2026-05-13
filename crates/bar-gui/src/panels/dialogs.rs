@@ -97,6 +97,40 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                 changed = true;
             }
 
+            ui.add_space(8.0);
+            ui.heading(t!("editor.prefs.game.heading"));
+            ui.weak(t!("editor.prefs.game.hint"));
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label(t!("editor.prefs.game.archive_label"));
+                let display = app
+                    .settings()
+                    .selected_game_archive
+                    .as_deref()
+                    .and_then(|p| p.file_name())
+                    .and_then(|n| n.to_str())
+                    .unwrap_or(&t!("editor.prefs.game.none"))
+                    .to_string();
+                ui.weak(&display);
+            });
+            ui.horizontal(|ui| {
+                if ui.button(t!("editor.prefs.game.browse")).clicked() {
+                    let picked = rfd::FileDialog::new()
+                        .add_filter("BAR game archive", &["sdz", "sd7", "sdd"])
+                        .pick_file();
+                    if let Some(path) = picked {
+                        app.settings.selected_game_archive = Some(path);
+                        changed = true;
+                    }
+                }
+                if app.settings().selected_game_archive.is_some()
+                    && ui.button(t!("editor.prefs.game.clear")).clicked()
+                {
+                    app.settings.selected_game_archive = None;
+                    changed = true;
+                }
+            });
+
             ui.add_space(12.0);
             if let Some(p) = Settings::config_path() {
                 ui.weak(t!("editor.prefs.saved_to", path = p.display().to_string()));

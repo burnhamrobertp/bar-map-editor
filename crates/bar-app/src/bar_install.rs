@@ -26,6 +26,8 @@ pub struct BarGameVersion {
     pub label: String,
     /// Value written to `GameType=` in the startscript.
     pub archive_name: String,
+    /// Full path to the archive on disk. `None` for rapid/synthetic entries.
+    pub path: Option<std::path::PathBuf>,
 }
 
 /// One available engine version shown in the version picker.
@@ -91,6 +93,7 @@ impl BarVersions {
         let mut games = vec![BarGameVersion {
             label: "Beyond All Reason (latest)".to_string(),
             archive_name: "Beyond All Reason $VERSION".to_string(),
+            path: None,
         }];
         games.extend(collect_games(&data_dir.join("games")));
 
@@ -262,11 +265,13 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
                 return None;
             }
             let mtime = entry.metadata().ok()?.modified().ok()?;
+            let full_path = entry.path();
             Some((
                 mtime,
                 BarGameVersion {
                     label: name.clone(),
                     archive_name: name,
+                    path: Some(full_path),
                 },
             ))
         })

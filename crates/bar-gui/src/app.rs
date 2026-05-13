@@ -338,6 +338,14 @@ impl BarEditorApp {
         &self.settings
     }
 
+    /// Set the selected BAR game archive used for the feature catalog and
+    /// persist the change to disk. Called from bar-app when auto-detection
+    /// finds an archive the user hasn't configured yet.
+    pub fn set_game_archive(&mut self, path: std::path::PathBuf) {
+        self.settings.selected_game_archive = Some(path);
+        self.settings.save();
+    }
+
     /// True when the user is currently looking at a subgraph tab —
     /// the palette uses this to gate the "SubGraph IO" group so
     /// `SubgraphInput`/`SubgraphOutput` can't be dropped at the

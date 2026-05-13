@@ -34,6 +34,14 @@
       "startup": {
         "heading": "Startup",
         "restore_last": "Reopen the last project on launch"
+      },
+      "game": {
+        "heading": "Game Data",
+        "archive_label": "Feature catalog archive:",
+        "none": "(not set)",
+        "browse": "Browse...",
+        "clear": "Clear",
+        "hint": "Point to a BAR game archive (.sdz or .sdd) to show known feature types in green in the 3D preview."
       }
     },
     "menu": {
