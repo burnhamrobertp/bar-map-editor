@@ -151,6 +151,12 @@ pub struct Fingerprint {
     pub tiles_x: u32,
     #[serde(default)]
     pub tiles_y: u32,
+    /// World-space height range from the recipe at compile time (Spring units).
+    /// Zero when the fingerprint was written before this field was added.
+    #[serde(default)]
+    pub min_height: f32,
+    #[serde(default)]
+    pub max_height: f32,
     /// Size and mtime of each asset file that was live at compile time.
     pub assets: HashMap<String, AssetStat>,
 }

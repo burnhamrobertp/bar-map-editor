@@ -761,7 +761,11 @@ pub fn load_compiled_bc1(
         let pm = pw.max(ph);
         let x_extent = (0.5 * pw / pm).min(0.5);
         let z_extent = (0.5 * ph / pm).min(0.5);
-        let (min_h, max_h) = hm_range(&hm);
+        // Use the world-space height range from the recipe (recorded in the
+        // fingerprint at compile time). The heightmap.bin values are
+        // normalized [0,1], so we must not derive the scale from them.
+        let min_h = fp.min_height;
+        let max_h = fp.max_height;
         let height_range = (max_h - min_h).abs().max(1.0);
         let height_scale = (height_range / (pm * 8.0)).max(0.005);
         let water_y = if min_h < 0.0 {
@@ -804,25 +808,4 @@ pub fn load_compiled_bc1(
     }
 
     Some((tex_w, tex_h))
-}
-
-fn hm_range(hm: &bar_data::Heightmap) -> (f32, f32) {
-    let mut min = f32::MAX;
-    let mut max = f32::MIN;
-    for y in 0..hm.height() {
-        for x in 0..hm.width() {
-            let v = hm.get(x, y).unwrap_or(0.0);
-            if v < min {
-                min = v;
-            }
-            if v > max {
-                max = v;
-            }
-        }
-    }
-    if min > max {
-        (0.0, 1.0)
-    } else {
-        (min, max)
-    }
 }
