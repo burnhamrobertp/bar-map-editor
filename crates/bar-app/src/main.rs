@@ -946,8 +946,9 @@ impl eframe::App for AppWrapper {
         // ── Preview layout BC1 texture management ─────────────────────────
         // When in the Preview layout, load the compiled BC1 texture once.
         // When leaving, force a re-eval so the working-res RGBA texture returns.
+        let layout = self.app.active_layout();
         {
-            let in_preview = self.app.active_layout() == bar_gui::Layout::Preview;
+            let in_preview = layout == bar_gui::Layout::Preview;
             if in_preview && self.app.preview.take_bc_texture_requested() && !session.bc1_loaded {
                 let project_dir = self.app.project.path.clone();
                 let recipe_name = self.app.recipe_for_export().name;
@@ -974,6 +975,7 @@ impl eframe::App for AppWrapper {
                 session.last_low_res_key = u64::MAX;
                 session.last_high_res_key = u64::MAX;
                 session.current_frame = None;
+                session.viewport_texture_id = None;
             }
         }
 
@@ -1092,7 +1094,7 @@ impl eframe::App for AppWrapper {
         }
 
         // ── Progressive preview: spawn passes as needed ───────────────────
-        if !self.app.graph().nodes().is_empty() {
+        if !self.app.graph().nodes().is_empty() && layout != bar_gui::Layout::Preview {
             // Compute height/water params once; both passes share the same values.
             let (w, h) = self.app.map.dimensions();
             let (height_scale, water_y, x_extent, z_extent) = {
@@ -1266,7 +1268,6 @@ impl eframe::App for AppWrapper {
         // When Sculpt3D or Preview layout is active the central panel is left
         // unclaimed by bar-gui so we can fill it here with the 3D viewport.
         // `session` is already in scope from the guard above.
-        let layout = self.app.active_layout();
         if layout == bar_gui::Layout::Sculpt3D || layout == bar_gui::Layout::Preview {
             egui::CentralPanel::default().show(ctx, |ui| {
                 Self::draw_viewport_on(
@@ -1285,7 +1286,10 @@ impl eframe::App for AppWrapper {
         // left of the Properties side panel — that's a far more useful
         // initial location than the top-left corner.
         // Not shown in Sculpt3D layout -- the embedded panel above takes over.
-        if self.app.preview.is_open() && self.app.active_layout() != bar_gui::Layout::Sculpt3D {
+        if self.app.preview.is_open()
+            && layout != bar_gui::Layout::Sculpt3D
+            && layout != bar_gui::Layout::Preview
+        {
             let title = self.app.preview_node_label();
             let mut preview_open = true;
             // Properties panel is 250 px wide; allow ~24 px gutter.
@@ -1614,9 +1618,11 @@ impl AppWrapper {
         use eframe::egui;
 
         let is_sculpt_layout = app.active_layout() == bar_gui::Layout::Sculpt3D;
+        let is_preview_layout = app.active_layout() == bar_gui::Layout::Preview;
         if is_sculpt_layout {
             ui.small(bar_gui::i18n::t("editor.viewport_3d.sculpt_controls_hint"));
-        } else {
+            ui.separator();
+        } else if !is_preview_layout {
             ui.horizontal(|ui| {
                 ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1628,8 +1634,8 @@ impl AppWrapper {
                     }
                 });
             });
+            ui.separator();
         }
-        ui.separator();
 
         let available_size = ui.available_size();
         // Convert to integer pixel dimensions for the GPU texture (minimum 1×1).
@@ -1693,9 +1699,13 @@ impl AppWrapper {
             Self::handle_camera_input_on(session, gpu_context, render_state, &response, ctx, app);
         } else {
             // No texture yet -- initial render in progress. Show a centered
-            // spinner sized to the context: large in the dedicated sculpt
+            // spinner sized to the context: large in the dedicated sculpt/preview
             // workspace, medium in the floating preview window.
-            let spinner_size = if is_sculpt_layout { 80.0 } else { 48.0 };
+            let spinner_size = if is_sculpt_layout || is_preview_layout {
+                80.0
+            } else {
+                48.0
+            };
             ui.centered_and_justified(|ui| {
                 ui.add(
                     egui::Spinner::new()
