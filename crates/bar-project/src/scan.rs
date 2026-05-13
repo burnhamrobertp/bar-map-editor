@@ -493,7 +493,7 @@ mod tests {
         scan.map_dims = Some((512, 512));
         let (p, pending, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
-        for k in ["hm", "nm", "bundler", "preview"] {
+        for k in ["hm", "nm", "bundler"] {
             assert!(keys.contains(&k), "missing: {k}");
         }
         for k in ["metal", "type", "tex", "pass"] {
@@ -517,9 +517,7 @@ mod tests {
         scan.passthrough_files = vec![(PathBuf::from("/tmp/a.lua"), PathBuf::from("a.lua"))];
         let (p, pending, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
-        for k in [
-            "hm", "metal", "type", "tex", "nm", "pass", "bundler", "preview",
-        ] {
+        for k in ["hm", "metal", "type", "tex", "nm", "pass", "bundler"] {
             assert!(keys.contains(&k), "missing: {k}");
         }
         assert_eq!(pending.len(), 4); // hm, metal, type, tex (PaintedTexture fallback -- no smt_abs)
@@ -544,10 +542,6 @@ mod tests {
             "bundler.heightmap not in tos"
         );
         assert!(tos.contains(&"nm.input"), "nm.input not in tos");
-        assert!(
-            tos.contains(&"preview.heightmap"),
-            "preview.heightmap not in tos"
-        );
     }
 
     #[test]

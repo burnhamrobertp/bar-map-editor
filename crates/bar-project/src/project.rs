@@ -245,8 +245,12 @@ mod tests {
             subgraph_outputs: Vec::new(),
             macro_params: Vec::new(),
         });
-        let json = project.to_json().unwrap();
-        let loaded = Project::from_json(&json).unwrap();
+        let dir = std::env::temp_dir().join("bar_groups_roundtrip_test.barproj");
+        let _ = std::fs::remove_dir_all(&dir);
+        project.save(&dir).unwrap();
+        let loaded = Project::load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
         assert_eq!(loaded.layout.groups.len(), 1);
         let g = &loaded.layout.groups[0];
         assert_eq!(g.id, 7);
@@ -259,8 +263,6 @@ mod tests {
     fn test_project_roundtrip() {
         let recipe = Recipe::sample();
         let mut project = Project::from_recipe(recipe);
-
-        // Add some layout
         project
             .layout
             .node_positions
@@ -269,8 +271,11 @@ mod tests {
         project.recipe.output.width = 512;
         project.recipe.output.height = 512;
 
-        let json = project.to_json().unwrap();
-        let loaded = Project::from_json(&json).unwrap();
+        let dir = std::env::temp_dir().join("bar_project_roundtrip_test.barproj");
+        let _ = std::fs::remove_dir_all(&dir);
+        project.save(&dir).unwrap();
+        let loaded = Project::load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
 
         assert_eq!(loaded.recipe.name, project.recipe.name);
         assert_eq!(loaded.recipe.nodes.len(), project.recipe.nodes.len());
