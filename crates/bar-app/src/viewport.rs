@@ -109,6 +109,10 @@ pub struct EvalState {
     pub low_res_completed_at: Option<Instant>,
     pub force_refresh_requested: bool,
     pub features_dirty: bool,
+    /// `app.paint.heightmap_rev` value when feature instances were last built.
+    /// `u64::MAX` means never built. Rebuilt whenever the rev advances so
+    /// instances track terrain height after the first eval completes.
+    pub last_hm_rev: u64,
     /// Texture dims of the fast-preview pass for this slot's map dims.
     pub low_tex_dims: Option<(u32, u32)>,
     /// Texture dims of the full-quality pass for this slot's map dims.
@@ -128,6 +132,7 @@ impl EvalState {
             low_res_completed_at: None,
             force_refresh_requested: false,
             features_dirty: true,
+            last_hm_rev: u64::MAX,
             low_tex_dims: None,
             high_tex_dims: None,
         }

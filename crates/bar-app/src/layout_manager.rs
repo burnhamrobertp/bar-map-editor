@@ -144,8 +144,12 @@ impl LayoutManager {
             slot.core.current_frame = None;
         }
 
-        // Feature instances: upload once per session when dirty.
-        if slot.eval.features_dirty {
+        // Feature instances: rebuild when dirty or when a new heightmap arrives.
+        // The initial build fires before the first eval completes (heightmap = None),
+        // so we also track heightmap_rev and rebuild once the heightmap is available.
+        let hm_rev = app.paint.heightmap_rev;
+        let needs_feature_rebuild = slot.eval.features_dirty || slot.eval.last_hm_rev != hm_rev;
+        if needs_feature_rebuild {
             if let (Some(ref mut renderer), Some(ref gpu)) =
                 (&mut slot.core.terrain_renderer, gpu_context)
             {
@@ -162,6 +166,7 @@ impl LayoutManager {
                 );
                 renderer.update_feature_instances(&gpu.device, &instances);
                 slot.eval.features_dirty = false;
+                slot.eval.last_hm_rev = hm_rev;
             }
         }
 
