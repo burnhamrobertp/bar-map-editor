@@ -25,7 +25,7 @@ pub use bar_project::{
     write_asset_file, AssetHeader, AssetStat, Fingerprint, PackageDir, PendingAsset, PendingRawFile,
 };
 pub use bundler::{execute_bundlers, find_bundler_nodes, BundlerResult};
-pub use compile::compile_project;
+pub use compile::{compile_project, read_compiled_heightmap};
 pub use executor::CpuExecutor;
 pub use export::{
     export_grassmap_png, export_heightmap_png, export_normalmap_png, export_sd7_directory,

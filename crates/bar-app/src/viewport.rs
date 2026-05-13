@@ -10,7 +10,7 @@ use std::time::Instant;
 use bar_compute::GpuContext;
 use bar_engine::recipe::PlacedFeature;
 use bar_graph::NodeExecutor;
-use bar_render::{pick_terrain, Camera, FeatureInstance, TerrainRenderer};
+use bar_render::{pick_terrain, Camera, FeatureInstance, TerrainRenderer, TerrainUpdateParams};
 use eframe::egui;
 
 // ── Result type returned by background eval threads ──────────────────────────
@@ -750,5 +750,79 @@ pub fn load_compiled_bc1(
         tiles_y,
         "Preview BC1: uploaded native-resolution texture"
     );
+
+    // Upload the compiled heightmap as the terrain mesh so the BC1 texture
+    // has geometry to project onto. Without this the renderer just outputs
+    // its clear color.
+    if let Some(hm) = bar_engine::read_compiled_heightmap(&pkg) {
+        let (w, h) = (fp.map_x, fp.map_y);
+        let pw = (w as f32).max(1.0);
+        let ph = (h as f32).max(1.0);
+        let pm = pw.max(ph);
+        let x_extent = (0.5 * pw / pm).min(0.5);
+        let z_extent = (0.5 * ph / pm).min(0.5);
+        let (min_h, max_h) = hm_range(&hm);
+        let height_range = (max_h - min_h).abs().max(1.0);
+        let height_scale = (height_range / (pm * 8.0)).max(0.005);
+        let water_y = if min_h < 0.0 {
+            (-min_h / height_range) * height_scale
+        } else {
+            -1.0
+        };
+        let grid_n = hm.width().max(hm.height()).min(2048);
+        renderer.update_heightmap(
+            &gpu.device,
+            &gpu.queue,
+            &hm,
+            TerrainUpdateParams {
+                height_scale,
+                x_extent,
+                z_extent,
+                water_y,
+                water_color: [0.2, 0.45, 0.75],
+                grid_n,
+            },
+        );
+        core.current_frame = Some(OwnedFrame {
+            height_scale,
+            x_extent,
+            z_extent,
+            water_y,
+            water_color: [0.2, 0.45, 0.75],
+            quality_high: true,
+            smf_lighting: bar_render::SmfLighting::default(),
+            tex_w,
+            tex_h,
+        });
+        tracing::info!(
+            w = hm.width(),
+            h = hm.height(),
+            "Preview BC1: uploaded terrain mesh from compiled heightmap"
+        );
+    } else {
+        tracing::warn!("Preview BC1: no compiled heightmap.bin -- terrain mesh not loaded");
+    }
+
     Some((tex_w, tex_h))
+}
+
+fn hm_range(hm: &bar_data::Heightmap) -> (f32, f32) {
+    let mut min = f32::MAX;
+    let mut max = f32::MIN;
+    for y in 0..hm.height() {
+        for x in 0..hm.width() {
+            let v = hm.get(x, y).unwrap_or(0.0);
+            if v < min {
+                min = v;
+            }
+            if v > max {
+                max = v;
+            }
+        }
+    }
+    if min > max {
+        (0.0, 1.0)
+    } else {
+        (min, max)
+    }
 }

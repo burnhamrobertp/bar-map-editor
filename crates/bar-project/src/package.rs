@@ -274,6 +274,11 @@ impl PackageDir {
         self.compiled_dir().join("tile_index.bin")
     }
 
+    /// Absolute path to the compiled heightmap (raw f32 LE, width then height as u32 LE prefix).
+    pub fn compiled_heightmap_path(&self) -> PathBuf {
+        self.compiled_dir().join("heightmap.bin")
+    }
+
     /// True when `compiled/fingerprint.json` exists.
     pub fn is_compiled(&self) -> bool {
         self.compiled_dir().join("fingerprint.json").exists()

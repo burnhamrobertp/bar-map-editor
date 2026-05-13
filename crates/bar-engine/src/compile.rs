@@ -11,8 +11,8 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use bar_data::write_smt;
 use bar_graph::{
-    evaluate_graph_with_progress, get_texture_output, GraphEngine, NodeExecutor, NodeOutputs,
-    NodeType, ParamValue,
+    evaluate_graph_with_progress, get_preview_heightmap, get_texture_output, GraphEngine,
+    NodeExecutor, NodeOutputs, NodeType, ParamValue,
 };
 use bar_project::{AssetStat, Fingerprint, PackageDir};
 
@@ -95,7 +95,13 @@ pub fn compile_project(
     std::fs::write(&idx_path, &idx_bytes)
         .with_context(|| format!("Cannot write {}", idx_path.display()))?;
 
-    on_progress("[98%] Writing fingerprint");
+    on_progress("[97%] Writing heightmap");
+    if let Some(hm) = get_preview_heightmap(graph, &outputs) {
+        let hm_path = pkg.compiled_heightmap_path();
+        write_heightmap_bin(&hm_path, &hm)?;
+    }
+
+    on_progress("[99%] Writing fingerprint");
     write_fingerprint(&pkg, recipe, map_x, map_y, tiles_x, tiles_y, project_dir)?;
     on_progress("[100%] Compile complete");
     Ok(())
@@ -179,6 +185,47 @@ fn find_texture_output(
     outputs: &NodeOutputs,
 ) -> Option<bar_data::ColorBuffer> {
     get_texture_output(graph, outputs)
+}
+
+/// Read `compiled/heightmap.bin` written by `compile_project`. Returns `None`
+/// when the file is absent, truncated, or has zero dimensions.
+pub fn read_compiled_heightmap(pkg: &PackageDir) -> Option<bar_data::Heightmap> {
+    let bytes = std::fs::read(pkg.compiled_heightmap_path()).ok()?;
+    if bytes.len() < 8 {
+        return None;
+    }
+    let w = u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+    let h = u32::from_le_bytes([bytes[4], bytes[5], bytes[6], bytes[7]]);
+    if w == 0 || h == 0 || bytes.len() < 8 + w as usize * h as usize * 4 {
+        return None;
+    }
+    let mut hm = bar_data::Heightmap::new(w, h).ok()?;
+    for y in 0..h {
+        for x in 0..w {
+            let off = 8 + (y as usize * w as usize + x as usize) * 4;
+            let v =
+                f32::from_le_bytes([bytes[off], bytes[off + 1], bytes[off + 2], bytes[off + 3]]);
+            let _ = hm.set(x, y, v);
+        }
+    }
+    Some(hm)
+}
+
+/// Write a heightmap as raw binary: 4-byte LE u32 width, 4-byte LE u32 height,
+/// then width*height f32 LE samples in row-major order.
+fn write_heightmap_bin(path: &Path, hm: &bar_data::Heightmap) -> Result<()> {
+    let w = hm.width();
+    let h = hm.height();
+    let mut buf = Vec::with_capacity(8 + w as usize * h as usize * 4);
+    buf.extend_from_slice(&w.to_le_bytes());
+    buf.extend_from_slice(&h.to_le_bytes());
+    for y in 0..h {
+        for x in 0..w {
+            buf.extend_from_slice(&hm.get(x, y).unwrap_or(0.0).to_le_bytes());
+        }
+    }
+    std::fs::write(path, &buf)
+        .with_context(|| format!("Cannot write heightmap to {}", path.display()))
 }
 
 /// Build and write `compiled/fingerprint.json`.
