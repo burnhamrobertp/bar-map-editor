@@ -229,21 +229,14 @@ pub fn draw_preview_placeholder(
 
 pub fn draw_preview_viewport(
     core: &mut ViewportCore,
+    res: &ResolutionStatus,
     gpu_context: &Option<GpuContext>,
     render_state: &Option<eframe::egui_wgpu::RenderState>,
     ui: &mut egui::Ui,
     ctx: &egui::Context,
     app: &mut bar_gui::BarEditorApp,
 ) {
-    // Preview is read-only; no eval scheduler, so no resolution overlay.
-    let res = ResolutionStatus {
-        current_tex_dims: None,
-        low_tex_dims: None,
-        high_tex_dims: None,
-        low_pending: false,
-        high_pending: false,
-    };
-    draw_viewport_body(core, &res, gpu_context, render_state, ui, ctx, app);
+    draw_viewport_body(core, res, gpu_context, render_state, ui, ctx, app);
 }
 
 // ── Shared viewport body ──────────────────────────────────────────────────────
@@ -684,22 +677,17 @@ pub fn build_feature_instances(
 
 /// Load the compiled native-resolution BC1 texture into the viewport renderer.
 /// Returns `true` on success.
+/// Load the compiled BC1 texture into the Preview slot's terrain renderer.
+/// Returns the native texture dimensions `(w, h)` on success, `None` on failure.
 pub fn load_compiled_bc1(
     project_dir: Option<&std::path::Path>,
     recipe_name: &str,
     core: &mut ViewportCore,
     gpu: &GpuContext,
-) -> bool {
-    let Some(project_dir) = project_dir else {
-        return false;
-    };
-    let pkg = match bar_engine::PackageDir::open(project_dir) {
-        Ok(p) => p,
-        Err(_) => return false,
-    };
-    let Some(fp) = pkg.read_fingerprint() else {
-        return false;
-    };
+) -> Option<(u32, u32)> {
+    let project_dir = project_dir?;
+    let pkg = bar_engine::PackageDir::open(project_dir).ok()?;
+    let fp = pkg.read_fingerprint()?;
 
     let tiles_x = if fp.tiles_x > 0 {
         fp.tiles_x
@@ -712,41 +700,32 @@ pub fn load_compiled_bc1(
         fp.map_y / 4
     };
     if tiles_x == 0 || tiles_y == 0 {
-        return false;
+        return None;
     }
+    let tex_w = tiles_x * 32;
+    let tex_h = tiles_y * 32;
 
     let smt_path = pkg.compiled_smt_path(recipe_name);
     let idx_path = pkg.compiled_tile_index_path();
 
-    let tile_pool = match std::fs::File::open(&smt_path)
+    let tile_pool = std::fs::File::open(&smt_path)
         .and_then(|mut f| bar_data::read_smt_raw(&mut f).map_err(std::io::Error::other))
-    {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::warn!(err = %e, "Preview BC1: failed to read compiled SMT");
-            return false;
-        }
-    };
-    let tile_indices: Vec<i32> = match std::fs::read(&idx_path) {
-        Ok(bytes) => bytes
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
-            .collect(),
-        Err(e) => {
-            tracing::warn!(err = %e, "Preview BC1: failed to read tile index");
-            return false;
-        }
-    };
+        .map_err(|e| tracing::warn!(err = %e, "Preview BC1: failed to read compiled SMT"))
+        .ok()?;
+    let tile_indices: Vec<i32> = std::fs::read(&idx_path)
+        .map_err(|e| tracing::warn!(err = %e, "Preview BC1: failed to read tile index"))
+        .ok()?
+        .chunks_exact(4)
+        .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
 
     let bc1 = bar_data::assemble_bc1_linear(&tile_pool, &tile_indices, tiles_x, tiles_y);
-    if let Some(ref mut renderer) = core.terrain_renderer {
-        renderer.upload_bc1_texture(&gpu.device, &gpu.queue, &bc1, tiles_x * 32, tiles_y * 32);
-        tracing::info!(
-            tiles_x,
-            tiles_y,
-            "Preview BC1: uploaded native-resolution texture"
-        );
-        return true;
-    }
-    false
+    let renderer = core.terrain_renderer.as_mut()?;
+    renderer.upload_bc1_texture(&gpu.device, &gpu.queue, &bc1, tex_w, tex_h);
+    tracing::info!(
+        tiles_x,
+        tiles_y,
+        "Preview BC1: uploaded native-resolution texture"
+    );
+    Some((tex_w, tex_h))
 }

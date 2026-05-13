@@ -42,6 +42,8 @@ impl RenderSlot {
 pub struct PreviewSlot {
     pub core: ViewportCore,
     pub bc1_loaded: bool,
+    /// Native texture dims of the loaded BC1 texture (set on successful load).
+    pub bc1_tex_dims: Option<(u32, u32)>,
 }
 
 impl PreviewSlot {
@@ -49,6 +51,7 @@ impl PreviewSlot {
         Self {
             core: ViewportCore::new(gpu_context, session_id),
             bc1_loaded: false,
+            bc1_tex_dims: None,
         }
     }
 }
@@ -256,41 +259,70 @@ impl LayoutManager {
             return;
         }
 
-        // Load BC1 texture once per compile.
+        // Derive the expected native texture dims from map settings.
+        let (map_w, map_h) = app.map.dimensions();
+        let native_tex_dims = if map_w > 1 && map_h > 1 {
+            Some(((map_w - 1) * 8, (map_h - 1) * 8))
+        } else {
+            None
+        };
+
+        // Load BC1 texture once per compile (synchronous).
         if !slot.bc1_loaded {
             let project_dir = app.project.path.clone();
             let recipe_name = app.recipe_for_export().name;
             if let Some(ref gpu) = gpu_context {
-                let loaded =
-                    load_compiled_bc1(project_dir.as_deref(), &recipe_name, &mut slot.core, gpu);
-                if loaded {
+                if let Some(dims) =
+                    load_compiled_bc1(project_dir.as_deref(), &recipe_name, &mut slot.core, gpu)
+                {
+                    slot.bc1_tex_dims = Some(dims);
                     app.set_status("Preview: native-resolution BC1 texture loaded");
                 }
             }
             slot.bc1_loaded = true;
         }
 
-        // Animation tick.
+        // Animation + initial render. Drive the render even when there is no
+        // current_frame (no heightmap yet) so viewport_texture_id gets set
+        // as soon as the BC1 albedo is available.
         if let Some(ref gpu) = gpu_context {
             if let Some(ref mut renderer) = slot.core.terrain_renderer {
-                if let Some(ref owned) = slot.core.current_frame {
-                    let elapsed = slot.core.started_at.elapsed().as_secs_f32();
-                    let frame = owned.as_frame(elapsed);
-                    renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, Some(&frame));
-                    update_viewport_texture(
-                        &mut slot.core.viewport_texture_id,
-                        &slot.core.terrain_renderer,
-                        render_state,
-                        ctx,
-                    );
+                let elapsed = slot.core.started_at.elapsed().as_secs_f32();
+                let frame = slot
+                    .core
+                    .current_frame
+                    .as_ref()
+                    .map(|f| f.as_frame(elapsed));
+                renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, frame.as_ref());
+                update_viewport_texture(
+                    &mut slot.core.viewport_texture_id,
+                    &slot.core.terrain_renderer,
+                    render_state,
+                    ctx,
+                );
+                if slot.core.current_frame.is_some() {
                     ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 }
             }
         }
 
+        // Build resolution status: current dims come from the loaded BC1 texture;
+        // pending dims come from the native resolution we expect to load.
+        let res = ResolutionStatus {
+            current_tex_dims: if slot.bc1_loaded {
+                slot.bc1_tex_dims
+            } else {
+                None
+            },
+            low_tex_dims: None,
+            high_tex_dims: native_tex_dims,
+            low_pending: false,
+            high_pending: !slot.bc1_loaded,
+        };
+
         let core = &mut slot.core;
         egui::CentralPanel::default().show(ctx, |ui| {
-            draw_preview_viewport(core, gpu_context, render_state, ui, ctx, app);
+            draw_preview_viewport(core, &res, gpu_context, render_state, ui, ctx, app);
         });
     }
 
