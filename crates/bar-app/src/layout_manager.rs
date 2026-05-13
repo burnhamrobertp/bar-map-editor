@@ -355,8 +355,23 @@ fn apply_preview_result(
     eval: &mut EvalState,
 ) {
     if result.session_id != core.session_id || result.cache_key != current_key {
+        tracing::debug!(
+            pass = if result.is_low_res { "low" } else { "high" },
+            reason = if result.session_id != core.session_id {
+                "session"
+            } else {
+                "key"
+            },
+            "Eval: stale result discarded"
+        );
         return;
     }
+    tracing::info!(
+        pass = if result.is_low_res { "low" } else { "high" },
+        has_hm = result.heightmap.is_some(),
+        has_tex = result.texture.is_some(),
+        "Eval: applying result to renderer"
+    );
 
     let grid_n = if result.is_low_res {
         96
@@ -498,12 +513,18 @@ fn spawn_eval_passes(
         current_key != slot.eval.last_low_res_key && current_key != slot.eval.last_high_res_key;
 
     if needs_low_res && !slot.eval.low_res_pending {
+        tracing::info!(
+            hm = format!("{low_hm_w}x{low_hm_h}"),
+            tex = format!("{low_tex_w}x{low_tex_h}"),
+            "Eval: spawning low-res pass"
+        );
         let graph = app.graph().clone();
         let tx = slot.eval.preview_tx.clone();
         let ctx_clone = ctx.clone();
         let exec = Arc::clone(executor);
         slot.eval.low_res_pending = true;
         std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
             let (heightmap, texture) = eval_preview(
                 &graph,
                 exec.as_ref(),
@@ -512,6 +533,8 @@ fn spawn_eval_passes(
                 low_tex_w,
                 low_tex_h,
             );
+            let ms = t0.elapsed().as_millis();
+            tracing::info!(ms, "Eval: low-res pass complete");
             let _ = tx.send(PreviewResult {
                 heightmap,
                 texture,
@@ -540,13 +563,21 @@ fn spawn_eval_passes(
 
     if needs_high_res && !slot.eval.low_res_pending && !slot.eval.high_res_pending && cooldown_done
     {
+        tracing::info!(
+            hm = format!("{w}x{h}"),
+            tex = format!("{tex_w}x{tex_h}"),
+            "Eval: spawning high-res pass"
+        );
         let graph = app.graph().clone();
         let tx = slot.eval.preview_tx.clone();
         let ctx_clone = ctx.clone();
         let exec = Arc::clone(executor);
         slot.eval.high_res_pending = true;
         std::thread::spawn(move || {
+            let t0 = std::time::Instant::now();
             let (heightmap, texture) = eval_preview(&graph, exec.as_ref(), w, h, tex_w, tex_h);
+            let ms = t0.elapsed().as_millis();
+            tracing::info!(ms, "Eval: high-res pass complete");
             let _ = tx.send(PreviewResult {
                 heightmap,
                 texture,

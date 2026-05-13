@@ -192,7 +192,17 @@ pub fn draw_sculpt_viewport(
 ) {
     ui.small(bar_gui::i18n::t("editor.viewport_3d.sculpt_controls_hint"));
     ui.separator();
-    draw_viewport_body(core, res, gpu_context, render_state, ui, ctx, app);
+    let has_content = core.current_frame.is_some();
+    draw_viewport_body(
+        core,
+        res,
+        has_content,
+        gpu_context,
+        render_state,
+        ui,
+        ctx,
+        app,
+    );
 }
 
 // ── Preview layout viewport drawing ──────────────────────────────────────────
@@ -236,7 +246,20 @@ pub fn draw_preview_viewport(
     ctx: &egui::Context,
     app: &mut bar_gui::BarEditorApp,
 ) {
-    draw_viewport_body(core, res, gpu_context, render_state, ui, ctx, app);
+    // Preview has no current_frame (no eval pass), but the BC1 texture is
+    // meaningful content once loaded. Signal ready based on whether the BC1
+    // texture dims are known (set by load_compiled_bc1 on success).
+    let has_content = res.current_tex_dims.is_some();
+    draw_viewport_body(
+        core,
+        res,
+        has_content,
+        gpu_context,
+        render_state,
+        ui,
+        ctx,
+        app,
+    );
 }
 
 // ── Shared viewport body ──────────────────────────────────────────────────────
@@ -244,6 +267,7 @@ pub fn draw_preview_viewport(
 fn draw_viewport_body(
     core: &mut ViewportCore,
     res: &ResolutionStatus,
+    has_content: bool,
     gpu_context: &Option<GpuContext>,
     render_state: &Option<eframe::egui_wgpu::RenderState>,
     ui: &mut egui::Ui,
@@ -271,7 +295,8 @@ fn draw_viewport_body(
         }
     }
 
-    if let Some(tex_id) = core.viewport_texture_id {
+    if has_content && core.viewport_texture_id.is_some() {
+        let tex_id = core.viewport_texture_id.unwrap();
         let image = egui::Image::new(egui::load::SizedTexture::new(tex_id, available))
             .fit_to_exact_size(available)
             .sense(egui::Sense::click_and_drag());
