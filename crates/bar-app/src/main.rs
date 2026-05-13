@@ -1626,10 +1626,31 @@ impl AppWrapper {
             ui.horizontal(|ui| {
                 ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let resp = ui
-                        .small_button("\u{27F3}")
-                        .on_hover_text(bar_gui::i18n::t("editor.viewport_3d.force_refresh"));
-                    if resp.clicked() {
+                    let btn_size = egui::vec2(18.0, 18.0);
+                    let (btn_rect, btn_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(btn_rect) {
+                        let icon_color = if btn_resp.hovered() {
+                            ui.visuals().strong_text_color()
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        if btn_resp.hovered() {
+                            ui.painter_at(btn_rect).rect_filled(
+                                btn_rect,
+                                3.0,
+                                ui.visuals().widgets.hovered.bg_fill,
+                            );
+                        }
+                        bar_gui::panels::icons::paint_refresh_icon(
+                            &ui.painter_at(btn_rect),
+                            btn_rect,
+                            icon_color,
+                        );
+                    }
+                    let refresh_clicked = btn_resp.clicked();
+                    btn_resp.on_hover_text(bar_gui::i18n::t("editor.viewport_3d.force_refresh"));
+                    if refresh_clicked {
                         session.force_refresh_requested = true;
                     }
                 });

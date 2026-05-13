@@ -64,13 +64,33 @@ pub(crate) fn draw_summary(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(
                         egui::Layout::centered_and_justified(egui::Direction::TopDown),
                     ));
-                    let resp = child
-                        .add(egui::SelectableLabel::new(false, "\u{27F3}"))
-                        .on_hover_text(t!("editor.validation.rerun"));
-                    if resp.hovered() {
+                    let icon_resp = child.allocate_response(rect.size(), egui::Sense::click());
+                    if child.is_rect_visible(icon_resp.rect) {
+                        let color = if icon_resp.hovered() {
+                            child.visuals().strong_text_color()
+                        } else {
+                            child.visuals().text_color()
+                        };
+                        if icon_resp.hovered() {
+                            child.painter().rect_filled(
+                                icon_resp.rect,
+                                2.0,
+                                child.visuals().widgets.hovered.bg_fill,
+                            );
+                        }
+                        crate::panels::icons::paint_refresh_icon(
+                            child.painter(),
+                            icon_resp.rect,
+                            color,
+                        );
+                    }
+                    let hovered = icon_resp.hovered();
+                    let clicked = icon_resp.clicked();
+                    icon_resp.on_hover_text(t!("editor.validation.rerun"));
+                    if hovered {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
-                    if resp.clicked() {
+                    if clicked {
                         app.run_validation();
                         app.validation.last_fingerprint = app.validation_inputs_fingerprint();
                     }
@@ -244,11 +264,31 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
                 );
                 app.validation.set_filter(active_filter);
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .small_button("\u{27F3}")
-                        .on_hover_text(t!("editor.validation.rerun"))
-                        .clicked()
-                    {
+                    let btn_size = egui::vec2(18.0, 18.0);
+                    let (btn_rect, btn_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(btn_rect) {
+                        let color = if btn_resp.hovered() {
+                            ui.visuals().strong_text_color()
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        if btn_resp.hovered() {
+                            ui.painter_at(btn_rect).rect_filled(
+                                btn_rect,
+                                3.0,
+                                ui.visuals().widgets.hovered.bg_fill,
+                            );
+                        }
+                        crate::panels::icons::paint_refresh_icon(
+                            &ui.painter_at(btn_rect),
+                            btn_rect,
+                            color,
+                        );
+                    }
+                    let btn_clicked = btn_resp.clicked();
+                    btn_resp.on_hover_text(t!("editor.validation.rerun"));
+                    if btn_clicked {
                         app.run_validation();
                     }
                     if errors == 0 && warnings == 0 {
@@ -272,13 +312,35 @@ pub(crate) fn draw_details(app: &mut BarEditorApp, ctx: &egui::Context) {
                         ValidationFilter::Warning => f.severity == bar_project::Severity::Warning,
                         ValidationFilter::Info => f.severity == bar_project::Severity::Info,
                     }) {
-                        let (icon, color) = match f.severity {
-                            bar_project::Severity::Error => ("\u{2716}", red),
-                            bar_project::Severity::Warning => ("\u{26A0}", yellow),
-                            bar_project::Severity::Info => ("\u{24D8}", blue),
-                        };
                         ui.horizontal_wrapped(|ui| {
-                            ui.colored_label(color, icon);
+                            let icon_size = egui::vec2(14.0, 14.0);
+                            let (icon_rect, _) =
+                                ui.allocate_exact_size(icon_size, egui::Sense::hover());
+                            if ui.is_rect_visible(icon_rect) {
+                                match f.severity {
+                                    bar_project::Severity::Error => {
+                                        crate::panels::icons::paint_severity_error(
+                                            &ui.painter_at(icon_rect),
+                                            icon_rect,
+                                            red,
+                                        );
+                                    }
+                                    bar_project::Severity::Warning => {
+                                        crate::panels::icons::paint_severity_warning(
+                                            &ui.painter_at(icon_rect),
+                                            icon_rect,
+                                            yellow,
+                                        );
+                                    }
+                                    bar_project::Severity::Info => {
+                                        crate::panels::icons::paint_severity_info(
+                                            &ui.painter_at(icon_rect),
+                                            icon_rect,
+                                            blue,
+                                        );
+                                    }
+                                }
+                            }
                             ui.colored_label(
                                 egui::Color32::from_rgb(180, 180, 200), // muted category label
                                 format!("[{}]", f.category),

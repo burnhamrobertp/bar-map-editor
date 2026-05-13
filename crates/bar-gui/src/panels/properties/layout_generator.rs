@@ -48,14 +48,22 @@ impl BarEditorApp {
             let open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(i == 0);
 
             ui.horizontal(|ui| {
-                let arrow = if open { "\u{25BC}" } else { "\u{25B6}" };
-                if ui
-                    .add(
-                        egui::Label::new(egui::RichText::new(format!("{arrow} {label}")).strong())
-                            .sense(egui::Sense::click()),
-                    )
-                    .clicked()
-                {
+                let body_h = ui.text_style_height(&egui::TextStyle::Body);
+                let (arrow_rect, arrow_resp) =
+                    ui.allocate_exact_size(egui::vec2(body_h, body_h), egui::Sense::click());
+                if ui.is_rect_visible(arrow_rect) {
+                    crate::panels::icons::paint_triangle_arrow(
+                        &ui.painter_at(arrow_rect),
+                        arrow_rect,
+                        open,
+                        ui.visuals().text_color(),
+                    );
+                }
+                let label_resp = ui.add(
+                    egui::Label::new(egui::RichText::new(label).strong())
+                        .sense(egui::Sense::click()),
+                );
+                if arrow_resp.clicked() || label_resp.clicked() {
                     ui.data_mut(|d| d.insert_temp::<bool>(open_id, !open));
                 }
             });
