@@ -183,7 +183,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         .unwrap_or_default();
 
     // Assemble SMT texture as raw RGB bytes for PaintedTexture.
-    const TEX_RES: u32 = 512;
+    const TEX_RES: u32 = 2048;
     let (texture_data, texture_res) =
         if let (Some(smt_path), Some(smf)) = (smt_abs.as_ref(), smf_data.as_ref()) {
             let result: Option<(Vec<u8>, u32)> = (|| {

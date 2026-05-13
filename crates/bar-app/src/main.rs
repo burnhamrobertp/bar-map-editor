@@ -754,6 +754,7 @@ impl eframe::App for AppWrapper {
                     min_h,
                     max_h,
                     self.feature_catalog.as_ref(),
+                    self.app.paint.heightmap.as_ref(),
                 );
                 renderer.update_feature_instances(&gpu.device, &instances);
                 session.features_dirty = false;
@@ -1642,6 +1643,7 @@ fn build_feature_instances(
     min_h: f32,
     max_h: f32,
     catalog: Option<&FeatureCatalog>,
+    heightmap: Option<&bar_data::Heightmap>,
 ) -> Vec<FeatureInstance> {
     use glam::{Mat4, Quat, Vec3};
 
@@ -1652,21 +1654,41 @@ fn build_feature_instances(
     let ze = (0.5 * ph / pm).min(0.5);
     let height_range = (max_h - min_h).abs().max(1.0);
     let hs = (height_range / (pm * 8.0)).max(0.005);
-    // Box half-size in render-space, scaled proportionally to the map so
-    // features appear roughly 60 elmos across regardless of map dimensions.
-    // Clamped so boxes are always legible on tiny maps and never swamp terrain.
-    let box_scale = (60.0_f32 / (pm * 8.0)).clamp(0.003, 0.012);
+    // Fallback footprint (2 Spring squares = 16 elmos) used when the catalog
+    // doesn't have a definition for a feature type.
+    let default_footprint = 2.0_f32;
 
     features
         .iter()
         .map(|f| {
             let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
             let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
-            // Spring snaps features to terrain Y at runtime so stored y is 0
-            // for surface-placed objects. Render at box_scale above the render-space
-            // floor (y = 0 = world height min_h) so the box sits above the terrain base.
+
+            // Footprint in Spring squares from the game's FeatureDef; fall back
+            // to default_footprint for unknown types.
+            let (fp_x, fp_z) = catalog
+                .and_then(|cat| cat.features.get(&f.feature_type.to_lowercase()))
+                .map(|def| (def.footprint_x.max(1) as f32, def.footprint_z.max(1) as f32))
+                .unwrap_or((default_footprint, default_footprint));
+            // 1 Spring square = 8 elmos; convert to render-space units (pm squares wide).
+            let sx = fp_x / pm;
+            let sz = fp_z / pm;
+            // Height: approximate with max horizontal dimension (no model data).
+            let sy = sx.max(sz);
+
+            // Y position: sample the heightmap at this feature's XZ so the box
+            // sits on the actual terrain surface rather than floating or buried.
+            // Spring snaps y=0 features to terrain at runtime, so we mirror that.
+            let h_render = if let Some(hm) = heightmap {
+                let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
+                let hz =
+                    (f.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
+                hm.get(hx as u32, hz as u32).unwrap_or(0.0) * hs
+            } else {
+                hs * 0.5
+            };
             let ry = if f.y.abs() < 0.01 {
-                box_scale
+                h_render
             } else {
                 ((f.y - min_h) / height_range) * hs
             };
@@ -1674,7 +1696,7 @@ fn build_feature_instances(
             // Spring angle: degrees CCW from +Z around Y axis. Negate to match
             // render-space handedness.
             let transform = Mat4::from_scale_rotation_translation(
-                Vec3::splat(box_scale),
+                Vec3::new(sx, sy, sz),
                 Quat::from_rotation_y(-f.angle.to_radians()),
                 Vec3::new(rx, ry, rz),
             );

@@ -642,7 +642,11 @@ fn cmd_preview(
         let ze = (0.5 * ph / pm).min(0.5);
         let height_range = (max_h - min_h).abs().max(1.0);
         let hs = (height_range / (pm * 8.0)).max(0.005);
-        let box_scale = (60.0_f32 / (pm * 8.0)).clamp(0.003, 0.012);
+        // Default 2 Spring squares (16 elmos) footprint; no catalog in CLI mode.
+        let default_fp = 2.0_f32;
+        let sx = default_fp / pm;
+        let sy = sx;
+        let sz = sx;
 
         let instances: Vec<FeatureInstance> = project
             .recipe
@@ -651,13 +655,21 @@ fn cmd_preview(
             .map(|f| {
                 let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
                 let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+                // Sample heightmap at feature XZ to match terrain surface.
+                let h_render = {
+                    let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0)
+                        * (heightmap.width().saturating_sub(1)) as f32;
+                    let hz = (f.z / (ph * 8.0)).clamp(0.0, 1.0)
+                        * (heightmap.height().saturating_sub(1)) as f32;
+                    heightmap.get(hx as u32, hz as u32).unwrap_or(0.0) * hs
+                };
                 let ry = if f.y.abs() < 0.01 {
-                    box_scale
+                    h_render
                 } else {
                     ((f.y - min_h) / height_range) * hs
                 };
                 let transform = Mat4::from_scale_rotation_translation(
-                    Vec3::splat(box_scale),
+                    Vec3::new(sx, sy, sz),
                     Quat::from_rotation_y(-f.angle.to_radians()),
                     Vec3::new(rx, ry, rz),
                 );
