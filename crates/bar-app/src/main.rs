@@ -237,8 +237,49 @@ fn main() -> Result<()> {
     if let Some(icon_data) = icon {
         viewport = viewport.with_icon(icon_data);
     }
+    // Request BC texture compression and a large max texture dimension.
+    // eframe's default device_descriptor requests no optional features, so
+    // device.features() would return nothing even on a capable GPU -- the
+    // Preview layout's BC1 upload would silently report "unavailable".
+    // We also raise max_texture_dimension_2d to the adapter's maximum because
+    // native-resolution BC1 textures for large maps exceed the default 8192px cap.
+    let wgpu_setup =
+        eframe::egui_wgpu::WgpuSetup::CreateNew(eframe::egui_wgpu::WgpuSetupCreateNew {
+            device_descriptor: std::sync::Arc::new(|adapter| {
+                let bc = if adapter
+                    .features()
+                    .contains(wgpu::Features::TEXTURE_COMPRESSION_BC)
+                {
+                    wgpu::Features::TEXTURE_COMPRESSION_BC
+                } else {
+                    wgpu::Features::empty()
+                };
+                let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+                    wgpu::Limits::downlevel_webgl2_defaults()
+                } else {
+                    wgpu::Limits::default()
+                };
+                wgpu::DeviceDescriptor {
+                    label: Some("bar-editor"),
+                    required_features: bc,
+                    required_limits: wgpu::Limits {
+                        max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
+                        max_storage_buffer_binding_size: 512 * 1024 * 1024,
+                        max_buffer_size: 512 * 1024 * 1024,
+                        ..base_limits
+                    },
+                    ..Default::default()
+                }
+            }),
+            ..Default::default()
+        });
+    let wgpu_options = eframe::egui_wgpu::WgpuConfiguration {
+        wgpu_setup,
+        ..Default::default()
+    };
     let options = eframe::NativeOptions {
         viewport,
+        wgpu_options,
         ..Default::default()
     };
 
