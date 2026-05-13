@@ -928,7 +928,10 @@ impl eframe::App for AppWrapper {
                 current_key != session.last_low_res_key && current_key != session.last_high_res_key;
 
             if needs_low_res && !session.low_res_pending {
-                let low_res_size = 128u32.min(w.min(h));
+                // Scale down to ~128 in the short dimension, preserving aspect ratio.
+                let scale = 128.0 / w.min(h).max(1) as f32;
+                let low_w = ((w as f32 * scale).round() as u32).max(1);
+                let low_h = ((h as f32 * scale).round() as u32).max(1);
                 let graph = self.app.graph().clone();
                 let tx = session.preview_tx.clone();
                 let ctx_clone = ctx.clone();
@@ -937,7 +940,7 @@ impl eframe::App for AppWrapper {
                 session.low_res_pending = true;
                 std::thread::spawn(move || {
                     let (heightmap, texture) =
-                        eval_preview(&graph, executor.as_ref(), low_res_size, preview_node_id);
+                        eval_preview(&graph, executor.as_ref(), low_w, low_h, preview_node_id);
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -968,7 +971,6 @@ impl eframe::App for AppWrapper {
                 && !session.high_res_pending
                 && cooldown_done
             {
-                let high_res_size = 512u32.min(w.min(h));
                 let graph = self.app.graph().clone();
                 let tx = session.preview_tx.clone();
                 let ctx_clone = ctx.clone();
@@ -977,7 +979,7 @@ impl eframe::App for AppWrapper {
                 session.high_res_pending = true;
                 std::thread::spawn(move || {
                     let (heightmap, texture) =
-                        eval_preview(&graph, executor.as_ref(), high_res_size, preview_node_id);
+                        eval_preview(&graph, executor.as_ref(), w, h, preview_node_id);
                     let _ = tx.send(PreviewResult {
                         heightmap,
                         texture,
@@ -1607,10 +1609,11 @@ impl AppWrapper {
 fn eval_preview(
     graph: &bar_graph::GraphEngine,
     executor: &dyn NodeExecutor,
-    size: u32,
+    width: u32,
+    height: u32,
     preview_node_id: Option<bar_graph::NodeId>,
 ) -> (Option<bar_data::Heightmap>, Option<bar_data::ColorBuffer>) {
-    let result = match evaluate_graph(graph, executor, size, size) {
+    let result = match evaluate_graph(graph, executor, width, height) {
         Ok(outputs) => outputs,
         Err(_) => return (None, None),
     };
