@@ -70,27 +70,11 @@ fn draw_info_bar(app: &mut BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
                 ui.label("Compiled");
             }
         }
-
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let running = app.preview.compile_running;
-            let any_running = running || app.preview.export_status().is_running();
-
-            let tooltip = if is_compiled { "Recompile" } else { "Compile" };
-            let response = ui
-                .add_enabled(!any_running, egui::Button::new("\u{2699}"))
-                .on_hover_text(tooltip);
-            if response.clicked() {
-                app.preview.compile_requested = true;
-            }
-            if running {
-                draw_animated_border(ui, response.rect);
-            }
-        });
     });
 }
 
 /// Draw a bright segment travelling clockwise around `rect` to indicate activity.
-fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
+pub fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
     let time = ui.input(|i| i.time) as f32;
     let phase = (time * 0.75).fract();
 
