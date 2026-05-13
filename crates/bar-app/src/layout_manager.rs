@@ -18,7 +18,7 @@ use eframe::egui;
 use crate::viewport::{
     build_feature_instances, draw_preview_placeholder, draw_preview_viewport, draw_sculpt_viewport,
     eval_preview, load_compiled_bc1, update_viewport_texture, EvalState, OwnedFrame, PreviewResult,
-    ViewportCore,
+    ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -205,23 +205,17 @@ impl LayoutManager {
             }
         }
 
-        // Claim the central panel and draw the viewport.
-        let high_res_pending = slot.eval.high_res_pending;
+        // Snapshot resolution state before borrowing core mutably.
+        let res = ResolutionStatus {
+            current_tex_dims: slot.core.current_frame.as_ref().map(|f| (f.tex_w, f.tex_h)),
+            low_tex_dims: slot.eval.low_tex_dims,
+            high_tex_dims: slot.eval.high_tex_dims,
+            low_pending: slot.eval.low_res_pending,
+            high_pending: slot.eval.high_res_pending,
+        };
         let core = &mut slot.core;
         egui::CentralPanel::default().show(ctx, |ui| {
-            draw_sculpt_viewport(
-                core,
-                &EvalState {
-                    high_res_pending,
-                    // Other fields unused by draw_sculpt_viewport.
-                    ..EvalState::new()
-                },
-                gpu_context,
-                render_state,
-                ui,
-                ctx,
-                app,
-            );
+            draw_sculpt_viewport(core, &res, gpu_context, render_state, ui, ctx, app);
         });
     }
 
@@ -360,6 +354,8 @@ fn apply_preview_result(
             water_color: result.water_color,
             quality_high: !result.is_low_res,
             smf_lighting: result.smf_lighting,
+            tex_w: result.tex_w,
+            tex_h: result.tex_h,
         });
 
         if let Some(ref gpu) = gpu_context {
@@ -462,6 +458,10 @@ fn spawn_eval_passes(
     let low_hm_w = ((w as f32 * low_hm_scale).round() as u32).max(1);
     let low_hm_h = ((h as f32 * low_hm_scale).round() as u32).max(1);
 
+    // Always record configured dims so the overlay can display them.
+    slot.eval.low_tex_dims = Some((low_tex_w, low_tex_h));
+    slot.eval.high_tex_dims = Some((tex_w, tex_h));
+
     let needs_low_res =
         current_key != slot.eval.last_low_res_key && current_key != slot.eval.last_high_res_key;
 
@@ -492,6 +492,8 @@ fn spawn_eval_passes(
                 is_low_res: true,
                 x_extent,
                 z_extent,
+                tex_w: low_tex_w,
+                tex_h: low_tex_h,
             });
             ctx_clone.request_repaint();
         });
@@ -525,6 +527,8 @@ fn spawn_eval_passes(
                 is_low_res: false,
                 x_extent,
                 z_extent,
+                tex_w,
+                tex_h,
             });
             ctx_clone.request_repaint();
         });

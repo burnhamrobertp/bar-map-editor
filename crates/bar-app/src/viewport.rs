@@ -27,6 +27,9 @@ pub struct PreviewResult {
     pub is_low_res: bool,
     pub x_extent: f32,
     pub z_extent: f32,
+    /// Texture resolution this result was evaluated at.
+    pub tex_w: u32,
+    pub tex_h: u32,
 }
 
 // ── Owned frame (renderer input, survives across frames) ─────────────────────
@@ -40,6 +43,9 @@ pub struct OwnedFrame {
     pub water_color: [f32; 3],
     pub quality_high: bool,
     pub smf_lighting: bar_render::SmfLighting,
+    /// Texture resolution this frame was evaluated at.
+    pub tex_w: u32,
+    pub tex_h: u32,
 }
 
 impl OwnedFrame {
@@ -103,6 +109,10 @@ pub struct EvalState {
     pub low_res_completed_at: Option<Instant>,
     pub force_refresh_requested: bool,
     pub features_dirty: bool,
+    /// Texture dims of the fast-preview pass for this slot's map dims.
+    pub low_tex_dims: Option<(u32, u32)>,
+    /// Texture dims of the full-quality pass for this slot's map dims.
+    pub high_tex_dims: Option<(u32, u32)>,
 }
 
 impl EvalState {
@@ -118,8 +128,22 @@ impl EvalState {
             low_res_completed_at: None,
             force_refresh_requested: false,
             features_dirty: true,
+            low_tex_dims: None,
+            high_tex_dims: None,
         }
     }
+}
+
+/// Resolution info for the viewport status overlay.
+pub struct ResolutionStatus {
+    /// Texture dims of the frame currently displayed (None = no frame yet).
+    pub current_tex_dims: Option<(u32, u32)>,
+    /// Configured fast-preview dims for this slot.
+    pub low_tex_dims: Option<(u32, u32)>,
+    /// Configured full-quality dims for this slot.
+    pub high_tex_dims: Option<(u32, u32)>,
+    pub low_pending: bool,
+    pub high_pending: bool,
 }
 
 // ── Helper: register / update the egui texture handle ────────────────────────
@@ -159,7 +183,7 @@ pub fn update_viewport_texture(
 
 pub fn draw_sculpt_viewport(
     core: &mut ViewportCore,
-    eval: &EvalState,
+    res: &ResolutionStatus,
     gpu_context: &Option<GpuContext>,
     render_state: &Option<eframe::egui_wgpu::RenderState>,
     ui: &mut egui::Ui,
@@ -168,15 +192,7 @@ pub fn draw_sculpt_viewport(
 ) {
     ui.small(bar_gui::i18n::t("editor.viewport_3d.sculpt_controls_hint"));
     ui.separator();
-    draw_viewport_body(
-        core,
-        eval.high_res_pending,
-        gpu_context,
-        render_state,
-        ui,
-        ctx,
-        app,
-    );
+    draw_viewport_body(core, res, gpu_context, render_state, ui, ctx, app);
 }
 
 // ── Preview layout viewport drawing ──────────────────────────────────────────
@@ -219,15 +235,22 @@ pub fn draw_preview_viewport(
     ctx: &egui::Context,
     app: &mut bar_gui::BarEditorApp,
 ) {
-    // Preview is read-only -- no sculpt brush, no refresh button.
-    draw_viewport_body(core, false, gpu_context, render_state, ui, ctx, app);
+    // Preview is read-only; no eval scheduler, so no resolution overlay.
+    let res = ResolutionStatus {
+        current_tex_dims: None,
+        low_tex_dims: None,
+        high_tex_dims: None,
+        low_pending: false,
+        high_pending: false,
+    };
+    draw_viewport_body(core, &res, gpu_context, render_state, ui, ctx, app);
 }
 
 // ── Shared viewport body ──────────────────────────────────────────────────────
 
 fn draw_viewport_body(
     core: &mut ViewportCore,
-    high_res_pending: bool,
+    res: &ResolutionStatus,
     gpu_context: &Option<GpuContext>,
     render_state: &Option<eframe::egui_wgpu::RenderState>,
     ui: &mut egui::Ui,
@@ -263,28 +286,89 @@ fn draw_viewport_body(
             .sense(egui::Sense::click_and_drag());
         let response = ui.add(image);
 
-        if high_res_pending {
-            let corner = response.rect.right_bottom() - egui::vec2(22.0, 22.0);
-            ui.put(
-                egui::Rect::from_center_size(corner, egui::Vec2::splat(20.0)),
-                egui::Spinner::new()
-                    .size(16.0)
-                    .color(egui::Color32::from_rgba_unmultiplied(255, 200, 80, 220)),
-            );
+        draw_resolution_badge(ui, &response.rect, res);
+        if res.low_pending || res.high_pending {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
 
         handle_camera_input(core, gpu_context, render_state, &response, ctx, app);
     } else {
+        // No frame yet -- show a loading message with the target resolution.
+        let target = if res.low_pending {
+            res.low_tex_dims
+        } else if res.high_pending {
+            res.high_tex_dims
+        } else {
+            None
+        };
         ui.centered_and_justified(|ui| {
-            ui.add(
-                egui::Spinner::new()
-                    .size(80.0)
-                    .color(egui::Color32::from_rgba_unmultiplied(255, 200, 80, 220)),
-            );
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() * 0.35);
+                ui.add(
+                    egui::Spinner::new()
+                        .size(48.0)
+                        .color(egui::Color32::from_rgba_unmultiplied(255, 200, 80, 220)),
+                );
+                if let Some((tw, th)) = target {
+                    ui.add_space(10.0);
+                    ui.colored_label(
+                        egui::Color32::from_rgba_unmultiplied(255, 200, 80, 200),
+                        format!("Loading {}...", fmt_tex_res(tw, th)),
+                    );
+                }
+            });
         });
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
+}
+
+fn fmt_tex_res(w: u32, h: u32) -> String {
+    if w == h {
+        format!("{}px", w)
+    } else {
+        format!("{}x{}px", w, h)
+    }
+}
+
+fn draw_resolution_badge(ui: &egui::Ui, viewport_rect: &egui::Rect, res: &ResolutionStatus) {
+    let target_dims = if res.low_pending {
+        res.low_tex_dims
+    } else if res.high_pending {
+        res.high_tex_dims
+    } else {
+        None
+    };
+
+    let label: String = match (res.current_tex_dims, target_dims) {
+        (None, Some((tw, th))) => format!("-> {}", fmt_tex_res(tw, th)),
+        (Some((cw, ch)), Some((tw, th))) if (cw, ch) != (tw, th) => {
+            format!("{} -> {}", fmt_tex_res(cw, ch), fmt_tex_res(tw, th))
+        }
+        (Some((cw, ch)), _) => fmt_tex_res(cw, ch),
+        (None, None) => return,
+    };
+
+    let painter = ui.painter();
+    let font = egui::FontId::monospace(11.0);
+    let text_color = if target_dims.is_some() {
+        egui::Color32::from_rgba_unmultiplied(255, 200, 80, 230)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(160, 200, 160, 200)
+    };
+
+    let galley = painter.layout_no_wrap(label, font, text_color);
+    let padding = egui::vec2(6.0, 3.0);
+    let badge_size = galley.size() + padding * 2.0;
+    let badge_pos =
+        viewport_rect.right_bottom() - egui::vec2(badge_size.x + 8.0, badge_size.y + 8.0);
+    let badge_rect = egui::Rect::from_min_size(badge_pos, badge_size);
+
+    painter.rect_filled(
+        badge_rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160),
+    );
+    painter.galley(badge_pos + padding, galley, text_color);
 }
 
 // ── Camera and sculpt input ───────────────────────────────────────────────────
