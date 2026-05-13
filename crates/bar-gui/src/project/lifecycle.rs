@@ -1099,8 +1099,8 @@ mod session_reset_tests {
         assert!(!app.history.can_undo());
         assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
         assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
-        // do_new_project drops a Bundler + Preview by default.
-        assert_eq!(app.graph.nodes().len(), 2);
+        // do_new_project drops a single Bundler terminal node.
+        assert_eq!(app.graph.nodes().len(), 1);
     }
 
     #[test]
