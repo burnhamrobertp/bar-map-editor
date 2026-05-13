@@ -1263,10 +1263,11 @@ impl eframe::App for AppWrapper {
             }
         }
 
-        // When the Sculpt3D layout is active the central panel is left
+        // When Sculpt3D or Preview layout is active the central panel is left
         // unclaimed by bar-gui so we can fill it here with the 3D viewport.
         // `session` is already in scope from the guard above.
-        if self.app.active_layout() == bar_gui::Layout::Sculpt3D {
+        let layout = self.app.active_layout();
+        if layout == bar_gui::Layout::Sculpt3D || layout == bar_gui::Layout::Preview {
             egui::CentralPanel::default().show(ctx, |ui| {
                 Self::draw_viewport_on(
                     session,
