@@ -411,6 +411,7 @@ impl BarEditorApp {
     /// Mark the project as dirty (unsaved changes pending).
     pub(crate) fn mark_dirty(&mut self) {
         self.project.is_dirty = true;
+        self.project.compile_dirty = true;
     }
 
     /// Append a message to the log buffer. Info/Warning/Error also update

@@ -75,6 +75,11 @@ pub struct PreviewState {
     /// Live export busy-state. Set by `bar-app` to gate the run buttons
     /// in the GUI.
     pub export_status: ExportStatus,
+    /// Set to `true` for one frame when the user clicks "Compile".
+    /// `bar-app` consumes via `take_compile_requested`.
+    pub compile_requested: bool,
+    /// True while a compile is running. Set by `bar-app`.
+    pub compile_running: bool,
 }
 
 impl PreviewState {
@@ -113,6 +118,11 @@ impl PreviewState {
 
     pub fn set_export_status(&mut self, s: ExportStatus) {
         self.export_status = s;
+    }
+
+    /// Consume the one-frame "compile" pulse.
+    pub fn take_compile_requested(&mut self) -> bool {
+        std::mem::take(&mut self.compile_requested)
     }
 
     /// Reset to defaults. Called by `BarEditorApp::reset_session_state`

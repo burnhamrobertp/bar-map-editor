@@ -17,7 +17,10 @@ pub mod recipe;
 pub mod scan;
 pub mod validation;
 
-pub use package::{read_asset_file, write_asset_file, AssetHeader, AssetId, AssetKind, PackageDir};
+pub use package::{
+    read_asset_file, write_asset_file, AssetHeader, AssetId, AssetKind, AssetStat, Fingerprint,
+    PackageDir,
+};
 pub use project::{
     EditorLayout, MacroParamSpec, NodeGroup, NodeSize, PersistedCanvasView, Position, Project,
     SubgraphPort,
@@ -26,5 +29,5 @@ pub use recipe::{
     AtmosphereSettings, DetailTexture, LightingSettings, MapSettings, OutputConfig, Recipe,
     RecipeConnection, RecipeNode, WaterSettings, RECIPE_SCHEMA_VERSION,
 };
-pub use scan::{scan_to_project, PendingAsset, WorkDirScan};
+pub use scan::{scan_to_project, PendingAsset, PendingRawFile, WorkDirScan};
 pub use validation::{has_errors, validate_project, Finding, Severity};

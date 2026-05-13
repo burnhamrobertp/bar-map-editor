@@ -44,6 +44,13 @@ pub struct ProjectState {
     /// open). `bar-app` consumes this via `take_graph_reset` to flush
     /// GPU preview state.
     pub graph_reset: bool,
+    /// `true` when the graph or params have changed since the last
+    /// successful compile. Cleared by `bar-app` after `compile_project`
+    /// succeeds.
+    pub compile_dirty: bool,
+    /// Timestamp of the last successful compile in this session. `None`
+    /// until the user has compiled at least once.
+    pub compiled_at: Option<Instant>,
 }
 
 impl ProjectState {

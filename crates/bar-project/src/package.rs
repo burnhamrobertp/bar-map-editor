@@ -11,7 +11,10 @@
 //! lets the reader know dimensions and pixel format without an external
 //! codec dependency in this crate.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+
+use serde::{Deserialize, Serialize};
 
 use anyhow::{Context, Result};
 
@@ -131,6 +134,39 @@ pub fn read_asset_file(path: &Path) -> Result<(AssetHeader, Vec<u8>)> {
     ))
 }
 
+// ── Compile fingerprint ────────────────────────────────────────────────────
+
+/// Metadata written to `compiled/fingerprint.json` after each successful
+/// compile. Used to determine whether the compiled output is stale.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Fingerprint {
+    /// FNV-64 hash of `recipe.json` at compile time (hex string).
+    pub recipe_hash: String,
+    /// Map dimensions at compile time (map_x = output.width - 1).
+    pub map_x: u32,
+    pub map_y: u32,
+    /// Size and mtime of each asset file that was live at compile time.
+    pub assets: HashMap<String, AssetStat>,
+}
+
+/// File-level stats for one asset used in the staleness check.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetStat {
+    pub size: u64,
+    pub mtime_secs: u64,
+}
+
+/// FNV-64 hash (no external dep).
+fn fnv64(data: &[u8]) -> u64 {
+    const PRIME: u64 = 0x0000_0100_0000_01B3;
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &b in data {
+        h ^= b as u64;
+        h = h.wrapping_mul(PRIME);
+    }
+    h
+}
+
 // ── PackageDir ─────────────────────────────────────────────────────────────
 
 /// A handle to an open `.barproj` directory package.
@@ -202,6 +238,66 @@ impl PackageDir {
 
     pub fn asset_exists(&self, id: &AssetId) -> bool {
         self.asset_path(id).exists()
+    }
+
+    pub fn compiled_dir(&self) -> PathBuf {
+        self.root.join("compiled")
+    }
+
+    /// True when `compiled/fingerprint.json` exists.
+    pub fn is_compiled(&self) -> bool {
+        self.compiled_dir().join("fingerprint.json").exists()
+    }
+
+    /// Read the fingerprint written by the last compile. Returns `None` on
+    /// missing file or parse error.
+    pub fn read_fingerprint(&self) -> Option<Fingerprint> {
+        let s = std::fs::read_to_string(self.compiled_dir().join("fingerprint.json")).ok()?;
+        serde_json::from_str(&s).ok()
+    }
+
+    /// Write `fingerprint.json` into the compiled dir.
+    pub fn write_fingerprint(&self, fp: &Fingerprint) -> anyhow::Result<()> {
+        let dir = self.compiled_dir();
+        std::fs::create_dir_all(&dir)
+            .with_context(|| format!("Cannot create compiled dir {}", dir.display()))?;
+        let s = serde_json::to_string_pretty(fp)?;
+        std::fs::write(dir.join("fingerprint.json"), s)?;
+        Ok(())
+    }
+
+    /// True when the compiled output is absent or does not match the current
+    /// recipe + map dims. Asset stats are checked against the on-disk `assets/`
+    /// directory.
+    pub fn is_stale(&self, recipe_json: &str, map_x: u32, map_y: u32) -> bool {
+        let Some(fp) = self.read_fingerprint() else {
+            return true;
+        };
+        let recipe_hash = format!("{:016x}", fnv64(recipe_json.as_bytes()));
+        if fp.recipe_hash != recipe_hash || fp.map_x != map_x || fp.map_y != map_y {
+            return true;
+        }
+        let assets_dir = self.assets_dir();
+        for (name, stat) in &fp.assets {
+            match std::fs::metadata(assets_dir.join(name)) {
+                Ok(m) => {
+                    if m.len() != stat.size {
+                        return true;
+                    }
+                    let mtime = m
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    if mtime != stat.mtime_secs {
+                        return true;
+                    }
+                }
+                Err(_) => return true,
+            }
+        }
+        false
     }
 
     /// Save a timestamped autosave snapshot of `recipe_json` inside `autosave/`.

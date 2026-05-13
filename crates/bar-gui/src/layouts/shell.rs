@@ -985,6 +985,33 @@ impl BarEditorApp {
                         self.preview.run_requested = true;
                     }
 
+                    // Compile button
+                    ui.add_space(4.0);
+                    let compile_running = self.preview.compile_running;
+                    let compile_dirty = self.project.compile_dirty;
+                    let compile_label = if compile_running {
+                        "Compiling..."
+                    } else if compile_dirty {
+                        "Compile (out of date)"
+                    } else {
+                        "Compile"
+                    };
+                    let can_compile = !compile_running && !any_running;
+                    let compile_resp =
+                        ui.add_enabled(can_compile, egui::Button::new(compile_label));
+                    if compile_resp.clicked() && can_compile {
+                        self.preview.compile_requested = true;
+                    }
+                    if let Some(compiled_at) = self.project.compiled_at {
+                        let secs = compiled_at.elapsed().as_secs();
+                        let age = if secs < 60 {
+                            format!("{secs}s ago")
+                        } else {
+                            format!("{}m ago", secs / 60)
+                        };
+                        compile_resp.on_hover_text(format!("Last compiled {age}"));
+                    }
+
                     // Edit Map Info button — opens the project's designated map
                     // info file in the OS default editor. Prompts for the file
                     // on first use.

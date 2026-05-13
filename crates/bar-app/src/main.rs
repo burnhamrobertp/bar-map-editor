@@ -293,6 +293,7 @@ fn main() -> Result<()> {
                 progress_rx: None,
                 export_status: bar_gui::ExportStatus::Idle,
                 sd7_extract_rx: None,
+                compile_result_rx: None,
                 test_in_bar_rx: None,
                 pending_export_dir: None,
                 bar_install,
@@ -340,6 +341,8 @@ struct AppWrapper {
     export_status: bar_gui::ExportStatus,
     /// Receiver for SD7 extraction results (Some while extraction is in progress).
     sd7_extract_rx: Option<mpsc::Receiver<Result<bar_engine::WorkDirScan, String>>>,
+    /// Background compile result. `Some` while a compile is running.
+    compile_result_rx: Option<mpsc::Receiver<Result<(), String>>>,
     /// In-flight "Test in BAR" pipeline. Background thread exports the
     /// project to a temp dir and sends back the SD7 path; the main loop
     /// then copies the file into BAR's maps dir and spawns the lobby.
@@ -484,6 +487,55 @@ impl eframe::App for AppWrapper {
                 self.app.set_status(msg);
                 self.export_result_rx = None;
                 self.export_status = bar_gui::ExportStatus::Idle;
+            }
+        }
+
+        // Handle Compile button
+        if let Some(rx) = &self.compile_result_rx {
+            match rx.try_recv() {
+                Ok(Ok(())) => {
+                    self.app.project.compile_dirty = false;
+                    self.app.project.compiled_at = Some(std::time::Instant::now());
+                    self.app.preview.compile_running = false;
+                    self.compile_result_rx = None;
+                    self.app.set_status("Compile complete");
+                }
+                Ok(Err(e)) => {
+                    self.app.preview.compile_running = false;
+                    self.compile_result_rx = None;
+                    self.app.set_status(format!("Compile failed: {e}"));
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.app.preview.compile_running = false;
+                    self.compile_result_rx = None;
+                }
+            }
+        }
+        if self.app.preview.take_compile_requested() && self.compile_result_rx.is_none() {
+            if let Some(project_dir) = self.app.project.path.clone() {
+                let graph = self.app.graph().clone();
+                let recipe = self.app.recipe_for_export();
+                let executor = Arc::clone(&self.executor);
+                let (tx, rx) = mpsc::channel::<Result<(), String>>();
+                self.compile_result_rx = Some(rx);
+                self.app.preview.compile_running = true;
+                let ctx_clone = ctx.clone();
+                std::thread::spawn(move || {
+                    let result = bar_engine::compile_project(
+                        &project_dir,
+                        &graph,
+                        executor.as_ref(),
+                        &recipe,
+                        &|_| {},
+                    )
+                    .map_err(|e| e.to_string());
+                    let _ = tx.send(result);
+                    ctx_clone.request_repaint();
+                });
+            } else {
+                self.app
+                    .set_status("Project must be saved before compiling");
             }
         }
 

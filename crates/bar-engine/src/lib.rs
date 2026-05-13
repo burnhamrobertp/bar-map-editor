@@ -9,6 +9,7 @@
 //! - Export orchestration: graph → .smf / PNG output
 
 pub mod bundler;
+pub mod compile;
 pub mod executor;
 pub mod export;
 pub mod extract;
@@ -20,8 +21,11 @@ pub mod recipe;
 pub mod targets;
 
 pub use bar_project::scan_to_project;
-pub use bar_project::{write_asset_file, AssetHeader, PendingAsset};
+pub use bar_project::{
+    write_asset_file, AssetHeader, AssetStat, Fingerprint, PackageDir, PendingAsset, PendingRawFile,
+};
 pub use bundler::{execute_bundlers, find_bundler_nodes, BundlerResult};
+pub use compile::compile_project;
 pub use executor::CpuExecutor;
 pub use export::{
     export_grassmap_png, export_heightmap_png, export_normalmap_png, export_sd7_directory,
