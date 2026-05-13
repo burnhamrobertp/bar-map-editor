@@ -1,10 +1,4 @@
-//! Layout dispatch — picks the active layout and delegates to it.
-//!
-//! Today there's only one layout (`Standard`). The match arm is
-//! one line; the value of routing through this dispatcher is
-//! that adding a second layout means adding one match arm here
-//! and one new file in `super::`, with zero churn in `app.rs` or
-//! the eframe `update` body.
+//! Layout dispatch -- picks the active layout and delegates to it.
 
 use eframe::egui;
 
@@ -27,7 +21,7 @@ pub fn draw_active(app: &mut BarEditorApp, ctx: &egui::Context, frame: &mut efra
     }
 
     match app.active_layout() {
-        Layout::Standard => super::standard::draw(app, ctx, frame),
+        Layout::NodeGraph => super::node_graph::draw(app, ctx, frame),
         Layout::Sculpt3D => super::sculpt3d::draw(app, ctx, frame),
         Layout::Preview => super::preview::draw(app, ctx, frame),
     }

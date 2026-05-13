@@ -11,6 +11,10 @@ use eframe::egui;
 use crate::app::BarEditorApp;
 
 /// Draw the Preview layout.
+///
+/// Only the info bar is drawn here. The central panel is left unclaimed --
+/// `bar-app`'s layout manager fills it with the BC1 viewport or the
+/// "not compiled" placeholder, depending on project state.
 pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
     let is_compiled = app
         .project
@@ -27,17 +31,9 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
         draw_info_bar(app, ui, is_compiled);
     });
 
-    let can_show_viewport = app.supports_bc && is_compiled;
-
-    if !can_show_viewport {
-        egui::CentralPanel::default().show(ctx, |ui| {
-            draw_placeholder(app, ui, is_compiled);
-        });
-        return;
+    if app.supports_bc && is_compiled {
+        app.preview.bc_texture_requested = true;
     }
-
-    // Signal bar-app to load the compiled BC1 texture this frame.
-    app.preview.bc_texture_requested = true;
 }
 
 fn draw_info_bar(app: &mut BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
@@ -135,28 +131,4 @@ fn perimeter_point(rect: egui::Rect, t: f32) -> egui::Pos2 {
     } else {
         egui::pos2(rect.left(), rect.bottom() - (pos - 2.0 * w - h))
     }
-}
-
-fn draw_placeholder(app: &BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
-    ui.centered_and_justified(|ui| {
-        ui.vertical_centered(|ui| {
-            ui.add_space(60.0);
-            if !app.supports_bc {
-                ui.heading("BC texture compression unavailable");
-                ui.add_space(8.0);
-                ui.label("Your GPU does not support BC1/DXT1 texture compression.");
-                ui.label("The native-resolution Preview layout requires it.");
-            } else if !is_compiled {
-                ui.heading("Not yet compiled");
-                ui.add_space(8.0);
-                ui.label("Run Compile to generate the native-resolution texture.");
-                ui.add_space(16.0);
-                if !app.preview.compile_running {
-                    ui.label("Use the Compile button above or in the toolbar.");
-                } else {
-                    ui.label("Compiling...");
-                }
-            }
-        });
-    });
 }

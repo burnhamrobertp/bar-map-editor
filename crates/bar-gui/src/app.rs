@@ -181,16 +181,14 @@ pub use crate::editor::ExportStatus;
 /// + a match arm in `layouts::dispatch::draw_active`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Layout {
-    /// Today's editor: top toolbar, left palette, centre canvas,
-    /// right contextual properties, bottom status bar, with
-    /// floating windows for inspector / map info / validation /
-    /// settings / about.
+    /// Node graph editor: left palette, central canvas, contextual
+    /// properties, floating dialogs. No 3D viewport -- switch to
+    /// Sculpt3D or use a future split layout for side-by-side editing.
     #[default]
-    Standard,
-    /// Full-width 3D viewport with brush controls on the right.
+    NodeGraph,
+    /// Full-width 3D viewport with brush controls on the left.
     /// Writes brush strokes to `SculptState` directly; the
-    /// export pipeline merges them onto graph output at bundle
-    /// time.
+    /// export pipeline merges them onto graph output at bundle time.
     Sculpt3D,
     /// Read-only 3D viewport showing the compiled native-resolution
     /// BC1 texture. Available only when a compile has been run.
@@ -200,12 +198,12 @@ pub enum Layout {
 impl Layout {
     /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
     /// Ctrl+2, etc. Extend this slice when new layouts are added.
-    pub const ALL: &'static [Layout] = &[Layout::Standard, Layout::Sculpt3D, Layout::Preview];
+    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Sculpt3D, Layout::Preview];
 
     /// i18n key for this layout's display name.
     pub(crate) fn i18n_key(self) -> &'static str {
         match self {
-            Layout::Standard => "editor.menu.node_graph",
+            Layout::NodeGraph => "editor.menu.node_graph",
             Layout::Sculpt3D => "editor.menu.sculpt_3d",
             Layout::Preview => "editor.menu.preview",
         }
@@ -854,9 +852,7 @@ impl eframe::App for BarEditorApp {
 }
 
 impl BarEditorApp {
-    /// The currently selected top-level UI layout. Today only
-    /// `Layout::Standard` exists; future variants are surfaced via
-    /// the toolbar layout-switcher and persisted in user settings.
+    /// The currently selected top-level UI layout.
     pub fn active_layout(&self) -> Layout {
         self.active_layout
     }

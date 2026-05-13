@@ -482,7 +482,7 @@ impl BarEditorApp {
                         // Auto Layout — only meaningful on the NodeGraph layout.
                         if ui
                             .add_enabled(
-                                self.has_project() && self.active_layout == Layout::Standard,
+                                self.has_project() && self.active_layout == Layout::NodeGraph,
                                 egui::Button::new(t!("editor.menu.auto_layout")),
                             )
                             .clicked()
