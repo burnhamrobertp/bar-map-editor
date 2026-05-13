@@ -29,6 +29,28 @@ pub struct PendingAsset {
     pub data: Vec<u8>,
 }
 
+/// A raw (non-BARASSET-format) file produced during SD7 import. Used for
+/// `.smt` tile atlases and `.idx` tile-index maps that have their own native
+/// formats. The caller writes the file to `assets/<id>.<extension>` and injects
+/// the resolved path into the matching graph node.
+pub struct PendingRawFile {
+    /// Key of the recipe node this file belongs to.
+    pub node_key: String,
+    /// Stable identifier stored in the node param named `match_param`.
+    pub id: AssetId,
+    /// Name of the node param holding this file's UUID (e.g. `"asset_id"`).
+    pub match_param: String,
+    /// Name of the node param to inject the resolved path into (e.g. `"asset_path"`).
+    pub inject_param: String,
+    /// Copy from this source path (avoids loading large files into RAM). When
+    /// `None` the caller writes `data` directly.
+    pub source_path: Option<PathBuf>,
+    /// Raw bytes to write. Only used when `source_path` is `None`.
+    pub data: Vec<u8>,
+    /// File extension without leading dot (e.g. `"smt"`, `"idx"`).
+    pub extension: String,
+}
+
 /// Convert a scanned SD7 work directory into a `Project` ready for `apply_project`
 /// plus a list of binary assets that the caller must write to the project directory.
 ///
@@ -38,8 +60,9 @@ pub struct PendingAsset {
 ///
 /// The returned `PendingAsset` list must be written to `<proj_dir>/assets/<id>.bin`
 /// before the graph can be evaluated; until then the executor will produce
-/// empty outputs for those nodes.
-pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>) {
+/// empty outputs for those nodes. The returned `PendingRawFile` list must be
+/// written to `<proj_dir>/assets/<id>.<ext>` (no BARASSET header).
+pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<PendingRawFile>) {
     let source_x = 80.0_f32;
     let bundler_x = 700.0_f32;
     let nm_x = (source_x + 165.0 + bundler_x) / 2.0;
@@ -49,6 +72,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>) {
     let mut node_positions: HashMap<String, Position> = HashMap::new();
     let mut node_sizes: HashMap<String, NodeSize> = HashMap::new();
     let mut pending: Vec<PendingAsset> = Vec::new();
+    let mut raw_files: Vec<PendingRawFile> = Vec::new();
 
     // Passthrough covers ancillary files only (mapinfo.lua, scripts, sounds,
     // etc.). The original .smf/.smt are NOT included -- they are regenerated
@@ -146,9 +170,66 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>) {
         );
     }
 
-    // Texture node (PaintedTexture backed by a binary asset)
-    let has_texture = !scan.texture_data.is_empty();
-    if has_texture {
+    // Texture node: ImportedTexture when the original .smt is available (preferred
+    // path -- preserves tile resolution for compile step); PaintedTexture as fallback
+    // when only the assembled RGB preview is present.
+    let has_texture = scan.smt_abs.is_some() || !scan.texture_data.is_empty();
+    if let (Some(smt_path), Some((tiles_x, tiles_y))) = (&scan.smt_abs, &scan.tile_grid) {
+        let smt_id = AssetId::new();
+        let idx_id = AssetId::new();
+        let mut params = HashMap::new();
+        params.insert("asset_id".to_string(), ParamValue::String(smt_id.0.clone()));
+        params.insert(
+            "tile_index_id".to_string(),
+            ParamValue::String(idx_id.0.clone()),
+        );
+        params.insert("tiles_x".to_string(), ParamValue::UInt(*tiles_x));
+        params.insert("tiles_y".to_string(), ParamValue::UInt(*tiles_y));
+        nodes.push(RecipeNode {
+            key: "tex".to_string(),
+            node_type: NodeType::ImportedTexture,
+            label: "Texture".to_string(),
+            params,
+        });
+        node_positions.insert(
+            "tex".to_string(),
+            Position {
+                x: source_x,
+                y: 500.0,
+            },
+        );
+        node_sizes.insert(
+            "tex".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 80.0,
+            },
+        );
+        // Serialize tile indices as raw i32 little-endian bytes for the .idx file.
+        let idx_bytes: Vec<u8> = scan
+            .tile_indices
+            .iter()
+            .flat_map(|&v| v.to_le_bytes())
+            .collect();
+        raw_files.push(PendingRawFile {
+            node_key: "tex".to_string(),
+            id: smt_id,
+            match_param: "asset_id".to_string(),
+            inject_param: "asset_path".to_string(),
+            source_path: Some(smt_path.clone()),
+            data: Vec::new(),
+            extension: "smt".to_string(),
+        });
+        raw_files.push(PendingRawFile {
+            node_key: "tex".to_string(),
+            id: idx_id,
+            match_param: "tile_index_id".to_string(),
+            inject_param: "tile_index_path".to_string(),
+            source_path: None,
+            data: idx_bytes,
+            extension: "idx".to_string(),
+        });
+    } else if !scan.texture_data.is_empty() {
         let id = AssetId::new();
         let tex_res = scan.texture_res;
         let mut params = HashMap::new();
@@ -380,7 +461,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>) {
         active_tab: 0,
     };
 
-    (Project { recipe, layout }, pending)
+    (Project { recipe, layout }, pending, raw_files)
 }
 
 #[cfg(test)]
@@ -409,6 +490,7 @@ mod tests {
             typemap_res: 0,
             texture_data: Vec::new(),
             texture_res: 0,
+            tile_indices: Vec::new(),
             features: Vec::new(),
         }
     }
@@ -430,12 +512,13 @@ mod tests {
     #[test]
     fn empty_scan_produces_only_bundler() {
         let scan = empty_scan("test_map");
-        let (p, pending) = scan_to_project(&scan);
+        let (p, pending, raw) = scan_to_project(&scan);
         assert_eq!(p.recipe.nodes.len(), 1);
         assert_eq!(p.recipe.nodes[0].key, "bundler");
         assert_eq!(p.recipe.nodes[0].node_type, NodeType::Bundler);
         assert!(p.recipe.connections.is_empty());
         assert!(pending.is_empty());
+        assert!(raw.is_empty());
     }
 
     #[test]
@@ -444,7 +527,7 @@ mod tests {
         scan.heightmap_data = vec![0xffu8; 16];
         scan.heightmap_res = 4;
         scan.map_dims = Some((512, 512));
-        let (p, pending) = scan_to_project(&scan);
+        let (p, pending, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         for k in ["hm", "nm", "bundler", "preview"] {
             assert!(keys.contains(&k), "missing: {k}");
@@ -468,14 +551,14 @@ mod tests {
         scan.texture_data = vec![0x01u8; 48]; // RGB: 16 pixels * 3 bytes
         scan.texture_res = 4;
         scan.passthrough_files = vec![(PathBuf::from("/tmp/a.lua"), PathBuf::from("a.lua"))];
-        let (p, pending) = scan_to_project(&scan);
+        let (p, pending, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         for k in [
             "hm", "metal", "type", "tex", "nm", "pass", "bundler", "preview",
         ] {
             assert!(keys.contains(&k), "missing: {k}");
         }
-        assert_eq!(pending.len(), 4); // hm, metal, type, tex
+        assert_eq!(pending.len(), 4); // hm, metal, type, tex (PaintedTexture fallback -- no smt_abs)
     }
 
     #[test]
@@ -483,7 +566,7 @@ mod tests {
         let mut scan = empty_scan("wire");
         scan.heightmap_data = vec![0xaau8; 16];
         scan.heightmap_res = 4;
-        let (p, _) = scan_to_project(&scan);
+        let (p, _, _) = scan_to_project(&scan);
         let froms: Vec<&str> = p
             .recipe
             .connections
@@ -506,7 +589,7 @@ mod tests {
     #[test]
     fn map_name_set_in_bundler_params() {
         let scan = empty_scan("my_cool_map");
-        let (p, _) = scan_to_project(&scan);
+        let (p, _, _) = scan_to_project(&scan);
         let bundler = p.recipe.nodes.iter().find(|n| n.key == "bundler").unwrap();
         assert!(
             matches!(
@@ -521,7 +604,7 @@ mod tests {
     fn height_range_propagates_to_map_settings() {
         let mut scan = empty_scan("heights");
         scan.height_range = Some((100.0, 900.0));
-        let (p, _) = scan_to_project(&scan);
+        let (p, _, _) = scan_to_project(&scan);
         assert_eq!(p.recipe.output.map_settings.min_height, 100.0);
         assert_eq!(p.recipe.output.map_settings.max_height, 900.0);
     }
@@ -531,7 +614,7 @@ mod tests {
         let mut scan = empty_scan("nohm");
         scan.metalmap_data = vec![0xffu8; 16];
         scan.metalmap_res = 4;
-        let (p, _) = scan_to_project(&scan);
+        let (p, _, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         assert!(!keys.contains(&"hm"), "unexpected hm");
         assert!(!keys.contains(&"nm"), "unexpected nm");
@@ -551,7 +634,7 @@ mod tests {
             angle: 1.57,
             taken_damage: 0,
         }];
-        let (p, _) = scan_to_project(&scan);
+        let (p, _, _) = scan_to_project(&scan);
         assert_eq!(p.recipe.features.len(), 1);
         assert_eq!(p.recipe.features[0].feature_type, "arborreal");
         assert!((p.recipe.features[0].x - 100.0).abs() < 0.001);
@@ -564,7 +647,7 @@ mod tests {
             PathBuf::from("/tmp/mapinfo.lua"),
             PathBuf::from("mapinfo.lua"),
         )];
-        let (p, _) = scan_to_project(&scan);
+        let (p, _, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         assert!(keys.contains(&"pass"), "missing pass");
         let has_conn = p
@@ -621,8 +704,13 @@ pub struct WorkDirScan {
     pub typemap_res: u32,
 
     /// Raw RGB (3 bytes/pixel) assembled texture at `texture_res x texture_res`.
+    /// Only populated when there is no `.smt` file (fallback path).
     pub texture_data: Vec<u8>,
     pub texture_res: u32,
+
+    /// Tile index map from the SMF: maps each tile-grid slot to an SMT tile index.
+    /// Length = tiles_x * tiles_y. Empty when no SMF is present.
+    pub tile_indices: Vec<i32>,
 
     /// Feature placements extracted from the SMF feature section.
     pub features: Vec<crate::recipe::PlacedFeature>,

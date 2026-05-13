@@ -744,14 +744,29 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
         Some("sd7") => {
             let scan = bar_engine::extract_sd7_to_work_dir(path)
                 .with_context(|| format!("Failed to extract {}", path.display()))?;
-            let (project, pending_assets) = bar_engine::scan_to_project(&scan);
+            let (project, pending_assets, raw_files) = bar_engine::scan_to_project(&scan);
+            let temp_dir = std::env::temp_dir().join("bar-editor-assets");
             // Write pending binary assets to temp so executors can read them.
             if !pending_assets.is_empty() {
-                let temp_dir = std::env::temp_dir().join("bar-editor-assets");
                 for asset in &pending_assets {
                     let ap = temp_dir.join(format!("{}.bin", asset.id.0));
                     if let Err(e) = bar_engine::write_asset_file(&ap, asset.header, &asset.data) {
                         eprintln!("Warning: failed to write temp asset: {e}");
+                    }
+                }
+            }
+            // Write raw files (ImportedTexture .smt + .idx).
+            if !raw_files.is_empty() {
+                let _ = std::fs::create_dir_all(&temp_dir);
+                for raw in &raw_files {
+                    let dest = temp_dir.join(format!("{}.{}", raw.id.0, raw.extension));
+                    let ok = if let Some(src) = &raw.source_path {
+                        std::fs::copy(src, &dest).is_ok()
+                    } else {
+                        std::fs::write(&dest, &raw.data).is_ok()
+                    };
+                    if !ok {
+                        eprintln!("Warning: failed to write raw temp asset");
                     }
                 }
             }

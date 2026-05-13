@@ -274,6 +274,14 @@ fn painted_texture_with_empty_data_emits_color_buffer() {
     assert_color_dims(&cb);
 }
 
+#[test]
+fn imported_texture_with_no_paths_emits_empty_color_buffer() {
+    // No asset_path / tile_index_path set -- executor falls back to an empty ColorBuffer.
+    let outputs = run(NodeType::ImportedTexture, &[], &empty_inputs());
+    let cb = out_color(&outputs, "output");
+    assert_color_dims(&cb);
+}
+
 // ── Filters ─────────────────────────────────────────────────────────
 
 #[test]

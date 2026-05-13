@@ -14,8 +14,8 @@ use bar_graph::{NodeId, NodeType};
 
 use crate::app::{BarEditorApp, CanvasView};
 use crate::project::path::{
-    pack_painted_asset, pack_passthrough_files, pack_path_param, resolve_passthrough_files,
-    resolve_path_param,
+    pack_painted_asset, pack_passthrough_files, pack_path_param, pack_raw_asset,
+    resolve_passthrough_files, resolve_path_param,
 };
 use crate::t;
 
@@ -78,6 +78,36 @@ impl BarEditorApp {
                         }
                     }
                 }
+                NodeType::ImportedTexture => {
+                    if let Some(bar_graph::ParamValue::String(id)) =
+                        node.params.get("asset_id").cloned()
+                    {
+                        if !id.is_empty() {
+                            let abs = assets_dir
+                                .join(format!("{id}.smt"))
+                                .to_string_lossy()
+                                .into_owned();
+                            node.params.insert(
+                                "asset_path".to_string(),
+                                bar_graph::ParamValue::String(abs),
+                            );
+                        }
+                    }
+                    if let Some(bar_graph::ParamValue::String(id)) =
+                        node.params.get("tile_index_id").cloned()
+                    {
+                        if !id.is_empty() {
+                            let abs = assets_dir
+                                .join(format!("{id}.idx"))
+                                .to_string_lossy()
+                                .into_owned();
+                            node.params.insert(
+                                "tile_index_path".to_string(),
+                                bar_graph::ParamValue::String(abs),
+                            );
+                        }
+                    }
+                }
                 _ => {}
             }
         }
@@ -107,6 +137,22 @@ impl BarEditorApp {
                 NodeType::PaintedHeightmap | NodeType::PaintedTexture | NodeType::Sculpt => {
                     pack_painted_asset(&mut node.params, project_dir, &assets_dir)?;
                 }
+                NodeType::ImportedTexture => {
+                    pack_raw_asset(
+                        &mut node.params,
+                        &assets_dir,
+                        "asset_id",
+                        "asset_path",
+                        "smt",
+                    )?;
+                    pack_raw_asset(
+                        &mut node.params,
+                        &assets_dir,
+                        "tile_index_id",
+                        "tile_index_path",
+                        "idx",
+                    )?;
+                }
                 _ => {}
             }
         }
@@ -133,6 +179,7 @@ impl BarEditorApp {
             // Strip runtime-only params before persisting.
             let mut params = node.params.clone();
             params.remove("asset_path");
+            params.remove("tile_index_path");
             nodes.push(RecipeNode {
                 key: key.clone(),
                 node_type: node.node_type.clone(),

@@ -241,6 +241,50 @@ pub(crate) fn pack_painted_asset(
     Ok(())
 }
 
+/// Copy a raw (non-BARASSET) asset from its current location to `assets_dir/<id>.<ext>`
+/// and update the path param in-place. Skips the copy when the file is already
+/// inside `assets_dir`.
+pub(crate) fn pack_raw_asset(
+    params: &mut HashMap<String, ParamValue>,
+    assets_dir: &std::path::Path,
+    id_param: &str,
+    path_param: &str,
+    ext: &str,
+) -> Result<(), String> {
+    let asset_id = match params.get(id_param) {
+        Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => return Ok(()),
+    };
+    let asset_path = match params.get(path_param) {
+        Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => return Ok(()),
+    };
+    if path_is_inside(&asset_path, assets_dir) {
+        return Ok(());
+    }
+    std::fs::create_dir_all(assets_dir)
+        .map_err(|e| format!("Cannot create assets dir {}: {e}", assets_dir.display()))?;
+    let src = std::path::Path::new(&asset_path);
+    let dest = assets_dir.join(format!("{asset_id}.{ext}"));
+    if !dest.exists()
+        || src.metadata().map(|m| m.len()).unwrap_or(0)
+            != dest.metadata().map(|m| m.len()).unwrap_or(1)
+    {
+        std::fs::copy(src, &dest).map_err(|e| {
+            format!(
+                "Failed to copy asset {} -> {}: {e}",
+                src.display(),
+                dest.display()
+            )
+        })?;
+    }
+    params.insert(
+        path_param.to_string(),
+        ParamValue::String(dest.to_string_lossy().into_owned()),
+    );
+    Ok(())
+}
+
 /// Cheap "are these files identical" check by length first, then content.
 /// Used to skip redundant copies on repeated saves to the same destination.
 pub(crate) fn files_equal(a: &std::path::Path, b: &std::path::Path) -> bool {

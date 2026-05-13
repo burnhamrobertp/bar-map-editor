@@ -750,6 +750,64 @@ impl NodeExecutor for CpuExecutor {
                 // Terminal node — inputs are collected after graph evaluation by execute_bundlers().
             }
 
+            NodeType::ImportedTexture => {
+                let asset_path = get_string(params, "asset_path", "");
+                let idx_path = get_string(params, "tile_index_path", "");
+                let tiles_x = get_uint(params, "tiles_x", 0);
+                let tiles_y = get_uint(params, "tiles_y", 0);
+                let color =
+                    if asset_path.is_empty() || idx_path.is_empty() || tiles_x == 0 || tiles_y == 0
+                    {
+                        ColorBuffer::new(tex_width, tex_height).unwrap()
+                    } else {
+                        let tiles_result = (|| {
+                            let file = std::fs::File::open(asset_path).ok()?;
+                            bar_data::smt::read_smt(&mut std::io::BufReader::new(file)).ok()
+                        })();
+                        let idx_result = std::fs::read(idx_path).ok();
+                        match (tiles_result, idx_result) {
+                            (Some(tiles), Some(idx_bytes)) => {
+                                let tile_indices: Vec<i32> = idx_bytes
+                                    .chunks(4)
+                                    .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                                    .collect();
+                                let rgba = assemble_texture_preview(
+                                    &tiles,
+                                    &tile_indices,
+                                    tiles_x,
+                                    tiles_y,
+                                    tex_width,
+                                    tex_height,
+                                );
+                                let mut buf = ColorBuffer::new(tex_width, tex_height).unwrap();
+                                for (i, px) in rgba.chunks(4).enumerate() {
+                                    let x = (i as u32) % tex_width;
+                                    let y = (i as u32) / tex_width;
+                                    buf.set(
+                                        x,
+                                        y,
+                                        [
+                                            px[0] as f32 / 255.0,
+                                            px[1] as f32 / 255.0,
+                                            px[2] as f32 / 255.0,
+                                            1.0,
+                                        ],
+                                    );
+                                }
+                                buf
+                            }
+                            _ => {
+                                tracing::warn!(
+                                    asset_path,
+                                    "ImportedTexture: failed to read SMT or tile index"
+                                );
+                                ColorBuffer::new(tex_width, tex_height).unwrap()
+                            }
+                        }
+                    };
+                outputs.insert("output".to_string(), PortValue::Color(color));
+            }
+
             NodeType::PassThrough => {
                 let files_str = get_string(params, "files", "");
                 let file_list: Vec<bar_graph::FileRef> = files_str

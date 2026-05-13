@@ -684,12 +684,12 @@ impl BarEditorApp {
     pub fn finish_open_map(&mut self, scan: bar_project::WorkDirScan) {
         let name = scan.map_name.clone();
         let status = t!("editor.project.opened", name = name);
-        let (project, pending_assets) = bar_project::scan_to_project(&scan);
+        let (project, pending_assets, raw_files) = bar_project::scan_to_project(&scan);
         self.apply_project(project, None, name, status);
         // Write pending binary assets to a temp dir so executors can read
         // them before the user has saved the project to a .barproj directory.
+        let temp_dir = std::env::temp_dir().join("bar-editor-assets");
         if !pending_assets.is_empty() {
-            let temp_dir = std::env::temp_dir().join("bar-editor-assets");
             for asset in &pending_assets {
                 let path = temp_dir.join(format!("{}.bin", asset.id.0));
                 if let Err(e) = bar_project::write_asset_file(&path, asset.header, &asset.data) {
@@ -704,6 +704,41 @@ impl BarEditorApp {
                                 "asset_path".to_string(),
                                 bar_graph::ParamValue::String(path_str.clone()),
                             );
+                        }
+                    }
+                }
+            }
+        }
+        // Write raw (non-BARASSET) files and inject their paths.
+        if !raw_files.is_empty() {
+            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                tracing::warn!(error = %e, "Failed to create temp asset dir");
+            } else {
+                for raw in &raw_files {
+                    let dest = temp_dir.join(format!("{}.{}", raw.id.0, raw.extension));
+                    let ok = if let Some(src) = &raw.source_path {
+                        std::fs::copy(src, &dest).is_ok()
+                    } else {
+                        std::fs::write(&dest, &raw.data).is_ok()
+                    };
+                    if !ok {
+                        tracing::warn!(
+                            dest = %dest.display(),
+                            "Failed to write raw temp asset"
+                        );
+                        continue;
+                    }
+                    let path_str = dest.to_string_lossy().into_owned();
+                    for (_, node) in self.graph.nodes_mut() {
+                        if let Some(bar_graph::ParamValue::String(aid)) =
+                            node.params.get(&raw.match_param)
+                        {
+                            if *aid == raw.id.0 {
+                                node.params.insert(
+                                    raw.inject_param.clone(),
+                                    bar_graph::ParamValue::String(path_str.clone()),
+                                );
+                            }
                         }
                     }
                 }

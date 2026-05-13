@@ -247,6 +247,11 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         }
     }
 
+    let tile_indices = smf_data
+        .as_ref()
+        .map(|s| s.tile_indices.clone())
+        .unwrap_or_default();
+
     Ok(WorkDirScan {
         work_dir,
         map_name,
@@ -266,6 +271,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         typemap_res,
         texture_data,
         texture_res,
+        tile_indices,
         features,
     })
 }

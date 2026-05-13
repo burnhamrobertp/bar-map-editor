@@ -100,6 +100,12 @@ pub enum NodeType {
     /// as the Bundler's texture input or for compositing with derived
     /// textures. Resolution is fixed at 256 for now.
     PaintedTexture,
+    /// An imported Spring Map Texture (.smt) stored in the project's
+    /// asset directory. Outputs a Color buffer assembled from the SMT
+    /// tile atlas at the requested texture resolution. Source-only node;
+    /// no inputs. Runtime params `asset_path` and `tile_index_path` are
+    /// injected at load time and stripped before save.
+    ImportedTexture,
 
     // Additional Generators
     FileInput,
@@ -542,6 +548,10 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         // map. Output is a Color buffer suitable for the Bundler's
         // texture input.
         NodeType::PaintedTexture => (
+            vec![],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::ImportedTexture => (
             vec![],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),
