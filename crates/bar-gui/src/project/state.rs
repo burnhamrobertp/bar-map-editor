@@ -54,6 +54,10 @@ pub struct ProjectState {
     /// Timestamp of the last successful compile in this session. `None`
     /// until the user has compiled at least once.
     pub compiled_at: Option<Instant>,
+    /// Absolute path to the SD7 archive the current map was imported from.
+    /// Restored from `recipe.source_sd7` on barproj load so the model
+    /// loader can find the map work dir without a fresh re-import.
+    pub source_sd7: Option<std::path::PathBuf>,
 }
 
 impl ProjectState {

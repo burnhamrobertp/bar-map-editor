@@ -28,7 +28,7 @@ pub fn work_dir_root() -> PathBuf {
 }
 
 /// Compute the per-archive work directory for a given source `.sd7`.
-fn work_dir_for(archive: &Path) -> PathBuf {
+pub fn work_dir_for(archive: &Path) -> PathBuf {
     let stem = archive
         .file_stem()
         .and_then(|s| s.to_str())
@@ -69,7 +69,9 @@ pub fn extract_sd7_to_work_dir(archive: &Path) -> Result<WorkDirScan> {
             .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
     }
 
-    scan_work_dir(work_dir, map_name)
+    let mut scan = scan_work_dir(work_dir, map_name)?;
+    scan.source_sd7 = archive.to_path_buf();
+    Ok(scan)
 }
 
 /// Delete work directories under [`work_dir_root`] whose mtime is older than
@@ -273,6 +275,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         texture_res,
         tile_indices,
         features,
+        source_sd7: std::path::PathBuf::new(),
     })
 }
 

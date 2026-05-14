@@ -426,6 +426,27 @@ impl eframe::App for AppRunner {
         if self.app.project.features_changed {
             self.app.project.features_changed = false;
             self.model_rx = None; // cancel prior loader for a different map
+                                  // On barproj reload no SD7 extraction runs, so map_work_dir may be
+                                  // None. Restore it from the saved source path so the model loader
+                                  // can find map-bundled S3O files and feature defs.
+            if self.map_work_dir.is_none() {
+                if let Some(sd7) = self.app.project.source_sd7.clone() {
+                    let wd = bar_engine::work_dir_for(&sd7);
+                    if wd.is_dir() {
+                        let map_catalog = FeatureCatalog::from_dir(&wd);
+                        if !map_catalog.is_empty() {
+                            if let Some(ref mut catalog) = self.feature_catalog {
+                                catalog.merge(map_catalog);
+                                let mut names: Vec<String> =
+                                    catalog.features.keys().cloned().collect();
+                                names.sort();
+                                self.app.feature_palette_names = names;
+                            }
+                        }
+                        self.map_work_dir = Some(wd);
+                    }
+                }
+            }
             self.spawn_model_loader(ctx);
         }
 

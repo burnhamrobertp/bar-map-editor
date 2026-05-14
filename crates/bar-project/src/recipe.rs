@@ -72,6 +72,11 @@ pub struct Recipe {
     /// Preserved from .sd7 import; editable in the sculpt view in a future iteration.
     #[serde(default)]
     pub features: Vec<PlacedFeature>,
+    /// Absolute path to the SD7 archive this recipe was imported from.
+    /// Used to locate the map work dir (feature defs + S3O models) when
+    /// reopening a `.barproj` without re-importing the archive.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_sd7: Option<std::path::PathBuf>,
 }
 
 /// A feature (tree, rock, crystal, etc.) placed on the map.
@@ -601,6 +606,7 @@ impl Recipe {
                 map_settings: MapSettings::default(),
             },
             features: Vec::new(),
+            source_sd7: None,
         }
     }
 }
@@ -666,6 +672,7 @@ mod tests {
                 map_settings: MapSettings::default(),
             },
             features: Vec::new(),
+            source_sd7: None,
         };
         assert!(recipe.validate().is_err());
     }
@@ -699,6 +706,7 @@ mod tests {
             }],
             output: OutputConfig::default(),
             features: Vec::new(),
+            source_sd7: None,
         };
         assert!(recipe.validate().is_err());
     }
@@ -729,6 +737,7 @@ mod tests {
             connections: vec![],
             output: OutputConfig::default(),
             features: Vec::new(),
+            source_sd7: None,
         };
         assert!(recipe.validate().is_err());
     }
@@ -867,6 +876,7 @@ mod tests {
                 map_settings: MapSettings::default(),
             },
             features: Vec::new(),
+            source_sd7: None,
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
@@ -930,6 +940,7 @@ mod tests {
                 map_settings: MapSettings::default(),
             },
             features: Vec::new(),
+            source_sd7: None,
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();
@@ -981,6 +992,7 @@ mod tests {
                 map_settings: MapSettings::default(),
             },
             features: Vec::new(),
+            source_sd7: None,
         };
         let json = recipe.to_json().unwrap();
         let loaded = Recipe::from_json(&json).unwrap();

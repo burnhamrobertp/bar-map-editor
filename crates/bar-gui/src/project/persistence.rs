@@ -242,6 +242,7 @@ impl BarEditorApp {
                 },
             },
             features: self.map.features.clone(),
+            source_sd7: self.project.source_sd7.clone(),
         };
 
         Project {
