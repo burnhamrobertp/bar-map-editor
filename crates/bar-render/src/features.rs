@@ -259,7 +259,12 @@ impl FeatureRenderer {
 
     /// Upload a real S3O model for a named feature type.
     /// If a model already exists for this name it is replaced.
+    /// Models with no geometry (e.g. hierarchical root pieces not yet supported)
+    /// are silently skipped; those features render as placeholder boxes.
     pub fn load_mesh(&mut self, device: &wgpu::Device, name: &str, mesh: &bar_data::S3oMesh) {
+        if mesh.vertices.is_empty() || mesh.indices.is_empty() {
+            return;
+        }
         let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(&format!("feature_vb_{name}")),
             contents: bytemuck::cast_slice(&mesh.vertices),

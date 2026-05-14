@@ -20,7 +20,7 @@
 //! child piece offset in the child pointer table:
 //!   +0  nameOffset          (u32) -- absolute file offset to piece name string
 //!   +4  numChildren         (u32)
-//!   +8  sfxFalloffs         (u32) -- legacy, ignored
+//!   +8  childrenOffset      (u32) -- offset to array of numChildren u32 child-piece offsets
 //!   +12 numVertices         (u32)
 //!   +16 vertexOffset        (u32) -- absolute file offset to vertex data
 //!   +20 (reserved)
@@ -49,8 +49,9 @@ const MAGIC: &[u8; 12] = b"Spring unit\0";
 /// Header is 52 bytes; rootPieceOffset lives here.
 const HDR_ROOT_PIECE_OFFSET: usize = 36;
 
-/// Piece struct field offsets (each piece is 52 bytes).
+/// Piece struct field offsets (each piece is 52 bytes). From `rts/Rendering/Models/s3o.h`.
 const PIECE_NUM_CHILDREN: usize = 4;
+const PIECE_CHILDREN_OFFSET: usize = 8; // offset to array of numChildren child-piece offsets
 const PIECE_NUM_VERTICES: usize = 12;
 const PIECE_VERTEX_OFFSET: usize = 16;
 const PIECE_PRIMITIVE_TYPE: usize = 24;
@@ -257,21 +258,15 @@ fn collect_piece(
         }
     }
 
-    // Child traversal: the standard Spring S3O child table lives at piece+16 when
-    // numChildren > 0 (the same field that holds vertexOffset for leaf pieces).
-    // BAR map-bundled hierarchical models (e.g. anemone) use a non-standard internal
-    // format, so child pieces are skipped here -- their root piece contributes no
-    // geometry and the child blocks are not in standard struct form. A child piece
-    // with conforming layout (valid struct offsets) will parse correctly.
+    // Child traversal: piece+8 holds an offset to an array of numChildren u32
+    // child-piece offsets. Errors in any child piece are ignored so one bad child
+    // does not prevent siblings or the rest of the hierarchy from contributing.
     if num_children > 0 {
-        // Field +16 holds childTableOffset when numChildren > 0.
-        let children_offset = read_u32(data, piece_off + PIECE_VERTEX_OFFSET)? as usize;
+        let children_offset = read_u32(data, piece_off + PIECE_CHILDREN_OFFSET)? as usize;
         let children_list_end = children_offset + num_children * 4;
         if children_list_end <= data.len() {
             for i in 0..num_children {
                 if let Ok(child_off) = read_u32(data, children_offset + i * 4) {
-                    // Ignore errors from child pieces whose internal format is
-                    // non-standard (e.g. anemone); they simply contribute no geometry.
                     let _ = collect_piece(data, child_off as usize, pos, mesh);
                 }
             }
@@ -316,21 +311,31 @@ fn detect_index_shift(
 // -- Primitive expansion ------------------------------------------------------
 
 fn expand_tristrip(raw: &[u32], base: u32, out: &mut Vec<u32>) {
-    if raw.len() < 3 {
-        return;
-    }
-    for i in 0..raw.len() - 2 {
-        let a = base + raw[i];
-        let b = base + raw[i + 1];
-        let c = base + raw[i + 2];
-        if a == b || b == c || a == c {
-            continue; // degenerate restart strip
+    // 0xFFFFFFFF is the Spring strip-restart sentinel (S3OParser.cpp:Trianglize).
+    // Parity tracks the triangle index within the strip: even -> (a,b,v), odd -> (a,v,b).
+    let mut parity = 0usize;
+    let mut v0: Option<u32> = None; // two positions back
+    let mut v1: Option<u32> = None; // one position back
+    for &idx in raw {
+        if idx == 0xFFFF_FFFF {
+            parity = 0;
+            v0 = None;
+            v1 = None;
+            continue;
         }
-        if i % 2 == 0 {
-            out.extend_from_slice(&[a, b, c]);
-        } else {
-            out.extend_from_slice(&[a, c, b]); // flip winding for odd strips
+        let v = base + idx;
+        if let (Some(a), Some(b)) = (v0, v1) {
+            if a != b && b != v && a != v {
+                if parity.is_multiple_of(2) {
+                    out.extend_from_slice(&[a, b, v]);
+                } else {
+                    out.extend_from_slice(&[a, v, b]);
+                }
+            }
         }
+        v0 = v1;
+        v1 = Some(v);
+        parity += 1;
     }
 }
 
@@ -481,12 +486,22 @@ mod tests {
 
     #[test]
     fn tristrip_expands_correctly() {
-        // Strip [0,1,2,3] -> triangles [0,1,2] and [1,3,2] (winding alternates)
+        // Strip [0,1,2,3]: tri0=(0,1,2) even, tri1=(1,3,2) odd (Spring winding: swap last two)
         let mut out = Vec::new();
         expand_tristrip(&[0, 1, 2, 3], 0, &mut out);
         assert_eq!(out.len(), 6);
         assert_eq!(&out[..3], &[0, 1, 2]);
         assert_eq!(&out[3..], &[1, 3, 2]);
+    }
+
+    #[test]
+    fn tristrip_restart_sentinel() {
+        // 0xFFFFFFFF restarts the strip; each sub-strip is independent.
+        let mut out = Vec::new();
+        expand_tristrip(&[0, 1, 2, 0xFFFF_FFFF, 3, 4, 5], 0, &mut out);
+        assert_eq!(out.len(), 6);
+        assert_eq!(&out[..3], &[0, 1, 2]);
+        assert_eq!(&out[3..], &[3, 4, 5]);
     }
 
     #[test]
