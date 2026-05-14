@@ -62,6 +62,7 @@ pub(crate) fn apply_brush_dab(hm: &mut Heightmap, cx: f32, cy: f32, brush: &Brus
 
             let cur = hm.get(x as u32, y as u32).unwrap_or(0.0);
             let new_val = match brush.tool {
+                BrushTool::Pointer => cur,
                 BrushTool::Raise => cur + brush.strength * weight,
                 BrushTool::Lower => cur - brush.strength * weight,
                 BrushTool::Smooth => {

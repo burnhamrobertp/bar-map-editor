@@ -76,6 +76,10 @@ impl LogBuffer {
         v
     }
 
+    pub(crate) fn mark_needs_scroll(&mut self) {
+        self.needs_scroll = true;
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.entries.len()
     }

@@ -47,6 +47,8 @@ impl BarEditorApp {
         self.map.max_height = 800.0;
         self.map.recipe_meta = RecipeMeta::default();
         self.map.features = Vec::new();
+        self.map.selected_feature_idx = None;
+        self.selected_feature_type = None;
 
         // Signal renderers to flush stale GPU resources.
         self.project.graph_reset = true;

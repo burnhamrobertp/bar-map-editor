@@ -34,16 +34,62 @@ impl BarEditorApp {
                         self.dialog.log_buffer.clear();
                     }
                     ui.weak(format!("({} entries)", self.dialog.log_buffer.len()));
+                    ui.separator();
+                    // Level filter toggles.
+                    for (label, level) in [
+                        ("INF", LogLevel::Info),
+                        ("WRN", LogLevel::Warning),
+                        ("ERR", LogLevel::Error),
+                        ("DBG", LogLevel::Debug),
+                    ] {
+                        let active = self.dialog.log_level_filter == Some(level);
+                        let btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .monospace()
+                                .color(level_color(level)),
+                        )
+                        .selected(active);
+                        if ui.add(btn).clicked() {
+                            self.dialog.log_level_filter = if active { None } else { Some(level) };
+                        }
+                    }
+                    ui.separator();
+                    // Text search box.
+                    ui.label("Filter:");
+                    let search = ui.add(
+                        egui::TextEdit::singleline(&mut self.dialog.log_search)
+                            .desired_width(150.0),
+                    );
+                    if search.changed() {
+                        // Reset scroll when filter changes.
+                        self.dialog.log_buffer.mark_needs_scroll();
+                    }
+                    if !self.dialog.log_search.is_empty()
+                        && ui.small_button("x").on_hover_text("Clear filter").clicked()
+                    {
+                        self.dialog.log_search.clear();
+                    }
                 });
                 ui.separator();
 
                 let needs_scroll = self.dialog.log_buffer.take_needs_scroll();
+                let level_filter = self.dialog.log_level_filter;
+                let search_lower = self.dialog.log_search.to_lowercase();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
                         for entry in self.dialog.log_buffer.entries() {
-                            ui.horizontal(|ui| {
+                            if let Some(f) = level_filter {
+                                if entry.level != f {
+                                    continue;
+                                }
+                            }
+                            if !search_lower.is_empty()
+                                && !entry.message.to_lowercase().contains(&search_lower)
+                            {
+                                continue;
+                            }
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(
                                     egui::RichText::new(format!("{:8.1}s", entry.elapsed_secs))
                                         .monospace()
@@ -55,9 +101,12 @@ impl BarEditorApp {
                                         .strong()
                                         .color(level_color(entry.level)),
                                 );
-                                ui.label(
-                                    egui::RichText::new(&entry.message)
-                                        .color(level_color(entry.level)),
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&entry.message)
+                                            .color(level_color(entry.level)),
+                                    )
+                                    .wrap(),
                                 );
                             });
                         }

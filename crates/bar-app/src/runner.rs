@@ -509,6 +509,11 @@ impl eframe::App for AppRunner {
             });
         }
 
+        // If the user placed new features interactively, ensure their models are loaded.
+        if self.app.map.features_placement_dirty {
+            self.spawn_model_loader(ctx);
+        }
+
         // Delegate layout rendering to the layout manager.
         let layout = self.app.active_layout();
         self.layout_manager.update(
@@ -572,33 +577,85 @@ impl AppRunner {
         self.model_rx = Some(rx);
         let archive = archive.clone();
         let work_dir = self.map_work_dir.clone();
+        // Sibling .sdz/.sd7 archives alongside a .sdd stub hold the real game content.
+        let sibling_archives = bar_engine::sibling_zip_archives(&archive);
+        // data_dir is two levels up from BAR.sdd (games/ -> data/) for pool reading.
+        let pool_data_dir = archive
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf());
         let ctx_clone = ctx.clone();
         std::thread::spawn(move || {
             let mut loaded = 0usize;
             for (name, path) in to_load {
-                let data = bar_engine::read_file_from_archive(&archive, &path).or_else(|| {
+                // Try sources in order: primary archive, sibling archives, work_dir, rapid pool.
+                // Fall through on parse failure so a stub with broken S3O data doesn't block
+                // the real model in a sibling .sdz or the pool.
+                let mut candidates: Vec<(&'static str, Option<Vec<u8>>)> = Vec::new();
+                candidates.push((
+                    "archive",
+                    bar_engine::read_file_from_archive(&archive, &path),
+                ));
+                for sibling in &sibling_archives {
+                    candidates.push((
+                        "sibling",
+                        bar_engine::read_file_from_archive(sibling, &path),
+                    ));
+                }
+                candidates.push((
+                    "work_dir",
                     work_dir.as_ref().and_then(|wd| {
                         std::fs::read(wd.join(path.replace('/', std::path::MAIN_SEPARATOR_STR)))
                             .ok()
-                    })
-                });
-                if let Some(data) = data {
+                    }),
+                ));
+                candidates.push((
+                    "pool",
+                    pool_data_dir
+                        .as_ref()
+                        .and_then(|dd| bar_engine::read_file_from_rapid_pool(dd, &path)),
+                ));
+                let mut parsed = None;
+                for (source, maybe_data) in candidates {
+                    let Some(data) = maybe_data else { continue };
                     match bar_data::parse_s3o(&data) {
                         Ok(mesh) => {
-                            loaded += 1;
-                            if tx.send((name.clone(), mesh)).is_err() {
-                                break;
-                            }
-                            ctx_clone.request_repaint();
-                        }
-                        Err(e) => {
-                            tracing::debug!(
+                            tracing::info!(
                                 feature = %name,
                                 path = %path,
+                                source,
+                                bytes = data.len(),
+                                "S3O loaded"
+                            );
+                            parsed = Some(mesh);
+                            break;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                feature = %name,
+                                path = %path,
+                                source,
+                                bytes = data.len(),
                                 err = %e,
-                                "S3O parse failed"
+                                "S3O parse failed, trying next source"
                             );
                         }
+                    }
+                }
+                match parsed {
+                    Some(mesh) => {
+                        loaded += 1;
+                        if tx.send((name.clone(), mesh)).is_err() {
+                            break;
+                        }
+                        ctx_clone.request_repaint();
+                    }
+                    None => {
+                        tracing::warn!(
+                            feature = %name,
+                            path = %path,
+                            "S3O not found or unparseable in any source"
+                        );
                     }
                 }
             }

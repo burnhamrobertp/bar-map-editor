@@ -403,7 +403,7 @@ fn handle_camera_input(
     app: &mut bar_gui::BarEditorApp,
 ) {
     let mut camera_changed = false;
-    let sculpt_active = app.is_sculpt_input_active();
+    let sculpt_active = app.sculpt_input_active();
 
     let cursor_uv = response.hover_pos().map(|p| {
         let r = response.rect;
@@ -438,42 +438,116 @@ fn handle_camera_input(
         renderer.set_brush_cursor(cursor_world);
     }
 
-    // Feature placement: primary click (no drag) places a feature at terrain pick.
+    // Feature interaction: only when the Pointer tool is active and not in the read-only Preview layout.
     let feature_type = app.selected_feature_type.clone();
-    if let Some(ref feature_type) = feature_type {
+    if app.paint.brush.tool == bar_gui::BrushTool::Pointer
+        && app.active_layout() != bar_gui::Layout::Preview
+    {
         if response.clicked_by(egui::PointerButton::Primary) {
-            if let Some(uv) = cursor_uv {
-                if let Some(hm) = app.paint.heightmap.as_ref() {
-                    if let Some(renderer) = core.terrain_renderer.as_ref() {
-                        let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
-                        if let Some(pick) = pick_terrain(
-                            &core.camera,
-                            aspect,
-                            uv,
-                            hm,
-                            x_extent,
-                            z_extent,
-                            height_scale,
-                        ) {
-                            let (map_w, map_h) = app.map.dimensions();
-                            // Convert renderer world coords to Spring world units.
-                            // Renderer: x in [-x_extent, x_extent], z in [-z_extent, z_extent].
-                            // Spring: x in [0, map_w * 8], z in [0, map_h * 8].
-                            let spring_x =
-                                (pick.world.x / x_extent + 1.0) * 0.5 * map_w.max(1) as f32 * 8.0;
-                            let spring_z =
-                                (pick.world.z / z_extent + 1.0) * 0.5 * map_h.max(1) as f32 * 8.0;
-                            app.map.features.push(PlacedFeature {
-                                feature_type: feature_type.clone(),
-                                x: spring_x,
-                                y: 0.0,
-                                z: spring_z,
-                                angle: 0.0,
-                                taken_damage: 0,
-                            });
-                            app.map.features_placement_dirty = true;
+            if let Some(ref feature_type) = feature_type {
+                // Placement mode: place a new feature at the terrain pick position.
+                if let Some(uv) = cursor_uv {
+                    if let Some(hm) = app.paint.heightmap.as_ref() {
+                        if let Some(renderer) = core.terrain_renderer.as_ref() {
+                            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                            if let Some(pick) = pick_terrain(
+                                &core.camera,
+                                aspect,
+                                uv,
+                                hm,
+                                x_extent,
+                                z_extent,
+                                height_scale,
+                            ) {
+                                let (map_w, map_h) = app.map.dimensions();
+                                let spring_x = (pick.world.x / x_extent + 1.0)
+                                    * 0.5
+                                    * map_w.max(1) as f32
+                                    * 8.0;
+                                let spring_z = (pick.world.z / z_extent + 1.0)
+                                    * 0.5
+                                    * map_h.max(1) as f32
+                                    * 8.0;
+                                app.map.features.push(PlacedFeature {
+                                    feature_type: feature_type.clone(),
+                                    x: spring_x,
+                                    y: 0.0,
+                                    z: spring_z,
+                                    angle: 0.0,
+                                    taken_damage: 0,
+                                });
+                                app.map.features_placement_dirty = true;
+                            }
                         }
                     }
+                }
+            } else {
+                // Selection mode: pick the nearest feature.
+                if let Some(uv) = cursor_uv {
+                    if let Some(hm) = app.paint.heightmap.as_ref() {
+                        if let Some(renderer) = core.terrain_renderer.as_ref() {
+                            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                            if let Some(pick) = pick_terrain(
+                                &core.camera,
+                                aspect,
+                                uv,
+                                hm,
+                                x_extent,
+                                z_extent,
+                                height_scale,
+                            ) {
+                                let (map_w, map_h) = app.map.dimensions();
+                                let pw = (map_w as f32 - 1.0).max(1.0);
+                                let ph = (map_h as f32 - 1.0).max(1.0);
+                                let sx = (pick.world.x / x_extent + 1.0) * 0.5 * pw * 8.0;
+                                let sz = (pick.world.z / z_extent + 1.0) * 0.5 * ph * 8.0;
+                                let threshold = 200.0_f32;
+                                let prev = app.map.selected_feature_idx;
+                                let best = app
+                                    .map
+                                    .features
+                                    .iter()
+                                    .enumerate()
+                                    .filter_map(|(i, f)| {
+                                        let dx = f.x - sx;
+                                        let dz = f.z - sz;
+                                        let d = dx * dx + dz * dz;
+                                        if d < threshold * threshold {
+                                            Some((i, d))
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
+                                app.map.selected_feature_idx = best.map(|(i, _)| i);
+                                if app.map.selected_feature_idx != prev {
+                                    app.map.features_placement_dirty = true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Delete key removes the selected feature.
+        if response.has_focus() || response.hovered() {
+            if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
+                if let Some(idx) = app.map.selected_feature_idx.take() {
+                    if idx < app.map.features.len() {
+                        app.map.features.remove(idx);
+                        app.map.features_placement_dirty = true;
+                    }
+                }
+            }
+
+            // Escape: cancel placement or deselect.
+            if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+                if app.selected_feature_type.is_some() {
+                    app.selected_feature_type = None;
+                } else if app.map.selected_feature_idx.is_some() {
+                    app.map.selected_feature_idx = None;
+                    app.map.features_placement_dirty = true;
                 }
             }
         }
@@ -684,27 +758,32 @@ pub fn eval_preview(
 ///
 /// `loaded_model_names` is the set of lowercase feature type names for which
 /// `FeatureRenderer::load_mesh` has been called.
+pub struct FeatureMapDims {
+    pub w: u32,
+    pub h: u32,
+    pub min_h: f32,
+    pub max_h: f32,
+}
+
 pub fn build_feature_instances(
     features: &[PlacedFeature],
-    w: u32,
-    h: u32,
-    min_h: f32,
-    max_h: f32,
+    dims: &FeatureMapDims,
     catalog: Option<&bar_engine::FeatureCatalog>,
     heightmap: Option<&bar_data::Heightmap>,
     loaded_model_names: &std::collections::HashSet<String>,
+    selected_idx: Option<usize>,
 ) -> (
     std::collections::HashMap<String, Vec<FeatureInstance>>,
     Vec<FeatureInstance>,
 ) {
     use glam::{Mat4, Quat, Vec3};
 
-    let pw = (w as f32 - 1.0).max(1.0);
-    let ph = (h as f32 - 1.0).max(1.0);
+    let pw = (dims.w as f32 - 1.0).max(1.0);
+    let ph = (dims.h as f32 - 1.0).max(1.0);
     let pm = pw.max(ph);
     let xe = (0.5 * pw / pm).min(0.5);
     let ze = (0.5 * ph / pm).min(0.5);
-    let height_range = (max_h - min_h).abs().max(1.0);
+    let height_range = (dims.max_h - dims.min_h).abs().max(1.0);
     let hs = (height_range / (pm * 8.0)).max(0.005);
     // Uniform elmo-to-render scale: same factor as hs but without height_range.
     let elmo_scale = (1.0 / (pm * 8.0)).max(1e-6_f32);
@@ -714,8 +793,9 @@ pub fn build_feature_instances(
         std::collections::HashMap::new();
     let mut unknowns: Vec<FeatureInstance> = Vec::new();
 
-    for f in features {
+    for (idx, f) in features.iter().enumerate() {
         let lower = f.feature_type.to_lowercase();
+        let is_selected = selected_idx == Some(idx);
 
         let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
         let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
@@ -730,7 +810,7 @@ pub fn build_feature_instances(
         let ry = if f.y.abs() < 0.01 {
             h_render
         } else {
-            ((f.y - min_h) / height_range) * hs
+            ((f.y - dims.min_h) / height_range) * hs
         };
 
         let rot = Quat::from_rotation_y(-f.angle.to_radians());
@@ -743,12 +823,17 @@ pub fn build_feature_instances(
                 Vec3::new(rx, ry, rz),
             );
             let cols = transform.to_cols_array_2d();
+            let tint = if is_selected {
+                [1.0, 1.0, 0.0, 1.0] // yellow = selected
+            } else {
+                [0.2, 0.9, 0.2, 1.0] // green = known model
+            };
             let inst = FeatureInstance {
                 col0: cols[0],
                 col1: cols[1],
                 col2: cols[2],
                 col3: cols[3],
-                tint: [0.2, 0.9, 0.2, 1.0], // green = known model
+                tint,
             };
             groups.entry(lower).or_default().push(inst);
             continue;
@@ -767,7 +852,9 @@ pub fn build_feature_instances(
                 Vec3::new(rx, ry, rz),
             );
             let cols = transform.to_cols_array_2d();
-            let tint = if catalog
+            let tint = if is_selected {
+                [1.0, 1.0, 0.0, 1.0] // yellow = selected
+            } else if catalog
                 .map(|c| c.is_known(&f.feature_type))
                 .unwrap_or(false)
             {

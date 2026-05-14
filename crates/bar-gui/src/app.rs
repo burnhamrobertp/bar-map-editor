@@ -814,14 +814,11 @@ impl BarEditorApp {
         self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
     }
 
-    /// True when the viewport's primary mouse button should sculpt rather
-    /// than orbit. The Sculpt3D layout is unconditionally a sculpting
-    /// surface; otherwise requires the inspector to be open in Sculpt mode.
-    pub fn is_sculpt_input_active(&self) -> bool {
-        if self.active_layout == Layout::Sculpt3D {
-            return true;
-        }
-        self.paint.inspector_mode == InspectorMode::Sculpt && self.dialog.show_inspector
+    pub fn sculpt_input_active(&self) -> bool {
+        self.paint.brush.tool != BrushTool::Pointer
+            && (self.active_layout == Layout::Sculpt3D
+                || (self.paint.inspector_mode == InspectorMode::Sculpt
+                    && self.dialog.show_inspector))
     }
 
     /// Current brush radius in heightmap pixels. The 3D viewport

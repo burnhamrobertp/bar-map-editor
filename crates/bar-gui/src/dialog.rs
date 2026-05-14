@@ -125,6 +125,10 @@ pub struct DialogState {
     pub(crate) file_editor: Option<FileEditor>,
     /// True when the log window is visible.
     pub(crate) show_log: bool,
+    /// Level filter for the log window (None = show all).
+    pub(crate) log_level_filter: Option<LogLevel>,
+    /// Text search filter for the log window.
+    pub(crate) log_search: String,
     /// Level of the most recent status_message (drives footer color).
     pub(crate) status_level: LogLevel,
     /// Session-scoped ring buffer of all logged messages.

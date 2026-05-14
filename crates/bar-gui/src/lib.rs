@@ -18,7 +18,7 @@ pub mod settings;
 pub mod state;
 pub mod undo;
 
-pub use app::{BarEditorApp, ExportStatus, Layout, SmfLightingSnapshot};
+pub use app::{BarEditorApp, BrushTool, ExportStatus, Layout, SmfLightingSnapshot};
 pub use io::ParentWindow;
 pub use log::LogLevel;
 pub use settings::{Settings, WindowState};

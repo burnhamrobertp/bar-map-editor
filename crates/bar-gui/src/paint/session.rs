@@ -19,9 +19,11 @@ pub enum InspectorMode {
     Sculpt,
 }
 
-/// Heightmap-sculpting brush mode.
+/// Active editing tool. Determines what viewport clicks do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BrushTool {
+    /// Feature layer: click to select/place features.
+    Pointer,
     Raise,
     Lower,
     Smooth,
@@ -32,6 +34,7 @@ pub enum BrushTool {
 impl BrushTool {
     pub(crate) fn label(self) -> &'static str {
         match self {
+            BrushTool::Pointer => "Pointer",
             BrushTool::Raise => "Raise",
             BrushTool::Lower => "Lower",
             BrushTool::Smooth => "Smooth",

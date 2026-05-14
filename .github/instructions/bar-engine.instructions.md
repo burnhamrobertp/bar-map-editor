@@ -60,12 +60,21 @@ Use `const_hm(w, h, v)` helper for uniform-value test maps.
 ## Feature catalog
 
 `feature_catalog.rs` provides `FeatureCatalog` and `FeatureDef`. Load via
-`FeatureCatalog::from_archive(path)` -- reads `gamedata/featuredata.lua` and
-`features/*.lua` from a `.sdz` (ZIP) or `.sdd` (directory) game archive.
+`FeatureCatalog::from_archive(path)` -- reads `gamedata/featuredefs.lua` and
+`features/*.lua` from a `.sdz` (ZIP) or `.sdd` (directory) game archive. Also
+loads from the rapid pool via `load_from_rapid_pool` (scans `data/packages/*.sdp`
+manifests and decompresses matching pool files).
 
-Parsing uses a line-by-line Lua state machine (brace-depth tracking). Depth 1 =
-outer table, depth 2 = inside a feature definition. Keys are stored lowercase for
-case-insensitive lookup via `FeatureCatalog::is_known(feature_type)`.
+Parsing uses a line-by-line Lua state machine (brace-depth tracking). Runs at two
+outer depths (1 = inside a top-level wrapper table, 0 = top-level assignments like
+`featureDefs["name"] = {}`). `extract_feature_name` handles bare identifiers,
+bracket keys `["name"]`, and table-indexed keys `tableName["name"]`. Keys are
+stored lowercase for case-insensitive lookup via `FeatureCatalog::is_known(feature_type)`.
+
+Special case: `features/enginetrees_override.lua` (BAR) uses a programmatic Lua
+loop to define treetype0..255. Parsed by `parse_engine_trees_override` which
+extracts the objects array and loop bound without executing Lua, then generates
+entries with rotating fir_tree_*.s3o model assignments.
 
 `.sdz` archives use the `zip` crate (already a workspace dep). `.sd7` (7zip)
 archives are also attempted as ZIP since many BAR game archives use the .sd7

@@ -66,6 +66,8 @@ pub struct MapState {
     pub dragging_spawn: Option<usize>,
     /// Feature placements (imported from .sd7 and/or placed by the user).
     pub features: Vec<PlacedFeature>,
+    /// Index into `features` of the currently selected feature (for deletion).
+    pub selected_feature_idx: Option<usize>,
     /// Set to true when features are added/removed via the placement tool.
     /// Consumed by the layout manager to trigger a GPU instance rebuild.
     pub features_placement_dirty: bool,

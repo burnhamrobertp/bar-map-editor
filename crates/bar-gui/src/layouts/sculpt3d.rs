@@ -40,6 +40,21 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     });
     ui.separator();
 
+    // Features pseudo-layer -- always present at the top of the list.
+    let features_selected = app.paint.brush.tool == BrushTool::Pointer;
+    if ui
+        .horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(rect.center(), 4.0, Color32::from_rgb(255, 165, 60));
+            ui.selectable_label(features_selected, "Features").clicked()
+        })
+        .inner
+    {
+        app.paint.brush.tool = BrushTool::Pointer;
+        app.paint.selected_sculpt_layer = None;
+    }
+
     if entries.is_empty() {
         ui.weak("Add a Bundler node to enable sculpting.");
     } else {
@@ -55,96 +70,149 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ui.add_space(8.0);
     ui.separator();
 
-    // --- TOOLS section ---
-    ui.strong("Tools");
-    ui.add_space(4.0);
+    if app.paint.brush.tool == BrushTool::Pointer {
+        draw_features_panel(app, ui);
+    } else {
+        // --- TOOLS section ---
+        ui.strong("Tools");
+        ui.add_space(4.0);
 
-    let selected_kind = app
-        .paint
-        .selected_sculpt_layer
-        .and_then(|id| app.graph.get_node(id))
-        .map(|n| n.node_type.clone());
+        let selected_kind = app
+            .paint
+            .selected_sculpt_layer
+            .and_then(|id| app.graph.get_node(id))
+            .map(|n| n.node_type.clone());
 
-    let has_terrain = app.paint.heightmap.is_some();
+        let has_terrain = app.paint.heightmap.is_some();
 
-    match selected_kind {
-        Some(bar_graph::NodeType::PaintedHeightmap) | Some(bar_graph::NodeType::Sculpt) => {
-            ui.horizontal_wrapped(|ui| {
-                let cur = app.paint.brush.tool;
-                for tool in [
-                    BrushTool::Raise,
-                    BrushTool::Lower,
-                    BrushTool::Smooth,
-                    BrushTool::Flatten,
-                ] {
-                    if ui.selectable_label(cur == tool, tool.label()).clicked() {
-                        app.paint.brush.tool = tool;
+        match selected_kind {
+            Some(bar_graph::NodeType::PaintedHeightmap) | Some(bar_graph::NodeType::Sculpt) => {
+                ui.horizontal_wrapped(|ui| {
+                    let cur = app.paint.brush.tool;
+                    for tool in [
+                        BrushTool::Raise,
+                        BrushTool::Lower,
+                        BrushTool::Smooth,
+                        BrushTool::Flatten,
+                    ] {
+                        if ui.selectable_label(cur == tool, tool.label()).clicked() {
+                            app.paint.brush.tool = tool;
+                        }
                     }
+                });
+                if !has_terrain {
+                    draw_no_terrain_hint(app, ui);
                 }
-            });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
+            }
+            Some(bar_graph::NodeType::PaintedTexture) => {
+                ui.horizontal(|ui| {
+                    ui.label("Colour");
+                    let [r, g, b] = app.paint.brush.color_rgb;
+                    let mut c = egui::Color32::from_rgb(r, g, b);
+                    if ui.color_edit_button_srgba(&mut c).changed() {
+                        app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
+                    }
+                });
+                if !has_terrain {
+                    draw_no_terrain_hint(app, ui);
+                }
+            }
+            _ => {
+                ui.weak("Select a paintable layer.");
             }
         }
-        Some(bar_graph::NodeType::PaintedTexture) => {
-            ui.horizontal(|ui| {
-                ui.label("Colour");
-                let [r, g, b] = app.paint.brush.color_rgb;
-                let mut c = egui::Color32::from_rgb(r, g, b);
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
-                }
+
+        ui.add_space(8.0);
+        ui.separator();
+
+        // --- BRUSH sliders ---
+        ui.strong("Brush");
+        ui.add_space(4.0);
+        egui::Grid::new("sculpt_brush_params")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label("Radius");
+                ui.add(crate::panels::widgets::ParamSlider::new(
+                    &mut app.paint.brush.radius_px,
+                    0.5,
+                    96.0,
+                ));
+                ui.end_row();
+                ui.label("Strength");
+                ui.add(crate::panels::widgets::ParamSlider::new(
+                    &mut app.paint.brush.strength,
+                    0.001,
+                    0.2,
+                ));
+                ui.end_row();
+                ui.label("Falloff");
+                ui.add(crate::panels::widgets::ParamSlider::new(
+                    &mut app.paint.brush.falloff,
+                    0.5,
+                    4.0,
+                ));
+                ui.end_row();
             });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
-            }
-        }
-        _ => {
-            ui.weak("Select a paintable layer.");
+    }
+}
+
+/// Full features panel: library (type picker) + selected feature info.
+/// Only shown when the Features pseudo-layer is active.
+fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    // Selected feature info -- shown at the top so it's always visible.
+    if let Some(idx) = app.map.selected_feature_idx {
+        if let Some(f) = app.map.features.get(idx) {
+            let ftype = f.feature_type.clone();
+            let fx = f.x;
+            let fy = f.y;
+            let fz = f.z;
+            let fangle = f.angle;
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgb(30, 30, 40))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::same(6))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong("Selected Feature");
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .small_button("Delete")
+                                .on_hover_text("Remove this feature (Del)")
+                                .clicked()
+                            {
+                                app.map.features.remove(idx);
+                                app.map.selected_feature_idx = None;
+                                app.map.features_placement_dirty = true;
+                            }
+                        });
+                    });
+                    egui::Grid::new("feature_info_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 2.0])
+                        .show(ui, |ui| {
+                            ui.weak("Type");
+                            ui.label(&ftype);
+                            ui.end_row();
+                            ui.weak("Position");
+                            ui.label(format!("{:.1}, {:.1}, {:.1}", fx, fy, fz));
+                            ui.end_row();
+                            ui.weak("Angle");
+                            ui.label(format!("{:.1} deg", fangle));
+                            ui.end_row();
+                            ui.weak("Index");
+                            ui.label(format!("{} / {}", idx, app.map.features.len()));
+                            ui.end_row();
+                        });
+                });
+            ui.add_space(4.0);
+            ui.separator();
         }
     }
 
-    ui.add_space(8.0);
-    ui.separator();
-
-    // --- BRUSH sliders ---
-    ui.strong("Brush");
-    ui.add_space(4.0);
-    egui::Grid::new("sculpt_brush_params")
-        .num_columns(2)
-        .spacing([8.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("Radius");
-            ui.add(crate::panels::widgets::ParamSlider::new(
-                &mut app.paint.brush.radius_px,
-                0.5,
-                96.0,
-            ));
-            ui.end_row();
-            ui.label("Strength");
-            ui.add(crate::panels::widgets::ParamSlider::new(
-                &mut app.paint.brush.strength,
-                0.001,
-                0.2,
-            ));
-            ui.end_row();
-            ui.label("Falloff");
-            ui.add(crate::panels::widgets::ParamSlider::new(
-                &mut app.paint.brush.falloff,
-                0.5,
-                4.0,
-            ));
-            ui.end_row();
-        });
-
-    ui.add_space(8.0);
-    ui.separator();
-    draw_feature_palette(app, ui);
-}
-
-fn draw_feature_palette(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    // Feature library header.
     ui.horizontal(|ui| {
-        ui.strong("Features");
+        ui.strong("Library");
         if app.selected_feature_type.is_some() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
@@ -167,7 +235,10 @@ fn draw_feature_palette(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 
     if let Some(ref sel) = app.selected_feature_type.clone() {
         ui.label(format!("Placing: {sel}"));
-        ui.weak("Click on terrain to place.");
+        ui.weak("Click terrain to place. Esc to cancel.");
+        ui.add_space(4.0);
+    } else {
+        ui.weak("Click terrain to select. Del to remove.");
         ui.add_space(4.0);
     }
 
@@ -179,13 +250,7 @@ fn draw_feature_palette(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             for name in &names {
                 let selected = app.selected_feature_type.as_deref() == Some(name.as_str());
                 if ui.selectable_label(selected, name).clicked() {
-                    if selected {
-                        app.selected_feature_type = None;
-                    } else {
-                        app.selected_feature_type = Some(name.clone());
-                        // Deselect sculpt layer so brush doesn't fire.
-                        app.paint.selected_sculpt_layer = None;
-                    }
+                    app.selected_feature_type = if selected { None } else { Some(name.clone()) };
                 }
             }
         });
@@ -223,6 +288,10 @@ fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayer
 
     if clicked {
         app.paint.selected_sculpt_layer = Some(node_id);
+        if app.paint.brush.tool == BrushTool::Pointer {
+            app.paint.brush.tool = BrushTool::Raise;
+            app.selected_feature_type = None;
+        }
     }
 }
 

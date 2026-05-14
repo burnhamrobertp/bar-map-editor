@@ -76,35 +76,23 @@ impl FeatureCatalog {
 
         match ext.as_str() {
             "sdz" | "sd7" => {
-                if let Ok(file) = std::fs::File::open(archive) {
-                    if let Ok(mut zip) = zip::ZipArchive::new(file) {
-                        let mut lua_paths: Vec<String> = Vec::new();
-                        for i in 0..zip.len() {
-                            if let Ok(entry) = zip.by_index(i) {
-                                if is_feature_lua(entry.name()) {
-                                    lua_paths.push(entry.name().to_string());
-                                }
-                            }
-                        }
-                        for path in lua_paths {
-                            if let Ok(mut entry) = zip.by_name(&path) {
-                                let mut content = String::new();
-                                let _ = entry.read_to_string(&mut content);
-                                parse_feature_lua(&content, &mut catalog.features);
-                            }
-                        }
-                    }
-                }
+                scan_zip_for_features(archive, &mut catalog.features);
             }
             "sdd" => {
+                // Scan the stub directory itself (usually very sparse).
                 let paths = find_feature_lua_in_dir(archive);
                 for path in paths {
                     if let Ok(content) = std::fs::read_to_string(&path) {
                         parse_feature_lua(&content, &mut catalog.features);
                     }
                 }
-                // BAR.sdd is a launcher stub; actual game content lives in
-                // the rapid pool at <sdd>../../pool/ and <sdd>../../packages/.
+                // Scan sibling .sdz / .sd7 archives in the same directory --
+                // BAR.sdd is a launcher stub; the real game content lives in a
+                // byar_*.sdz or similar archive next to it.
+                for sibling in sibling_zip_archives(archive) {
+                    scan_zip_for_features(&sibling, &mut catalog.features);
+                }
+                // Also load from the rapid pool (override / map-specific Lua).
                 if let Some(data_dir) = archive.parent().and_then(|p| p.parent()) {
                     load_from_rapid_pool(data_dir, &mut catalog.features);
                 }
@@ -180,14 +168,16 @@ fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureD
             continue;
         }
         let Ok(bytes) = std::fs::read(&path) else {
+            tracing::warn!(sdp = %path.display(), "failed to read SDP file");
             continue;
         };
         let mut decoder = GzDecoder::new(bytes.as_slice());
         let mut data = Vec::new();
         if decoder.read_to_end(&mut data).is_err() {
+            tracing::warn!(sdp = %path.display(), "failed to decompress SDP file");
             continue;
         }
-
+        let mut feature_lua_count = 0usize;
         let mut pos = 0usize;
         while pos < data.len() {
             let name_len = data[pos] as usize;
@@ -205,9 +195,11 @@ fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureD
             if !is_feature_lua(&name) {
                 continue;
             }
+            feature_lua_count += 1;
             let md5_hex = md5.iter().map(|b| format!("{b:02x}")).collect::<String>();
             if !seen_md5.insert(md5_hex.clone()) {
-                continue; // already loaded this exact file
+                tracing::info!(name, "feature lua already loaded (duplicate md5), skipping");
+                continue;
             }
 
             // Pool path: pool/<first2>/<rest30>.gz
@@ -215,28 +207,248 @@ fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureD
                 .join(&md5_hex[..2])
                 .join(format!("{}.gz", &md5_hex[2..]));
             let Ok(pool_bytes) = std::fs::read(&pool_file) else {
+                tracing::warn!(name, md5 = %md5_hex, "pool file missing for feature lua");
                 continue;
             };
             let mut lua_decoder = GzDecoder::new(pool_bytes.as_slice());
             let mut content = String::new();
+            let before = features.len();
             if lua_decoder.read_to_string(&mut content).is_ok() {
-                parse_feature_lua(&content, features);
+                if name.to_lowercase() == "features/enginetrees_override.lua" {
+                    parse_engine_trees_override(&content, features);
+                } else {
+                    parse_feature_lua(&content, features);
+                }
+                tracing::info!(
+                    name,
+                    added = features.len() - before,
+                    total = features.len(),
+                    "loaded feature lua"
+                );
+            } else {
+                tracing::warn!(name, "failed to decode feature lua as UTF-8");
             }
         }
+        tracing::info!(
+            sdp = %path.file_name().unwrap_or_default().to_string_lossy(),
+            feature_lua_count,
+            "SDP scanned"
+        );
     }
 
     tracing::info!("Rapid pool: loaded {} feature defs", features.len());
 }
 
+/// Return all `.sdz` / `.sd7` archives in the same directory as `archive`
+/// (excluding `archive` itself). Used to find the real game content archive
+/// when the user has a `.sdd` launcher stub selected.
+pub fn sibling_zip_archives(archive: &Path) -> Vec<std::path::PathBuf> {
+    let Some(parent) = archive.parent() else {
+        return Vec::new();
+    };
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let ext = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.to_lowercase())
+                .unwrap_or_default();
+            if (ext == "sdz" || ext == "sd7") && p != archive {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Scan a `.sdz` / `.sd7` ZIP archive and parse all feature Lua files into `features`.
+pub fn scan_zip_for_features(archive: &Path, features: &mut HashMap<String, FeatureDef>) {
+    let Ok(file) = std::fs::File::open(archive) else {
+        return;
+    };
+    let Ok(mut zip) = zip::ZipArchive::new(file) else {
+        return;
+    };
+    let lua_paths: Vec<String> = (0..zip.len())
+        .filter_map(|i| zip.by_index(i).ok().map(|e| e.name().to_string()))
+        .filter(|n| is_feature_lua(n))
+        .collect();
+    let before = features.len();
+    for path in lua_paths {
+        if let Ok(mut entry) = zip.by_name(&path) {
+            let mut content = String::new();
+            if entry.read_to_string(&mut content).is_ok() {
+                if path.to_lowercase() == "features/enginetrees_override.lua" {
+                    parse_engine_trees_override(&content, features);
+                } else {
+                    parse_feature_lua(&content, features);
+                }
+            }
+        }
+    }
+    tracing::info!(
+        archive = %archive.file_name().unwrap_or_default().to_string_lossy(),
+        added = features.len() - before,
+        total = features.len(),
+        "scanned zip for feature defs"
+    );
+}
+
+/// Read one file from `data_dir/pool/` using the SDP manifest index.
+/// Scans all `.sdp` files in `data_dir/packages/` to locate the MD5 for `path`,
+/// then decompresses and returns the raw bytes from the pool.
+pub fn read_file_from_rapid_pool(data_dir: &Path, path: &str) -> Option<Vec<u8>> {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+
+    let packages_dir = data_dir.join("packages");
+    let pool_dir = data_dir.join("pool");
+    if !packages_dir.is_dir() || !pool_dir.is_dir() {
+        return None;
+    }
+
+    let path_lower = path.to_lowercase();
+    let mut md5_hex: Option<String> = None;
+
+    for entry in std::fs::read_dir(&packages_dir).ok()?.flatten() {
+        if entry.path().extension().and_then(|e| e.to_str()) != Some("sdp") {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(entry.path()) else {
+            continue;
+        };
+        let mut decoder = GzDecoder::new(bytes.as_slice());
+        let mut data = Vec::new();
+        if decoder.read_to_end(&mut data).is_err() {
+            continue;
+        }
+        let mut pos = 0usize;
+        while pos < data.len() {
+            let name_len = data[pos] as usize;
+            pos += 1;
+            if name_len == 0 || pos + name_len + 16 + 4 + 4 > data.len() {
+                break;
+            }
+            let name = std::str::from_utf8(&data[pos..pos + name_len])
+                .unwrap_or("")
+                .to_lowercase();
+            let md5 = &data[pos + name_len..pos + name_len + 16];
+            pos += name_len + 16 + 4 + 4;
+            if name == path_lower {
+                md5_hex = Some(md5.iter().map(|b| format!("{b:02x}")).collect());
+                break;
+            }
+        }
+        if md5_hex.is_some() {
+            break;
+        }
+    }
+
+    let md5_hex = md5_hex?;
+    let pool_file = pool_dir
+        .join(&md5_hex[..2])
+        .join(format!("{}.gz", &md5_hex[2..]));
+    tracing::info!(path, md5 = %md5_hex, pool = %pool_file.display(), "rapid pool lookup");
+    let pool_bytes = std::fs::read(&pool_file).ok()?;
+    let mut decoder = GzDecoder::new(pool_bytes.as_slice());
+    let mut out = Vec::new();
+    if let Err(e) = decoder.read_to_end(&mut out) {
+        tracing::warn!(path, md5 = %md5_hex, err = %e, "gzip decompress failed in rapid pool");
+        return None;
+    }
+    tracing::info!(path, md5 = %md5_hex, decompressed_bytes = out.len(), "rapid pool decompressed");
+    Some(out)
+}
+
+/// Parse `features/enginetrees_override.lua` which programmatically generates
+/// treetype0..N definitions mapped to rotating S3O models.
+///
+/// The file defines a local `objects` array of `.s3o` filenames, then loops
+/// `for i = 0, N do` assigning `treeDefs["treetype" .. i] = { object = ..., ... }`.
+/// We extract the object list and loop bound without executing Lua.
+fn parse_engine_trees_override(content: &str, features: &mut HashMap<String, FeatureDef>) {
+    let mut objects: Vec<String> = Vec::new();
+    let mut in_objects_array = false;
+    let mut loop_max: u32 = 255;
+
+    for line in content.lines() {
+        let stripped = strip_comment(line).trim();
+
+        if stripped.contains("local objects") && stripped.contains('{') {
+            in_objects_array = true;
+        }
+
+        if in_objects_array {
+            let mut rest = stripped;
+            while let Some(start) = rest.find('"') {
+                rest = &rest[start + 1..];
+                if let Some(end) = rest.find('"') {
+                    let s = &rest[..end];
+                    if s.ends_with(".s3o") {
+                        objects.push(s.to_string());
+                    }
+                    rest = &rest[end + 1..];
+                } else {
+                    break;
+                }
+            }
+            // End of the objects table
+            if stripped.contains('}') && !objects.is_empty() {
+                in_objects_array = false;
+            }
+        }
+
+        // "for i = 0, 255 do" or similar
+        if let Some(after_for) = stripped.strip_prefix("for i = 0,") {
+            let after = after_for.trim();
+            if let Some(n_str) = after.split_whitespace().next() {
+                if let Ok(n) = n_str.trim_end_matches(',').parse::<u32>() {
+                    loop_max = n;
+                }
+            }
+        }
+    }
+
+    // Fallback if parsing the objects array failed
+    if objects.is_empty() {
+        objects = vec![
+            "fir_tree_smallest.s3o".to_string(),
+            "fir_tree_small.s3o".to_string(),
+            "fir_tree_medium.s3o".to_string(),
+            "fir_tree_large.s3o".to_string(),
+        ];
+    }
+
+    // Lua arrays are 1-indexed; (i % #objects) + 1 maps i to 1-based index.
+    let n = objects.len();
+    for i in 0..=loop_max {
+        let name = format!("treetype{i}");
+        let object = objects[(i as usize) % n].clone();
+        features.entry(name.clone()).or_insert(FeatureDef {
+            name,
+            object,
+            footprint_x: 1,
+            footprint_z: 1,
+        });
+    }
+}
+
 fn is_feature_lua(name: &str) -> bool {
     let lower = name.to_lowercase();
-    lower == "gamedata/featuredata.lua"
+    lower == "gamedata/featuredefs.lua"
+        || lower == "gamedata/featuredefs_post.lua"
         || (lower.starts_with("features/") && lower.ends_with(".lua"))
 }
 
 fn find_feature_lua_in_dir(root: &Path) -> Vec<std::path::PathBuf> {
     let mut result = Vec::new();
-    let featuredata = root.join("gamedata").join("featuredata.lua");
+    let featuredata = root.join("gamedata").join("featuredefs.lua");
     if featuredata.exists() {
         result.push(featuredata);
     }
@@ -316,9 +528,11 @@ fn strip_comment(line: &str) -> &str {
     line
 }
 
-/// Extract a feature name from a line of the form `name = {` (depth-1 entry).
-/// Handles bare identifiers (`armorplate = {`) and bracket-quoted keys
-/// (`['Tree Type 1'] = {` or `["Rock"] = {`).
+/// Extract a feature name from a line of the form `name = {`.
+/// Handles:
+/// - bare identifiers: `armorplate = {`
+/// - bracket keys: `['Tree Type 1'] = {` or `["Rock"] = {`
+/// - table-indexed keys: `featureDefs["rock_large"] = {`
 fn extract_feature_name(line: &str) -> Option<String> {
     let line = line.trim();
     let eq_pos = line.find('=')?;
@@ -327,6 +541,11 @@ fn extract_feature_name(line: &str) -> Option<String> {
     if !rest.starts_with('{') {
         return None;
     }
+    // Bare identifier: `name = {`
+    if key.chars().all(|c| c.is_alphanumeric() || c == '_') && !key.is_empty() {
+        return Some(key.to_lowercase());
+    }
+    // Bracket key: `["name"] = {` or `['name'] = {`
     if key.starts_with('[') && key.ends_with(']') {
         let inner = key[1..key.len() - 1].trim();
         if (inner.starts_with('\'') && inner.ends_with('\''))
@@ -334,8 +553,17 @@ fn extract_feature_name(line: &str) -> Option<String> {
         {
             return Some(inner[1..inner.len() - 1].to_lowercase());
         }
-    } else if key.chars().all(|c| c.is_alphanumeric() || c == '_') && !key.is_empty() {
-        return Some(key.to_lowercase());
+    }
+    // Table indexing: `tableName["name"] = {` or `tableName['name'] = {`
+    if let Some(open) = key.rfind('[') {
+        if key[open..].find(']').map(|c| open + c) == Some(key.len() - 1) {
+            let inner = key[open + 1..key.len() - 1].trim();
+            if (inner.starts_with('"') && inner.ends_with('"'))
+                || (inner.starts_with('\'') && inner.ends_with('\''))
+            {
+                return Some(inner[1..inner.len() - 1].to_lowercase());
+            }
+        }
     }
     None
 }
@@ -379,8 +607,19 @@ struct PartialDef {
 }
 
 /// Parse one Lua feature definition file into the `features` map.
-/// Uses a depth-tracking state machine; nested tables inside features are skipped.
+/// Runs at two outer depths to catch both `featureDefs = { name = { ... } }` (depth 1)
+/// and `featureDefs["name"] = { ... }` top-level assignment style (depth 0).
 fn parse_feature_lua(content: &str, features: &mut HashMap<String, FeatureDef>) {
+    parse_feature_lua_at_depth(content, 1, features);
+    parse_feature_lua_at_depth(content, 0, features);
+}
+
+fn parse_feature_lua_at_depth(
+    content: &str,
+    outer: i32,
+    features: &mut HashMap<String, FeatureDef>,
+) {
+    let inner = outer + 1;
     let mut depth: i32 = 0;
     let mut current_name: Option<String> = None;
     let mut partial = PartialDef::default();
@@ -392,14 +631,14 @@ fn parse_feature_lua(content: &str, features: &mut HashMap<String, FeatureDef>) 
         let prev_depth = depth;
         depth += net;
 
-        // Entering a feature definition (depth 1 -> 2)
-        if prev_depth == 1 && depth >= 2 {
+        // Entering a feature definition
+        if prev_depth == outer && depth >= inner {
             current_name = extract_feature_name(stripped);
             partial = PartialDef::default();
         }
 
-        // Collecting fields while inside a feature definition at depth 2
-        if prev_depth == 2 && depth == 2 {
+        // Collecting fields inside a feature definition
+        if prev_depth == inner && depth == inner {
             if let Some(v) = extract_string_field(stripped, "object") {
                 partial.object = v.to_string();
             } else if let Some(v) = extract_u32_field(stripped, "footprintX") {
@@ -409,18 +648,16 @@ fn parse_feature_lua(content: &str, features: &mut HashMap<String, FeatureDef>) 
             }
         }
 
-        // Closing a feature definition (depth 2 -> 1)
-        if prev_depth >= 2 && depth <= 1 {
+        // Closing a feature definition
+        if prev_depth >= inner && depth <= outer {
             if let Some(name) = current_name.take() {
-                features.insert(
-                    name.clone(),
-                    FeatureDef {
-                        name,
-                        object: std::mem::take(&mut partial.object),
-                        footprint_x: partial.footprint_x,
-                        footprint_z: partial.footprint_z,
-                    },
-                );
+                // or_insert: depth-1 pass wins; depth-0 fills in any it missed
+                features.entry(name.clone()).or_insert(FeatureDef {
+                    name,
+                    object: std::mem::take(&mut partial.object),
+                    footprint_x: partial.footprint_x,
+                    footprint_z: partial.footprint_z,
+                });
             }
         }
     }

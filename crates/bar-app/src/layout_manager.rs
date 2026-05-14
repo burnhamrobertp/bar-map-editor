@@ -17,8 +17,8 @@ use eframe::egui;
 
 use crate::viewport::{
     build_feature_instances, draw_preview_placeholder, draw_preview_viewport, draw_sculpt_viewport,
-    eval_preview, load_compiled_bc1, update_viewport_texture, EvalState, OwnedFrame, PreviewResult,
-    ResolutionStatus, ViewportCore,
+    eval_preview, load_compiled_bc1, update_viewport_texture, EvalState, FeatureMapDims,
+    OwnedFrame, PreviewResult, ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -44,6 +44,10 @@ pub struct PreviewSlot {
     pub bc1_loaded: bool,
     /// Native texture dims of the loaded BC1 texture (set on successful load).
     pub bc1_tex_dims: Option<(u32, u32)>,
+    /// Feature instances need rebuild.
+    pub features_dirty: bool,
+    /// Heightmap revision at last feature rebuild.
+    pub last_hm_rev: u64,
 }
 
 impl PreviewSlot {
@@ -52,6 +56,8 @@ impl PreviewSlot {
             core: ViewportCore::new(gpu_context, session_id),
             bc1_loaded: false,
             bc1_tex_dims: None,
+            features_dirty: true,
+            last_hm_rev: u64::MAX,
         }
     }
 }
@@ -98,6 +104,17 @@ impl LayoutManager {
             self.reset(gpu_context);
         }
 
+        // Propagate placement changes to both slots before layout dispatch.
+        if app.map.features_placement_dirty {
+            app.map.features_placement_dirty = false;
+            if let Some(ref mut s) = self.sculpt3d {
+                s.eval.features_dirty = true;
+            }
+            if let Some(ref mut s) = self.preview {
+                s.features_dirty = true;
+            }
+        }
+
         match layout {
             bar_gui::Layout::NodeGraph => {}
             bar_gui::Layout::Sculpt3D => {
@@ -111,7 +128,7 @@ impl LayoutManager {
                 );
             }
             bar_gui::Layout::Preview => {
-                self.update_preview(ctx, app, gpu_context, render_state);
+                self.update_preview(ctx, app, gpu_context, render_state, feature_catalog);
             }
         }
     }
@@ -147,10 +164,6 @@ impl LayoutManager {
         // Feature instances: rebuild when dirty or when a new heightmap arrives.
         // Skip until the first eval completes -- without a heightmap the fallback
         // height (range midpoint) causes visible floating on non-flat maps.
-        if app.map.features_placement_dirty {
-            app.map.features_placement_dirty = false;
-            slot.eval.features_dirty = true;
-        }
         let hm_rev = app.paint.heightmap_rev;
         let needs_feature_rebuild = slot.eval.features_dirty || slot.eval.last_hm_rev != hm_rev;
         if needs_feature_rebuild && app.paint.heightmap.is_some() {
@@ -165,13 +178,11 @@ impl LayoutManager {
                     .unwrap_or_default();
                 let (groups, unknowns) = build_feature_instances(
                     &app.map.features,
-                    w,
-                    h,
-                    min_h,
-                    max_h,
+                    &FeatureMapDims { w, h, min_h, max_h },
                     feature_catalog,
                     app.paint.heightmap.as_ref(),
                     &loaded,
+                    app.map.selected_feature_idx,
                 );
                 renderer.update_feature_instances(&gpu.device, &groups, &unknowns);
                 slot.eval.features_dirty = false;
@@ -244,10 +255,38 @@ impl LayoutManager {
         app: &mut bar_gui::BarEditorApp,
         gpu_context: &Option<GpuContext>,
         render_state: &Option<eframe::egui_wgpu::RenderState>,
+        feature_catalog: Option<&bar_engine::FeatureCatalog>,
     ) {
         let Some(ref mut slot) = self.preview else {
             return;
         };
+
+        // Feature instances: rebuild when dirty or heightmap changes.
+        let hm_rev = app.paint.heightmap_rev;
+        let needs_feature_rebuild = slot.features_dirty || slot.last_hm_rev != hm_rev;
+        if needs_feature_rebuild && app.paint.heightmap.is_some() {
+            if let (Some(ref mut renderer), Some(ref gpu)) =
+                (&mut slot.core.terrain_renderer, gpu_context)
+            {
+                let (w, h) = app.map.dimensions();
+                let (min_h, max_h) = app.map.height_range();
+                let loaded: std::collections::HashSet<String> = renderer
+                    .feature_renderer_mut()
+                    .map(|fr| fr.loaded_model_names().map(|s| s.to_string()).collect())
+                    .unwrap_or_default();
+                let (groups, unknowns) = build_feature_instances(
+                    &app.map.features,
+                    &FeatureMapDims { w, h, min_h, max_h },
+                    feature_catalog,
+                    app.paint.heightmap.as_ref(),
+                    &loaded,
+                    app.map.selected_feature_idx,
+                );
+                renderer.update_feature_instances(&gpu.device, &groups, &unknowns);
+                slot.features_dirty = false;
+                slot.last_hm_rev = hm_rev;
+            }
+        }
 
         let is_compiled = app
             .project
@@ -340,14 +379,17 @@ impl LayoutManager {
         });
     }
 
-    /// Mark the Sculpt3D slot's feature instances as dirty (e.g. after catalog load).
+    /// Mark feature instances as dirty on all slots (e.g. after catalog load or model arrival).
     pub fn mark_features_dirty(&mut self) {
         if let Some(ref mut slot) = self.sculpt3d {
             slot.eval.features_dirty = true;
         }
+        if let Some(ref mut slot) = self.preview {
+            slot.features_dirty = true;
+        }
     }
 
-    /// Upload an S3O model to the Sculpt3D slot's feature renderer.
+    /// Upload an S3O model to both slots' feature renderers.
     pub fn load_feature_mesh(
         &mut self,
         device: &wgpu::Device,
@@ -355,6 +397,11 @@ impl LayoutManager {
         mesh: &bar_data::S3oMesh,
     ) {
         if let Some(ref mut slot) = self.sculpt3d {
+            if let Some(ref mut renderer) = slot.core.terrain_renderer {
+                renderer.load_feature_mesh(device, name, mesh);
+            }
+        }
+        if let Some(ref mut slot) = self.preview {
             if let Some(ref mut renderer) = slot.core.terrain_renderer {
                 renderer.load_feature_mesh(device, name, mesh);
             }
