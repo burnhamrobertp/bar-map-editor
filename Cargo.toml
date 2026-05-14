@@ -80,6 +80,9 @@ flate2 = "1"
 walkdir = "2"
 sevenz-rust = "0.6"
 
+# Lua evaluation for map-bundled feature definitions
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
+
 # Cross-platform path handling
 path-slash = "0.2"
 

@@ -19,6 +19,7 @@ toml = { workspace = true }
 tracing = { workspace = true }
 zip = { workspace = true }
 flate2 = { workspace = true }
+mlua = { workspace = true }
 walkdir = { workspace = true }
 sevenz-rust = { workspace = true }
 path-slash = { workspace = true }

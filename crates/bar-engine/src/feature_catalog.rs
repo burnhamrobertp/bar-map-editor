@@ -607,11 +607,92 @@ struct PartialDef {
 }
 
 /// Parse one Lua feature definition file into the `features` map.
-/// Runs at two outer depths to catch both `featureDefs = { name = { ... } }` (depth 1)
-/// and `featureDefs["name"] = { ... }` top-level assignment style (depth 0).
+/// Tries a fast static parser first; falls back to full Lua evaluation (mlua)
+/// for files that use loops or string concatenation to generate feature names.
 fn parse_feature_lua(content: &str, features: &mut HashMap<String, FeatureDef>) {
+    let before = features.len();
     parse_feature_lua_at_depth(content, 1, features);
     parse_feature_lua_at_depth(content, 0, features);
+    if features.len() == before {
+        parse_feature_lua_dynamic(content, features);
+    }
+}
+
+/// Evaluate a Lua feature file with mlua and extract the returned name->def table.
+/// Handles the dynamic `for`-loop style used in map-bundled feature files.
+///
+/// Sandbox: TABLE + STRING + MATH only (base library always present; no IO,
+/// OS, package, debug, coroutine, or utf8). 10 MB memory cap. 500k instruction
+/// hook aborts runaway scripts.
+fn parse_feature_lua_dynamic(content: &str, features: &mut HashMap<String, FeatureDef>) {
+    use mlua::prelude::*;
+
+    // Base library (pairs/ipairs/tostring/pcall/...) is always loaded.
+    // Add only the safe extras needed for typical feature Lua files.
+    let libs = LuaStdLib::TABLE | LuaStdLib::STRING | LuaStdLib::MATH;
+    let lua = match Lua::new_with(libs, LuaOptions::default()) {
+        Ok(l) => l,
+        Err(e) => {
+            tracing::warn!(err = %e, "failed to create Lua state for feature parsing");
+            return;
+        }
+    };
+
+    if let Err(e) = lua.set_memory_limit(10 * 1024 * 1024) {
+        tracing::debug!(err = %e, "Lua memory limit not supported");
+    }
+
+    lua.set_hook(
+        LuaHookTriggers::new().every_nth_instruction(500_000),
+        |_lua, _debug| {
+            Err(LuaError::RuntimeError(
+                "feature Lua: instruction limit exceeded".into(),
+            ))
+        },
+    );
+
+    let table = match lua.load(content).eval::<LuaValue>() {
+        Ok(LuaValue::Table(t)) => t,
+        Ok(_) => return,
+        Err(e) => {
+            tracing::debug!(err = %e, "feature Lua eval failed (skipped)");
+            return;
+        }
+    };
+
+    for pair in table.pairs::<LuaValue, LuaValue>() {
+        let Ok((key, val)) = pair else { continue };
+        let name = match &key {
+            LuaValue::String(s) => match s.to_str() {
+                Ok(s) => s.to_lowercase(),
+                Err(_) => continue,
+            },
+            _ => continue,
+        };
+        let def_table = match val {
+            LuaValue::Table(t) => t,
+            _ => continue,
+        };
+
+        let object: String = def_table.get::<String>("object").unwrap_or_default();
+        let footprint_x: u32 = def_table
+            .get::<u32>("footprintX")
+            .or_else(|_| def_table.get::<u32>("footprintx"))
+            .unwrap_or(1);
+        let footprint_z: u32 = def_table
+            .get::<u32>("footprintZ")
+            .or_else(|_| def_table.get::<u32>("footprintz"))
+            .unwrap_or(1);
+
+        if !name.is_empty() {
+            features.entry(name.clone()).or_insert(FeatureDef {
+                name,
+                object,
+                footprint_x,
+                footprint_z,
+            });
+        }
+    }
 }
 
 fn parse_feature_lua_at_depth(
