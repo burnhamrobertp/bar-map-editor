@@ -102,7 +102,6 @@ fn bench_full_export(c: &mut Criterion) {
                     map_settings: MapSettings::default(),
                 },
                 features: Vec::new(),
-                source_sd7: None,
             };
             b.iter(|| {
                 let outputs = evaluate_graph(&graph, &executor, size, size, size, size).unwrap();

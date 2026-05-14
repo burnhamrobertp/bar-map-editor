@@ -54,10 +54,11 @@ pub struct ProjectState {
     /// Timestamp of the last successful compile in this session. `None`
     /// until the user has compiled at least once.
     pub compiled_at: Option<Instant>,
-    /// Absolute path to the SD7 archive the current map was imported from.
-    /// Restored from `recipe.source_sd7` on barproj load so the model
-    /// loader can find the map work dir without a fresh re-import.
-    pub source_sd7: Option<std::path::PathBuf>,
+    /// Set by `bar-app` after SD7 extraction to the map's work directory.
+    /// `save_project` reads this once and copies `objects3d/` and
+    /// `features/` into the `.barproj` so the project is self-contained,
+    /// then clears this field.
+    pub pending_map_data_dir: Option<std::path::PathBuf>,
 }
 
 impl ProjectState {

@@ -335,7 +335,6 @@ fn build_recipe(
             map_settings: MapSettings::default(),
         },
         features: Vec::new(),
-        source_sd7: None,
     })
 }
 

@@ -336,7 +336,6 @@ impl BarEditorApp {
         self.map.min_height = self.map.settings.min_height;
         self.map.max_height = self.map.settings.max_height;
         self.map.features = project.recipe.features.clone();
-        self.project.source_sd7 = project.recipe.source_sd7.clone();
         if !self.map.features.is_empty() {
             self.project.features_changed = true;
         }
@@ -631,8 +630,7 @@ impl BarEditorApp {
     pub fn finish_open_map(&mut self, scan: bar_project::WorkDirScan) {
         let name = scan.map_name.clone();
         let status = t!("editor.project.opened", name = name);
-        let (mut project, pending_assets, raw_files) = bar_project::scan_to_project(&scan);
-        project.recipe.source_sd7 = Some(scan.source_sd7.clone());
+        let (project, pending_assets, raw_files) = bar_project::scan_to_project(&scan);
         self.apply_project(project, None, name, status);
         // Write pending binary assets to a temp dir so executors can read
         // them before the user has saved the project to a .barproj directory.

@@ -413,7 +413,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
             map_settings,
         },
         features: scan.features.clone(),
-        source_sd7: None,
     };
 
     let layout = EditorLayout {
@@ -457,7 +456,6 @@ mod tests {
             texture_res: 0,
             tile_indices: Vec::new(),
             features: Vec::new(),
-            source_sd7: PathBuf::new(),
         }
     }
 
@@ -674,8 +672,4 @@ pub struct WorkDirScan {
 
     /// Feature placements extracted from the SMF feature section.
     pub features: Vec<crate::recipe::PlacedFeature>,
-
-    /// Absolute path to the source SD7 archive this scan was produced from.
-    /// Used to reconstruct `map_work_dir` when reopening a `.barproj`.
-    pub source_sd7: std::path::PathBuf,
 }

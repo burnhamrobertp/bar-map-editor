@@ -427,13 +427,14 @@ impl eframe::App for AppRunner {
             self.app.project.features_changed = false;
             self.model_rx = None; // cancel prior loader for a different map
                                   // On barproj reload no SD7 extraction runs, so map_work_dir may be
-                                  // None. Restore it from the saved source path so the model loader
-                                  // can find map-bundled S3O files and feature defs.
+                                  // None. Check whether the project dir has objects3d/ copied in
+                                  // (happens on first save after import); if so, use it as the map
+                                  // data root so S3O models and feature defs are found without any
+                                  // reference to the original archive.
             if self.map_work_dir.is_none() {
-                if let Some(sd7) = self.app.project.source_sd7.clone() {
-                    let wd = bar_engine::work_dir_for(&sd7);
-                    if wd.is_dir() {
-                        let map_catalog = FeatureCatalog::from_dir(&wd);
+                if let Some(ref project_dir) = self.app.project.path.clone() {
+                    if project_dir.join("objects3d").is_dir() {
+                        let map_catalog = FeatureCatalog::from_dir(project_dir);
                         if !map_catalog.is_empty() {
                             if let Some(ref mut catalog) = self.feature_catalog {
                                 catalog.merge(map_catalog);
@@ -443,7 +444,7 @@ impl eframe::App for AppRunner {
                                 self.app.feature_palette_names = names;
                             }
                         }
-                        self.map_work_dir = Some(wd);
+                        self.map_work_dir = Some(project_dir.clone());
                     }
                 }
             }
@@ -484,6 +485,7 @@ impl eframe::App for AppRunner {
                 Ok(Ok(scan)) => {
                     let work_dir = scan.work_dir.clone();
                     self.map_work_dir = Some(work_dir.clone());
+                    self.app.project.pending_map_data_dir = Some(work_dir.clone());
                     // Merge map-specific feature defs into the game catalog while
                     // we still have both. If the game catalog isn't loaded yet, the
                     // merge happens in spawn_model_loader via map_work_dir.

@@ -28,6 +28,18 @@ impl BarEditorApp {
             self.log_error(format!("Asset packing failed: {e}"));
             return;
         }
+        // Copy map-bundled feature data into the project directory on first save
+        // so the project is self-contained: no back-reference to the work dir.
+        if let Some(src_dir) = self.project.pending_map_data_dir.take() {
+            for subdir in &["objects3d", "features"] {
+                let src = src_dir.join(subdir);
+                if src.is_dir() {
+                    if let Err(e) = copy_dir_flat(&src, &path.join(subdir)) {
+                        self.log_error(format!("Failed to copy {subdir} into project: {e}"));
+                    }
+                }
+            }
+        }
         let project = self.build_project(&path);
         match project.save(&path) {
             Ok(()) => {
@@ -242,7 +254,6 @@ impl BarEditorApp {
                 },
             },
             features: self.map.features.clone(),
-            source_sd7: self.project.source_sd7.clone(),
         };
 
         Project {
@@ -324,4 +335,15 @@ impl BarEditorApp {
             },
         }
     }
+}
+
+fn copy_dir_flat(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        if entry.file_type()?.is_file() {
+            std::fs::copy(entry.path(), dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
 }

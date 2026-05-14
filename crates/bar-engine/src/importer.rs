@@ -154,7 +154,6 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
             map_settings,
         },
         features: result.features,
-        source_sd7: None,
     };
 
     let layout = EditorLayout {

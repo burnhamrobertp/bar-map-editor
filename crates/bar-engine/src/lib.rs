@@ -31,9 +31,7 @@ pub use export::{
     export_grassmap_png, export_heightmap_png, export_normalmap_png, export_sd7_directory,
     export_smf, export_smt, export_texture_png, export_with_target, write_color_png, write_smf,
 };
-pub use extract::{
-    extract_sd7_to_work_dir, prune_old_work_dirs, work_dir_for, work_dir_root, WorkDirScan,
-};
+pub use extract::{extract_sd7_to_work_dir, prune_old_work_dirs, work_dir_root, WorkDirScan};
 pub use feature_catalog::{
     read_file_from_archive, read_file_from_rapid_pool, sibling_zip_archives, FeatureCatalog,
     FeatureDef,
