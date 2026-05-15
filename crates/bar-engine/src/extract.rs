@@ -143,21 +143,44 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         })
         .unwrap_or((None, None, None));
 
-    let mapinfo_override = std::fs::read_to_string(work_dir.join("mapinfo.lua"))
-        .ok()
-        .and_then(|s| crate::importer::parse_mapinfo_smf_heights(&s));
+    let mapinfo_lua: Option<String> = std::fs::read_to_string(work_dir.join("mapinfo.lua")).ok();
+    let mapinfo_override = mapinfo_lua
+        .as_deref()
+        .and_then(bar_project::parse_mapinfo_smf_heights);
     let height_range = mapinfo_override.or(header_range);
 
-    // Extract heightmap, metalmap, typemap as raw u8 grids (no hex encoding).
-    // PaintedHeightmap supports up to 512; downsample to the largest power-of-2 <= 512.
-    const MAX_RES: u32 = 512;
+    // Heightmap is stored at native SMF resolution as f32 bytes -- 8-bit
+    // quantisation was visible as terraced contour lines on any map with
+    // more than ~256 elevation levels (Ascendancy at 32 Spring-blocks /
+    // 4097-sample native made every gentle slope read as horizontal
+    // terraces). f32 costs 4x bytes per sample but preserves full SMF
+    // precision.
+    //
+    // The engine has NO hard cap on heightmap size -- the SMF format only
+    // requires `mapx % 128 == 0` (one Spring block = 128 samples), and the
+    // header uses signed-int storage. Practical limits come from GPU
+    // memory and runtime perf. BAR ships maps from ~8 blocks (1025
+    // samples) up to 64 blocks (8193 samples); 8192 covers everything
+    // shipped with f32 storage costing 256MB at the largest. If a map
+    // ever exceeds this, the cap should be bumped further -- it is NOT
+    // an engine limit, only a memory budget for the editor.
+    const MAX_HM_RES: u32 = 8192;
+    // Metal / type maps stay u8 (they're inherently quantised in the SMF
+    // format) and don't benefit from a higher resolution either. The 512
+    // cap is also just a memory-budget choice, not an engine constraint.
+    const MAX_OTHER_RES: u32 = 512;
 
     let (heightmap_data, heightmap_res) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.heightmap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_RES));
-            let pixels = downsample_f32_to_u8_square(smf.heightmap.data(), w, h, target);
+            // Use the native SMF heightmap resolution directly (only capped
+            // at MAX_HM_RES). We used to `largest_pow2_leq` here, which
+            // rounded e.g. 2049 -> 2048 and cost one row/col of native
+            // data. With f32 storage the asset header carries the actual
+            // dimensions, so non-power-of-2 sizes work fine downstream.
+            let target = w.min(h).min(MAX_HM_RES);
+            let pixels = downsample_f32_to_f32_bytes(smf.heightmap.data(), w, h, target);
             (pixels, target)
         })
         .unwrap_or_default();
@@ -166,7 +189,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.metalmap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_RES));
+            let target = largest_pow2_leq(w.min(h).min(MAX_OTHER_RES));
             let pixels = downsample_u8_to_square(&smf.metalmap, w, h, target);
             (pixels, target)
         })
@@ -176,7 +199,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.typemap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_RES));
+            let target = largest_pow2_leq(w.min(h).min(MAX_OTHER_RES));
             let pixels = downsample_u8_to_square(&smf.typemap, w, h, target);
             (pixels, target)
         })
@@ -273,6 +296,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         texture_res,
         tile_indices,
         features,
+        mapinfo_lua,
     })
 }
 
@@ -289,6 +313,7 @@ fn largest_pow2_leq(n: u32) -> u32 {
 }
 
 /// Bilinear downsample of an f32 [0,1] `w x h` grid into a `res x res` u8 grid.
+#[cfg(test)]
 fn downsample_f32_to_u8_square(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity((res * res) as usize);
     for oy in 0..res {
@@ -310,6 +335,40 @@ fn downsample_f32_to_u8_square(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8
                 + v01 * (1.0 - dx) * dy
                 + v11 * dx * dy;
             out.push((v.clamp(0.0, 1.0) * 255.0) as u8);
+        }
+    }
+    out
+}
+
+/// Bilinear downsample of an f32 [0,1] `w x h` grid into a `res x res` f32
+/// grid, returned as little-endian byte representation for asset storage.
+///
+/// Replaces `downsample_f32_to_u8_square` on the heightmap path. Quantising
+/// SMF height samples to 8-bit was visible as terraced contour lines on
+/// any map with more than ~256 effective elevation levels (Azurite hinted
+/// it, Ascendancy made it obvious -- 8m vertical range per step at 2000m
+/// total elevation). f32 storage preserves the full SMF precision.
+fn downsample_f32_to_f32_bytes(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((res * res) as usize * 4);
+    for oy in 0..res {
+        for ox in 0..res {
+            let fx = (ox as f32 + 0.5) / res as f32 * w as f32 - 0.5;
+            let fy = (oy as f32 + 0.5) / res as f32 * h as f32 - 0.5;
+            let x0 = (fx as i32).clamp(0, w as i32 - 1) as u32;
+            let y0 = (fy as i32).clamp(0, h as i32 - 1) as u32;
+            let x1 = (x0 + 1).min(w - 1);
+            let y1 = (y0 + 1).min(h - 1);
+            let dx = (fx - fx.floor()).max(0.0);
+            let dy = (fy - fy.floor()).max(0.0);
+            let v00 = data[(y0 * w + x0) as usize];
+            let v10 = data[(y0 * w + x1) as usize];
+            let v01 = data[(y1 * w + x0) as usize];
+            let v11 = data[(y1 * w + x1) as usize];
+            let v = v00 * (1.0 - dx) * (1.0 - dy)
+                + v10 * dx * (1.0 - dy)
+                + v01 * (1.0 - dx) * dy
+                + v11 * dx * dy;
+            out.extend_from_slice(&v.clamp(0.0, 1.0).to_le_bytes());
         }
     }
     out

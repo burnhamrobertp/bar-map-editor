@@ -477,8 +477,8 @@ impl NodeExecutor for CpuExecutor {
 
             NodeType::PaintedHeightmap => {
                 let src_res = get_uint(params, "resolution", 256).max(1);
-                let pixels = read_asset_bytes(get_string(params, "asset_path", ""));
-                let hm = painted_grayscale_to_heightmap(pixels, src_res, width, height);
+                let asset_path = get_string(params, "asset_path", "");
+                let hm = read_painted_heightmap_asset(asset_path, src_res, width, height);
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
@@ -2528,6 +2528,97 @@ fn apply_sculpt_delta(hm: &mut Heightmap, pixels: &[u8], src_res: u32, scale: f3
             let _ = hm.set(ox, oy, (cur + delta).clamp(0.0, 1.0));
         }
     }
+}
+
+/// Read a `PaintedHeightmap` asset, dispatching on its pixel format.
+/// Brush-painted assets are still 8-bit (the brush dab range is captured
+/// at u8 granularity); SD7-imported asset are f32 to preserve the full
+/// SMF height precision (16-bit native; u8 storage was visibly terraced).
+fn read_painted_heightmap_asset(
+    asset_path: &str,
+    fallback_res: u32,
+    out_w: u32,
+    out_h: u32,
+) -> Heightmap {
+    if asset_path.is_empty() {
+        return painted_grayscale_to_heightmap(Vec::new(), fallback_res, out_w, out_h);
+    }
+    match bar_project::read_asset_file(std::path::Path::new(asset_path)) {
+        Ok((header, data)) => match header.kind {
+            bar_project::AssetKind::GrayscaleU8 => {
+                painted_grayscale_to_heightmap(data, header.width.max(1), out_w, out_h)
+            }
+            bar_project::AssetKind::GrayscaleF32 => {
+                painted_f32_to_heightmap(&data, header.width.max(1), out_w, out_h)
+            }
+            other => {
+                tracing::warn!(
+                    asset_path,
+                    ?other,
+                    "PaintedHeightmap asset has non-grayscale kind; falling back to zero heightmap",
+                );
+                painted_grayscale_to_heightmap(Vec::new(), fallback_res, out_w, out_h)
+            }
+        },
+        Err(e) => {
+            tracing::warn!(asset_path, error = %e, "Failed to read PaintedHeightmap asset");
+            painted_grayscale_to_heightmap(Vec::new(), fallback_res, out_w, out_h)
+        }
+    }
+}
+
+/// Bilinearly resample a `src_res × src_res` f32 heightmap (stored as
+/// little-endian f32 bytes) into a `out_w × out_h` `Heightmap`. Sample
+/// values are clamped to `[0, 1]` to match the contract of the rest of
+/// the heightmap pipeline.
+fn painted_f32_to_heightmap(bytes: &[u8], src_res: u32, out_w: u32, out_h: u32) -> Heightmap {
+    let expected = (src_res as usize)
+        .saturating_mul(src_res as usize)
+        .saturating_mul(4);
+    if bytes.len() != expected || src_res == 0 {
+        // Wrong size -- produce a flat zero heightmap so downstream nodes
+        // still have something to operate on.
+        return Heightmap::frbar_data(
+            out_w,
+            out_h,
+            vec![0.0f32; (out_w as usize) * (out_h as usize)],
+        )
+        .unwrap();
+    }
+    // Reinterpret the bytes as &[f32] without an alloc copy. `read_asset_file`
+    // returns a `Vec<u8>` whose backing buffer isn't guaranteed f32-aligned,
+    // so we go via from_le_bytes per sample. Still O(N) and roughly as fast
+    // as a transmute thanks to compiler vectorisation of the loop.
+    let src: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
+
+    let src_w = src_res;
+    let src_h = src_res;
+    let mut data = vec![0.0f32; (out_w as usize) * (out_h as usize)];
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
+            let sy = oy as f32 * (src_h as f32 - 1.0) / (out_h as f32 - 1.0).max(1.0);
+            let x0 = sx as u32;
+            let y0 = sy as u32;
+            let x1 = (x0 + 1).min(src_w - 1);
+            let y1 = (y0 + 1).min(src_h - 1);
+            let fx = sx - sx.floor();
+            let fy = sy - sy.floor();
+            let v00 = src[(y0 as usize) * (src_w as usize) + x0 as usize];
+            let v10 = src[(y0 as usize) * (src_w as usize) + x1 as usize];
+            let v01 = src[(y1 as usize) * (src_w as usize) + x0 as usize];
+            let v11 = src[(y1 as usize) * (src_w as usize) + x1 as usize];
+            let v = v00 * (1.0 - fx) * (1.0 - fy)
+                + v10 * fx * (1.0 - fy)
+                + v01 * (1.0 - fx) * fy
+                + v11 * fx * fy;
+            data[(oy as usize) * (out_w as usize) + ox as usize] = v.clamp(0.0, 1.0);
+        }
+    }
+    Heightmap::frbar_data(out_w, out_h, data).unwrap()
 }
 
 /// Bilinearly scale a painted greyscale image at `src_res × src_res`

@@ -20,6 +20,13 @@ use crate::recipe::{
     MapSettings, OutputConfig, PlacedFeature, Recipe, RecipeConnection, RecipeNode,
 };
 
+// Re-export the mapinfo.lua parsers (canonical implementations live in
+// `bar_project::mapinfo`). The parsers are shared between this SD7 importer
+// path and the UI-driven SD7 scan path (`bar_project::scan_to_project`),
+// which previously had no access to them and silently dropped every
+// per-map water/lighting override.
+pub use bar_project::{parse_mapinfo_number, parse_mapinfo_smf_heights, parse_mapinfo_vec3};
+
 /// Result of importing a .sd7 archive.
 pub struct ImportResult {
     /// Map name (from mapinfo.lua or SMF filename stem as fallback).
@@ -101,37 +108,16 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
     // Pull additional MapSettings fields from the imported mapinfo.lua
     // when they're available. Fields that aren't found in the file fall
     // back to MapSettings::default() — same as a freshly-created project.
-    let map_settings = MapSettings {
+    // Once parsed and stored here, the values land in the recipe, are
+    // editable via the mapinfo editor panel, and round-trip on save/load.
+    let mut map_settings = MapSettings {
         min_height: result.min_height,
         max_height: result.max_height,
-        gravity: result
-            .mapinfo_lua
-            .as_deref()
-            .and_then(|l| parse_mapinfo_number(l, "gravity"))
-            .unwrap_or(MapSettings::default().gravity),
-        tidal_strength: result
-            .mapinfo_lua
-            .as_deref()
-            .and_then(|l| parse_mapinfo_number(l, "tidalStrength"))
-            .unwrap_or(MapSettings::default().tidal_strength),
-        max_metal: result
-            .mapinfo_lua
-            .as_deref()
-            .and_then(|l| parse_mapinfo_number(l, "maxMetal"))
-            .unwrap_or(MapSettings::default().max_metal),
-        extractor_radius: result
-            .mapinfo_lua
-            .as_deref()
-            .and_then(|l| parse_mapinfo_number(l, "extractorRadius"))
-            .unwrap_or(MapSettings::default().extractor_radius),
-        map_hardness: result
-            .mapinfo_lua
-            .as_deref()
-            .and_then(|l| parse_mapinfo_number(l, "mapHardness"))
-            .map(|v| v as u32)
-            .unwrap_or(MapSettings::default().map_hardness),
         ..MapSettings::default()
     };
+    if let Some(lua) = result.mapinfo_lua.as_deref() {
+        bar_project::apply_mapinfo_overrides(lua, &mut map_settings);
+    }
 
     let recipe = Recipe {
         schema_version: bar_project::RECIPE_SCHEMA_VERSION,
@@ -273,152 +259,10 @@ fn write_heightmap_png(heightmap: &bar_data::Heightmap, path: &Path) -> Result<(
         .with_context(|| format!("Failed to write heightmap PNG: {}", path.display()))
 }
 
-/// Parse the `smf.minheight` / `smf.maxheight` overrides from `mapinfo.lua`.
-///
-/// Spring/BAR uses these (when present) to reinterpret the heightmap u16
-/// values. They override whatever's in the SMF binary header. Many maps
-/// allocate generous header headroom (e.g. `[-50, 100]`) but specify the
-/// real working range here (e.g. `[-250, 670]`) — using the binary header
-/// alone produces flat-looking previews that don't match the engine.
-///
-/// Looks for `minheight = N` and `maxheight = N` (numeric values) anywhere
-/// inside an `smf = { ... }` block. Returns `Some((min, max))` only when
-/// both are found; `None` if the block is missing or malformed.
-pub fn parse_mapinfo_smf_heights(lua: &str) -> Option<(f32, f32)> {
-    // Find the `smf = {` block (case-insensitive). Match the full
-    // `smf <whitespace>* = <whitespace>* {` shape so we don't trip over
-    // earlier occurrences of "smf" inside comments (e.g. "// .smf file")
-    // or in unrelated identifiers.
-    let lower = lua.to_lowercase();
-    let mut search_from = 0usize;
-    let (smf_idx, brace_open) = loop {
-        let rel = lower[search_from..].find("smf")?;
-        let abs = search_from + rel;
-        // Look at what follows: must be optional whitespace, then '=',
-        // optional whitespace, then '{'. Anything else and we keep searching.
-        let after = &lua[abs + 3..];
-        let mut chars = after.char_indices().peekable();
-        let mut saw_eq = false;
-        let mut found_brace: Option<usize> = None;
-        while let Some(&(i, c)) = chars.peek() {
-            if c.is_whitespace() {
-                chars.next();
-                continue;
-            }
-            if !saw_eq {
-                if c == '=' {
-                    saw_eq = true;
-                    chars.next();
-                    continue;
-                }
-                break;
-            }
-            // After '=' — must be a brace.
-            if c == '{' {
-                found_brace = Some(abs + 3 + i);
-            }
-            break;
-        }
-        if let Some(bo) = found_brace {
-            break (abs, bo);
-        }
-        search_from = abs + 3;
-    };
-    let _ = smf_idx; // documents intent; not used below.
-    let after_smf = lua; // the absolute index `brace_open` references the original string.
-                         // Track depth so a sub-table inside smf doesn't fool us. Find the
-                         // matching closing brace.
-    let mut depth = 0;
-    let mut end = brace_open;
-    for (i, c) in after_smf[brace_open..].char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    end = brace_open + i;
-                    break;
-                }
-            }
-            _ => {}
-        }
-    }
-    // body starts at the opening `{` and ends just before the matching `}`.
-    // Strip the leading brace so the first piece on a single-line table
-    // (`{ minheight = 0, … }`) doesn't carry it into key matching.
-    let body = after_smf[brace_open + 1..end].trim();
-
-    let parse_field = |key: &str| -> Option<f32> {
-        // Split on both newlines AND commas so we can parse both
-        // multi-line and inline `{ a = 1, b = 2 }` forms.
-        for piece in body.split(['\n', ',']) {
-            let trimmed = piece.trim().to_lowercase();
-            // Match `<key> = ` or `<key>=`. Comments and trailing chars are
-            // tolerated; we just want the first numeric token after `=`.
-            if let Some(rest) = trimmed.strip_prefix(key).map(str::trim_start) {
-                if let Some(after_eq) = rest.strip_prefix('=').map(str::trim_start) {
-                    // Take a numeric prefix (signed float, integer, or scientific).
-                    let mut end = 0;
-                    for (i, c) in after_eq.char_indices() {
-                        if c.is_ascii_digit()
-                            || c == '-'
-                            || c == '+'
-                            || c == '.'
-                            || c == 'e'
-                            || c == 'E'
-                        {
-                            end = i + c.len_utf8();
-                        } else {
-                            break;
-                        }
-                    }
-                    if end > 0 {
-                        if let Ok(v) = after_eq[..end].parse::<f32>() {
-                            return Some(v);
-                        }
-                    }
-                }
-            }
-        }
-        None
-    };
-
-    let min = parse_field("minheight")?;
-    let max = parse_field("maxheight")?;
-    Some((min, max))
-}
-
-/// Parse a top-level numeric field from `mapinfo.lua` — e.g. `gravity = 130`,
-/// `tidalStrength = 18`, `mapHardness = 100`. Returns `None` if not found
-/// or unparseable. Used by the SD7 importer to populate MapSettings beyond
-/// just heights.
-pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {
-    let pat = format!("{}=", key);
-    for line in lua.lines() {
-        let trimmed = line.trim();
-        // Match `<key> =` ignoring whitespace around the equals
-        let stripped = trimmed.strip_prefix(key).map(|rest| rest.trim_start());
-        let rest = match stripped {
-            Some(r) if r.starts_with('=') => &r[1..],
-            _ => {
-                // Try the no-space form too
-                if !trimmed.starts_with(&pat) {
-                    continue;
-                }
-                &trimmed[pat.len()..]
-            }
-        };
-        let value = rest
-            .trim()
-            .trim_end_matches(',')
-            .trim_end_matches(';')
-            .trim();
-        if let Ok(v) = value.parse::<f32>() {
-            return Some(v);
-        }
-    }
-    None
-}
+// `parse_mapinfo_smf_heights`, `parse_mapinfo_number`, and `parse_mapinfo_vec3`
+// now live in `bar_project::mapinfo` (re-exported at the top of this module).
+// They moved so the SD7 work-dir scan path (`bar_project::scan_to_project`)
+// could call them without taking a dependency on this crate.
 
 /// Parse the map `name` field from `mapinfo.lua`.
 ///
@@ -636,5 +480,95 @@ local mapinfo = {
             .find(|f| f.feature_type == "GeoTherm_Lava_Rock")
             .expect("GeoTherm_Lava_Rock feature missing");
         assert_eq!(geo.taken_damage, 5);
+    }
+
+    #[test]
+    fn parse_mapinfo_vec3_inline() {
+        // The supreme_isthmus water table style: single-line vec3 with
+        // a trailing comma and an inline `--` comment.
+        let lua = "basecolor = { 0.05, 0.7, 0.6 }, -- the color shallow water starts out at";
+        assert_eq!(parse_mapinfo_vec3(lua, "basecolor"), Some([0.05, 0.7, 0.6]));
+    }
+
+    #[test]
+    fn parse_mapinfo_vec3_multiline() {
+        // The supreme_isthmus lighting block style: each component on its
+        // own line, with whitespace and a trailing comma on the final entry.
+        let lua = r#"
+lighting = {
+    groundAmbientColor = {
+      0.35,
+      0.35,
+      0.35,
+    },
+    sunDir = {
+      -0.64,
+      0.66,
+      -0.57,
+    },
+}
+"#;
+        assert_eq!(
+            parse_mapinfo_vec3(lua, "groundAmbientColor"),
+            Some([0.35, 0.35, 0.35])
+        );
+        assert_eq!(
+            parse_mapinfo_vec3(lua, "sunDir"),
+            Some([-0.64, 0.66, -0.57])
+        );
+    }
+
+    #[test]
+    fn parse_mapinfo_vec3_case_insensitive() {
+        // BAR's Lua loader lowercases keys; mapinfo authors use mixed case.
+        // Match either way.
+        let lua = "basecolor = { 0.1, 0.2, 0.3 }";
+        assert_eq!(parse_mapinfo_vec3(lua, "baseColor"), Some([0.1, 0.2, 0.3]));
+        assert_eq!(parse_mapinfo_vec3(lua, "BASECOLOR"), Some([0.1, 0.2, 0.3]));
+    }
+
+    #[test]
+    fn parse_mapinfo_vec3_word_boundary() {
+        // `basecolor` is a substring of `unitbasecolor` -- must not match.
+        let lua = "unitbasecolor = { 0.9, 0.9, 0.9 }";
+        assert_eq!(parse_mapinfo_vec3(lua, "basecolor"), None);
+    }
+
+    #[test]
+    fn parse_mapinfo_vec3_skips_commented_key() {
+        let lua = "-- basecolor = { 0.1, 0.2, 0.3 }\nbasecolor = { 0.5, 0.6, 0.7 }";
+        assert_eq!(parse_mapinfo_vec3(lua, "basecolor"), Some([0.5, 0.6, 0.7]));
+    }
+
+    #[test]
+    fn parse_mapinfo_vec3_missing_returns_none() {
+        let lua = "name = \"foo\"";
+        assert_eq!(parse_mapinfo_vec3(lua, "basecolor"), None);
+    }
+
+    #[test]
+    fn parse_mapinfo_number_handles_inline_comment() {
+        // Aurelia's mapinfo.lua format: scalar fresnel values have
+        // descriptive `--` comments on the same line. Earlier
+        // `parse_mapinfo_number` would feed "0.1, -- this defines..." into
+        // `parse::<f32>()` (which fails), so the field silently fell back
+        // to its WaterSettings default.
+        let lua = "fresnelMin = 0.1, --This defines the minimum amount of light\n\
+                   fresnelMax = 0.5, --Defines the maximum amount\n\
+                   fresnelPower = 3.0, --Defines how much\n\
+                   plain = 42";
+        assert_eq!(parse_mapinfo_number(lua, "fresnelMin"), Some(0.1));
+        assert_eq!(parse_mapinfo_number(lua, "fresnelMax"), Some(0.5));
+        assert_eq!(parse_mapinfo_number(lua, "fresnelPower"), Some(3.0));
+        // Plain value still works.
+        assert_eq!(parse_mapinfo_number(lua, "plain"), Some(42.0));
+    }
+
+    #[test]
+    fn parse_mapinfo_number_skips_commented_out_line() {
+        // A whole-line comment shouldn't match: the key only appears after
+        // `--`, so the parser must skip it.
+        let lua = "-- fresnelMin = 0.99\nfresnelMin = 0.1";
+        assert_eq!(parse_mapinfo_number(lua, "fresnelMin"), Some(0.1));
     }
 }

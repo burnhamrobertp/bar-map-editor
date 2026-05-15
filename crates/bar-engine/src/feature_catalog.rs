@@ -607,14 +607,21 @@ struct PartialDef {
 }
 
 /// Parse one Lua feature definition file into the `features` map.
-/// Tries a fast static parser first; falls back to full Lua evaluation (mlua)
-/// for files that use loops or string concatenation to generate feature names.
+///
+/// mlua evaluates the file the same way Recoil does, so it's the source of
+/// truth. The static text parser is only used as a fallback when mlua cannot
+/// execute the file (e.g. it references engine-only globals like `Spring.*`
+/// or `VFS.Include` that we do not expose). Earlier the order was reversed
+/// and the static parser would extract nested keys (e.g. `customparams` inside
+/// a `local Base = { ... }` template) as false-positive feature names, which
+/// then suppressed the mlua fallback and skipped any features the file
+/// actually generated via for-loops.
 fn parse_feature_lua(content: &str, features: &mut HashMap<String, FeatureDef>) {
     let before = features.len();
-    parse_feature_lua_at_depth(content, 1, features);
-    parse_feature_lua_at_depth(content, 0, features);
+    parse_feature_lua_dynamic(content, features);
     if features.len() == before {
-        parse_feature_lua_dynamic(content, features);
+        parse_feature_lua_at_depth(content, 1, features);
+        parse_feature_lua_at_depth(content, 0, features);
     }
 }
 
@@ -814,5 +821,55 @@ return featureDefs
         let (o, c) = count_braces(r#"description = 'has { brace }',"#);
         assert_eq!(o, 0);
         assert_eq!(c, 0);
+    }
+
+    /// Regression test: previously the static parser's depth-1 pass extracted
+    /// the nested `customparams` key as a fake feature, which then suppressed
+    /// the mlua fallback and the for-loop-generated features (here: euro_birch_*)
+    /// never got loaded. Verifies the fix in `parse_feature_lua` -- mlua runs
+    /// first; the static parser only kicks in when mlua produced nothing.
+    #[test]
+    fn template_with_nested_customparams_loads_all_features() {
+        let content = r#"
+local Base = {
+    description = "Birch tree",
+    footprintx = 1,
+    footprintz = 1,
+    customparams = {
+        author = "Nikuksis",
+        treeshader = "yes",
+    },
+}
+
+local trees = {}
+for j = 1, 4 do
+    for i = 1, 8 do
+        local name = "euro_birch_tree_0" .. tostring(i) .. '_' .. tostring(j)
+        local def = {}
+        for k, v in pairs(Base) do
+            def[k] = v
+        end
+        def.name = name
+        def.object = name .. ".s3o"
+        trees[name] = def
+    end
+end
+return trees
+"#;
+        let mut features = HashMap::new();
+        parse_feature_lua(content, &mut features);
+        // 4 x 8 = 32 generated entries; "customparams" must NOT be one of them.
+        assert_eq!(
+            features.len(),
+            32,
+            "expected 32 euro_birch entries, got: {:?}",
+            features.keys().collect::<Vec<_>>()
+        );
+        assert!(!features.contains_key("customparams"));
+        assert!(features.contains_key("euro_birch_tree_01_1"));
+        assert!(features.contains_key("euro_birch_tree_08_4"));
+        let def = &features["euro_birch_tree_03_2"];
+        assert_eq!(def.object, "euro_birch_tree_03_2.s3o");
+        assert_eq!(def.footprint_x, 1);
     }
 }
