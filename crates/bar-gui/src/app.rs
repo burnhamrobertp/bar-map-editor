@@ -389,6 +389,12 @@ impl BarEditorApp {
     pub(crate) fn map_settings_mut(&mut self) -> &mut bar_project::MapSettings {
         self.map.settings_mut()
     }
+    /// Read-only access to MapSettings. Used by `bar-app` to read fields
+    /// (e.g. `atmosphere.skybox`) that drive asset loading at the
+    /// renderer side.
+    pub fn map_settings(&self) -> &bar_project::MapSettings {
+        &self.map.settings
+    }
     pub(crate) fn map_dimensions_mut(&mut self) -> (&mut u32, &mut u32) {
         self.map.dimensions_mut()
     }
@@ -697,18 +703,10 @@ impl BarEditorApp {
     /// renderer would read for the same map. Consumers (bar-app's
     /// preview pipeline) clone this each frame; never store.
     pub fn smf_lighting(&self) -> SmfLightingSnapshot {
-        let lit = &self.map.settings.lighting;
-        let w = &self.map.settings.water;
-        SmfLightingSnapshot {
-            sun_dir: lit.sun_dir,
-            ground_ambient: lit.ground_ambient,
-            ground_diffuse: lit.ground_diffuse,
-            ground_specular: lit.ground_specular,
-            specular_exponent: lit.spec_exponent,
-            water_absorb: w.absorb,
-            water_base: w.base_color,
-            water_min: w.min_color,
-        }
+        // Single source of truth: MapSettings -> bar_render::SmfLighting.
+        // GUI + CLI + viewport all go through the same `From` impl in
+        // bar-render, so there's no second-copy drift.
+        SmfLightingSnapshot::from(&self.map.settings)
     }
 
     /// Composite cache key for the 3D preview's input state. Bumps

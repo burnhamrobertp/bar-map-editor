@@ -14,19 +14,14 @@ use bar_project::MapSettings;
 /// Plain-data snapshot of SMF ground-shading inputs (lighting +
 /// water-absorption). Returned by `BarEditorApp::smf_lighting` and
 /// consumed by `bar-app` to populate the renderer's per-frame
-/// `SmfLighting`. Lives in `bar-gui` so callers can read it without
-/// pulling in `bar-render` as a transitive dep.
-#[derive(Clone, Copy, Debug)]
-pub struct SmfLightingSnapshot {
-    pub sun_dir: [f32; 3],
-    pub ground_ambient: [f32; 3],
-    pub ground_diffuse: [f32; 3],
-    pub ground_specular: [f32; 3],
-    pub specular_exponent: f32,
-    pub water_absorb: [f32; 3],
-    pub water_base: [f32; 3],
-    pub water_min: [f32; 3],
-}
+/// uniforms. There is exactly one shape for this; `bar-render`
+/// defines it and we re-export the same type so the GUI, the
+/// renderer, and the CLI cannot drift out of sync on field order
+/// or units. (Previously a copy lived here as
+/// `SmfLightingSnapshot`, the renderer had its own
+/// `SmfLighting`, and the CLI handcopied between them — easy
+/// for one site to forget a field.)
+pub type SmfLightingSnapshot = bar_render::SmfLighting;
 
 /// Recipe identity block: the values that show up in the Map Info /
 /// About dialog and end up in the `.barproj` recipe header.

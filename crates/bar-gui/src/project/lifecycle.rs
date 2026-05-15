@@ -1044,8 +1044,8 @@ mod session_reset_tests {
         app.reset_project();
         assert!(!app.history.can_undo(), "history must be cleared");
         assert!(
-            matches!(app.paint.brush.tool, BrushTool::Raise),
-            "brush tool defaults to Raise"
+            matches!(app.paint.brush.tool, BrushTool::Pointer),
+            "brush tool defaults to Pointer (no-op until the user enters a brush layer)"
         );
         assert!(!app.paint.brush_stroking);
         assert_eq!(
@@ -1084,7 +1084,7 @@ mod session_reset_tests {
             1,
             "after start_with_macro, history holds only the macro-drop snapshot"
         );
-        assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
+        assert!(matches!(app.paint.brush.tool, BrushTool::Pointer));
         assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
         assert!(!app.dialog.show_validation_panel);
         assert!(
@@ -1102,7 +1102,7 @@ mod session_reset_tests {
         let mut app = dirtied_app();
         app.do_new_project();
         assert!(!app.history.can_undo());
-        assert!(matches!(app.paint.brush.tool, BrushTool::Raise));
+        assert!(matches!(app.paint.brush.tool, BrushTool::Pointer));
         assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
         // do_new_project drops a single Bundler terminal node.
         assert_eq!(app.graph.nodes().len(), 1);

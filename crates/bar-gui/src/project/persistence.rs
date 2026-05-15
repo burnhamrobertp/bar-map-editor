@@ -30,8 +30,11 @@ impl BarEditorApp {
         }
         // Copy map-bundled feature data into the project directory on first save
         // so the project is self-contained: no back-reference to the work dir.
+        // - objects3d/ : S3O model files referenced by feature defs
+        // - features/  : map-local feature def lua files
+        // - unittextures/ : S3O diffuse / normal textures (.tga/.dds/.png)
         if let Some(src_dir) = self.project.pending_map_data_dir.take() {
-            for subdir in &["objects3d", "features"] {
+            for subdir in &["objects3d", "features", "unittextures"] {
                 let src = src_dir.join(subdir);
                 if src.is_dir() {
                     if let Err(e) = copy_dir_flat(&src, &path.join(subdir)) {
