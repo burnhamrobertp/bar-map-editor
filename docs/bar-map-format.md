@@ -1,20 +1,19 @@
 # BAR map format reference
 
-What the engine and the game actually require from a map archive, vs what's
-optional with a default. Source of truth for our `mapinfo.lua` emitter,
-validators, and the eventual mapconfig writers.
+The current archive format for Beyond All Reason maps -- the structure to target when authoring or generating a map.
 
-Derived from reading:
+For analysis of what shipped maps actually contain (template cargo-cult, dead fields, vestigial files, cleanup opportunities), see `bar-map-analysis.md`.
 
-- `~/Projects/bar-recoil/rts/Map/MapInfo.cpp` (the engine's mapinfo reader)
-- `~/Projects/bar-recoil/rts/Map/MapParser.cpp` (top-level archive parser)
-- `~/Projects/bar-recoil/rts/Map/SMF/SMFMapFile.cpp` and `SMFReadMap.cpp`
-- `~/Projects/bar-recoil/rts/Game/GameSetup.cpp` (start-position handling)
-- `~/Projects/bar-game/luarules/gadgets/include/startbox_utilities.lua`
-- `~/Projects/bar-game/luarules/gadgets/game_initial_spawn.lua`
+---
 
-Pinned commits live at the top of each clone's `git log`. Re-verify before
-making decisions if the BAR/Recoil source moves.
+## What a map archive is
+
+A BAR map is distributed as an `.sd7` archive (7-zip). Inside:
+
+- An SMF / SMT binary pair holding the heightmap, embedded minimap, embedded metalmap, embedded typemap, and tile pool.
+- `mapinfo.lua` declaring engine-consumed properties: render parameters, lighting, water, splats, grass, texture references, team start positions, terrain types.
+- Optional game-Lua content under `LuaGaia/`, `LuaRules/`, `mapconfig/`, `features/` that runs once the map is loaded.
+- Optional asset overrides (water bitmaps, feature S3O models + textures, minimap).
 
 ---
 
@@ -23,19 +22,15 @@ making decisions if the BAR/Recoil source moves.
 Three files, two mapinfo fields:
 
 - `mapinfo.lua` (must parse without syntax errors)
-- `maps/<name>.smf` (heightmap binary, valid SMF header)
-- `maps/<name>.smt` (tile binary referenced by `smf.smtFileName0`)
+- `maps/<name>.smf`
+- `maps/<name>.smt`
 
-Minimum mapinfo content:
+Minimum mapinfo:
 
 ```lua
 return {
     name = "TestMap",
-
-    smf = {
-        smtFileName0 = "testmap.smt",
-    },
-
+    smf = { smtFileName0 = "testmap.smt" },
     teams = {
         [0] = { startPos = { x = 512, z = 512 } },
         [1] = { startPos = { x = 1536, z = 1536 } },
@@ -43,278 +38,332 @@ return {
 }
 ```
 
-Everything below is optional — the engine has a hardcoded default for every
-field. `teams[i].startPos` is *conditionally* required: only when
-`Game.startPosType == 0` (SPAWN_FIXED). For RANDOM / CHOOSE_IN_GAME the
-startPos values are ignored.
+`teams[i].startPos` is required when `Game.startPosType == 0` (SPAWN_FIXED). Everything else has a default.
 
 ---
 
-## Archive files
+## File layout
 
-| File                         | Required by | Effect of absence                                                                  |
-| ---------------------------- | ----------- | ---------------------------------------------------------------------------------- |
-| `mapinfo.lua`                | engine      | Fatal load error — `MapInfo.cpp:52`                                                |
-| `maps/<name>.smf`            | engine      | Fatal — heightmap binary missing                                                   |
-| `maps/<name>.smt`            | engine      | Fatal — referenced via `smf.smtFileName0`, must be present                         |
-| `mapconfig/map_startboxes.lua` | game (optional) | Falls back to autohost / random box. See [Startboxes](#startboxes).               |
-| `LuaGaia/*`, `LuaUI/*`         | game (optional) | Map-supplied widgets/gadgets disabled.                                             |
-| `metalmap.bmp`, `typemap.bmp`  | n/a         | Engine reads metalmap/typemap from the SMF binary directly. Loose files unused.   |
+| Path | Role |
+|---|---|
+| `mapinfo.lua` | Engine-parsed map config (required) |
+| `maps/<name>.smf` | Heightmap + embedded minimap / metalmap / typemap (required) |
+| `maps/<name>.smt` | Texture tile pool referenced by SMF (required) |
+| `maps/minimap.bmp` or `.dds` | Overrides the SMF-embedded minimap |
+| `mapoptions.lua` | Lobby-exposed map options |
+| `mapconfig/*.lua` | Auxiliary scripts loaded by gadgets (feature placement, startboxes, etc.) |
+| `LuaGaia/*` | Map's neutral-player Lua state |
+| `LuaRules/*` | Map-specific gameplay rules |
+| `libs/<name>/*.lua` | Lua libraries gadgets include from |
+| `features/*.lua` | Map-provided feature definitions |
+| `objects3d/*.s3o` | Feature model binaries |
+| `unittextures/*.dds` | Feature textures |
+| `bitmaps/*` | Engine-default override path (water foam, ocean, caustics, etc.) |
 
 ---
 
-## `mapinfo.lua` — top level
+## `mapinfo.lua` -- top level
 
-| Field             | Required | Default    | Effect of absence                                                            |
-| ----------------- | -------- | ---------- | ---------------------------------------------------------------------------- |
-| `name`            | game     | engine name | Lobby shows generic name                                                    |
-| `shortname`       | cosmetic | unset      | Falls back to `name`                                                         |
-| `description`     | cosmetic | unset      | Falls back to `name`                                                         |
-| `author`          | cosmetic | `""`       | No author shown                                                              |
-| `version`         | cosmetic | unset      | Not read by engine                                                           |
-| `mapfile`         | optional | auto-detect | Slower archive load (warning logged); auto-resolves                         |
-| `modtype`         | optional | unset      | Spring uses default; BAR maps conventionally set `3`                         |
-| `maphardness`     | optional | `100.0`    | Uniform deform resistance at default                                         |
-| `notDeformable`   | optional | `false`    | Map is deformable                                                            |
-| `gravity`         | optional | `130.0`    | Spring default gravity                                                       |
-| `tidalStrength`   | optional | `0.0`      | No tide                                                                      |
-| `maxMetal`        | optional | `0.02`     | Default 2% metal density                                                     |
-| `extractorRadius` | optional | `500.0`    | Default extractor radius                                                     |
-| `voidWater`       | optional | `false`    | Water renders normally                                                       |
-| `voidGround`      | optional | `false`    | Ground renders at edges                                                      |
+| Field | Default | Notes |
+|---|---|---|
+| `name` | engine name | Shown by lobby |
+| `shortname` | unset | Falls back to `name` |
+| `description` | unset | Falls back to `name` |
+| `author` | `""` | Display only |
+| `version` | unset | Display only |
+| `modtype` | unset | BAR convention: `3` |
+| `maphardness` | `100.0` | Uniform deform resistance |
+| `notDeformable` | `false` | Disable terrain deformation |
+| `gravity` | `130.0` | |
+| `tidalStrength` | `0.0` | |
+| `maxMetal` | `0.02` | Peak metalmap density |
+| `extractorRadius` | `500.0` | Elmo |
+| `voidWater` | `false` | Gadget-checked |
+| `voidGround` | `false` | Gadget-checked |
+| `autoShowMetal` | `false` | Toggle metalmap overlay at start |
 
 ---
 
 ## `mapinfo.lua → smf`
 
-| Field           | Required | Default                                       | Effect of absence                                            |
-| --------------- | -------- | --------------------------------------------- | ------------------------------------------------------------ |
-| `smtFileName0`  | engine   | n/a                                           | Tile rendering fails; required if SMF references tile file 0 |
-| `smtFileNameN`  | optional | n/a                                           | Only required if SMF was built with > 1 tile file            |
-| `minheight`     | optional | reads from SMF header                         | Falls back to header values; mapinfo override takes priority |
-| `maxheight`     | optional | reads from SMF header                         | Same                                                         |
-| `minimapTex`    | optional | embedded minimap from SMF                     | Engine uses 1024×1024 DXT1 minimap baked into SMF            |
-| `metalmapTex`   | optional | embedded metalmap from SMF                    | Path override only                                           |
-| `typemapTex`    | optional | embedded typemap from SMF                     | Path override only                                           |
-| `grassmapTex`   | optional | unset                                         | No grass rendering on this map                               |
+| Field | Default | Notes |
+|---|---|---|
+| `smtFileName0` | engine resolves from SMF | Reference to `.smt` tile binary |
+| `smtFileNameN` | n/a | Only if multiple tile pools |
+| `minheight` | reads from SMF header | Mapinfo override wins |
+| `maxheight` | reads from SMF header | |
+| `minimapTex` | embedded in SMF | External override |
+| `metalmapTex` | embedded in SMF | External override |
+| `typemapTex` | embedded in SMF | External override |
+| `grassmapTex` | unset | No grass rendering if absent |
 
 ---
 
 ## `mapinfo.lua → atmosphere`
 
-Every field optional. Defaults from `MapInfo.cpp:134-165`.
-
-| Field              | Default                  |
-| ------------------ | ------------------------ |
-| `minWind`          | `5.0`                    |
-| `maxWind`          | `25.0`                   |
-| `fogStart`         | `0.1`                    |
-| `fogEnd`           | `1.0`                    |
-| `fogColor`         | `{0.7, 0.7, 0.8}`        |
-| `skyBox`           | `""` (procedural sky)    |
-| `skyColor`         | `{0.1, 0.15, 0.7}`       |
-| `skyAxisAngle`     | `{0, 1, 2, 0}`           |
-| `sunColor`         | `{1, 1, 1}`              |
-| `cloudColor`       | `{1, 1, 1}`              |
-| `fluidDensity`     | `0.3`                    |
-| `cloudDensity`     | `0.5`                    |
+| Field | Default |
+|---|---|
+| `minWind` / `maxWind` | `5.0` / `25.0` |
+| `fogStart` / `fogEnd` | `0.1` / `1.0` |
+| `fogColor` | `{0.7, 0.7, 0.8}` |
+| `skyBox` | `""` (procedural sky) |
+| `skyColor` | `{0.1, 0.15, 0.7}` |
+| `skyAxisAngle` | `{0, 1, 2, 0}` (xyz + angle) |
+| `sunColor` | `{1, 1, 1}` |
+| `cloudColor` | `{1, 1, 1}` |
+| `fluidDensity` | `0.3` |
+| `cloudDensity` | `0.5` |
 
 ---
 
 ## `mapinfo.lua → lighting`
 
-Every field optional. Defaults from `MapInfo.cpp:207-221`.
-
-| Field                  | Default                    |
-| ---------------------- | -------------------------- |
-| `sunDir`               | `{0, 1, 2, 1}` (normalised) |
-| `groundAmbientColor`   | `{0.5, 0.5, 0.5}`          |
-| `groundDiffuseColor`   | `{0.5, 0.5, 0.5}`          |
-| `groundSpecularColor`  | `{0.1, 0.1, 0.1}`          |
-| `groundShadowDensity`  | `0.8`                      |
-| `unitAmbientColor`     | `{0.4, 0.4, 0.4}`          |
-| `unitDiffuseColor`     | `{0.7, 0.7, 0.7}`          |
-| `unitSpecularColor`    | falls back to `unitDiffuseColor` |
-| `unitShadowDensity`    | `0.8`                      |
-| `specularExponent`     | `100.0`                    |
+| Field | Default |
+|---|---|
+| `sunDir` | `{0, 1, 2, 1}` (normalised) |
+| `groundAmbientColor` | `{0.5, 0.5, 0.5}` |
+| `groundDiffuseColor` | `{0.5, 0.5, 0.5}` |
+| `groundSpecularColor` | `{0.1, 0.1, 0.1}` |
+| `groundShadowDensity` | `0.8` |
+| `unitAmbientColor` | `{0.4, 0.4, 0.4}` |
+| `unitDiffuseColor` | `{0.7, 0.7, 0.7}` |
+| `unitSpecularColor` | falls back to `unitDiffuseColor` |
+| `unitShadowDensity` | `0.8` |
+| `specularExponent` | `100.0` |
 
 ---
 
 ## `mapinfo.lua → water`
 
-All optional; large defaults block in `MapInfo.cpp:236-334`. Highlights:
+| Field | Default | Notes |
+|---|---|---|
+| `damage` | `0.0` | |
+| `absorb` | `{0, 0, 0}` | Per-channel absorption coefficient |
+| `baseColor` | `{0, 0, 0}` | Deep-water tint |
+| `minColor` | `{0, 0, 0}` | Floor of underwater colour |
+| `surfaceColor` | `{0.75, 0.8, 0.85}` | |
+| `surfaceAlpha` | `0.55` | |
+| `planeColor` | absent | Presence enables a flat water plane |
+| `texture` | engine `"ocean.jpg"` | Water diffuse |
+| `foamTexture` | engine `"foam.jpg"` | Shore foam |
+| `normalTexture` | engine `"waterbump_4tiles.dds"` | Bump-water normal |
 
-| Field           | Default                | Notes                                         |
-| --------------- | ---------------------- | --------------------------------------------- |
-| `damage`        | `0.0`                  | No water damage                               |
-| `absorb`        | `{0, 0, 0}`            | Black absorption                              |
-| `baseColor`     | `{0, 0, 0}`            | Black base                                    |
-| `minColor`      | `{0, 0, 0}`            | Black minimum                                 |
-| `surfaceColor`  | `{0.75, 0.8, 0.85}`    | Light blue surface                            |
-| `surfaceAlpha`  | `0.55`                 |                                               |
-| `planeColor`    | absent                 | Presence enables a flat water plane           |
-| `texture`       | `"ocean.jpg"` from `gamedata/resources.lua` | Engine fallback chain |
-| `foamTexture`   | `"foam.jpg"` from same                  | Engine fallback chain |
-| `normalTexture` | `"waterbump_4tiles.dds"` from same     | Engine fallback chain |
-| `caustics`      | 32 default textures from `bitmaps/caustics/` |                  |
-
-A long tail (`fresnel*`, `perlin*`, `wave*`, `causticsResolution`, etc.) all
-have defaults — see source. None are required.
+A long tail (`fresnelMin/Max/Power`, `perlinStart`, `perlinAmplitude`, `perlinLacunarity`, `shoreWaves`, `waveLength`, `waveFoamIntensity`, `waveOffsetFactor`, `causticsResolution`, `causticsStrength`, `reflectionDistortion`, `repeatX/Y`, `blurBase/Exponent`, `ambientFactor`, `diffuseFactor`, `specularFactor`, `specularPower`) all have defaults.
 
 ---
 
-## `mapinfo.lua → splats` (BAR-specific)
+## `mapinfo.lua → splats`
 
-| Field        | Default                  |
-| ------------ | ------------------------ |
-| `texScales`  | `{0.02, 0.02, 0.02, 0.02}` |
-| `texMults`   | `{1, 1, 1, 1}`           |
+The detail-normal splatting path: a 4-channel distribution texture selects which of four detail-normal textures applies per pixel.
+
+| Field | Default |
+|---|---|
+| `texScales` | `{0.02, 0.02, 0.02, 0.02}` |
+| `texMults` | `{1, 1, 1, 1}` |
+
+The 4 detail-normal textures themselves are referenced from `resources`.
 
 ---
 
-## `mapinfo.lua → grass` (BAR-specific)
+## `mapinfo.lua → grass`
 
-All optional. Defaults from `MapInfo.cpp:190-197`.
-
-| Field               | Default     |
-| ------------------- | ----------- |
-| `bladeWaveScale`    | `1.0`       |
-| `bladeWidth`        | `0.7`       |
-| `bladeHeight`       | `4.5`       |
-| `bladeAngle`        | `1.0`       |
-| `maxStrawsPerTurf`  | `150`       |
-| `bladeColor`        | `{0.1, 0.4, 0.1}` |
+| Field | Default |
+|---|---|
+| `bladeWaveScale` | `1.0` |
+| `bladeWidth` | `0.7` |
+| `bladeHeight` | `4.5` |
+| `bladeAngle` | `1.0` |
+| `maxStrawsPerTurf` | `150` |
+| `bladeColor` | `{0.1, 0.4, 0.1}` |
 
 ---
 
 ## `mapinfo.lua → resources`
 
-All optional. Engine has fallback chain to `gamedata/resources.lua` for the
-common textures.
+Texture filenames; engine resolves against the archive's VFS.
 
-| Field                       | Default fallback                          |
-| --------------------------- | ----------------------------------------- |
-| `detailTex`                 | `"detailtex2.bmp"` from `gamedata/resources.lua` |
-| `specularTex`               | unset                                     |
-| `splatDetailTex`            | unset (splat detail layer disabled)       |
-| `splatDistrTex`             | unset (requires `splatDetailTex`)         |
-| `grassShadingTex`           | unset                                     |
-| `skyReflectModTex`          | unset                                     |
-| `detailNormalTex`           | unset                                     |
-| `lightEmissionTex`          | unset                                     |
-| `parallaxHeightTex`         | unset                                     |
-| `splatDetailNormalTex[N]`   | unset (per-channel sub-table)             |
+| Field | Effect |
+|---|---|
+| `detailTex` | Tiled detail (older non-splat path) |
+| `specularTex` | Per-pixel specular colour (RGB) + exponent (alpha * 16) |
+| `splatDistrTex` | 4-channel splat distribution; enables splat-detail-normal path |
+| `splatDetailNormalTex1`..`4` | Four detail-normal textures sampled per channel |
+| `splatDetailNormalDiffuseAlpha` | Bool: alpha channel contributes additional detail colour |
+| `splatDetailTex` | Older greyscale splat path |
+| `skyReflectModTex` | Per-pixel sky-reflection mask |
+| `detailNormalTex` | Single map-wide normal texture |
+| `lightEmissionTex` | Per-pixel emissive contribution |
+| `parallaxHeightTex` | Per-pixel parallax depth |
+
+Choosing a path:
+- For per-pixel ground detail prefer `splatDistrTex` + `splatDetailNormalTex1..4`; the engine falls back to `detailTex` when no splats are authored.
+- For per-fragment specular use `specularTex`; without it the global `lighting.groundSpecularColor` applies uniformly across the terrain.
 
 ---
 
 ## `mapinfo.lua → teams`
 
-| Field                                  | Required                                  | Default                                  |
-| -------------------------------------- | ----------------------------------------- | ---------------------------------------- |
-| `teams[i]`                             | conditional on `Game.startPosType`        | warning logged, falls back if SPAWN_FIXED |
-| `teams[i].startPos.x`, `.z`            | conditional (SPAWN_FIXED only)            | n/a                                      |
-| `teams[i].startPos.y`                  | never read                                | engine recomputes from heightmap         |
+| Field | Notes |
+|---|---|
+| `teams[i]` | Required when `Game.startPosType == 0` (SPAWN_FIXED) |
+| `teams[i].startPos.x`, `.z` | Elmo coords |
+| `teams[i].startPos.y` | Never written; engine recomputes from heightmap |
 
-`startPosType` modes (`Game.startPosType`):
+`Game.startPosType`:
+- `0` SPAWN_FIXED -- `teams[i].startPos` used
+- `1` SPAWN_CHOOSE_BEFORE_GAME -- positions ignored
+- `2` SPAWN_CHOOSE_IN_GAME -- positions ignored
 
-- `0` SPAWN_FIXED — engine uses `teams[i].startPos`
-- `1` SPAWN_CHOOSE_BEFORE_GAME — players pick before game; mapinfo positions ignored
-- `2` SPAWN_CHOOSE_IN_GAME — players pick in game; mapinfo positions ignored
-
-For our editor's purposes: always emit `teams` with all spawns for safety.
+Always emit `teams` with all spawns so the map remains valid when a lobby falls back to SPAWN_FIXED.
 
 ---
 
 ## `mapinfo.lua → terrainTypes`
 
-Every field has a default. Optional.
+Movement modifiers per terrain-type ID (the typemap encodes a u8 per pixel referencing one of these entries).
 
-| Field                          | Default      |
-| ------------------------------ | ------------ |
-| `name`                         | `"Default"`  |
-| `hardness`                     | `1.0`        |
-| `receiveTracks`                | `true`       |
-| `moveSpeeds.tank/kbot/hover/ship` | `1.0` each |
+| Field | Default |
+|---|---|
+| `name` | `"Default"` |
+| `hardness` | `1.0` |
+| `receiveTracks` | `true` |
+| `moveSpeeds.tank` / `.kbot` / `.hover` / `.ship` | `1.0` each |
+
+---
+
+## `mapinfo.lua → custom.fog`
+
+Height-based fog tint applied as a post-pass by a BAR widget (`gui_custom_fog.lua`). Not consumed by the engine binary.
+
+```lua
+custom = {
+    fog = {
+        color    = { 0.6, 0.7, 1.0 },
+        height   = 200,    -- elmos
+        fogatten = 0.005,  -- per-elmo attenuation below height
+    },
+}
+```
+
+---
+
+## `mapinfo.lua → sound`
+
+Per-channel reverb / filter params. Rarely customised.
+
+---
+
+## `mapoptions.lua`
+
+Lobby-exposed map options.
+
+```lua
+return {
+    {
+        key    = 'Dry',
+        name   = 'Dry',
+        desc   = 'Lowers water level',
+        type   = 'number',           -- bool | number | string | list
+        def    = 0,
+        min    = 0, max = 1, step = 1,
+        -- maxlen = 32,              -- string only
+        -- items  = { ... },         -- list only
+    },
+}
+```
+
+Recognised entry fields: `key`, `name`, `desc`, `type`, `def`, `min`, `max`, `step`, `maxlen`, `items`.
+
+---
+
+## `mapconfig/`
+
+Auxiliary game-Lua scripts. All optional; specific gadgets `VFS.Include` the files they need.
+
+| Path | What it does |
+|---|---|
+| `mapconfig/featureplacer/config.lua` | Feature-placer params |
+| `mapconfig/featureplacer/set.lua` | Feature placement data (positions, types) |
+| `mapconfig/featureplacer/featureplacement_set.lua` | Alternate placement-set file |
+| `mapconfig/mapinfo/0_apply_options.lua` | Modifies mapinfo at parse based on mapoptions choices |
+| `mapconfig/map_startboxes.lua` | Startbox polygons (see Startboxes) |
+| `mapconfig/map_metal_layout.lua` | Custom metal-spot layout |
+
+---
+
+## `LuaGaia/` and `LuaRules/`
+
+Map's neutral-player and game-rules Lua states. The engine boots `LuaGaia/main.lua` and `LuaRules/main.lua` automatically if present.
+
+Conventional layout:
+
+| Path | Purpose |
+|---|---|
+| `LuaGaia/main.lua` | Synced gadget host |
+| `LuaGaia/draw.lua` | Unsynced draw host |
+| `LuaGaia/Gadgets/FP_featureplacer.lua` | Reads `mapconfig/featureplacer/*` and spawns features |
+| `LuaGaia/effects/*` | Particle assets (rain, snow, etc.) |
+| `LuaRules/main.lua` + `LuaRules/Gadgets/*` | Map-specific gameplay rules |
+| `libs/<name>/*.lua` | Lua libraries (e.g. `libs/lcs/`, `libs/s11n/`) gadgets include from |
+
+---
+
+## Features
+
+Two systems coexist:
+
+**Mod-provided.** The game archive ships standard feature definitions in `gamedata/defs.lua`; maps reference these features by name in placement data. No files in the map archive. This is the common case (trees, rocks, generic crystals, etc.).
+
+**Map-provided.** When the map needs features the game doesn't ship, the archive contains:
+
+- `features/*.lua` -- one Lua file per feature definition (returns a Lua table with the feature's properties and S3O model reference)
+- `objects3d/<name>.s3o` -- model binary
+- `unittextures/<name>.dds` -- textures referenced by the S3O
+
+Placement runs at map start via `LuaGaia/Gadgets/FP_featureplacer.lua` calling `Spring.CreateFeature()`. Coordinates are elmos; rotation in Spring heading units (`-32768..32767`, half-circles per 32768 units).
 
 ---
 
 ## Startboxes
 
-Format defined entirely by `bar-game`'s
-`luarules/gadgets/include/startbox_utilities.lua` (line 122 onward). The
-**Recoil engine never reads startboxes** — they are pure game-layer state.
-The engine's only related API is `Spring.SetAllyTeamStartBox(allyTeamID,
-xmin, zmin, xmax, zmax)` for AABB clamping, and game gadgets compute that
-themselves from the polygon.
+Format defined by `bar-game`'s `luarules/gadgets/include/startbox_utilities.lua`. The engine never reads startboxes -- they are pure game-layer state.
 
-**Archive path:** `mapconfig/map_startboxes.lua` (root of SD7).
+**Path:** `mapconfig/map_startboxes.lua`
 
-**Schema** the parser expects:
+**Schema:**
 
 ```lua
 return {
     [allyTeamID] = {
-        nameLong = "North-West",   -- string, optional, parser auto-fills if missing
-        nameShort = "NW",          -- string, optional
-        startpoints = { {x, z}, ... },  -- elmo coords, optional, never gameplay-read
-        boxes = {                       -- array of polygons; required for polygon configs
+        nameLong = "North-West",
+        nameShort = "NW",
+        startpoints = { {x, z}, ... },
+        boxes = {
             {
-                {x, z},                 -- {x, z} OR {x, z, spline_strength}
-                {x, z},                 -- spline_strength ∈ [0,1], default 0
+                {x, z},                  -- {x, z} OR {x, z, spline_strength}
                 ...
             },
             -- additional disjoint polygons allowed per ally team
         },
     },
-    -- additional ally teams …
 }
 ```
 
-- Coordinates are **elmos** (world units), not normalised.
-- Polygons are arrays of vertices — closed implicitly, conventionally clockwise.
-- Spline strength is **rendering-only** (Catmull-Rom tessellation in
-  `startbox_utilities.lua:193-208`). Containment checks happen on the
-  tessellated polygon. Plain rectangles emerge vertex-identical, no cost.
-- Ally-team keys are 0-based; the parser normalises 1-based keys via
-  `NormalizeConfigKeys()`.
-- Per-gametype branching: the parser includes the file via
-  `WrappedInclude()` which injects a `gametype` shim. Maps may
-  conditionally `return` different tables based on
-  `Spring.Utilities.Gametype.IsFFA()` etc. — this is map-author code, the
-  parser just receives whatever the file ultimately returns.
-- Multiple disjoint polygons per ally team are supported (`boxes` is an
-  array, not a single polygon).
-
-**Strategic direction (maps-metadata#605):** the new bar-lobby loads
-startboxes from Rowy via maps-metadata, not from map archives. The
-maps-metadata schema is moving from `poly.maxItems: 2` (axis-aligned
-rectangles) to N-point polygons, with bounding-box fallbacks for
-rect-only consumers (SPADS, Tachyon, engine `StartRectTop/Left/Bottom/Right`).
-Our editor's polygon authoring should follow Rowy's UX (drag vertices,
-edge-midpoint insertion, drag-to-move) so the same author muscle-memory
-works in both places.
-
-**Consumer APIs (game-side, `GG.*`):**
-
-- `GG.IsInsideStartbox(x, z, allyTeamID)` — `nil` if non-polygon config, else `bool`
-- `GG.GetStartboxBounds(allyTeamID)` — AABB
-- `GG.GetStartboxPolygons(allyTeamID)` — `entry.boxes` array
-- `GG.startBoxConfig` — raw table
-- `GG.startBoxConfigSource` — `"mapside" | "autohost_polygon" | "autohost_rect" | "fallback"`
+- Coordinates are elmos.
+- Polygons are arrays of vertices, closed implicitly, conventionally clockwise.
+- `spline_strength` in `[0, 1]` is rendering-only (Catmull-Rom tessellation); default `0`.
+- Ally-team keys are 0-based; 1-based keys are normalised by the parser.
+- `boxes` is an array, so a single ally team can own multiple disjoint polygons.
+- Maps may conditionally `return` different tables based on gametype (`Spring.Utilities.Gametype.IsFFA()` etc.).
 
 ---
 
-## Editor implications
+## Authoring recommendations
 
-1. Emit only fields the user has explicitly customised. Engine defaults are
-   stable and well-tuned; emitting them every time creates churn and
-   obscures real authorial choices.
-2. The bare-minimum-map serves as the floor for our own validation —
-   everything below should always be present:
-   - `name`, `smf.smtFileName0`, valid SMF + SMT, `teams[]` with `startPos`.
-3. Our project format is the single source of truth; we round-trip
-   polygons natively and compute the AABB at export time for any rect-only
-   downstream we end up needing.
-4. `description`/`author`/`version` are cosmetic — never block export on
-   them.
-5. `teams[i].startPos.y` is engine-computed — never write it.
+1. Emit only fields explicitly customised by the author. Defaults are stable; re-emitting every default obscures real authorial choices.
+2. Treat the bare-minimum map as the validation floor.
+3. Never write `teams[i].startPos.y` -- the engine recomputes Y from the heightmap on load.
+4. Cosmetic fields (`description`, `author`, `version`) are metadata, not load-critical.
+5. `maphelper/mapinfo.lua` -- emit a one-line `return VFS.Include("mapinfo.lua")` stub or skip the file entirely. The engine probes the helper path first but falls through to root.
+6. Game-Lua content (`mapoptions.lua`, `mapconfig/`, `LuaGaia/`, `LuaRules/`, `features/`, `libs/`) should be preserved verbatim by tools that don't intend to author gameplay logic.
+7. Strip build artefacts and unused asset variants at export.
