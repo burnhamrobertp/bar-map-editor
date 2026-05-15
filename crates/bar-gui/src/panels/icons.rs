@@ -187,27 +187,33 @@ pub(crate) fn paint_inspector_icon(
     );
 }
 
-/// Lightning bolt for the Compile toolbar button.
+/// Hammer glyph for the Compile toolbar button. A rotated rectangular head
+/// at the upper-left and a thin handle running diagonally down to the
+/// lower-right. The previous icon was a lightning bolt, which read as
+/// "fast / energy" rather than the "build" semantics of the compile action.
 pub(crate) fn paint_compile_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let cx = rect.center().x;
     let cy = rect.center().y;
-    // Two filled triangles forming a Z-shape (lightning bolt).
-    // Upper half: top-right corner down to the center notch.
+    // Hammer head: a quad tilted ~25 degrees so it reads as a head, not a
+    // brick. Sits in the upper-left of the icon area.
     painter.add(egui::Shape::convex_polygon(
         vec![
-            egui::pos2(cx + 4.0, cy - 8.0),
-            egui::pos2(cx - 4.5, cy + 0.5),
-            egui::pos2(cx + 1.5, cy + 0.5),
+            egui::pos2(cx - 6.5, cy - 5.5),
+            egui::pos2(cx - 0.5, cy - 8.0),
+            egui::pos2(cx + 1.5, cy - 3.5),
+            egui::pos2(cx - 4.5, cy - 1.0),
         ],
         color,
         egui::Stroke::NONE,
     ));
-    // Lower half: center notch down to bottom-left corner.
+    // Handle: a thin diagonal bar running from just under the head down to
+    // the lower-right of the icon area.
     painter.add(egui::Shape::convex_polygon(
         vec![
-            egui::pos2(cx - 1.5, cy - 0.5),
-            egui::pos2(cx - 4.0, cy + 8.0),
-            egui::pos2(cx + 4.5, cy - 0.5),
+            egui::pos2(cx - 3.5, cy - 0.5),
+            egui::pos2(cx - 1.0, cy - 2.5),
+            egui::pos2(cx + 6.0, cy + 6.0),
+            egui::pos2(cx + 3.5, cy + 8.0),
         ],
         color,
         egui::Stroke::NONE,

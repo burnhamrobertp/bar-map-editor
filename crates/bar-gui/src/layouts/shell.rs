@@ -943,45 +943,11 @@ impl BarEditorApp {
                     } else {
                         egui::Sense::click()
                     };
-                    let (rect, response) = ui.allocate_exact_size(btn_size, sense);
-
-                    if ui.is_rect_visible(rect) {
-                        let bg = if busy {
-                            tokens::BTN_EXPORT_BUSY
-                        } else if any_running {
-                            tokens::BTN_EXPORT_BLOCKED
-                        } else if response.is_pointer_button_down_on() {
-                            tokens::BTN_EXPORT_PRESS
-                        } else if response.hovered() {
-                            tokens::BTN_EXPORT_HOVER
-                        } else {
-                            tokens::BTN_EXPORT_NORMAL
-                        };
-                        let painter = ui.painter_at(rect);
-                        painter.rect_filled(rect, 5.0, bg);
-                        paint_export_icon(&painter, rect, egui::Color32::WHITE);
-                    }
-                    if busy {
-                        crate::layouts::preview::draw_animated_border(ui, rect);
-                    }
-
-                    let tooltip = if busy {
-                        "Exporting…"
-                    } else if any_running {
-                        "Another export is running"
-                    } else {
-                        "Export all Bundler nodes"
-                    };
-                    let response = response.on_hover_text(tooltip);
-                    if !any_running
-                        && response.clicked()
-                        && self.validate_before_export("Bundle all")
-                    {
-                        self.preview.run_requested = true;
-                    }
-
-                    // Compile button
-                    ui.add_space(4.0);
+                    // Compile button (first in the "build / ship" group:
+                    // Compile -> Bundle -> Test in BAR). Compile produces
+                    // the engine-loadable artefacts; Bundle packages them;
+                    // Test in BAR launches a skirmish on them. Group order
+                    // tracks that pipeline.
                     let compile_running = self.preview.compile_running;
                     let compile_dirty = self.project.compile_dirty;
                     let can_compile = !compile_running && !any_running;
@@ -1031,29 +997,43 @@ impl BarEditorApp {
                         crate::layouts::preview::draw_animated_border(ui, compile_rect);
                     }
 
-                    // Edit Map Info button — opens the project's designated map
-                    // info file in the OS default editor. Prompts for the file
-                    // on first use.
+                    // Bundle (Export all Bundler nodes).
                     ui.add_space(4.0);
-                    let (info_rect, info_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if ui.is_rect_visible(info_rect) {
-                        let bg = if info_resp.is_pointer_button_down_on() {
-                            tokens::BTN_MAPINFO_PRESS
-                        } else if info_resp.hovered() {
-                            tokens::BTN_MAPINFO_HOVER
+                    let (rect, response) = ui.allocate_exact_size(btn_size, sense);
+
+                    if ui.is_rect_visible(rect) {
+                        let bg = if busy {
+                            tokens::BTN_EXPORT_BUSY
+                        } else if any_running {
+                            tokens::BTN_EXPORT_BLOCKED
+                        } else if response.is_pointer_button_down_on() {
+                            tokens::BTN_EXPORT_PRESS
+                        } else if response.hovered() {
+                            tokens::BTN_EXPORT_HOVER
                         } else {
-                            tokens::BTN_MAPINFO_NORMAL
+                            tokens::BTN_EXPORT_NORMAL
                         };
-                        let painter = ui.painter_at(info_rect);
-                        painter.rect_filled(info_rect, 5.0, bg);
-                        paint_map_info_icon(&painter, info_rect, egui::Color32::WHITE);
+                        let painter = ui.painter_at(rect);
+                        painter.rect_filled(rect, 5.0, bg);
+                        paint_export_icon(&painter, rect, egui::Color32::WHITE);
                     }
-                    let info_resp = info_resp.on_hover_text(
-                        "Edit Map Info — open the project's map info file (e.g. mapinfo.lua)",
-                    );
-                    if info_resp.clicked() {
-                        self.handle_edit_map_info_clicked();
+                    if busy {
+                        crate::layouts::preview::draw_animated_border(ui, rect);
+                    }
+
+                    let tooltip = if busy {
+                        "Exporting…"
+                    } else if any_running {
+                        "Another export is running"
+                    } else {
+                        "Export all Bundler nodes"
+                    };
+                    let response = response.on_hover_text(tooltip);
+                    if !any_running
+                        && response.clicked()
+                        && self.validate_before_export("Bundle all")
+                    {
+                        self.preview.run_requested = true;
                     }
 
                     // Test in BAR -- export and launch directly in the engine.
@@ -1214,6 +1194,40 @@ impl BarEditorApp {
                         if outside {
                             ui.memory_mut(|m| m.close_popup());
                         }
+                    }
+
+                    // Visual separator: end of the "build / ship" group
+                    // (Bundle | Compile | Test in BAR) and start of the
+                    // project-metadata / inspection group (Edit Map Info,
+                    // 2D Inspector, etc.). The build buttons share an
+                    // operational pipeline; everything past this separator
+                    // operates on the project source instead.
+                    ui.add_space(8.0);
+                    ui.separator();
+                    ui.add_space(4.0);
+
+                    // Edit Map Info button — opens the project's designated map
+                    // info file in the OS default editor. Prompts for the file
+                    // on first use.
+                    let (info_rect, info_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(info_rect) {
+                        let bg = if info_resp.is_pointer_button_down_on() {
+                            tokens::BTN_MAPINFO_PRESS
+                        } else if info_resp.hovered() {
+                            tokens::BTN_MAPINFO_HOVER
+                        } else {
+                            tokens::BTN_MAPINFO_NORMAL
+                        };
+                        let painter = ui.painter_at(info_rect);
+                        painter.rect_filled(info_rect, 5.0, bg);
+                        paint_map_info_icon(&painter, info_rect, egui::Color32::WHITE);
+                    }
+                    let info_resp = info_resp.on_hover_text(
+                        "Edit Map Info — open the project's map info file (e.g. mapinfo.lua)",
+                    );
+                    if info_resp.clicked() {
+                        self.handle_edit_map_info_clicked();
                     }
 
                     // The toolbar Validate button used to live here. It's

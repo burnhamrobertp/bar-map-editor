@@ -73,7 +73,12 @@ pub struct BrushState {
 impl Default for BrushState {
     fn default() -> Self {
         Self {
-            tool: BrushTool::Raise,
+            // Pointer is the no-op default: the brush cursor doesn't render
+            // and viewport clicks select features. Selecting a sculpt layer
+            // promotes the tool to `Raise` (see `sculpt3d::draw_layer_row`),
+            // so the user doesn't lose access to the brushes -- they're just
+            // not active on first entry.
+            tool: BrushTool::Pointer,
             color_rgb: [0x8B, 0x73, 0x55],
             paint_value: 1.0,
             radius_px: 32.0,
