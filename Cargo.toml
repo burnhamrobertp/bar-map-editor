@@ -39,6 +39,10 @@ noise = "0.9"
 
 # Image I/O
 image = "0.25"
+# DDS parsing for skybox cubemaps -- `image` 0.25 has a DDS decoder but
+# it returns a 2D image, not the 6-face cubemap layout BAR uses. Use
+# `ddsfile` (the established Rust DDS parser) for that.
+ddsfile = "0.5"
 
 # Error handling
 anyhow = "1"
