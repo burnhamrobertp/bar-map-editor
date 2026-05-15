@@ -4,7 +4,7 @@
 //! `paint` live cache and the graph. The pure math lives in
 //! `super::brush_math`; this file wires it into the editor's per-stroke flow.
 
-use bar_graph::{NodeId, ParamValue};
+use bar_graph::{NodeId, NodeType, ParamValue};
 
 use crate::app::BarEditorApp;
 use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer};
@@ -172,13 +172,26 @@ impl BarEditorApp {
             );
             return;
         };
+        // Node type drives the on-disk encoding:
+        //   PaintedHeightmap -> GrayscaleF32 (absolute heights in [0,1])
+        //   Sculpt           -> GrayscaleU8 (deltas: 128 = neutral)
+        //   PaintedTexture   -> RgbU8
+        // Sculpt's u8 delta encoding maps cleanly onto the live buffer's
+        // [0,1] f32 range -- 0.5 = neutral, Raise pushes toward 1.0, Lower
+        // toward 0.0 -- so the brush math is unchanged; only the format
+        // tag in the asset header differs.
+        let node_type = self.graph.get_node(node_id).map(|n| n.node_type.clone());
         // Record undo BEFORE writing so the snapshot captures the
         // pre-stroke asset bytes (read off disk inside push_undo).
         let path_buf = std::path::PathBuf::from(&asset_path);
         self.push_undo_with_painted("Paint layer", std::iter::once(path_buf));
         match buffer {
             LivePaintBuffer::Height(hm) => {
-                if let Err(e) = write_height_asset(&asset_path, &hm) {
+                let kind = match node_type {
+                    Some(NodeType::Sculpt) => bar_project::AssetKind::GrayscaleU8,
+                    _ => bar_project::AssetKind::GrayscaleF32,
+                };
+                if let Err(e) = write_height_asset(&asset_path, &hm, kind) {
                     tracing::error!(error = %e, path = %asset_path, "Paint flush: write heightmap asset failed");
                     return;
                 }
@@ -243,21 +256,45 @@ fn read_height_asset(asset_path: &str) -> Option<bar_data::Heightmap> {
     }
 }
 
-/// Persist a `PaintedHeightmap` live buffer to its binary asset as
-/// `GrayscaleF32` (the executor's preferred precision; u8 would terrace
-/// any map with more than ~256 elevation levels).
+/// Persist a height live buffer to its binary asset, encoded according
+/// to the requested `kind`:
+///
+/// - `GrayscaleF32` -- absolute heights in `[0, 1]` written verbatim
+///   (used by `PaintedHeightmap`; full precision avoids the terracing
+///   u8 quantisation would cause on maps with more than ~256 elevation
+///   levels).
+/// - `GrayscaleU8` -- delta encoding (used by `Sculpt`). The live
+///   buffer's `[0, 1]` range maps to `[0, 255]`; the executor reads
+///   128 as "no change" so the brush convention (0.5 neutral, > 0.5
+///   positive delta, < 0.5 negative) round-trips correctly.
+///
+/// `RgbU8` is rejected (use `write_color_asset`).
 fn write_height_asset(
     asset_path: &str,
     hm: &bar_data::Heightmap,
+    kind: bar_project::AssetKind,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let w = hm.width();
     let h = hm.height();
-    let mut bytes = Vec::with_capacity((w as usize) * (h as usize) * 4);
-    for v in hm.data() {
-        bytes.extend_from_slice(&v.to_le_bytes());
-    }
+    let bytes = match kind {
+        bar_project::AssetKind::GrayscaleF32 => {
+            let mut out = Vec::with_capacity((w as usize) * (h as usize) * 4);
+            for v in hm.data() {
+                out.extend_from_slice(&v.to_le_bytes());
+            }
+            out
+        }
+        bar_project::AssetKind::GrayscaleU8 => hm
+            .data()
+            .iter()
+            .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
+            .collect(),
+        bar_project::AssetKind::RgbU8 => {
+            return Err("write_height_asset: RgbU8 not supported (use write_color_asset)".into());
+        }
+    };
     let header = bar_project::AssetHeader {
-        kind: bar_project::AssetKind::GrayscaleF32,
+        kind,
         width: w,
         height: h,
     };
