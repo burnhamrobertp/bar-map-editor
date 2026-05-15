@@ -6,7 +6,7 @@
 
 use bar_graph::{NodeId, ParamValue};
 
-use crate::app::{mask_hex_encode, BarEditorApp};
+use crate::app::BarEditorApp;
 use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer};
 use crate::paint::{BrushTool, LivePaintBuffer};
 
@@ -50,22 +50,23 @@ impl BarEditorApp {
             None => return false,
         };
 
-        // Initialise live buffer from the node's current data param.
+        // Initialise live buffer from the node's binary asset (the executor
+        // reads the same asset, so what we paint into the buffer must match
+        // the current on-disk state -- otherwise the first stroke replaces
+        // the existing heightmap with zeros plus the dab).
         if !self.paint.live_paint.contains_key(&node_id) {
-            let pixels = match self.graph.get_node(node_id) {
-                Some(n) => match n.params.get("data") {
-                    Some(ParamValue::String(s)) => hex_decode_bytes(s),
-                    _ => vec![],
-                },
-                None => return false,
-            };
-            let expected = (node_res * node_res) as usize;
-            let mut f32_data = vec![0.0f32; expected];
-            for (i, &b) in pixels.iter().take(expected).enumerate() {
-                f32_data[i] = b as f32 / 255.0;
-            }
-            let live_hm = bar_data::Heightmap::frbar_data(node_res, node_res, f32_data)
-                .unwrap_or_else(|_| bar_data::Heightmap::new(node_res, node_res).unwrap());
+            let asset_path = self
+                .graph
+                .get_node(node_id)
+                .and_then(|n| n.params.get("asset_path"))
+                .and_then(|v| match v {
+                    ParamValue::String(s) if !s.is_empty() => Some(s.clone()),
+                    _ => None,
+                });
+            let live_hm = asset_path
+                .as_deref()
+                .and_then(read_height_asset)
+                .unwrap_or_else(|| bar_data::Heightmap::new(node_res, node_res).unwrap());
             self.paint
                 .live_paint
                 .insert(node_id, LivePaintBuffer::Height(live_hm));
@@ -109,36 +110,24 @@ impl BarEditorApp {
         let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
         let [r, g, b] = self.paint.brush.color_rgb;
 
-        // Initialise live color buffer from node's current data param.
+        // Initialise live color buffer from the node's binary asset (the
+        // executor reads the same asset, so what we paint into the buffer
+        // must match the current on-disk state).
         if !self.paint.live_paint.contains_key(&node_id) {
-            let pixels = match self.graph.get_node(node_id) {
-                Some(n) => match n.params.get("data") {
-                    Some(ParamValue::String(s)) => hex_decode_bytes(s),
-                    _ => vec![],
-                },
-                None => return false,
-            };
-            let res = PAINTED_TEXTURE_RES as usize;
-            let expected = res * res * 3;
-            let mut cb =
-                bar_data::ColorBuffer::new(PAINTED_TEXTURE_RES, PAINTED_TEXTURE_RES).unwrap();
-            if pixels.len() == expected {
-                for py in 0..res {
-                    for px in 0..res {
-                        let idx = (py * res + px) * 3;
-                        cb.set(
-                            px as u32,
-                            py as u32,
-                            [
-                                pixels[idx] as f32 / 255.0,
-                                pixels[idx + 1] as f32 / 255.0,
-                                pixels[idx + 2] as f32 / 255.0,
-                                1.0,
-                            ],
-                        );
-                    }
-                }
-            }
+            let asset_path = self
+                .graph
+                .get_node(node_id)
+                .and_then(|n| n.params.get("asset_path"))
+                .and_then(|v| match v {
+                    ParamValue::String(s) if !s.is_empty() => Some(s.clone()),
+                    _ => None,
+                });
+            let cb = asset_path
+                .as_deref()
+                .and_then(read_color_asset)
+                .unwrap_or_else(|| {
+                    bar_data::ColorBuffer::new(PAINTED_TEXTURE_RES, PAINTED_TEXTURE_RES).unwrap()
+                });
             self.paint
                 .live_paint
                 .insert(node_id, LivePaintBuffer::Color(cb));
@@ -159,49 +148,49 @@ impl BarEditorApp {
         true
     }
 
-    /// Encode the live paint buffer for `node_id` and write it to the node's
-    /// `data` param. Pushes an undo snapshot and marks the node dirty so the
-    /// preview re-evaluates. Removes the buffer from `live_paint`.
+    /// Persist the live paint buffer for `node_id` to the node's binary
+    /// asset file (the executors read this file every eval, so writing here
+    /// is what makes painted edits survive the next eval). Pushes an undo
+    /// snapshot and marks the node dirty so the preview re-evaluates.
+    /// Removes the buffer from `live_paint`.
     pub fn flush_live_paint(&mut self, node_id: NodeId) {
         let Some(buffer) = self.paint.live_paint.remove(&node_id) else {
             return;
         };
-        let data_hex = match buffer {
+        let asset_path = self
+            .graph
+            .get_node(node_id)
+            .and_then(|n| n.params.get("asset_path"))
+            .and_then(|v| match v {
+                ParamValue::String(s) if !s.is_empty() => Some(s.clone()),
+                _ => None,
+            });
+        let Some(asset_path) = asset_path else {
+            tracing::warn!(
+                ?node_id,
+                "Paint flush: node has no asset_path; painted edits dropped"
+            );
+            return;
+        };
+        // Record undo BEFORE writing so the snapshot captures the
+        // pre-stroke asset bytes (read off disk inside push_undo).
+        let path_buf = std::path::PathBuf::from(&asset_path);
+        self.push_undo_with_painted("Paint layer", std::iter::once(path_buf));
+        match buffer {
             LivePaintBuffer::Height(hm) => {
-                let res = hm.width();
-                let hm_ref = &hm;
-                let pixels: Vec<u8> = (0..res)
-                    .flat_map(|y| {
-                        (0..res).map(move |x| {
-                            let v = hm_ref.get(x, y).unwrap_or(0.0).clamp(0.0, 1.0);
-                            (v * 255.0).round() as u8
-                        })
-                    })
-                    .collect();
-                mask_hex_encode(&pixels)
+                if let Err(e) = write_height_asset(&asset_path, &hm) {
+                    tracing::error!(error = %e, path = %asset_path, "Paint flush: write heightmap asset failed");
+                    return;
+                }
             }
             LivePaintBuffer::Color(cb) => {
-                let res = cb.width();
-                let cb_ref = &cb;
-                let pixels: Vec<u8> = (0..res)
-                    .flat_map(|y| {
-                        (0..res).flat_map(move |x| {
-                            let rgba = cb_ref.get(x, y).unwrap_or([0.0; 4]);
-                            [
-                                (rgba[0] * 255.0).round() as u8,
-                                (rgba[1] * 255.0).round() as u8,
-                                (rgba[2] * 255.0).round() as u8,
-                            ]
-                        })
-                    })
-                    .collect();
-                mask_hex_encode(&pixels)
+                if let Err(e) = write_color_asset(&asset_path, &cb) {
+                    tracing::error!(error = %e, path = %asset_path, "Paint flush: write color asset failed");
+                    return;
+                }
             }
-        };
-        self.push_undo("Paint layer");
+        }
         if let Some(node) = self.graph.get_node_mut(node_id) {
-            node.params
-                .insert("data".to_string(), ParamValue::String(data_hex));
             node.mark_dirty();
         }
     }
@@ -222,24 +211,117 @@ impl BarEditorApp {
     }
 }
 
-/// Decode a hex string produced by `mask_hex_encode` back to raw bytes.
-fn hex_decode_bytes(s: &str) -> Vec<u8> {
-    let s = s.as_bytes();
-    let n = s.len() / 2;
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let hi = nibble(s[i * 2]);
-        let lo = nibble(s[i * 2 + 1]);
-        out.push((hi << 4) | lo);
+/// Load the on-disk paint state for a `PaintedHeightmap` / `Sculpt` node
+/// from its binary asset, preserving native resolution. Returns `None` if
+/// the file doesn't exist, can't be read, or holds an unexpected kind --
+/// callers fall back to a blank heightmap.
+fn read_height_asset(asset_path: &str) -> Option<bar_data::Heightmap> {
+    let path = std::path::Path::new(asset_path);
+    if !path.exists() {
+        return None;
     }
-    out
+    let (header, data) = bar_project::read_asset_file(path).ok()?;
+    let w = header.width.max(1);
+    let h = header.height.max(1);
+    match header.kind {
+        bar_project::AssetKind::GrayscaleF32 => {
+            let need = (w as usize) * (h as usize) * 4;
+            if data.len() != need {
+                return None;
+            }
+            let f32_data: Vec<f32> = data
+                .chunks_exact(4)
+                .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                .collect();
+            bar_data::Heightmap::frbar_data(w, h, f32_data).ok()
+        }
+        bar_project::AssetKind::GrayscaleU8 => {
+            let f32_data: Vec<f32> = data.iter().map(|&b| (b as f32) / 255.0).collect();
+            bar_data::Heightmap::frbar_data(w, h, f32_data).ok()
+        }
+        bar_project::AssetKind::RgbU8 => None,
+    }
 }
 
-fn nibble(b: u8) -> u8 {
-    match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        b'A'..=b'F' => b - b'A' + 10,
-        _ => 0,
+/// Persist a `PaintedHeightmap` live buffer to its binary asset as
+/// `GrayscaleF32` (the executor's preferred precision; u8 would terrace
+/// any map with more than ~256 elevation levels).
+fn write_height_asset(
+    asset_path: &str,
+    hm: &bar_data::Heightmap,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let w = hm.width();
+    let h = hm.height();
+    let mut bytes = Vec::with_capacity((w as usize) * (h as usize) * 4);
+    for v in hm.data() {
+        bytes.extend_from_slice(&v.to_le_bytes());
     }
+    let header = bar_project::AssetHeader {
+        kind: bar_project::AssetKind::GrayscaleF32,
+        width: w,
+        height: h,
+    };
+    bar_project::write_asset_file(std::path::Path::new(asset_path), header, &bytes)
+        .map_err(|e| e.into())
+}
+
+/// Load the on-disk paint state for a `PaintedTexture` node, preserving
+/// native resolution. Returns `None` if missing / wrong kind.
+fn read_color_asset(asset_path: &str) -> Option<bar_data::ColorBuffer> {
+    let path = std::path::Path::new(asset_path);
+    if !path.exists() {
+        return None;
+    }
+    let (header, data) = bar_project::read_asset_file(path).ok()?;
+    let w = header.width.max(1);
+    let h = header.height.max(1);
+    if !matches!(header.kind, bar_project::AssetKind::RgbU8) {
+        return None;
+    }
+    let need = (w as usize) * (h as usize) * 3;
+    if data.len() != need {
+        return None;
+    }
+    let mut cb = bar_data::ColorBuffer::new(w, h).ok()?;
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 3) as usize;
+            cb.set(
+                x,
+                y,
+                [
+                    data[idx] as f32 / 255.0,
+                    data[idx + 1] as f32 / 255.0,
+                    data[idx + 2] as f32 / 255.0,
+                    1.0,
+                ],
+            );
+        }
+    }
+    Some(cb)
+}
+
+/// Persist a `PaintedTexture` live buffer to its binary asset as `RgbU8`.
+fn write_color_asset(
+    asset_path: &str,
+    cb: &bar_data::ColorBuffer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let w = cb.width();
+    let h = cb.height();
+    let mut bytes = Vec::with_capacity((w as usize) * (h as usize) * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let rgba = cb.get(x, y).unwrap_or([0.0; 4]);
+            bytes.push((rgba[0] * 255.0).round() as u8);
+            bytes.push((rgba[1] * 255.0).round() as u8);
+            bytes.push((rgba[2] * 255.0).round() as u8);
+        }
+    }
+    let header = bar_project::AssetHeader {
+        kind: bar_project::AssetKind::RgbU8,
+        width: w,
+        height: h,
+    };
+    bar_project::write_asset_file(std::path::Path::new(asset_path), header, &bytes)
+        .map_err(|e| e.into())
 }
