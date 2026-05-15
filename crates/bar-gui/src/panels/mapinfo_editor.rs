@@ -406,6 +406,12 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let f_fs = findings_index.field("atmosphere", "fog_start");
                         let f_fe = findings_index.field("atmosphere", "fog_end");
                         let f_fc = findings_index.field("atmosphere", "fog_color");
+                        // Snapshot the project path before the mutable
+                        // borrow of `atm` below -- the skybox browse
+                        // button needs it to copy the picked DDS into
+                        // the project's passthrough dir.
+                        let project_path_opt: Option<std::path::PathBuf> =
+                            app.project.path.clone();
                         let atm = &mut app.map_settings_mut().atmosphere;
                         dirty |= outline_finding(ui, f_min, |ui| {
                             drag_f32(ui, "Min wind", &mut atm.min_wind, 0.0, 200.0)
@@ -421,6 +427,122 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         });
                         dirty |= outline_finding(ui, f_fc, |ui| {
                             color_rgb(ui, "Fog colour", &mut atm.fog_color)
+                        });
+
+                        ui.add_space(12.0);
+                        ui.heading("Sky");
+                        ui.label(
+                            "Procedural sky parameters from mapinfo. Drive \
+                             the clouds + horizon colour + sun direction in \
+                             the same way the engine's ModernSkyFS does. \
+                             When `skyBox` is set the renderer samples the \
+                             cubemap DDS instead of the procedural sky.",
+                        );
+                        dirty |= color_rgb(ui, "Sun colour", &mut atm.sun_color);
+                        dirty |= color_rgb(ui, "Sky colour", &mut atm.sky_color);
+                        dirty |= drag_f32(ui, "Sun dir X", &mut atm.sky_dir[0], -1.0, 1.0);
+                        dirty |= drag_f32(ui, "Sun dir Y", &mut atm.sky_dir[1], -1.0, 1.0);
+                        dirty |= drag_f32(ui, "Sun dir Z", &mut atm.sky_dir[2], -1.0, 1.0);
+                        dirty |= color_rgb(ui, "Cloud colour", &mut atm.cloud_color);
+                        dirty |= drag_f32(ui, "Cloud density", &mut atm.cloud_density, 0.0, 1.0);
+                        ui.horizontal(|ui| {
+                            ui.label("Skybox cubemap:");
+                            // Stored as a bare filename -- the renderer's
+                            // `find_file_in_dir` recursively walks
+                            // `<project>/passthrough/` for it. The user
+                            // can type a filename directly here OR pick
+                            // a DDS via the browse button, which copies
+                            // the file into `passthrough/` and stores
+                            // just the basename.
+                            let edit = ui.add(
+                                egui::TextEdit::singleline(&mut atm.skybox)
+                                    .hint_text("(empty = procedural sky)")
+                                    .desired_width(200.0),
+                            );
+                            if edit.changed() {
+                                dirty = true;
+                            }
+                            if ui.button("Browse…").clicked() {
+                                if let Some(picked) = rfd::FileDialog::new()
+                                    .set_title("Select skybox DDS cubemap")
+                                    .add_filter("DDS cubemap", &["dds"])
+                                    .pick_file()
+                                {
+                                    // Copy into `passthrough/maps/` so
+                                    // the project is self-contained;
+                                    // store the bare filename so the
+                                    // VFS-style lookup in the renderer
+                                    // still finds it.
+                                    let filename = picked
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .map(|s| s.to_string());
+                                    if let (Some(name), Some(project_dir)) =
+                                        (filename, project_path_opt.as_deref())
+                                    {
+                                        let dst_dir =
+                                            project_dir.join("passthrough").join("maps");
+                                        let dst = dst_dir.join(&name);
+                                        let copy_result = std::fs::create_dir_all(&dst_dir)
+                                            .and_then(|_| std::fs::copy(&picked, &dst));
+                                        match copy_result {
+                                            Ok(_) => {
+                                                atm.skybox = name;
+                                                dirty = true;
+                                            }
+                                            Err(e) => {
+                                                tracing::warn!(
+                                                    err = %e,
+                                                    "Failed to copy skybox DDS"
+                                                );
+                                            }
+                                        }
+                                    } else if let Some(name) = picked
+                                        .file_name()
+                                        .and_then(|n| n.to_str())
+                                        .map(|s| s.to_string())
+                                    {
+                                        // No project saved yet: just
+                                        // store the filename. The user
+                                        // will need to save and reload
+                                        // for the renderer to find it.
+                                        atm.skybox = name;
+                                        dirty = true;
+                                    }
+                                }
+                            }
+                            if !atm.skybox.is_empty() && ui.button("Clear").clicked() {
+                                atm.skybox.clear();
+                                dirty = true;
+                            }
+                        });
+
+                        ui.add_space(12.0);
+                        ui.heading("Height fog (custom.fog)");
+                        ui.label(
+                            "BAR widget: tints fragments below the ceiling \
+                             toward the fog colour, attenuated per elmo. \
+                             This is what gives underwater terrain its cool \
+                             cast on maps like Aurelia.",
+                        );
+                        let fog = &mut app.map_settings_mut().custom_fog;
+                        dirty |= ui.checkbox(&mut fog.enabled, "Enabled").changed();
+                        ui.add_enabled_ui(fog.enabled, |ui| {
+                            dirty |= color_rgb(ui, "Colour", &mut fog.color);
+                            dirty |= drag_f32(
+                                ui,
+                                "Ceiling height (elmos)",
+                                &mut fog.height_elmos,
+                                -1024.0,
+                                1024.0,
+                            );
+                            dirty |= drag_f32(
+                                ui,
+                                "Attenuation (per elmo)",
+                                &mut fog.atten,
+                                0.0,
+                                1.0,
+                            );
                         });
                     }
                     MapInfoTab::Lighting => {
@@ -452,12 +574,56 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         let f_dmg = findings_index.field("water", "damage");
                         let f_abs = findings_index.field("water", "absorb");
                         let w = &mut app.map_settings_mut().water;
-                        dirty |= outline_finding(ui, f_dmg, |ui| {
-                            drag_f32(ui, "Water damage / sec", &mut w.damage, 0.0, 1000.0)
-                        });
-                        dirty |= outline_finding(ui, f_abs, |ui| {
-                            color_rgb(ui, "Absorb (per RGB)", &mut w.absorb)
-                        });
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.heading("Gameplay");
+                                dirty |= outline_finding(ui, f_dmg, |ui| {
+                                    drag_f32(ui, "Damage / sec", &mut w.damage, 0.0, 1000.0)
+                                });
+
+                                ui.add_space(8.0);
+                                ui.heading("Color & absorption");
+                                ui.label("Drives both terrain-underwater shading and the refraction sample tint.");
+                                dirty |= outline_finding(ui, f_abs, |ui| {
+                                    color_rgb(ui, "Absorb (per-elmo attenuation)", &mut w.absorb)
+                                });
+                                dirty |= color_rgb(ui, "Base color (shallow)", &mut w.base_color);
+                                dirty |= color_rgb(ui, "Minimum color (deep floor)", &mut w.min_color);
+
+                                ui.add_space(8.0);
+                                ui.heading("Surface tint");
+                                ui.label("BumpWater's surface contribution — the 10-20% non-refraction layer that gives water its body.");
+                                dirty |= color_rgb(ui, "Surface color", &mut w.surface_color);
+                                dirty |= drag_f32(ui, "Surface alpha", &mut w.surface_alpha, 0.0, 1.0);
+
+                                ui.add_space(8.0);
+                                ui.heading("Surface lighting");
+                                ui.label("Sun lighting applied to the water surface tint. Ambient is brighter at glancing angles; diffuse peaks for surfaces facing the (Y-flattened) sun.");
+                                dirty |= color_rgb(ui, "Diffuse color", &mut w.diffuse_color);
+                                dirty |= drag_f32(ui, "Ambient factor", &mut w.ambient_factor, 0.0, 2.0);
+                                dirty |= drag_f32(ui, "Diffuse factor", &mut w.diffuse_factor, 0.0, 4.0);
+
+                                ui.add_space(8.0);
+                                ui.heading("Sun specular");
+                                ui.label("Anti-Phong: gated by view angle so the glint is strongest at glancing camera angles. Set specular factor to 0 to disable.");
+                                dirty |= color_rgb(ui, "Specular color", &mut w.specular_color);
+                                dirty |= drag_f32(ui, "Specular factor", &mut w.specular_factor, 0.0, 4.0);
+                                dirty |= drag_f32(ui, "Specular power", &mut w.specular_power, 1.0, 200.0);
+
+                                ui.add_space(8.0);
+                                ui.heading("Reflection (Fresnel)");
+                                ui.label("Reflectance vs viewing angle: fresnel(angle) = min + max * pow(angle, power), where angle = 1 - |E.N| (0 = looking straight down, 1 = grazing). Engine defaults: 0.2 / 0.8 / 4.0.");
+                                dirty |= drag_f32(ui, "Fresnel min", &mut w.fresnel_min, 0.0, 1.0);
+                                dirty |= drag_f32(ui, "Fresnel max", &mut w.fresnel_max, 0.0, 1.0);
+                                dirty |= drag_f32(ui, "Fresnel power", &mut w.fresnel_power, 0.1, 16.0);
+                                dirty |= drag_f32(ui, "Reflection distortion", &mut w.reflection_distortion, 0.0, 4.0);
+
+                                ui.add_space(8.0);
+                                ui.heading("Wave normals");
+                                ui.label("Per-octave amplitude falloff for the 4-octave normal map sampling. Higher = more pronounced ripples.");
+                                dirty |= drag_f32(ui, "Perlin amplitude", &mut w.perlin_amplitude, 0.0, 2.0);
+                            });
                     }
                 });
         });
