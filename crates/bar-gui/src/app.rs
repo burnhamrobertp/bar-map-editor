@@ -222,6 +222,9 @@ pub struct BarEditorApp {
     pub canvas: crate::editor::CanvasState,
     pub map: crate::editor::MapState,
     pub(crate) history: UndoHistory,
+    /// Side table holding interned paint-asset bytes referenced by undo
+    /// snapshots. Each entry is content-hashed so equal bytes dedupe.
+    pub(crate) paint_history: crate::paint_history::PaintHistoryStore,
     pub project: crate::project::ProjectState,
     /// Raw window + display handles of the editor's main window. Used
     /// to parent native file dialogs so they belong to the editor
@@ -279,6 +282,7 @@ impl Default for BarEditorApp {
                 ..Default::default()
             },
             history: UndoHistory::default(),
+            paint_history: crate::paint_history::PaintHistoryStore::new(),
             project: crate::project::ProjectState::default(),
             parent_window_handles: None,
             preview: crate::editor::PreviewState::default(),

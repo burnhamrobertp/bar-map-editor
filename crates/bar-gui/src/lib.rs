@@ -12,6 +12,7 @@ pub mod layouts;
 pub mod log;
 pub mod macros;
 pub(crate) mod paint;
+pub(crate) mod paint_history;
 pub mod panels;
 pub mod project;
 pub mod settings;

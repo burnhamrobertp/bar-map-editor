@@ -18,14 +18,26 @@
 //! Memory is bounded by `max_history`. Each snapshot is small —
 //! GraphEngine nodes are just owned data, no GPU handles.
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use crate::state::EditorState;
 
 /// A captured editor state plus a human-readable label. The label is
 /// shown in undo-history UIs and helps debugging.
+///
+/// `painted_assets` maps each affected on-disk paint asset path (e.g.
+/// `<project>/assets/<id>.bin`) to a content-hash pointer into the
+/// editor's `PaintHistoryStore`. Snapshots that revert painting know
+/// to write those bytes back to disk during `restore_snapshot`. The
+/// hash indirection keeps the snapshot itself compact -- the bytes are
+/// stored once per unique content in the side table, deduped across
+/// snapshots.
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub state: EditorState,
     pub description: String,
+    pub painted_assets: HashMap<PathBuf, u64>,
 }
 
 /// LIFO stack of snapshots with a paired redo stack. Both are bounded
@@ -78,6 +90,16 @@ impl UndoHistory {
     pub fn can_redo(&self) -> bool {
         !self.redo_stack.is_empty()
     }
+    /// Peek at the snapshot that would be popped by `undo` without
+    /// modifying the stack. Used so the caller can capture the right
+    /// painted-asset paths when building the `current` snapshot.
+    pub fn peek_undo(&self) -> Option<&Snapshot> {
+        self.undo_stack.last()
+    }
+    /// Peek at the snapshot that would be popped by `redo`.
+    pub fn peek_redo(&self) -> Option<&Snapshot> {
+        self.redo_stack.last()
+    }
     pub fn undo_depth(&self) -> usize {
         self.undo_stack.len()
     }
@@ -99,8 +121,30 @@ impl Default for UndoHistory {
 use crate::app::BarEditorApp;
 
 impl BarEditorApp {
-    /// Capture the entire undoable editor state.
-    pub(crate) fn snapshot(&self, description: &str) -> Snapshot {
+    /// Capture the entire undoable editor state (no painted-asset
+    /// capture -- non-paint mutations don't need it). Use
+    /// `snapshot_with_painted` when a stroke is being recorded. Takes
+    /// `&mut self` for symmetry with `snapshot_with_painted`, which
+    /// has to mutate the paint-history store; this entry just creates
+    /// an empty `painted_assets` map.
+    pub(crate) fn snapshot(&mut self, description: &str) -> Snapshot {
+        self.snapshot_with_painted(description, std::iter::empty::<PathBuf>())
+    }
+
+    /// Capture editor state AND interned bytes for the given asset
+    /// paths. The brush flush flow calls this so that undo can write
+    /// the pre-stroke bytes back to disk later.
+    pub(crate) fn snapshot_with_painted<I>(&mut self, description: &str, paths: I) -> Snapshot
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let mut painted_assets = HashMap::new();
+        for path in paths {
+            if let Ok(bytes) = std::fs::read(&path) {
+                let id = self.paint_history.register(bytes);
+                painted_assets.insert(path, id);
+            }
+        }
         Snapshot {
             state: EditorState {
                 graph: self.graph.clone(),
@@ -110,6 +154,7 @@ impl BarEditorApp {
                 next_group_id: self.visuals.next_group_id,
             },
             description: description.to_string(),
+            painted_assets,
         }
     }
 
@@ -121,9 +166,23 @@ impl BarEditorApp {
         self.project.is_dirty = true;
     }
 
+    /// Push an undo entry that also remembers the pre-mutation contents
+    /// of the listed asset files. On undo, those bytes get written back
+    /// to the original paths; on redo, the post-mutation bytes (captured
+    /// at the moment `undo()` runs) are written.
+    pub(crate) fn push_undo_with_painted<I>(&mut self, description: &str, paths: I)
+    where
+        I: IntoIterator<Item = PathBuf>,
+    {
+        let snap = self.snapshot_with_painted(description, paths);
+        self.history.push(snap);
+        self.project.is_dirty = true;
+    }
+
     /// Swap the editor's state with a captured snapshot. Resets
     /// transient UI state so the user doesn't see stale highlights
-    /// pointing at deleted things.
+    /// pointing at deleted things. Also restores any painted-asset
+    /// bytes captured with the snapshot back to disk.
     pub(crate) fn restore_snapshot(&mut self, snap: Snapshot) {
         self.graph = snap.state.graph;
         self.visuals.node_visuals = snap.state.node_visuals;
@@ -131,19 +190,48 @@ impl BarEditorApp {
         self.visuals.node_to_group = snap.state.node_to_group;
         self.visuals.next_group_id = snap.state.next_group_id;
         self.clear_selection();
+        // Replay painted-asset captures: write the recorded bytes back
+        // to the asset path. Then clear the cached preview heightmap /
+        // colour buffer so the next graph eval reloads them from disk.
+        let mut touched_any = false;
+        for (path, id) in &snap.painted_assets {
+            let Some(bytes) = self.paint_history.get(*id) else {
+                tracing::error!(?path, id, "Paint undo: blob missing from history store");
+                continue;
+            };
+            if let Err(e) = std::fs::write(path, bytes.as_ref()) {
+                tracing::error!(?path, error = %e, "Paint undo: failed to restore asset");
+                continue;
+            }
+            touched_any = true;
+        }
+        if touched_any {
+            self.paint.heightmap = None;
+            self.paint.color_buffer = None;
+        }
     }
 
-    /// Perform undo.
+    /// Perform undo. Captures the current state (with the same painted
+    /// paths the popped snapshot tracks) so redo can recover.
     pub fn undo(&mut self) {
-        let current = self.snapshot("current");
+        let Some(prev) = self.history.peek_undo() else {
+            return;
+        };
+        let paint_paths: Vec<PathBuf> = prev.painted_assets.keys().cloned().collect();
+        let current = self.snapshot_with_painted("current", paint_paths);
         if let Some(prev) = self.history.undo(current) {
             self.restore_snapshot(prev);
         }
     }
 
-    /// Perform redo.
+    /// Perform redo. Mirror of `undo` -- captures current state with
+    /// the same paint paths the redo target tracks.
     pub fn redo(&mut self) {
-        let current = self.snapshot("current");
+        let Some(next) = self.history.peek_redo() else {
+            return;
+        };
+        let paint_paths: Vec<PathBuf> = next.painted_assets.keys().cloned().collect();
+        let current = self.snapshot_with_painted("current", paint_paths);
         if let Some(next) = self.history.redo(current) {
             self.restore_snapshot(next);
         }
@@ -166,6 +254,7 @@ mod tests {
         Snapshot {
             state,
             description: desc.to_string(),
+            painted_assets: HashMap::new(),
         }
     }
 
@@ -237,6 +326,7 @@ mod tests {
         let snap = Snapshot {
             state: state.clone(),
             description: "with-group".into(),
+            painted_assets: HashMap::new(),
         };
         let cloned = snap.clone();
         assert_eq!(cloned.state.groups.len(), 1);
