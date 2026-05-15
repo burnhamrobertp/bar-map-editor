@@ -81,6 +81,36 @@ impl Camera {
         self.distance = (self.distance * (1.0 + factor)).clamp(0.05, 1000.0);
     }
 
+    /// Snap the look-at target to `new_target` while preserving the camera's
+    /// world position (and therefore the visual frame). Recomputes
+    /// `distance`, `azimuth`, `elevation` so the camera looks at the new
+    /// target from the same point in space.
+    ///
+    /// Used at the start of an orbit drag to put the rotation pivot under
+    /// the cursor: without this, orbit spins around the map-centre regardless
+    /// of zoom level, which makes close-up rotation feel like the camera is
+    /// flying through the scene.
+    pub fn snap_target_preserving_position(&mut self, new_target: Vec3) {
+        let pos = self.position();
+        let view_vec = pos - new_target;
+        let new_distance = view_vec.length();
+        if new_distance < 1e-4 {
+            // Degenerate -- new target coincides with camera. Leave camera
+            // untouched.
+            return;
+        }
+        let dir = view_vec / new_distance;
+        let elev = dir.y.clamp(-1.0, 1.0).asin().clamp(
+            -std::f32::consts::FRAC_PI_2 + 0.01,
+            std::f32::consts::FRAC_PI_2 - 0.01,
+        );
+        let azim = dir.z.atan2(dir.x);
+        self.elevation = elev;
+        self.azimuth = azim;
+        self.distance = new_distance.clamp(0.05, 1000.0);
+        self.target = new_target;
+    }
+
     /// Pan the camera target along the camera's apparent ground-plane axes.
     /// `right` moves along the camera's screen-right axis (projected onto
     /// the XZ plane); `forward` moves into/out of the scene along the
@@ -92,8 +122,13 @@ impl Camera {
     pub fn pan_xz(&mut self, right: f32, forward: f32) {
         let view_dir = self.target - self.position();
         let forward_xz = Vec3::new(view_dir.x, 0.0, view_dir.z).normalize_or_zero();
-        // right = cross(world_up, forward) for a right-handed frame.
-        let right_xz = Vec3::new(forward_xz.z, 0.0, -forward_xz.x);
+        // Camera-right in a right-handed Y-up frame is `cross(view_dir, up)`,
+        // not `cross(up, view_dir)` -- the previous formula gave LEFT, which
+        // is why middle-mouse drag right was moving the target LEFT (so the
+        // scene slid right while forward/back panned with the cursor).
+        // cross(forward_xz, Y) = (forward.z*0 - 0*1, 0*0 - forward.x*0,
+        //                          forward.x*1 - 0*0) = (-forward.z, 0, forward.x).
+        let right_xz = Vec3::new(-forward_xz.z, 0.0, forward_xz.x);
         self.target += right_xz * right + forward_xz * forward;
     }
 
