@@ -22,7 +22,12 @@ impl<S: tracing::Subscriber> Layer<S> for AppLogLayer {
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
         let level = *event.metadata().level();
-        if level > Level::INFO {
+        // Forward DEBUG and above. The BME log panel has its own
+        // per-level visibility toggle (the "DEBUG" button) so anything
+        // below INFO stays hidden by default but is available for
+        // diagnostics. TRACE is still dropped here -- it's noisy and the
+        // panel doesn't have a TRACE toggle.
+        if level > Level::DEBUG {
             return;
         }
         let mut visitor = MessageVisitor::default();

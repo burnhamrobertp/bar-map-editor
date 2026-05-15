@@ -16,13 +16,18 @@ use runner::{make_executor, AppRunner};
 
 fn main() -> Result<()> {
     let (log_tx, log_rx) = mpsc::channel::<(Level, String)>();
+    // BME log panel filter: DEBUG so the panel's "DBG" visibility toggle
+    // has something to surface. The panel hides DEBUG events by default;
+    // the user enables them with the per-level button. Stdout filter
+    // stays at INFO (or RUST_LOG override) to avoid debug-spam in the
+    // terminal.
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_filter(
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         ))
         .with(
             app_log_layer::AppLogLayer::new(log_tx)
-                .with_filter(tracing_subscriber::filter::LevelFilter::INFO),
+                .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
         )
         .init();
 
@@ -80,6 +85,11 @@ fn main() -> Result<()> {
                         max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
                         max_storage_buffer_binding_size: 512 * 1024 * 1024,
                         max_buffer_size: 512 * 1024 * 1024,
+                        // Terrain pipeline now uses 5 bind groups (camera +
+                        // textures + water_planes + heightmap + shadow). Bump
+                        // the limit accordingly; both desktop GL and modern
+                        // backends support 8 groups, so 5 is well within range.
+                        max_bind_groups: 8.min(adapter.limits().max_bind_groups),
                         ..base_limits
                     },
                     ..Default::default()

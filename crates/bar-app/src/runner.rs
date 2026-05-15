@@ -19,6 +19,26 @@ pub struct PendingExportDir {
     pub run_filter_label: Option<String>,
 }
 
+/// Result of the background S3O + texture loader. Both textures are optional
+/// -- the renderer substitutes a default white texture for any that failed.
+/// `tex1` (the S3O `texture1` channel) is the diffuse RGB plus team-color mask
+/// in alpha. `tex2` (the S3O `texture2` channel) carries glow / specular in
+/// RGB and the actual opacity in alpha (per
+/// `cont/base/springcontent/shaders/GLSL/ModelFragProg.glsl`).
+pub struct LoadedModel {
+    pub name: String,
+    pub mesh: bar_data::S3oMesh,
+    pub tex1: Option<TextureRgba>,
+    pub tex2: Option<TextureRgba>,
+}
+
+/// CPU-side RGBA8 texture ready for `Rgba8UnormSrgb` upload.
+pub struct TextureRgba {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 pub struct AppRunner {
     pub app: bar_gui::BarEditorApp,
     pub executor: Arc<dyn NodeExecutor + Send + Sync>,
@@ -42,19 +62,25 @@ pub struct AppRunner {
     /// feature defs and S3O models not in the game archive.
     pub map_work_dir: Option<std::path::PathBuf>,
     /// Receives parsed S3O meshes from the background model-loader threads.
-    /// Each item is `(lowercase_feature_type_name, mesh)`.
-    pub model_rx: Option<mpsc::Receiver<(String, bar_data::S3oMesh)>>,
+    /// Each item is `(lowercase_feature_type_name, mesh, optional_diffuse_rgba)`.
+    /// The texture, when present, is `(width, height, rgba8 bytes)` ready for
+    /// direct GPU upload as `Rgba8UnormSrgb`.
+    pub model_rx: Option<mpsc::Receiver<LoadedModel>>,
     /// Receives forwarded tracing events from the AppLogLayer for display in the BME log.
     pub log_rx: mpsc::Receiver<(Level, String)>,
 }
 
 impl eframe::App for AppRunner {
     fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
-        // Drain forwarded tracing events into the BME log buffer.
+        // Drain forwarded tracing events into the BME log buffer. The BME
+        // log panel has per-level visibility toggles (INF / WRN / ERR / DBG)
+        // so DEBUG events route to LogLevel::Debug rather than collapsing
+        // into Info.
         while let Ok((level, msg)) = self.log_rx.try_recv() {
             let bme_level = match level {
                 Level::ERROR => bar_gui::LogLevel::Error,
                 Level::WARN => bar_gui::LogLevel::Warning,
+                Level::DEBUG => bar_gui::LogLevel::Debug,
                 _ => bar_gui::LogLevel::Info,
             };
             self.app.log_at(bme_level, msg);
@@ -457,10 +483,16 @@ impl eframe::App for AppRunner {
         if let Some(ref rx) = self.model_rx {
             loop {
                 match rx.try_recv() {
-                    Ok((name, mesh)) => {
+                    Ok(loaded) => {
                         if let Some(ref gpu) = self.gpu_context {
-                            self.layout_manager
-                                .load_feature_mesh(&gpu.device, &name, &mesh);
+                            self.layout_manager.load_feature_mesh(
+                                &gpu.device,
+                                &gpu.queue,
+                                &loaded.name,
+                                &loaded.mesh,
+                                loaded.tex1.as_ref(),
+                                loaded.tex2.as_ref(),
+                            );
                             any_model_loaded = true;
                         }
                     }
@@ -596,12 +628,16 @@ impl AppRunner {
         }
         self.app
             .set_status(format!("Loading {} feature models...", to_load.len()));
-        let (tx, rx) = mpsc::channel::<(String, bar_data::S3oMesh)>();
+        let (tx, rx) = mpsc::channel::<LoadedModel>();
         self.model_rx = Some(rx);
         let archive = archive.clone();
         let work_dir = self.map_work_dir.clone();
         // Sibling .sdz/.sd7 archives alongside a .sdd stub hold the real game content.
         let sibling_archives = bar_engine::sibling_zip_archives(&archive);
+        // Cached SD7 work dirs from prior imports. Used as a fallback for
+        // textures missing from the project_dir (e.g. .barproj saved before
+        // the unittextures copy fix landed).
+        let work_dir_cache = list_cached_work_dirs();
         // data_dir is two levels up from BAR.sdd (games/ -> data/) for pool reading.
         let pool_data_dir = archive
             .parent()
@@ -611,76 +647,42 @@ impl AppRunner {
         std::thread::spawn(move || {
             let mut loaded = 0usize;
             for (name, path) in to_load {
-                // Try sources in order: primary archive, sibling archives, work_dir, rapid pool.
-                // Fall through on parse failure so a stub with broken S3O data doesn't block
-                // the real model in a sibling .sdz or the pool.
-                let mut candidates: Vec<(&'static str, Option<Vec<u8>>)> = Vec::new();
-                candidates.push((
-                    "archive",
-                    bar_engine::read_file_from_archive(&archive, &path),
-                ));
-                for sibling in &sibling_archives {
-                    candidates.push((
-                        "sibling",
-                        bar_engine::read_file_from_archive(sibling, &path),
-                    ));
+                let asset_sources = AssetSources {
+                    archive: &archive,
+                    siblings: &sibling_archives,
+                    work_dir: work_dir.as_deref(),
+                    work_dir_cache: &work_dir_cache,
+                    pool_data_dir: pool_data_dir.as_deref(),
+                };
+                let Some(mesh) = load_s3o_from_sources(&name, &path, &asset_sources) else {
+                    tracing::warn!(
+                        feature = %name,
+                        path = %path,
+                        "S3O not found or unparseable in any source"
+                    );
+                    continue;
+                };
+                let tex1 = if mesh.texture1.is_empty() {
+                    None
+                } else {
+                    load_texture_from_sources(&name, "tex1", &mesh.texture1, &asset_sources)
+                };
+                let tex2 = if mesh.texture2.is_empty() {
+                    None
+                } else {
+                    load_texture_from_sources(&name, "tex2", &mesh.texture2, &asset_sources)
+                };
+                loaded += 1;
+                let msg = LoadedModel {
+                    name: name.clone(),
+                    mesh,
+                    tex1,
+                    tex2,
+                };
+                if tx.send(msg).is_err() {
+                    break;
                 }
-                candidates.push((
-                    "work_dir",
-                    work_dir.as_ref().and_then(|wd| {
-                        std::fs::read(wd.join(path.replace('/', std::path::MAIN_SEPARATOR_STR)))
-                            .ok()
-                    }),
-                ));
-                candidates.push((
-                    "pool",
-                    pool_data_dir
-                        .as_ref()
-                        .and_then(|dd| bar_engine::read_file_from_rapid_pool(dd, &path)),
-                ));
-                let mut parsed = None;
-                for (source, maybe_data) in candidates {
-                    let Some(data) = maybe_data else { continue };
-                    match bar_data::parse_s3o(&data) {
-                        Ok(mesh) => {
-                            tracing::info!(
-                                feature = %name,
-                                path = %path,
-                                source,
-                                bytes = data.len(),
-                                "S3O loaded"
-                            );
-                            parsed = Some(mesh);
-                            break;
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                feature = %name,
-                                path = %path,
-                                source,
-                                bytes = data.len(),
-                                err = %e,
-                                "S3O parse failed, trying next source"
-                            );
-                        }
-                    }
-                }
-                match parsed {
-                    Some(mesh) => {
-                        loaded += 1;
-                        if tx.send((name.clone(), mesh)).is_err() {
-                            break;
-                        }
-                        ctx_clone.request_repaint();
-                    }
-                    None => {
-                        tracing::warn!(
-                            feature = %name,
-                            path = %path,
-                            "S3O not found or unparseable in any source"
-                        );
-                    }
-                }
+                ctx_clone.request_repaint();
             }
             tracing::info!(loaded, "S3O model loading complete");
         });
@@ -776,6 +778,258 @@ impl AppRunner {
             Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
         }
     }
+}
+
+// ── Asset loading helpers ─────────────────────────────────────────────────────
+
+/// Bundle of asset sources searched when looking up a model or texture.
+/// All paths use forward slashes (archive-internal convention); on-disk
+/// lookups rewrite to the platform separator before reading.
+struct AssetSources<'a> {
+    archive: &'a std::path::Path,
+    siblings: &'a [std::path::PathBuf],
+    /// Primary "map data root" -- either the freshly extracted SD7 work-dir or,
+    /// after a .barproj reload, the project directory (which has objects3d/ and
+    /// features/ -- and, post-fix, unittextures/ -- copied in on first save).
+    work_dir: Option<&'a std::path::Path>,
+    /// Sibling cached SD7 work dirs (BarEditor cache). Searched after the
+    /// primary work_dir so a .barproj saved before the unittextures copy fix
+    /// still finds map-bundled textures from the SD7 cache by file name. All
+    /// extracted SD7 work dirs share the same file layout (objects3d/,
+    /// unittextures/, features/), so a missed name in one is harmless --
+    /// duplicates resolve to the same content.
+    work_dir_cache: &'a [std::path::PathBuf],
+    pool_data_dir: Option<&'a std::path::Path>,
+}
+
+impl<'a> AssetSources<'a> {
+    /// Try to read a single asset by archive-internal path in priority order:
+    /// 1. primary archive (BAR.sdd usually -- often a stub),
+    /// 2. sibling archives in the same directory,
+    /// 3. the map's primary work directory (project_dir or extracted SD7),
+    /// 4. any other cached SD7 work directory (fallback for partial bundles),
+    /// 5. the rapid content pool.
+    fn read(&self, path: &str) -> Option<(&'static str, Vec<u8>)> {
+        if let Some(b) = bar_engine::read_file_from_archive(self.archive, path) {
+            return Some(("archive", b));
+        }
+        for sibling in self.siblings {
+            if let Some(b) = bar_engine::read_file_from_archive(sibling, path) {
+                return Some(("sibling", b));
+            }
+        }
+        let rel = path.replace('/', std::path::MAIN_SEPARATOR_STR);
+        if let Some(wd) = self.work_dir {
+            if let Ok(b) = std::fs::read(wd.join(&rel)) {
+                return Some(("work_dir", b));
+            }
+        }
+        for cache in self.work_dir_cache {
+            if Some(cache.as_path()) == self.work_dir {
+                continue;
+            }
+            if let Ok(b) = std::fs::read(cache.join(&rel)) {
+                return Some(("work_dir_cache", b));
+            }
+        }
+        if let Some(dd) = self.pool_data_dir {
+            if let Some(b) = bar_engine::read_file_from_rapid_pool(dd, path) {
+                return Some(("pool", b));
+            }
+        }
+        None
+    }
+}
+
+/// Enumerate cached SD7 work directories under `work_dir_root()`. Best-effort:
+/// returns empty on any error. Used as a fallback asset source so a .barproj
+/// saved before the unittextures copy fix still finds map textures.
+fn list_cached_work_dirs() -> Vec<std::path::PathBuf> {
+    let root = bar_engine::work_dir_root();
+    let Ok(entries) = std::fs::read_dir(&root) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            if p.is_dir() {
+                Some(p)
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// Find and parse an S3O for `feature_name` at archive-internal `path`. Walks
+/// the source priority list; on parse failure for any source, falls through to
+/// the next (some maps ship broken stubs alongside the real model elsewhere).
+fn load_s3o_from_sources(
+    feature_name: &str,
+    path: &str,
+    sources: &AssetSources,
+) -> Option<bar_data::S3oMesh> {
+    if let Some((source, data)) = sources.read(path) {
+        match bar_data::parse_s3o(&data) {
+            Ok(mesh) => {
+                tracing::info!(
+                    feature = %feature_name,
+                    path = %path,
+                    source,
+                    bytes = data.len(),
+                    "S3O loaded"
+                );
+                return Some(mesh);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    feature = %feature_name,
+                    path = %path,
+                    source,
+                    bytes = data.len(),
+                    err = %e,
+                    "S3O parse failed in primary source"
+                );
+            }
+        }
+    }
+    None
+}
+
+/// Resolve a texture filename declared in the S3O header. S3O stores just the
+/// base filename; the engine prefixes `unittextures/` to it. If the declared
+/// extension does not exist in any source, retry with alternate extensions
+/// (Recoil's model loader does the same fallback). `slot` is "tex1" or "tex2"
+/// purely for logging so the caller can tell which channel resolved.
+fn load_texture_from_sources(
+    feature_name: &str,
+    slot: &'static str,
+    tex_filename: &str,
+    sources: &AssetSources,
+) -> Option<TextureRgba> {
+    let trimmed = tex_filename.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Build candidate paths: declared name first, then a few common BAR/Spring
+    // alternates with the same stem.
+    let (stem, declared_ext) = match trimmed.rsplit_once('.') {
+        Some((s, e)) => (s, Some(e.to_ascii_lowercase())),
+        None => (trimmed, None),
+    };
+    let mut tried: Vec<String> = Vec::new();
+    if let Some(ext) = declared_ext.as_deref() {
+        tried.push(format!("unittextures/{stem}.{ext}"));
+    } else {
+        tried.push(format!("unittextures/{stem}"));
+    }
+    for alt in ["dds", "tga", "png", "bmp"] {
+        if declared_ext.as_deref() == Some(alt) {
+            continue;
+        }
+        tried.push(format!("unittextures/{stem}.{alt}"));
+    }
+
+    for cand in &tried {
+        let Some((source, bytes)) = sources.read(cand) else {
+            continue;
+        };
+        // DDS is the dominant format for BAR mod feature textures
+        // (rocks30_snow_color.dds etc.). The `image` crate 0.25 ships
+        // without DDS support in our build, so we have to use our own
+        // DDS decoder for that extension; without this branch, every
+        // mod-feature S3O ends up rendering with the default white
+        // texture, producing oddly-tinted features (the texture's
+        // baked tone is missing, so the mapinfo lighting × white
+        // makes rocks appear tan/khaki instead of grey).
+        let ext = std::path::Path::new(cand.as_str())
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase());
+        if ext.as_deref() == Some("dds") {
+            match bar_data::load_dds_2d_bytes(&bytes) {
+                Ok((rgba, w, h)) => {
+                    tracing::info!(
+                        feature = %feature_name,
+                        slot,
+                        texture = %cand,
+                        source,
+                        bytes = bytes.len(),
+                        width = w,
+                        height = h,
+                        "Texture loaded (DDS)"
+                    );
+                    return Some(TextureRgba {
+                        width: w,
+                        height: h,
+                        rgba,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        feature = %feature_name,
+                        slot,
+                        texture = %cand,
+                        source,
+                        err = %e,
+                        "DDS decode failed; trying next candidate"
+                    );
+                    continue;
+                }
+            }
+        }
+        // `image::load_from_memory` does magic-byte sniffing, which fails on
+        // headerless TGA 1.0 files (no signature at offset 0; only TGA 2.0 has
+        // a footer at the end). Most BAR feature textures are exactly that --
+        // headerless TGA -- so always derive the format from the filename
+        // extension first, falling back to sniff only if that fails or the
+        // extension is unknown.
+        let format_hint = ext.as_deref().and_then(image::ImageFormat::from_extension);
+        let decode_result = match format_hint {
+            Some(fmt) => image::load_from_memory_with_format(&bytes, fmt)
+                .or_else(|_| image::load_from_memory(&bytes)),
+            None => image::load_from_memory(&bytes),
+        };
+        match decode_result {
+            Ok(img) => {
+                let rgba = img.to_rgba8();
+                let (w, h) = rgba.dimensions();
+                tracing::info!(
+                    feature = %feature_name,
+                    slot,
+                    texture = %cand,
+                    source,
+                    bytes = bytes.len(),
+                    width = w,
+                    height = h,
+                    "Texture loaded"
+                );
+                return Some(TextureRgba {
+                    width: w,
+                    height: h,
+                    rgba: rgba.into_raw(),
+                });
+            }
+            Err(e) => {
+                tracing::warn!(
+                    feature = %feature_name,
+                    slot,
+                    texture = %cand,
+                    source,
+                    err = %e,
+                    "Texture decode failed"
+                );
+            }
+        }
+    }
+    tracing::warn!(
+        feature = %feature_name,
+        slot,
+        declared = %tex_filename,
+        "Texture not found in any source"
+    );
+    None
 }
 
 // ── Executor construction (shared between main and tests) ─────────────────────

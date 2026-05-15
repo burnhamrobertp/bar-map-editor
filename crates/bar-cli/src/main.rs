@@ -559,7 +559,7 @@ fn cmd_preview(
         .or_else(|| get_texture_output(&graph, &outputs));
 
     // Compute the same height_scale / extent / water_y the GUI uses.
-    let (height_scale, water_y, x_extent, z_extent) = {
+    let (height_scale, height_range_elmos, water_y, x_extent, z_extent, elmo_per_render_xz) = {
         let pw = (w as f32 - 1.0).max(1.0);
         let ph = (h as f32 - 1.0).max(1.0);
         let pm = pw.max(ph);
@@ -572,7 +572,12 @@ fn cmd_preview(
         } else {
             -1.0
         };
-        (hs, wy, xe, ze)
+        // Render-space XZ is [-xe, xe], world-space is [-pw*4, pw*4]
+        // elmos (each heightmap pixel = 8 elmos, pw=w-1 pixels wide).
+        // elmos_per_render_x = (pw * 8) / (2 * xe).
+        let epx = pw * 4.0 / xe.max(1e-4);
+        let epz = ph * 4.0 / ze.max(1e-4);
+        (hs, hr, wy, xe, ze, [epx, epz])
     };
 
     // Diagnostic: actual data range vs the SMF header's nominal range. A
@@ -629,6 +634,8 @@ fn cmd_preview(
             water_y,
             water_color: [0.2, 0.45, 0.75],
             grid_n: mesh_lod,
+            height_range_elmos,
+            elmo_per_render_xz,
         },
     );
     if let Some(ref tex) = texture {
@@ -694,19 +701,26 @@ fn cmd_preview(
         renderer.update_feature_instances(&gpu.device, &Default::default(), &instances);
     }
 
+    // Drive lighting and water uniforms from the project's MapSettings --
+    // same source the GUI uses (see `live_smf_lighting` in
+    // `bar-app::viewport`, which also passes through this `From` impl
+    // now). Without it the CLI rendered with default zero-water
+    // SmfLighting, which made headless debugging useless.
+    let ms = &project.recipe.output.map_settings;
+    let smf_lighting = bar_render::SmfLighting::from(ms);
     let frame = bar_render::PreviewFrame {
         height_scale,
         x_extent,
         z_extent,
         water_y,
-        water_color: [0.2, 0.45, 0.75],
+        water_color: ms.water.base_color,
         // CLI always uses the high-pass (full) shader -- the low-pass is for
         // the GUI's progressive refinement, not relevant headlessly.
         quality_high: true,
         time: 0.0,
-        // CLI doesn't read MapSettings.lighting yet -- fall back to engine
-        // defaults so the renderer still produces a sensible image.
-        smf_lighting: bar_render::SmfLighting::default(),
+        smf_lighting,
+        height_range_elmos,
+        elmo_per_render_xz,
     };
 
     // Camera with user-supplied angles.
