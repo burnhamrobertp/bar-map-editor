@@ -18,6 +18,20 @@ pub struct TerrainUpdateParams {
     pub water_y: f32,
     pub water_color: [f32; 3],
     pub grid_n: u32,
+    /// Vertical span of the heightmap in Spring elmos (`max_h - min_h`).
+    /// Lets the shader convert render-space Y back to absolute elmos so the
+    /// SMF water-absorption depth math (which is calibrated against the
+    /// engine's `SMF_SHALLOW_WATER_DEPTH = 10` elmos) actually matches the
+    /// engine. Previously the shader assumed `1 height_scale unit == 8
+    /// elmos`, which under-counted the depth by ~75x on typical BAR maps
+    /// and left the refraction texture nearly un-tinted.
+    pub height_range_elmos: f32,
+    /// Elmos per unit of render-space XZ. Computed by the host from
+    /// map dimensions (`world_size_elmos / (2 * extent)`). Needed by
+    /// the splat-detail shader path to apply per-channel UV scales
+    /// in elmo units, matching `vertexWorldPos.xzxz * splatTexScales`
+    /// upstream.
+    pub elmo_per_render_xz: [f32; 2],
 }
 
 #[repr(C)]
@@ -34,7 +48,7 @@ struct CameraUniform {
     water_y: f32,
     time: f32,
     skip_water: f32,
-    _pad0: f32,
+    height_range_elmos: f32,
     screen_w: f32,
     screen_h: f32,
     x_extent: f32,
@@ -51,9 +65,31 @@ struct CameraUniform {
     // + plane.w >= 0. Used by reflection and refraction passes; main pass
     // sets it to (0, 0, 0, 1) so all fragments pass.
     clip_plane: [f32; 4],
+    // Height-based custom fog. rgb = colour, a = attenuation rate per elmo.
+    custom_fog_color_atten: [f32; 4],
+    // x = enabled (0/1), y = height (elmos), zw = unused.
+    custom_fog_params: [f32; 4],
+    // Atmosphere / procedural sky inputs (mapinfo `atmosphere = { ... }`).
+    sun_color: [f32; 4],
+    sky_color_density: [f32; 4], // rgb = skyColor, a = cloudDensity
+    sky_dir: [f32; 4],
+    cloud_color: [f32; 4],
+    // x = skybox enabled (0/1) -- when 1 the sky shader samples
+    // `skybox_tex`, otherwise falls back to procedural ModernSky.
+    skybox_params: [f32; 4],
+    // Per-channel UV scale for splat-detail-normal sampling (mapinfo
+    // `splats.texScales`). The engine does `worldXZ * scales.{r,g,b,a}`
+    // per texture and `worldXZ` is in elmos, so the shader needs to
+    // convert render-space -> elmos first using `elmo_per_render` below.
+    splat_tex_scales: [f32; 4],
+    splat_tex_mults: [f32; 4],
+    // xy = elmos per render-space unit (world_size_elmos / 2*extent).
+    // z = advanced splat detail enabled (0/1).
+    // w = splat detail diffuse-alpha enabled (0/1).
+    splat_params: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CameraUniform>() == 336);
+const _: () = assert!(std::mem::size_of::<CameraUniform>() == 496);
 
 /// Clip-plane value that passes every fragment. Used by the main pass.
 const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -74,19 +110,196 @@ pub struct PreviewFrame {
     pub quality_high: bool,
     pub time: f32,
     pub smf_lighting: SmfLighting,
+    /// See [`TerrainUpdateParams::height_range_elmos`].
+    pub height_range_elmos: f32,
+    /// See [`TerrainUpdateParams::elmo_per_render_xz`].
+    pub elmo_per_render_xz: [f32; 2],
 }
 
-/// Engine-faithful SMF shading inputs.
+/// Engine-faithful SMF shading inputs. Ground / sun fields come from the
+/// `lighting` table in `mapinfo.lua`; water fields come from the `water`
+/// table, with defaults matching Recoil's `rts/Map/MapInfo.cpp`.
 #[derive(Clone, Copy, Debug)]
 pub struct SmfLighting {
+    // Ground lighting (SMF ground shader inputs)
     pub sun_dir: [f32; 3],
     pub ground_ambient: [f32; 3],
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
     pub specular_exponent: f32,
+    // Water absorption colors (used by `smf_water_absorb` for underwater
+    // ground shading -- not the water surface itself)
     pub water_absorb: [f32; 3],
     pub water_base: [f32; 3],
     pub water_min: [f32; 3],
+    // Water surface (BumpWater inputs) -- see `WaterParamsUniform`.
+    pub water_surface_color: [f32; 3],
+    pub water_surface_alpha: f32,
+    pub water_diffuse_color: [f32; 3],
+    pub water_specular_color: [f32; 3],
+    pub water_ambient_factor: f32,
+    pub water_diffuse_factor: f32,
+    pub water_specular_factor: f32,
+    pub water_specular_power: f32,
+    pub water_fresnel_min: f32,
+    pub water_fresnel_max: f32,
+    pub water_fresnel_power: f32,
+    pub water_reflection_distortion: f32,
+    pub water_perlin_amplitude: f32,
+    // Height-based "custom" fog (mapinfo's `custom.fog` block). Applied as
+    // a final post-pass in the terrain and water shaders -- not part of
+    // the engine SMF/BumpWater pipeline but matches in-game appearance
+    // because BAR ships a widget that renders it.
+    pub custom_fog_enabled: bool,
+    pub custom_fog_color: [f32; 3],
+    pub custom_fog_height_elmos: f32,
+    pub custom_fog_atten: f32,
+    // Atmosphere / sky parameters (`atmosphere = { ... }` in mapinfo).
+    // Drive the procedural sky shader so each map has its authored sky
+    // rather than a hardcoded one.
+    pub sun_color: [f32; 3],
+    pub sky_color: [f32; 3],
+    pub sky_dir: [f32; 3],
+    pub cloud_density: f32,
+    pub cloud_color: [f32; 3],
+    /// True when an actual cubemap has been uploaded via
+    /// `TerrainRenderer::update_skybox`. The renderer also tracks this
+    /// state internally; carrying it on `SmfLighting` lets the shader
+    /// branch on a uniform read instead of needing two pipeline
+    /// variants.
+    pub skybox_enabled: bool,
+    /// True when a `skyReflectModTex` has been uploaded. Gates the
+    /// engine's `SMF_SKY_REFLECTIONS` path so the shader only mixes
+    /// the cubemap into the terrain diffuse when a real mask is
+    /// available -- otherwise we'd reflect into everything uniformly.
+    pub sky_reflect_mod_enabled: bool,
+    /// True when a `specularTex` has been uploaded. Gates the engine's
+    /// `SMF_SPECULAR_LIGHTING` path: when set, the terrain shader samples
+    /// the per-pixel specular colour + exponent from this texture instead
+    /// of using the global `groundSpecularColor` / `groundSpecularExponent`
+    /// uniforms. The texture's RGB is the per-pixel specular colour;
+    /// alpha * 16 is the per-pixel exponent. Most natural terrain texels
+    /// have near-zero values here, which is why maps that ship
+    /// `specularTex` look right in-engine but show whole-surface spec
+    /// blowout in our editor before this path is wired.
+    pub specular_tex_enabled: bool,
+    /// 1.0 when the legacy `detailTex` should apply to the playable
+    /// area, 0.0 when it shouldn't. Engine-side, `detailTex` is only
+    /// applied to the playable area by `SMFFragProg` when the map is
+    /// in the simple (non-splat) detail mode; maps using splat detail
+    /// (i.e. `splatDistrTex` set) route it to the border shader
+    /// instead, which we don't render. Carrying this here lets the
+    /// shader gate detail without re-encoding the heuristic.
+    pub detail_strength: f32,
+    /// Per-channel UV scale for splat-detail sampling (from mapinfo
+    /// `splats.texScales`). Engine multiplies world XZ in elmos by
+    /// these; we convert render-space XZ -> elmos in the shader using
+    /// `elmo_per_render_xz`.
+    pub splat_tex_scales: [f32; 4],
+    pub splat_tex_mults: [f32; 4],
+    /// Set by `update_splat_textures` once all four splat-detail-normal
+    /// textures + the distribution texture are uploaded. When false
+    /// the shader skips the splat sampling entirely and the playable
+    /// area renders without splat detail.
+    pub advanced_splat_enabled: bool,
+    /// Mirrors mapinfo `splatDetailNormalDiffuseAlpha`. When true the
+    /// alpha of the weighted detail-normal sum contributes to the
+    /// per-pixel detail colour; when false detail colour is 0.
+    pub splat_detail_diffuse_alpha: bool,
+    /// Map size in elmos per unit of render-space (= world_size_elmos /
+    /// (2 * extent_render)). Set by the host so the splat shader can
+    /// convert render-XZ -> elmo-XZ before applying per-channel scales.
+    pub elmo_per_render_xz: [f32; 2],
+}
+
+/// Helper: clone `f.smf_lighting` with renderer-runtime flags overridden.
+/// MapSettings doesn't know which assets the renderer has actually
+/// uploaded -- so the per-frame uniform reads upload state from the
+/// renderer instead. Same pattern as the skybox flag.
+fn bar_render_smf_with_runtime_overrides(
+    mut smf: SmfLighting,
+    skybox_enabled: bool,
+    advanced_splat_enabled: bool,
+    sky_reflect_mod_enabled: bool,
+    specular_tex_enabled: bool,
+    elmo_per_render_xz: [f32; 2],
+) -> SmfLighting {
+    smf.skybox_enabled = skybox_enabled;
+    smf.advanced_splat_enabled = advanced_splat_enabled;
+    smf.sky_reflect_mod_enabled = sky_reflect_mod_enabled;
+    smf.specular_tex_enabled = specular_tex_enabled;
+    smf.elmo_per_render_xz = elmo_per_render_xz;
+    smf
+}
+
+impl From<&bar_project::MapSettings> for SmfLighting {
+    /// Build the renderer-side lighting + water inputs directly from a
+    /// recipe's `MapSettings`. Both the GUI (`live_smf_lighting` in
+    /// `bar-app::viewport`) and the CLI (`bar-cli::cmd_preview`) call
+    /// through this so there is one canonical mapping; previously each
+    /// site copied the 20+ fields by hand, which made it easy for the
+    /// CLI to drift (it shipped default zero-water for a while, which
+    /// in turn made headless debugging meaningless).
+    fn from(ms: &bar_project::MapSettings) -> Self {
+        let l = &ms.lighting;
+        let w = &ms.water;
+        Self {
+            sun_dir: l.sun_dir,
+            ground_ambient: l.ground_ambient,
+            ground_diffuse: l.ground_diffuse,
+            ground_specular: l.ground_specular,
+            specular_exponent: l.spec_exponent,
+            water_absorb: w.absorb,
+            water_base: w.base_color,
+            water_min: w.min_color,
+            water_surface_color: w.surface_color,
+            water_surface_alpha: w.surface_alpha,
+            water_diffuse_color: w.diffuse_color,
+            water_specular_color: w.specular_color,
+            water_ambient_factor: w.ambient_factor,
+            water_diffuse_factor: w.diffuse_factor,
+            water_specular_factor: w.specular_factor,
+            water_specular_power: w.specular_power,
+            water_fresnel_min: w.fresnel_min,
+            water_fresnel_max: w.fresnel_max,
+            water_fresnel_power: w.fresnel_power,
+            water_reflection_distortion: w.reflection_distortion,
+            water_perlin_amplitude: w.perlin_amplitude,
+            custom_fog_enabled: ms.custom_fog.enabled,
+            custom_fog_color: ms.custom_fog.color,
+            custom_fog_height_elmos: ms.custom_fog.height_elmos,
+            custom_fog_atten: ms.custom_fog.atten,
+            sun_color: ms.atmosphere.sun_color,
+            sky_color: ms.atmosphere.sky_color,
+            sky_dir: ms.atmosphere.sky_dir,
+            cloud_density: ms.atmosphere.cloud_density,
+            cloud_color: ms.atmosphere.cloud_color,
+            // MapSettings doesn't carry runtime upload state; the
+            // renderer overrides this flag in `sync_to_frame` based
+            // on whether a real cubemap is uploaded.
+            skybox_enabled: false,
+            sky_reflect_mod_enabled: false,
+            specular_tex_enabled: false,
+            // Apply legacy detailTex only when the map has no splat
+            // distribution texture -- matches engine routing of
+            // detailTex to the playable area only in that case.
+            detail_strength: if ms.resources.splat_distr_tex.is_empty() {
+                1.0
+            } else {
+                0.0
+            },
+            splat_tex_scales: ms.resources.splat_tex_scales,
+            splat_tex_mults: ms.resources.splat_tex_mults,
+            // `advanced_splat_enabled` is a renderer-runtime flag,
+            // overridden in `sync_to_frame` based on which textures
+            // were actually uploaded. Map-settings can't know that.
+            advanced_splat_enabled: false,
+            splat_detail_diffuse_alpha: ms.resources.splat_detail_normal_diffuse_alpha,
+            // Same: host computes this from map dimensions and sets
+            // it via update_heightmap / sync_to_frame.
+            elmo_per_render_xz: [1.0, 1.0],
+        }
+    }
 }
 
 impl Default for SmfLighting {
@@ -96,10 +309,44 @@ impl Default for SmfLighting {
             ground_ambient: [0.5, 0.5, 0.5],
             ground_diffuse: [0.5, 0.5, 0.5],
             ground_specular: [0.1, 0.1, 0.1],
-            specular_exponent: 10.0,
+            // Engine default is 100.0 (MapInfo.cpp::ReadLight). Our 10.0
+            // produced a much broader, dimmer spec lobe than engine on any
+            // map that didn't override `specularExponent` in mapinfo.lua.
+            specular_exponent: 100.0,
             water_absorb: [0.0, 0.0, 0.0],
             water_base: [0.0, 0.0, 0.0],
             water_min: [0.0, 0.0, 0.0],
+            water_surface_color: [0.75, 0.8, 0.85],
+            water_surface_alpha: 0.55,
+            water_diffuse_color: [1.0, 1.0, 1.0],
+            water_specular_color: [1.0, 1.0, 1.0],
+            water_ambient_factor: 1.0,
+            water_diffuse_factor: 1.0,
+            water_specular_factor: 1.0,
+            water_specular_power: 20.0,
+            water_fresnel_min: 0.2,
+            water_fresnel_max: 0.8,
+            water_fresnel_power: 4.0,
+            water_reflection_distortion: 1.0,
+            water_perlin_amplitude: 0.9,
+            custom_fog_enabled: false,
+            custom_fog_color: [0.0, 0.0, 0.0],
+            custom_fog_height_elmos: 0.0,
+            custom_fog_atten: 0.0,
+            sun_color: [1.0, 1.0, 1.0],
+            sky_color: [0.1, 0.15, 0.7],
+            sky_dir: [0.0, 0.0, -1.0],
+            cloud_density: 0.5,
+            cloud_color: [1.0, 1.0, 1.0],
+            skybox_enabled: false,
+            sky_reflect_mod_enabled: false,
+            specular_tex_enabled: false,
+            detail_strength: 1.0,
+            splat_tex_scales: [1.0, 1.0, 1.0, 1.0],
+            splat_tex_mults: [1.0, 1.0, 1.0, 1.0],
+            advanced_splat_enabled: false,
+            splat_detail_diffuse_alpha: false,
+            elmo_per_render_xz: [1.0, 1.0],
         }
     }
 }
@@ -110,7 +357,7 @@ impl SmfLighting {
         let len = (s[0] * s[0] + s[1] * s[1] + s[2] * s[2]).sqrt().max(1e-4);
         let s = [s[0] / len, s[1] / len, s[2] / len];
         SmfUniformSlots {
-            sun_dir_exp: [s[0], s[1], s[2], self.specular_exponent.max(1.0)],
+            sun_dir_exp: [s[0], s[1], s[2], self.specular_exponent],
             ground_ambient: [
                 self.ground_ambient[0],
                 self.ground_ambient[1],
@@ -142,6 +389,65 @@ impl SmfLighting {
                 0.0,
             ],
             water_min_color: [self.water_min[0], self.water_min[1], self.water_min[2], 0.0],
+            custom_fog_color_atten: [
+                self.custom_fog_color[0],
+                self.custom_fog_color[1],
+                self.custom_fog_color[2],
+                self.custom_fog_atten,
+            ],
+            custom_fog_params: [
+                if self.custom_fog_enabled { 1.0 } else { 0.0 },
+                self.custom_fog_height_elmos,
+                0.0,
+                0.0,
+            ],
+            sun_color: [self.sun_color[0], self.sun_color[1], self.sun_color[2], 1.0],
+            sky_color_density: [
+                self.sky_color[0],
+                self.sky_color[1],
+                self.sky_color[2],
+                self.cloud_density,
+            ],
+            sky_dir: [self.sky_dir[0], self.sky_dir[1], self.sky_dir[2], 0.0],
+            cloud_color: [
+                self.cloud_color[0],
+                self.cloud_color[1],
+                self.cloud_color[2],
+                0.0,
+            ],
+            // x = skybox enabled, y = legacy detailTex strength,
+            // z = sky_reflect_mod enabled (gates `SMF_SKY_REFLECTIONS`
+            // path in terrain.wgsl).
+            // w = specular_tex enabled (gates `SMF_SPECULAR_LIGHTING`
+            // path -- when on, terrain samples per-pixel spec colour +
+            // exponent from `specular_tex` instead of using the global
+            // groundSpecularColor / groundSpecularExponent uniforms).
+            skybox_params: [
+                if self.skybox_enabled { 1.0 } else { 0.0 },
+                self.detail_strength,
+                if self.sky_reflect_mod_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
+                if self.specular_tex_enabled { 1.0 } else { 0.0 },
+            ],
+            splat_tex_scales: self.splat_tex_scales,
+            splat_tex_mults: self.splat_tex_mults,
+            splat_params: [
+                self.elmo_per_render_xz[0],
+                self.elmo_per_render_xz[1],
+                if self.advanced_splat_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
+                if self.splat_detail_diffuse_alpha {
+                    1.0
+                } else {
+                    0.0
+                },
+            ],
         }
     }
 }
@@ -154,14 +460,111 @@ struct SmfUniformSlots {
     water_absorb: [f32; 4],
     water_base_color: [f32; 4],
     water_min_color: [f32; 4],
+    custom_fog_color_atten: [f32; 4],
+    custom_fog_params: [f32; 4],
+    sun_color: [f32; 4],
+    sky_color_density: [f32; 4],
+    sky_dir: [f32; 4],
+    cloud_color: [f32; 4],
+    skybox_params: [f32; 4],
+    splat_tex_scales: [f32; 4],
+    splat_tex_mults: [f32; 4],
+    splat_params: [f32; 4],
+}
+
+/// Per-map water surface parameters consumed by the BumpWater port in
+/// `shaders/water.wgsl`. Packed into 4 vec4s for std140 alignment; field
+/// names mirror Recoil's `WaterRendering` struct.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable, Default, PartialEq)]
+struct WaterParamsUniform {
+    /// rgb = surfaceColor, w = surfaceAlpha
+    surface_color_alpha: [f32; 4],
+    /// rgb = diffuseColor, w = diffuseFactor
+    diffuse_color_factor: [f32; 4],
+    /// rgb = specularColor, w = specularPower
+    specular_color_power: [f32; 4],
+    /// x = ambientFactor, y = specularFactor,
+    /// z = reflectionDistortion, w = perlinAmplitude
+    factors: [f32; 4],
+    /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = unused
+    fresnel: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 80);
+
+impl From<&SmfLighting> for WaterParamsUniform {
+    fn from(l: &SmfLighting) -> Self {
+        // Engine-side prescale (`rts/Rendering/Env/BumpWater.cpp:429,436`).
+        // BumpWater bakes these as `#define` constants when it compiles the
+        // shader, so the WGSL port has to apply the same scale before the
+        // value reaches the uniform. Without them the surface tint runs to
+        // double the engine's, which is what produced the white-wash look.
+        const SURFACE_COLOR_SCALE: f32 = 0.4;
+        const DIFFUSE_FACTOR_SCALE: f32 = 15.0;
+        Self {
+            surface_color_alpha: [
+                l.water_surface_color[0] * SURFACE_COLOR_SCALE,
+                l.water_surface_color[1] * SURFACE_COLOR_SCALE,
+                l.water_surface_color[2] * SURFACE_COLOR_SCALE,
+                l.water_surface_alpha,
+            ],
+            diffuse_color_factor: [
+                l.water_diffuse_color[0],
+                l.water_diffuse_color[1],
+                l.water_diffuse_color[2],
+                l.water_diffuse_factor * DIFFUSE_FACTOR_SCALE,
+            ],
+            specular_color_power: [
+                l.water_specular_color[0],
+                l.water_specular_color[1],
+                l.water_specular_color[2],
+                l.water_specular_power.max(1.0),
+            ],
+            factors: [
+                l.water_ambient_factor,
+                l.water_specular_factor,
+                l.water_reflection_distortion,
+                l.water_perlin_amplitude,
+            ],
+            fresnel: [
+                l.water_fresnel_min,
+                l.water_fresnel_max,
+                l.water_fresnel_power.max(0.01),
+                0.0,
+            ],
+        }
+    }
 }
 
 /// The terrain rendering pipeline.
 pub struct TerrainRenderer {
     render_pipeline: wgpu::RenderPipeline,
     sky_pipeline: wgpu::RenderPipeline,
+    /// Depth-only terrain pipeline used for casting into the shadow map.
+    shadow_terrain_pipeline: wgpu::RenderPipeline,
+    /// Shadow map (depth texture + light VP uniform + caster/receiver bind groups).
+    shadow: crate::shadow::ShadowMap,
+    /// Group-2 bind group for shadow_terrain caster (heightmap).
+    shadow_caster_heightmap_bg: wgpu::BindGroup,
+    shadow_caster_heightmap_bgl: wgpu::BindGroupLayout,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    /// Cached for `update_skybox` -- it rebuilds the camera bind group
+    /// against a freshly-uploaded cubemap view.
+    camera_bind_group_layout: wgpu::BindGroupLayout,
+    skybox_sampler: wgpu::Sampler,
+    /// Currently-bound skybox view. Starts as a 1x1 black cubemap and is
+    /// replaced when `update_skybox` is called with a real cubemap.
+    skybox_view: wgpu::TextureView,
+    /// Optional: holds the cubemap texture so it isn't dropped while
+    /// the view above is in use.
+    #[allow(dead_code)]
+    skybox_texture: Option<wgpu::Texture>,
+    /// Whether the renderer has a non-default cubemap loaded. Sourced
+    /// into `SmfLighting.skybox_enabled` and ultimately into the
+    /// shader's `skybox_params.x` flag.
+    skybox_enabled: bool,
     feature_renderer: Option<crate::features::FeatureRenderer>,
     // ── Group 1: albedo + metalmap + typemap ────────────────────────────────
     texture_bind_group_layout: wgpu::BindGroupLayout,
@@ -170,13 +573,50 @@ pub struct TerrainRenderer {
     albedo_sampler: wgpu::Sampler,
     metalmap_texture: wgpu::Texture,
     typemap_texture: wgpu::Texture,
+    /// Detail texture (mapinfo `resources.detailTex`). Starts as a 1x1
+    /// mid-grey so the shader's `(detail - 0.5)` term contributes
+    /// nothing until a real texture is uploaded.
+    detail_texture: wgpu::Texture,
+    detail_sampler: wgpu::Sampler,
+    /// Four splat-detail-normal textures + a single distribution map.
+    /// Defaults are 1x1 grey + zero distribution. `update_splat_textures`
+    /// replaces all five and flips `advanced_splat_enabled` in the
+    /// SmfLighting we sync at the next render.
+    splat_detail_normal_1: wgpu::Texture,
+    splat_detail_normal_2: wgpu::Texture,
+    splat_detail_normal_3: wgpu::Texture,
+    splat_detail_normal_4: wgpu::Texture,
+    splat_distr_texture: wgpu::Texture,
+    advanced_splat_enabled: bool,
+    /// `skyReflectModTex` upload state. 1x1 black default produces
+    /// zero reflection mix; replaced by `update_sky_reflect_mod` when
+    /// the map specifies one.
+    sky_reflect_mod_texture: wgpu::Texture,
+    sky_reflect_mod_enabled: bool,
+    /// `specularTex` upload state. 1x1 black default produces zero
+    /// per-pixel spec; replaced by `update_specular_tex` when the map
+    /// specifies one. The `specular_tex_enabled` flag is what gates the
+    /// shader's spec-tex path (SMF_SPECULAR_LIGHTING) -- when off, the
+    /// global `ground_specular` / spec exponent are used instead.
+    specular_tex_texture: wgpu::Texture,
+    specular_tex_enabled: bool,
     has_albedo: bool,
-    // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) ──────
+    // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) + water params (b4) ──────
     water_planes_bind_group_layout: wgpu::BindGroupLayout,
     reflection_sampler: wgpu::Sampler,
     refraction_sampler: wgpu::Sampler,
+    /// Non-filtering sampler for the refraction-pass depth texture
+    /// (used by the water shader's depth-aware refraction mixback).
+    refraction_depth_sampler: wgpu::Sampler,
     water_planes_bind_group: wgpu::BindGroup,
     water_planes_bind_group_dummy: wgpu::BindGroup,
+    /// Per-map water surface uniform (BumpWater inputs). Re-uploaded each
+    /// frame in `render_internal` from the current `SmfLighting`.
+    water_params_buffer: wgpu::Buffer,
+    /// Last `WaterParamsUniform` we uploaded -- used so the per-frame log
+    /// in `render_internal` only fires on change instead of spamming every
+    /// frame. Diagnostic only; not load-bearing.
+    last_water_params: WaterParamsUniform,
     // ── Group 3: water_normal (bindings 0,1) + heightmap (binding 2) ─────────
     #[allow(dead_code)]
     water_normal_texture: wgpu::Texture,
@@ -189,6 +629,13 @@ pub struct TerrainRenderer {
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
     num_indices: u32,
+    /// Index where the water-plane sub-range starts in `index_buffer`. The
+    /// main pass draws `[0, water_index_offset)` for terrain ground, then the
+    /// feature pass runs, then `[water_index_offset, num_indices)` for water.
+    /// This ordering lets underwater features write into the depth buffer
+    /// before the water surface, so the water shader's alpha-blend correctly
+    /// composites the features instead of depth-culling them.
+    water_index_offset: u32,
     /// Grid resolution used when building the flat terrain mesh.
     grid_n: u32,
     // ── Output targets ──────────────────────────────────────────────────────
@@ -206,6 +653,12 @@ pub struct TerrainRenderer {
     pub height: u32,
     // ── Cached per-frame state ──────────────────────────────────────────────
     height_scale: f32,
+    /// Elmo span of the heightmap; needed by the shader's underwater
+    /// absorption to convert render-space Y back into engine elmos.
+    height_range_elmos: f32,
+    /// Elmos per unit of render-space XZ -- mirrors the XZ axes of
+    /// `height_range_elmos`, needed by the splat-detail shader path.
+    elmo_per_render_xz: [f32; 2],
     water_y: f32,
     water_color: [f32; 3],
     smf_lighting: SmfLighting,
@@ -216,25 +669,78 @@ pub struct TerrainRenderer {
     quality_high: bool,
 }
 
+/// Generate a tileable noise-based water normal map.
+///
+/// Earlier this was 3 low-frequency sine octaves, but the result is
+/// visibly periodic when the water shader's 4-octave sampler tiles it at
+/// large scales (the diagonal stripes you can see in `water-cp1.png`). A
+/// hash-based value-noise field at multiple octaves doesn't repeat in a
+/// recognisable way at any sample scale, so the tiled appearance breaks up.
 fn make_water_normal_map(size: u32) -> Vec<u8> {
-    use std::f32::consts::TAU;
+    // 2D hash → [0, 1] from integer cell coords. Cheap, no self-correlation.
+    fn hash(x: i32, y: i32) -> f32 {
+        let mut h = (x as u32).wrapping_mul(374761393) ^ (y as u32).wrapping_mul(668265263);
+        h ^= h >> 13;
+        h = h.wrapping_mul(1274126177);
+        h ^= h >> 16;
+        (h & 0x00FF_FFFF) as f32 / 0x00FF_FFFF as f32
+    }
+    // Smoothed value noise (tileable across `period` cells), bilinear with
+    // a fade curve so derivatives are continuous across cell boundaries.
+    fn value_noise(u: f32, v: f32, period: i32) -> f32 {
+        let scaled_u = u * period as f32;
+        let scaled_v = v * period as f32;
+        let xi = scaled_u.floor() as i32;
+        let yi = scaled_v.floor() as i32;
+        let xf = scaled_u - xi as f32;
+        let yf = scaled_v - yi as f32;
+        let fade = |t: f32| t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+        let fx = fade(xf);
+        let fy = fade(yf);
+        // Wrap cell coords through `period` so the noise tiles cleanly.
+        let wrap = |c: i32| c.rem_euclid(period);
+        let a = hash(wrap(xi), wrap(yi));
+        let b = hash(wrap(xi + 1), wrap(yi));
+        let c = hash(wrap(xi), wrap(yi + 1));
+        let d = hash(wrap(xi + 1), wrap(yi + 1));
+        let ab = a * (1.0 - fx) + b * fx;
+        let cd = c * (1.0 - fx) + d * fx;
+        ab * (1.0 - fy) + cd * fy
+    }
+
     let n = size as usize;
     let mut data = Vec::with_capacity(n * n * 4);
     for y in 0..n {
         for x in 0..n {
             let u = x as f32 / n as f32;
             let v = y as f32 / n as f32;
-            let nx = 0.25 * (TAU * u).sin()
-                + 0.20 * (TAU * (2.0 * u + v)).sin()
-                + 0.10 * (TAU * (3.0 * u - 2.0 * v)).sin();
-            let ny = 0.25 * (TAU * v).cos()
-                + 0.20 * (TAU * (u + 2.0 * v)).cos()
-                + 0.10 * (TAU * (2.0 * u + 3.0 * v)).cos();
-            let nz = (1.0 - nx * nx - ny * ny).max(0.1_f32).sqrt();
+            // Three octaves of value noise; periods chosen so the texture
+            // tiles seamlessly at every octave (each period divides `size`
+            // for a 128-texel input -> 8 / 16 / 32 cells).
+            let h = 0.50 * value_noise(u, v, 8)
+                + 0.30 * value_noise(u, v, 16)
+                + 0.20 * value_noise(u, v, 32);
+            // Central differences on the noise field give a continuous
+            // gradient suitable for use as a tangent-space normal.
+            let eps = 1.0 / n as f32;
+            let hx = 0.50 * value_noise(u + eps, v, 8)
+                + 0.30 * value_noise(u + eps, v, 16)
+                + 0.20 * value_noise(u + eps, v, 32);
+            let hy = 0.50 * value_noise(u, v + eps, 8)
+                + 0.30 * value_noise(u, v + eps, 16)
+                + 0.20 * value_noise(u, v + eps, 32);
+            // Slope of the height field; scaled so the normal lies firmly
+            // away from straight-up but not so steep that pow(N.V, ~100)
+            // for the sun specular dies completely.
+            let nx_raw = (h - hx) * 6.0;
+            let ny_raw = (h - hy) * 6.0;
+            let nz_raw = (1.0 - nx_raw * nx_raw - ny_raw * ny_raw)
+                .max(0.04_f32)
+                .sqrt();
             let to_u8 = |f: f32| ((f * 0.5 + 0.5).clamp(0.0, 1.0) * 255.0) as u8;
-            data.push(to_u8(nx));
-            data.push(to_u8(ny));
-            data.push(to_u8(nz));
+            data.push(to_u8(nx_raw));
+            data.push(to_u8(ny_raw));
+            data.push(to_u8(nz_raw));
             data.push(255u8);
         }
     }
@@ -268,6 +774,63 @@ fn make_default_r32float(
         wgpu::util::TextureDataOrder::LayerMajor,
         &data,
     )
+}
+
+/// Ensure a mip chain runs all the way down to 1x1, synthesising any
+/// missing levels via 2x2 box filtering on the RGBA8 data.
+///
+/// Input invariant: `mips[0]` is the base level. Subsequent entries are
+/// `(w >> level)`-sized half-decay if present. If the caller passed only
+/// the base level (e.g. PNG / TGA / single-mip DDS) we generate the rest
+/// down to 1x1 so the GPU sampler has every level to bilerp between.
+///
+/// Box-filter mip generation is a close-enough approximation of what the
+/// engine gets from `glGenerateMipmap` on the OpenGL side; both are
+/// simple 2x2 averages with no normal-renormalisation. For splat
+/// detail-normals the loss in normal preservation is well within the
+/// tolerance for "no longer aliases into per-fragment grain".
+fn ensure_full_mip_chain(mut chain: Vec<(Vec<u8>, u32, u32)>) -> Vec<(Vec<u8>, u32, u32)> {
+    if chain.is_empty() {
+        return chain;
+    }
+    let (_, base_w, base_h) = chain[0];
+    let max_dim = base_w.max(base_h).max(1);
+    let target_count = (32 - max_dim.leading_zeros()) as usize; // log2 + 1
+    while chain.len() < target_count {
+        let (prev_rgba, pw, ph) = chain.last().unwrap();
+        let pw = *pw;
+        let ph = *ph;
+        let nw = (pw / 2).max(1);
+        let nh = (ph / 2).max(1);
+        if nw == pw && nh == ph {
+            break;
+        }
+        let mut next = vec![0u8; (nw * nh * 4) as usize];
+        for y in 0..nh {
+            for x in 0..nw {
+                // 2x2 box filter. Edge pixels get clamped sampling so a
+                // non-power-of-2 base doesn't read out of bounds.
+                let sx0 = (x * 2).min(pw - 1);
+                let sx1 = (x * 2 + 1).min(pw - 1);
+                let sy0 = (y * 2).min(ph - 1);
+                let sy1 = (y * 2 + 1).min(ph - 1);
+                let i00 = ((sy0 * pw + sx0) * 4) as usize;
+                let i10 = ((sy0 * pw + sx1) * 4) as usize;
+                let i01 = ((sy1 * pw + sx0) * 4) as usize;
+                let i11 = ((sy1 * pw + sx1) * 4) as usize;
+                for c in 0..4 {
+                    let sum = prev_rgba[i00 + c] as u32
+                        + prev_rgba[i10 + c] as u32
+                        + prev_rgba[i01 + c] as u32
+                        + prev_rgba[i11 + c] as u32;
+                    let out_i = ((y * nw + x) * 4) as usize;
+                    next[out_i + c] = (sum / 4) as u8;
+                }
+            }
+        }
+        chain.push((next, nw, nh));
+    }
+    chain
 }
 
 /// Create a 1x1 R8Unorm texture with value `v` (0.0..1.0). Used for default
@@ -323,16 +886,42 @@ impl TerrainRenderer {
         let camera_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("camera_bind_group_layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
                     },
-                    count: None,
-                }],
+                    // Skybox cubemap (sourced from mapinfo `atmosphere.skyBox`).
+                    // When the map doesn't specify a skybox -- or until the
+                    // user re-imports a map that does -- this is a 1x1 black
+                    // cubemap and `camera.skybox_params.x` is 0, telling the
+                    // sky shader to fall back to the procedural ModernSky
+                    // path. Lives on the camera bind group so every pipeline
+                    // that binds group 0 sees the same skybox without
+                    // additional plumbing.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::Cube,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 2,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
             });
 
         // Group 1: albedo (tex + sampler) + metalmap (tex) + typemap (tex) + shared material sampler
@@ -382,6 +971,121 @@ impl TerrainRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // Detail texture (mapinfo `resources.detailTex`).
+                    // Sampled at world.xz * detail_tex_params.x, then
+                    // centred via `-0.5` and added to the diffuse colour
+                    // BEFORE the shade multiply -- matches engine's
+                    // `(diffuseCol + detailCol) * shadeInt`. Defaults
+                    // to a 1x1 grey (0.5, 0.5, 0.5) so the contribution
+                    // is zero when no detail texture is loaded.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Splat detail-normal textures + distribution
+                    // (mapinfo `splatDetailNormalTex{1..4}` and
+                    // `splatDistrTex`). When all five are uploaded
+                    // and `splat_params.z >= 0.5`, the terrain shader
+                    // computes the engine's `splatDetailStrength.y`
+                    // contribution and adds it to the diffuse before
+                    // the shade multiply. Defaults are 1x1 (127, 127,
+                    // 127, 127), i.e. a centered zero contribution so
+                    // a missing splat-detail texture yields no change.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Sky-reflection mod texture (mapinfo `skyReflectModTex`).
+                    // Engine `SMF_SKY_REFLECTIONS` path: per-pixel mask
+                    // for where the skybox cubemap reflects on terrain.
+                    // Defaults to 1x1 black so a missing texture yields
+                    // zero reflection mix.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Per-pixel specular texture (mapinfo `specularTex`).
+                    // Engine `SMF_SPECULAR_LIGHTING` path: `.rgb` is the
+                    // per-pixel specular colour, `.a * 16` the per-pixel
+                    // exponent. Defaults to 1x1 black so a missing texture
+                    // yields zero spec contribution everywhere (rather
+                    // than the global `groundSpecularColor`, which would
+                    // produce hot whole-surface spec on maps that author
+                    // a non-zero global colour).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -422,6 +1126,43 @@ impl TerrainRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // BumpWater surface params (per-map values from mapinfo.lua).
+                    // 80-byte uniform; matches `WaterParamsUniform` and the
+                    // `water_params` declaration in shaders/water.wgsl.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 4,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
+                    // Refraction-pass depth, sampled by the water shader
+                    // for the engine's depth-aware refraction mixback
+                    // (BumpWaterFS:304-314). NonFiltering sampler --
+                    // wgpu only allows depth textures with non-filtering
+                    // sampling on a regular sampler binding (or
+                    // sampler_comparison on a `texture_depth_2d`); we
+                    // pick the former since we only need raw depth
+                    // reads, not shadow-style compares.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 5,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Depth,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 6,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
                 ],
             });
 
@@ -459,6 +1200,11 @@ impl TerrainRenderer {
                 ],
             });
 
+        // Shadow map (depth texture + light_view_proj uniform + bind groups).
+        // Layouts are constructed here so the main terrain pipeline can include
+        // the receiver BGL as group 4, matching `shaders/terrain.wgsl`.
+        let shadow = crate::shadow::ShadowMap::new(device);
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("terrain_pipeline_layout"),
             bind_group_layouts: &[
@@ -466,9 +1212,28 @@ impl TerrainRenderer {
                 &texture_bind_group_layout,      // group 1: albedo/metalmap/typemap
                 &water_planes_bind_group_layout, // group 2: reflection + refraction
                 &heightmap_bind_group_layout,    // group 3: water normal + heightmap
+                &shadow.receiver_bgl,            // group 4: shadow tex + sampler + light_vp
             ],
             push_constant_ranges: &[],
         });
+
+        // Caster pipeline layout: group 0 camera (for x_extent/z_extent/
+        // height_scale), group 1 shadow uniform (light_view_proj), group 2
+        // heightmap.
+        let shadow_caster_heightmap_bgl =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("shadow_caster_heightmap_bgl"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                }],
+            });
 
         let depth_format = wgpu::TextureFormat::Depth32Float;
 
@@ -570,7 +1335,7 @@ impl TerrainRenderer {
             water_y: -1.0,
             time: 0.0,
             skip_water: 0.0,
-            _pad0: 0.0,
+            height_range_elmos: 1.0,
             screen_w: 512.0,
             screen_h: 512.0,
             x_extent: 0.5,
@@ -584,6 +1349,16 @@ impl TerrainRenderer {
             water_min_color: smf.water_min_color,
             brush_cursor: [0.0, 0.0, 0.0, 0.0],
             clip_plane: NO_CLIP,
+            custom_fog_color_atten: smf.custom_fog_color_atten,
+            custom_fog_params: smf.custom_fog_params,
+            sun_color: smf.sun_color,
+            sky_color_density: smf.sky_color_density,
+            sky_dir: smf.sky_dir,
+            cloud_color: smf.cloud_color,
+            skybox_params: smf.skybox_params,
+            splat_tex_scales: smf.splat_tex_scales,
+            splat_tex_mults: smf.splat_tex_mults,
+            splat_params: smf.splat_params,
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -592,13 +1367,63 @@ impl TerrainRenderer {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        // Default skybox cubemap: 1x1 black, used until a map's actual
+        // skybox DDS is loaded via `update_skybox`. wgpu requires the
+        // bind group to have a real cubemap view regardless of whether
+        // the shader uses it, so we create this once at construction.
+        let skybox_default_data: [u8; 4 * 6] = [0; 4 * 6];
+        let skybox_default_tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("skybox_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &skybox_default_data,
+        );
+        let skybox_default_view = skybox_default_tex.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("skybox_default_view"),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        let skybox_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("skybox_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera_bind_group"),
             layout: &camera_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: camera_buffer.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&skybox_default_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&skybox_sampler),
+                },
+            ],
         });
 
         let albedo_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -634,10 +1459,149 @@ impl TerrainRenderer {
         let metalmap_texture = make_default_r8unorm(device, queue, "metalmap_default", 0.0);
         let typemap_texture = make_default_r8unorm(device, queue, "typemap_default", 0.0);
 
+        // Default detail texture: 1x1 mid-grey. The shader subtracts
+        // 0.5 from the sample (mirroring engine's `texture - 0.5`),
+        // so a 0.5 sample yields no contribution -- safe no-op when
+        // no map-authored detail texture has been uploaded.
+        let mid_grey: [u8; 4] = [128, 128, 128, 255];
+        let detail_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &mid_grey,
+        );
+        // Shared sampler for the detail / splat-detail-normal / splat
+        // distribution / sky-reflection-mask textures. Trilinear with 16x
+        // anisotropy. Matches engine behaviour:
+        //   - `GL_LINEAR_MIPMAP_LINEAR` -> wgpu `mipmap_filter: Linear` +
+        //     min/mag/`Linear` for the in-mip and inter-mip filtering steps.
+        //   - `GL_TEXTURE_MAX_ANISOTROPY_EXT` defaults to 16 in BAR
+        //     -> wgpu `anisotropy_clamp: 16`. wgpu silently caps to the
+        //     adapter's max anisotropy support (most desktop drivers do 16).
+        // Without anisotropy + mips, the splat-detail-normal textures
+        // sampled at world-space elmo scales alias into per-fragment normal
+        // noise at oblique angles, which lit every shadowed surface as
+        // grain.
+        let detail_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("detail_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            anisotropy_clamp: 16,
+            ..Default::default()
+        });
+
+        // Default splat textures: 1x1 (127, 127, 127, 127). The shader
+        // does `sample * 2 - 1` so 127/255 ≈ 0.498 → centered ≈ -0.004,
+        // i.e. effectively zero contribution. Distribution gets the
+        // same default; with no real distribution loaded the shader's
+        // `splat_params.z` flag (advanced enabled) is false so the
+        // path isn't even taken.
+        let splat_default_data: [u8; 4] = [127, 127, 127, 127];
+        let make_splat_default = |label: &str| {
+            device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &splat_default_data,
+            )
+        };
+        let splat_dn_default_1 = make_splat_default("splat_dn_default_1");
+        let splat_dn_default_2 = make_splat_default("splat_dn_default_2");
+        let splat_dn_default_3 = make_splat_default("splat_dn_default_3");
+        let splat_dn_default_4 = make_splat_default("splat_dn_default_4");
+        let splat_distr_default = make_splat_default("splat_distr_default");
+
+        // Sky-reflection mod default: 1x1 black -> mix factor 0
+        // everywhere -> zero reflection contribution until a real
+        // map-authored texture is uploaded.
+        let sky_reflect_mod_default_data: [u8; 4] = [0, 0, 0, 255];
+        let sky_reflect_mod_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("sky_reflect_mod_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &sky_reflect_mod_default_data,
+        );
+
+        // Specular texture default: 1x1 black -> per-pixel spec colour = 0
+        // and alpha-driven exponent = 0 -> no spec contribution everywhere
+        // until a real map-authored texture is uploaded. The `specular_tex_enabled`
+        // flag also has to be set on for the shader to take this path at
+        // all, so the default texture is mostly belt-and-braces.
+        let specular_tex_default_data: [u8; 4] = [0, 0, 0, 255];
+        let specular_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("specular_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &specular_tex_default_data,
+        );
+
         let texture_bind_group = {
             let av = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let mv = metalmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let tv = typemap_texture.create_view(&wgpu::TextureViewDescriptor::default());
+            let dv = detail_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let sd1 = splat_dn_default_1.create_view(&wgpu::TextureViewDescriptor::default());
+            let sd2 = splat_dn_default_2.create_view(&wgpu::TextureViewDescriptor::default());
+            let sd3 = splat_dn_default_3.create_view(&wgpu::TextureViewDescriptor::default());
+            let sd4 = splat_dn_default_4.create_view(&wgpu::TextureViewDescriptor::default());
+            let sdv = splat_distr_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let srmv = sky_reflect_mod_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let specv = specular_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture_bind_group"),
                 layout: &texture_bind_group_layout,
@@ -661,6 +1625,42 @@ impl TerrainRenderer {
                     wgpu::BindGroupEntry {
                         binding: 4,
                         resource: wgpu::BindingResource::Sampler(&albedo_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 5,
+                        resource: wgpu::BindingResource::TextureView(&dv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 6,
+                        resource: wgpu::BindingResource::Sampler(&detail_sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 7,
+                        resource: wgpu::BindingResource::TextureView(&sd1),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 8,
+                        resource: wgpu::BindingResource::TextureView(&sd2),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 9,
+                        resource: wgpu::BindingResource::TextureView(&sd3),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 10,
+                        resource: wgpu::BindingResource::TextureView(&sd4),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 11,
+                        resource: wgpu::BindingResource::TextureView(&sdv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 12,
+                        resource: wgpu::BindingResource::TextureView(&srmv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 13,
+                        resource: wgpu::BindingResource::TextureView(&specv),
                     },
                 ],
             })
@@ -731,8 +1731,55 @@ impl TerrainRenderer {
         let refraction_default_view =
             refraction_default_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
+        // Water surface params uniform (BumpWater inputs). Initial contents
+        // are SmfLighting defaults; `render_internal` re-uploads each frame
+        // from the current map's settings.
+        let water_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("water_params_uniform"),
+            size: std::mem::size_of::<WaterParamsUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &water_params_buffer,
+            0,
+            bytemuck::bytes_of(&WaterParamsUniform::from(&SmfLighting::default())),
+        );
+
+        // Default refraction-depth texture: 1x1 depth = 1.0 (far). Used
+        // before resize() creates the real one. With depth = 1.0 the
+        // mixback computation yields 0 everywhere (nothing's closer
+        // than the water plane), which is the right no-op.
+        let refraction_depth_default = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("refraction_depth_default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: depth_format,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let refraction_depth_default_view =
+            refraction_depth_default.create_view(&wgpu::TextureViewDescriptor::default());
+        let refraction_depth_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("refraction_depth_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
         let make_water_planes_bg =
-            |refl_view: &wgpu::TextureView, refr_view: &wgpu::TextureView| {
+            |refl_view: &wgpu::TextureView,
+             refr_view: &wgpu::TextureView,
+             refr_depth_view: &wgpu::TextureView| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("water_planes_bind_group"),
                     layout: &water_planes_bind_group_layout,
@@ -753,13 +1800,31 @@ impl TerrainRenderer {
                             binding: 3,
                             resource: wgpu::BindingResource::Sampler(&refraction_sampler),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 4,
+                            resource: water_params_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 5,
+                            resource: wgpu::BindingResource::TextureView(refr_depth_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 6,
+                            resource: wgpu::BindingResource::Sampler(&refraction_depth_sampler),
+                        },
                     ],
                 })
             };
-        let water_planes_bind_group =
-            make_water_planes_bg(&reflection_default_view, &refraction_default_view);
-        let water_planes_bind_group_dummy =
-            make_water_planes_bg(&reflection_default_view, &refraction_default_view);
+        let water_planes_bind_group = make_water_planes_bg(
+            &reflection_default_view,
+            &refraction_default_view,
+            &refraction_depth_default_view,
+        );
+        let water_planes_bind_group_dummy = make_water_planes_bg(
+            &reflection_default_view,
+            &refraction_default_view,
+            &refraction_depth_default_view,
+        );
 
         let water_normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("water_normal_sampler"),
@@ -795,40 +1860,125 @@ impl TerrainRenderer {
         // Default 1x1 heightmap (zero height) until update_heightmap is called.
         // Group 3 bind group combines water_normal (0,1) and heightmap (2).
         let heightmap_texture = make_default_r32float(device, queue, "heightmap_default", 0.0);
-        let heightmap_bind_group = {
-            let hv = heightmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("group3_bind_group"),
-                layout: &heightmap_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&water_normal_view),
+        let heightmap_view = heightmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let heightmap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("group3_bind_group"),
+            layout: &heightmap_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&water_normal_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&water_normal_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&heightmap_view),
+                },
+            ],
+        });
+
+        // Shadow caster heightmap bind group: same texture, single-binding
+        // layout for the depth-only terrain pipeline.
+        let shadow_caster_heightmap_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("shadow_caster_heightmap_bg"),
+            layout: &shadow_caster_heightmap_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&heightmap_view),
+            }],
+        });
+
+        // Shadow caster pipeline for terrain. Writes only depth into the shadow
+        // map; the heightmap displacement matches `vs_main` so the shadow
+        // silhouette matches the rendered terrain.
+        let shadow_terrain_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("shadow_terrain_shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/shadow_terrain.wgsl").into(),
+            ),
+        });
+        let shadow_caster_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("shadow_caster_terrain_layout"),
+            bind_group_layouts: &[
+                &camera_bind_group_layout,    // group 0: camera (extents + height_scale)
+                &shadow.caster_bgl,           // group 1: light view-proj
+                &shadow_caster_heightmap_bgl, // group 2: heightmap
+            ],
+            push_constant_ranges: &[],
+        });
+        let shadow_terrain_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("shadow_terrain_pipeline"),
+                layout: Some(&shadow_caster_layout),
+                vertex: wgpu::VertexState {
+                    module: &shadow_terrain_shader,
+                    entry_point: Some("vs_shadow_terrain"),
+                    buffers: &[TerrainVertex::desc()],
+                    compilation_options: Default::default(),
+                },
+                // Depth-only: no fragment color output. The FS just runs the
+                // `discard` for skirt/water vertices.
+                fragment: Some(wgpu::FragmentState {
+                    module: &shadow_terrain_shader,
+                    entry_point: Some("fs_shadow_terrain"),
+                    targets: &[],
+                    compilation_options: Default::default(),
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Ccw,
+                    cull_mode: None,
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: crate::shadow::ShadowMap::FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    // Small slope-scale bias attenuates depth acne on the
+                    // displaced terrain mesh without pushing feature contact
+                    // shadows off the ground.
+                    bias: wgpu::DepthBiasState {
+                        constant: 1,
+                        slope_scale: 1.0,
+                        clamp: 0.0,
                     },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&water_normal_sampler),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&hv),
-                    },
-                ],
-            })
-        };
+                }),
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            });
 
         let feature_renderer = crate::features::FeatureRenderer::new(
             device,
+            queue,
             output_format,
             depth_format,
             &camera_bind_group_layout,
+            &shadow.caster_bgl,
+            &shadow.receiver_bgl,
         );
 
         Self {
             render_pipeline,
             sky_pipeline,
+            shadow_terrain_pipeline,
+            shadow,
+            shadow_caster_heightmap_bg,
+            shadow_caster_heightmap_bgl,
             camera_buffer,
             camera_bind_group,
+            camera_bind_group_layout,
+            skybox_sampler,
+            skybox_view: skybox_default_view,
+            skybox_texture: None,
+            skybox_enabled: false,
             feature_renderer: Some(feature_renderer),
             texture_bind_group_layout,
             texture_bind_group,
@@ -836,12 +1986,27 @@ impl TerrainRenderer {
             albedo_sampler,
             metalmap_texture,
             typemap_texture,
+            detail_texture: detail_default,
+            detail_sampler,
+            splat_detail_normal_1: splat_dn_default_1,
+            splat_detail_normal_2: splat_dn_default_2,
+            splat_detail_normal_3: splat_dn_default_3,
+            splat_detail_normal_4: splat_dn_default_4,
+            splat_distr_texture: splat_distr_default,
+            advanced_splat_enabled: false,
+            sky_reflect_mod_texture: sky_reflect_mod_default,
+            sky_reflect_mod_enabled: false,
+            specular_tex_texture: specular_tex_default,
+            specular_tex_enabled: false,
             has_albedo: false,
             water_planes_bind_group_layout,
             reflection_sampler,
             refraction_sampler,
+            refraction_depth_sampler,
             water_planes_bind_group,
             water_planes_bind_group_dummy,
+            water_params_buffer,
+            last_water_params: WaterParamsUniform::default(),
             water_normal_texture,
             water_normal_sampler,
             water_normal_view,
@@ -851,6 +2016,7 @@ impl TerrainRenderer {
             vertex_buffer: None,
             index_buffer: None,
             num_indices: 0,
+            water_index_offset: 0,
             grid_n: 512,
             depth_texture: None,
             depth_format,
@@ -865,6 +2031,8 @@ impl TerrainRenderer {
             width: 512,
             height: 512,
             height_scale: 0.3,
+            height_range_elmos: 1.0,
+            elmo_per_render_xz: [1.0, 1.0],
             water_y: -1.0,
             water_color: [0.2, 0.4, 0.7],
             smf_lighting: SmfLighting::default(),
@@ -896,6 +2064,8 @@ impl TerrainRenderer {
             water_y,
             water_color,
             grid_n,
+            height_range_elmos,
+            elmo_per_render_xz,
         } = params;
         self.height_scale = height_scale;
         self.x_extent = x_extent;
@@ -903,6 +2073,8 @@ impl TerrainRenderer {
         self.water_y = water_y;
         self.water_color = water_color;
         self.grid_n = grid_n;
+        self.height_range_elmos = height_range_elmos;
+        self.elmo_per_render_xz = elmo_per_render_xz;
 
         // Build mesh: flat grid + skirts/cap + optional water plane.
         let (mut verts, mut idxs) = generate_flat_grid(grid_n);
@@ -914,6 +2086,11 @@ impl TerrainRenderer {
         verts.extend(skirt_v);
 
         let water_base = verts.len() as u32;
+        // Record where the water sub-range starts BEFORE pushing water indices
+        // so the main pass can draw `[0, water_index_offset)` for ground and
+        // `[water_index_offset, num_indices)` for water as separate calls
+        // with the feature pass between.
+        self.water_index_offset = idxs.len() as u32;
         let (water_v, water_i) = generate_water_plane(x_extent, z_extent, water_y);
         idxs.extend(water_i.iter().map(|i| i + water_base));
         verts.extend(water_v);
@@ -1006,6 +2183,16 @@ impl TerrainRenderer {
                     },
                 ],
             });
+            // Shadow caster needs its own bind group pointing at the same view.
+            self.shadow_caster_heightmap_bg =
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("shadow_caster_heightmap_bg"),
+                    layout: &self.shadow_caster_heightmap_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    }],
+                });
             self.heightmap_texture = tex;
         }
     }
@@ -1044,6 +2231,110 @@ impl TerrainRenderer {
                 depth_or_array_layers: 1,
             },
         );
+    }
+
+    /// Replace the skybox cubemap. `faces` is the 6-face array decoded by
+    /// `bar_data::skybox::load_dds_cubemap`. All faces must be the same
+    /// `width x height` and in `Rgba8Unorm` row-major layout. Setting a
+    /// skybox flips `skybox_enabled` on so the sky shader samples the
+    /// cubemap instead of the procedural ModernSky path.
+    pub fn update_skybox(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        cubemap: &bar_data::Cubemap,
+    ) {
+        // wgpu expects the 6 faces concatenated as `LayerMajor` data --
+        // face 0 first, then face 1, etc. `bar_data::Cubemap` already
+        // stores them in that order.
+        let mut packed: Vec<u8> =
+            Vec::with_capacity((cubemap.width * cubemap.height * 4 * 6) as usize);
+        for face in &cubemap.faces {
+            packed.extend_from_slice(face);
+        }
+        let tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("skybox_cubemap"),
+                size: wgpu::Extent3d {
+                    width: cubemap.width,
+                    height: cubemap.height,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &packed,
+        );
+        let view = tex.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("skybox_cubemap_view"),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        self.skybox_view = view;
+        self.skybox_texture = Some(tex);
+        self.skybox_enabled = true;
+        self.rebuild_camera_bind_group(device);
+    }
+
+    /// Clear any uploaded skybox; the sky shader falls back to the
+    /// procedural ModernSky path on the next frame.
+    pub fn clear_skybox(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let zero: [u8; 4 * 6] = [0; 4 * 6];
+        let tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("skybox_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 6,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &zero,
+        );
+        let view = tex.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("skybox_default_view"),
+            dimension: Some(wgpu::TextureViewDimension::Cube),
+            ..Default::default()
+        });
+        self.skybox_view = view;
+        self.skybox_texture = None;
+        self.skybox_enabled = false;
+        self.rebuild_camera_bind_group(device);
+    }
+
+    fn rebuild_camera_bind_group(&mut self, device: &wgpu::Device) {
+        self.camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("camera_bind_group"),
+            layout: &self.camera_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.camera_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&self.skybox_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.skybox_sampler),
+                },
+            ],
+        });
     }
 
     /// Replace the albedo texture from a `ColorBuffer`. Sets the `has_albedo`
@@ -1323,6 +2614,30 @@ impl TerrainRenderer {
         let tv = self
             .typemap_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let dv = self
+            .detail_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let sd1 = self
+            .splat_detail_normal_1
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let sd2 = self
+            .splat_detail_normal_2
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let sd3 = self
+            .splat_detail_normal_3
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let sd4 = self
+            .splat_detail_normal_4
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let sdv = self
+            .splat_distr_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let srmv = self
+            .sky_reflect_mod_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let specv = self
+            .specular_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("texture_bind_group"),
             layout: &self.texture_bind_group_layout,
@@ -1347,8 +2662,311 @@ impl TerrainRenderer {
                     binding: 4,
                     resource: wgpu::BindingResource::Sampler(&self.albedo_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&dv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&self.detail_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&sd1),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::TextureView(&sd2),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&sd3),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&sd4),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&sdv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView(&srmv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&specv),
+                },
             ],
         });
+    }
+
+    /// Replace the sky-reflection mod 2D texture. Flips
+    /// `sky_reflect_mod_enabled` on so the next frame's shader applies
+    /// the cubemap reflection on the terrain.
+    pub fn update_sky_reflect_mod(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.sky_reflect_mod_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("sky_reflect_mod"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.sky_reflect_mod_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset the sky-reflection mod to the 1x1 black default so the
+    /// shader's mix factor goes to zero everywhere.
+    pub fn clear_sky_reflect_mod(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let zero: [u8; 4] = [0, 0, 0, 255];
+        self.sky_reflect_mod_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("sky_reflect_mod_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &zero,
+        );
+        self.sky_reflect_mod_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the per-pixel specular texture (mapinfo `specularTex`).
+    /// Engine `SMF_SPECULAR_LIGHTING` path. Flips `specular_tex_enabled`
+    /// on so the next frame's uniform tells the shader to sample
+    /// per-pixel `specCol.rgb` + `specCol.a * 16` for exponent instead
+    /// of using the global `groundSpecularColor`.
+    pub fn update_specular_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.specular_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("specular_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.specular_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset the specular texture to the 1x1 black default so the shader's
+    /// `SMF_SPECULAR_LIGHTING` gate goes off and spec falls back to the
+    /// global `ground_specular` uniform.
+    pub fn clear_specular_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let zero: [u8; 4] = [0, 0, 0, 255];
+        self.specular_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("specular_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &zero,
+        );
+        self.specular_tex_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace all five splat-detail textures at once. Each `faces`-style
+    /// entry is `(rgba_bytes, width, height)`. Order:
+    /// `[splatDetailNormalTex1..4, splatDistrTex]`. Sets
+    /// `advanced_splat_enabled = true` so the next frame's uniform
+    /// flips the shader path on.
+    /// Upload the four splat-detail-normal textures + the distribution
+    /// texture. Each entry is a mip chain `(rgba, w, h)` with `mips[0]`
+    /// being the base level. If a chain has only the base mip we
+    /// synthesise the rest CPU-side via box filtering -- approximates
+    /// `glGenerateMipmap`, sufficient to defeat aliasing on the splat
+    /// detail-normal sample even when the source format had no mip data
+    /// (PNG/TGA). DDS sources pass through their hand-tuned chain.
+    pub fn update_splat_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textures: [Vec<(Vec<u8>, u32, u32)>; 5],
+    ) {
+        let make = |label: &str, mip_chain: Vec<(Vec<u8>, u32, u32)>| -> wgpu::Texture {
+            let chain = ensure_full_mip_chain(mip_chain);
+            let (_, base_w, base_h) = chain[0];
+            let mip_count = chain.len() as u32;
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: base_w,
+                    height: base_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: mip_count,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+            for (level, (rgba, w, h)) in chain.into_iter().enumerate() {
+                queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &tex,
+                        mip_level: level as u32,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &rgba,
+                    wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(w * 4),
+                        rows_per_image: Some(h),
+                    },
+                    wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            tex
+        };
+
+        // Unfortunately I can't deconstruct the array directly because the
+        // closure captures `chain`. Hold the entries in a Vec long enough
+        // to hand each to `make` in turn.
+        let mut iter = textures.into_iter();
+        self.splat_detail_normal_1 = make("splat_detail_normal_1", iter.next().unwrap());
+        self.splat_detail_normal_2 = make("splat_detail_normal_2", iter.next().unwrap());
+        self.splat_detail_normal_3 = make("splat_detail_normal_3", iter.next().unwrap());
+        self.splat_detail_normal_4 = make("splat_detail_normal_4", iter.next().unwrap());
+        self.splat_distr_texture = make("splat_distr", iter.next().unwrap());
+        self.advanced_splat_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Drop any uploaded splat textures and revert to the 1x1
+    /// defaults so the shader's advanced-splat path stays off.
+    pub fn clear_splat_textures(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let default_data: [u8; 4] = [127, 127, 127, 127];
+        let make = |label: &str| -> wgpu::Texture {
+            device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                &default_data,
+            )
+        };
+        self.splat_detail_normal_1 = make("splat_dn_default_1");
+        self.splat_detail_normal_2 = make("splat_dn_default_2");
+        self.splat_detail_normal_3 = make("splat_dn_default_3");
+        self.splat_detail_normal_4 = make("splat_dn_default_4");
+        self.splat_distr_texture = make("splat_distr_default");
+        self.advanced_splat_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the detail texture (mapinfo `resources.detailTex`).
+    /// Takes raw RGBA bytes + dimensions; the loader in bar-app decodes
+    /// whatever format the map ships (BMP/PNG/TGA via `image`, DDS via
+    /// `ddsfile`) and passes us the canonical RGBA8 layout.
+    pub fn update_detail_texture(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        let tex = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_texture"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.detail_texture = tex;
+        self.rebuild_material_bind_group(device);
     }
 
     // ── Camera and animation ────────────────────────────────────────────────
@@ -1477,11 +3095,26 @@ impl TerrainRenderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.depth_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            // The water shader samples this depth in the main pass to
+            // do the engine's depth-aware refraction mixback
+            // (`BumpWaterFS:304-314`): if the distorted refraction UV
+            // pulls in a fragment that's *closer* than the water plane
+            // (i.e. above-water terrain leaking through near a
+            // shoreline), the shader replaces it with the undistorted
+            // sample. That requires TEXTURE_BINDING on top of the
+            // RENDER_ATTACHMENT we always needed.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         self.refraction_depth_view =
             Some(refraction_depth.create_view(&wgpu::TextureViewDescriptor::default()));
+
+        // We need a view of the refraction-depth texture that's
+        // separate from the one used for the depth attachment, so
+        // capture it here before storing the attachment view on
+        // self.refraction_depth_view.
+        let refraction_depth_sample_view =
+            refraction_depth.create_view(&wgpu::TextureViewDescriptor::default());
 
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
@@ -1502,6 +3135,18 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: wgpu::BindingResource::Sampler(&self.refraction_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.water_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(&refraction_depth_sample_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&self.refraction_depth_sampler),
                 },
             ],
         });
@@ -1536,9 +3181,25 @@ impl TerrainRenderer {
     /// Apply per-frame params from a `PreviewFrame`. No geometry or texture uploads.
     fn sync_to_frame(&mut self, f: &PreviewFrame) {
         self.height_scale = f.height_scale;
+        self.height_range_elmos = f.height_range_elmos;
+        self.elmo_per_render_xz = f.elmo_per_render_xz;
         self.water_y = f.water_y;
         self.water_color = f.water_color;
-        self.smf_lighting = f.smf_lighting;
+        // The skybox + splat upload state is owned by the renderer
+        // (set by `update_skybox` / `update_splat_textures`), not by
+        // the per-frame uniform. Echo them into `smf_lighting` before
+        // storing so the per-frame uniform sees the correct enabled
+        // flags regardless of what the caller set in `f.smf_lighting`.
+        // Same for `elmo_per_render_xz` -- comes from `update_heightmap`
+        // (host computes it from map dimensions).
+        self.smf_lighting = bar_render_smf_with_runtime_overrides(
+            f.smf_lighting,
+            self.skybox_enabled,
+            self.advanced_splat_enabled,
+            self.sky_reflect_mod_enabled,
+            self.specular_tex_enabled,
+            self.elmo_per_render_xz,
+        );
         self.x_extent = f.x_extent;
         self.z_extent = f.z_extent;
         self.set_quality_high(f.quality_high);
@@ -1585,7 +3246,7 @@ impl TerrainRenderer {
         queue.submit(std::iter::once(encoder.finish()));
     }
 
-    fn render_internal(&self, device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera) {
+    fn render_internal(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, camera: &Camera) {
         let Some(ref output_view) = self.output_view else {
             return;
         };
@@ -1604,6 +3265,44 @@ impl TerrainRenderer {
         let cam_pos = camera.position();
 
         let smf = self.smf_lighting.to_uniform_slots();
+
+        // Upload per-map BumpWater surface params. Cheap: 80-byte uniform.
+        // Log only on change so moving Water-tab sliders surfaces a clean
+        // signal in the BME log without spamming every frame.
+        let water_params = WaterParamsUniform::from(&self.smf_lighting);
+        if water_params != self.last_water_params {
+            // DEBUG-level so this doesn't appear in the BME log by default;
+            // toggle the panel's DBG button to see it. Fires on change only,
+            // so dragging a Water-tab slider produces one row per stable
+            // value rather than one per frame.
+            tracing::debug!(
+                fresnel_min = water_params.fresnel[0],
+                fresnel_max = water_params.fresnel[1],
+                fresnel_power = water_params.fresnel[2],
+                surface_alpha = water_params.surface_color_alpha[3],
+                specular_factor = water_params.factors[1],
+                perlin_amplitude = water_params.factors[3],
+                "water_params changed"
+            );
+            self.last_water_params = water_params;
+        }
+        queue.write_buffer(
+            &self.water_params_buffer,
+            0,
+            bytemuck::bytes_of(&water_params),
+        );
+
+        // Refresh the shadow uniform from the current sun + scene bounds.
+        // Cheap (a single 80-byte write_buffer); keeps the shadow frustum in
+        // sync with map resizes and sun direction edits without any caching.
+        self.shadow.update_light(
+            queue,
+            self.smf_lighting.sun_dir,
+            self.x_extent,
+            self.z_extent,
+            self.height_scale,
+        );
+
         let base_uniform = CameraUniform {
             view_proj: view_proj.to_cols_array_2d(),
             inv_view_proj: view_proj.inverse().to_cols_array_2d(),
@@ -1616,7 +3315,7 @@ impl TerrainRenderer {
             water_y: self.water_y,
             time: self.time,
             skip_water: 0.0,
-            _pad0: 0.0,
+            height_range_elmos: self.height_range_elmos,
             screen_w: self.width as f32,
             screen_h: self.height as f32,
             x_extent: self.x_extent,
@@ -1630,7 +3329,61 @@ impl TerrainRenderer {
             water_min_color: smf.water_min_color,
             brush_cursor: [0.0, 0.0, 0.0, 0.0],
             clip_plane: NO_CLIP,
+            custom_fog_color_atten: smf.custom_fog_color_atten,
+            custom_fog_params: smf.custom_fog_params,
+            sun_color: smf.sun_color,
+            sky_color_density: smf.sky_color_density,
+            sky_dir: smf.sky_dir,
+            cloud_color: smf.cloud_color,
+            skybox_params: smf.skybox_params,
+            splat_tex_scales: smf.splat_tex_scales,
+            splat_tex_mults: smf.splat_tex_mults,
+            splat_params: smf.splat_params,
         };
+
+        // ── Pass 0: shadow map ──────────────────────────────────────────────
+        // Render terrain + features from the sun's POV into a single depth
+        // texture. The receiver bind group built by `ShadowMap` is then bound
+        // by every subsequent pass that uses the terrain or feature pipeline.
+        // Write the main-pass camera uniform before the shadow pass; the
+        // shadow_terrain shader only reads x_extent / z_extent / height_scale
+        // and the buffer contents are stable across this whole encoder.
+        queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&base_uniform));
+        {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("shadow_pass_encoder"),
+            });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("shadow_pass"),
+                    color_attachments: &[],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: self.shadow.depth_view(),
+                        depth_ops: Some(wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(1.0),
+                            store: wgpu::StoreOp::Store,
+                        }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                // Terrain caster.
+                rp.set_pipeline(&self.shadow_terrain_pipeline);
+                rp.set_bind_group(0, &self.camera_bind_group, &[]);
+                rp.set_bind_group(1, self.shadow.caster_bind_group(), &[]);
+                rp.set_bind_group(2, &self.shadow_caster_heightmap_bg, &[]);
+                rp.set_vertex_buffer(0, vertex_buffer.slice(..));
+                rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                rp.draw_indexed(0..self.num_indices, 0, 0..1);
+
+                // Feature caster -- skipped if there are no features.
+                if let Some(ref fr) = self.feature_renderer {
+                    fr.draw_shadow(&mut rp, self.shadow.caster_bind_group());
+                }
+            }
+            queue.submit(std::iter::once(enc.finish()));
+        }
 
         // ── Pass 1: planar reflection ───────────────────────────────────────
         // Renders the world from a camera mirrored about y = water_y, keeping
@@ -1719,6 +3472,7 @@ impl TerrainRenderer {
                     rp.set_bind_group(1, &self.texture_bind_group, &[]);
                     rp.set_bind_group(2, &self.water_planes_bind_group_dummy, &[]);
                     rp.set_bind_group(3, &self.heightmap_bind_group, &[]);
+                    rp.set_bind_group(4, self.shadow.receiver_bind_group(), &[]);
                     rp.set_vertex_buffer(0, vertex_buffer.slice(..));
                     rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     rp.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -1771,10 +3525,18 @@ impl TerrainRenderer {
                             view: refraction_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
+                                // Refraction clear colour: derive each frame
+                                // from the live `water_base` channel of
+                                // SmfLighting (= mapinfo.lua's `water.basecolor`),
+                                // not the cached `self.water_color` channel.
+                                // This is what keeps the Preview and Sculpt3D
+                                // layouts in lockstep when a map author edits
+                                // the Water tab -- both pull from the same
+                                // live source.
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: self.water_color[0] as f64 * 0.5,
-                                    g: self.water_color[1] as f64 * 0.5,
-                                    b: self.water_color[2] as f64 * 0.5,
+                                    r: self.smf_lighting.water_base[0] as f64 * 0.5,
+                                    g: self.smf_lighting.water_base[1] as f64 * 0.5,
+                                    b: self.smf_lighting.water_base[2] as f64 * 0.5,
                                     a: 1.0,
                                 }),
                                 store: wgpu::StoreOp::Store,
@@ -1796,6 +3558,7 @@ impl TerrainRenderer {
                     rp.set_bind_group(1, &self.texture_bind_group, &[]);
                     rp.set_bind_group(2, &self.water_planes_bind_group_dummy, &[]);
                     rp.set_bind_group(3, &self.heightmap_bind_group, &[]);
+                    rp.set_bind_group(4, self.shadow.receiver_bind_group(), &[]);
                     rp.set_vertex_buffer(0, vertex_buffer.slice(..));
                     rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     rp.draw_indexed(0..self.num_indices, 0, 0..1);
@@ -1803,6 +3566,20 @@ impl TerrainRenderer {
                     rp.set_pipeline(&self.sky_pipeline);
                     rp.set_bind_group(0, &self.camera_bind_group, &[]);
                     rp.draw(0..3, 0..1);
+                }
+                // Feature pass into the refraction texture: lets the water
+                // shader's refraction sample carry underwater features. The
+                // refraction camera_uniform has `clip_plane` set to the
+                // far-side half-space, and features.wgsl's fragment shader
+                // discards fragments that fail it.
+                if let Some(ref fr) = self.feature_renderer {
+                    fr.draw(
+                        &mut enc,
+                        refraction_view,
+                        refraction_depth_view,
+                        &self.camera_bind_group,
+                        self.shadow.receiver_bind_group(),
+                    );
                 }
                 queue.submit(std::iter::once(enc.finish()));
             }
@@ -1851,9 +3628,14 @@ impl TerrainRenderer {
             render_pass.set_bind_group(1, &self.texture_bind_group, &[]);
             render_pass.set_bind_group(2, &self.water_planes_bind_group, &[]);
             render_pass.set_bind_group(3, &self.heightmap_bind_group, &[]);
+            render_pass.set_bind_group(4, self.shadow.receiver_bind_group(), &[]);
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
             render_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
-            render_pass.draw_indexed(0..self.num_indices, 0, 0..1);
+            // Ground geometry only -- skirts + heightmap displacement grid.
+            // Water plane is drawn last (after features) so underwater features
+            // composite through the water's alpha blend instead of being
+            // depth-culled by the water surface.
+            render_pass.draw_indexed(0..self.water_index_offset, 0, 0..1);
 
             if self.quality_high {
                 render_pass.set_pipeline(&self.sky_pipeline);
@@ -1862,8 +3644,9 @@ impl TerrainRenderer {
             }
         }
 
-        // Feature pass: separate render pass using LoadOp::Load so the terrain
-        // depth buffer correctly occludes feature boxes.
+        // Feature pass: writes color + depth for features, including any below
+        // the water plane. Runs BEFORE the water draw so the water's alpha
+        // blend layers cleanly over underwater features.
         if let (Some(ref fr), Some(ref depth_view)) = (&self.feature_renderer, &self.depth_texture)
         {
             fr.draw(
@@ -1871,7 +3654,46 @@ impl TerrainRenderer {
                 output_view,
                 depth_view,
                 &self.camera_bind_group,
+                self.shadow.receiver_bind_group(),
             );
+        }
+
+        // Water pass: draws only the water-plane sub-range of the terrain
+        // index buffer. LoadOp::Load keeps everything from the ground + feature
+        // passes. The water shader's ALPHA_BLENDING composites the planar
+        // reflection / refraction over what's already there, including
+        // underwater features.
+        if self.water_index_offset < self.num_indices {
+            let mut water_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("water_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            water_pass.set_pipeline(&self.render_pipeline);
+            water_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            water_pass.set_bind_group(1, &self.texture_bind_group, &[]);
+            water_pass.set_bind_group(2, &self.water_planes_bind_group, &[]);
+            water_pass.set_bind_group(3, &self.heightmap_bind_group, &[]);
+            water_pass.set_bind_group(4, self.shadow.receiver_bind_group(), &[]);
+            water_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            water_pass.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+            water_pass.draw_indexed(self.water_index_offset..self.num_indices, 0, 0..1);
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -1887,6 +3709,7 @@ impl TerrainRenderer {
         self.vertex_buffer = None;
         self.index_buffer = None;
         self.num_indices = 0;
+        self.water_index_offset = 0;
         self.water_y = -1.0;
         self.has_albedo = false;
     }
@@ -1918,15 +3741,21 @@ impl TerrainRenderer {
         self.feature_renderer.as_mut()
     }
 
-    /// Upload an S3O model for a named feature type.
+    /// Upload an S3O model and its two textures for a named feature type.
+    /// `tex1` is the diffuse (rgb) + team mask (a) channel; `tex2` is the
+    /// shading (rgb) + opacity (a) channel. When either is `None` the feature
+    /// renderer substitutes a 1x1 white default so the mesh still draws.
     pub fn load_feature_mesh(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         name: &str,
         mesh: &bar_data::S3oMesh,
+        tex1: Option<&crate::features::FeatureTexture>,
+        tex2: Option<&crate::features::FeatureTexture>,
     ) {
         if let Some(ref mut fr) = self.feature_renderer {
-            fr.load_mesh(device, name, mesh);
+            fr.load_mesh(device, queue, name, mesh, tex1, tex2);
         }
     }
 
@@ -2020,6 +3849,44 @@ mod tests {
         assert!(
             module.is_ok(),
             "terrain shader failed to parse: {:?}",
+            module.err()
+        );
+    }
+
+    #[test]
+    fn feature_shader_wgsl_parses() {
+        // FeatureRenderer concatenates the SMF ground-shade helper in front
+        // of features.wgsl so feature shading is identical to terrain shading;
+        // mirror that here so the parse test matches the runtime module.
+        let smf_ground = include_str!("../../../shaders/recoil/smf_ground.wgsl");
+        let features = include_str!("../../../shaders/features.wgsl");
+        let combined = format!("{smf_ground}\n{features}");
+        let module = naga::front::wgsl::parse_str(&combined);
+        assert!(
+            module.is_ok(),
+            "feature shader failed to parse: {:?}",
+            module.err()
+        );
+    }
+
+    #[test]
+    fn shadow_terrain_shader_wgsl_parses() {
+        let s = include_str!("../../../shaders/shadow_terrain.wgsl");
+        let module = naga::front::wgsl::parse_str(s);
+        assert!(
+            module.is_ok(),
+            "shadow_terrain shader failed to parse: {:?}",
+            module.err()
+        );
+    }
+
+    #[test]
+    fn shadow_feature_shader_wgsl_parses() {
+        let s = include_str!("../../../shaders/shadow_feature.wgsl");
+        let module = naga::front::wgsl::parse_str(s);
+        assert!(
+            module.is_ok(),
+            "shadow_feature shader failed to parse: {:?}",
             module.err()
         );
     }
