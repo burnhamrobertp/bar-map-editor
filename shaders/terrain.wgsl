@@ -20,7 +20,12 @@ struct CameraUniform {
     /// 1.0 => discard water-plane fragments (used by reflection / refraction
     /// pre-passes so the water surface itself isn't captured).
     skip_water: f32,
-    _pad0: f32,
+    /// Heightmap span in Spring elmos (= max_h - min_h). Lets the SMF
+    /// water-absorption math convert render-space Y back to absolute
+    /// elmos, since the engine's `SMF_SHALLOW_WATER_DEPTH = 10` is in
+    /// elmos. Without this, the absorption is calibrated against the
+    /// wrong unit and the refraction texture comes out un-tinted.
+    height_range_elmos: f32,
     screen_w: f32,
     screen_h: f32,
     /// Half-span of the terrain mesh in world units on the X axis.
@@ -45,9 +50,89 @@ struct CameraUniform {
     /// Main pass sets (0, 0, 0, 1) so all fragments pass; reflection and
     /// refraction passes set this to keep only one side of the water plane.
     clip_plane: vec4<f32>,
+    /// Height-based custom fog. rgb = colour, w = attenuation per elmo.
+    /// Mirrors the in-game `custom.fog` widget that BAR maps use to tint
+    /// fragments below a configured altitude (e.g. underwater). Not part
+    /// of the engine's core SMF/BumpWater shaders, but applied here as a
+    /// final post-pass so previews match in-game appearance.
+    custom_fog_color_atten: vec4<f32>,
+    /// x = enabled (0/1), y = ceiling height in elmos, zw = unused.
+    custom_fog_params: vec4<f32>,
+    /// Procedural-sky inputs from mapinfo `atmosphere = { ... }`.
+    /// `sun_color.rgb` -> sun disc tint; `sky_color_density.rgb` -> base
+    /// sky colour at horizon; `sky_color_density.a` -> cloud density
+    /// (0..1, scales the cumulus/cirrus thresholds); `sky_dir.xyz` ->
+    /// sun direction in world space (per-map); `cloud_color.rgb` ->
+    /// cloud tint.
+    sun_color: vec4<f32>,
+    sky_color_density: vec4<f32>,
+    sky_dir: vec4<f32>,
+    cloud_color: vec4<f32>,
+    /// x = skybox enabled (0/1). When 1, fs_sky samples the cubemap;
+    /// otherwise it falls through to procedural ModernSky.
+    /// y = legacy `detailTex` strength (0/1). The engine only applies
+    /// `detailTex` to the playable area when the map is in simple
+    /// (non-splat) detail mode; we encode that decision CPU-side
+    /// from the presence of `splatDistrTex`.
+    skybox_params: vec4<f32>,
+    /// Per-channel UV scale for the four splat-detail-normal textures
+    /// (mapinfo `splats.texScales`). Applied to world XZ in elmos.
+    splat_tex_scales: vec4<f32>,
+    /// Per-channel mix multiplier for the distribution (mapinfo
+    /// `splats.texMults`). Multiplied into the distribution sample
+    /// before the weighted sum.
+    splat_tex_mults: vec4<f32>,
+    /// xy = elmos per render-space unit (host computes from map
+    /// dimensions). z = advanced splat detail enabled (0/1). w =
+    /// splat-detail diffuse-alpha enabled (0/1).
+    splat_params: vec4<f32>,
 }
 
+// ── Debug toggles ──────────────────────────────────────────────────────
+//
+// Bisection knobs for chasing visual divergences from engine. Each
+// const wraps one effect in the fragment shader; flipping to `false`
+// disables that effect (with the rest still active) so the user can
+// pinpoint which path is producing a visible artefact. Order is roughly
+// "most likely culprit first" for the current Ascendancy-washout
+// investigation. The const-folding optimiser removes the dead branches,
+// so leaving them in costs nothing once we land on a setting.
+const DBG_SKY_REFLECTION: bool      = true; // skybox cubemap mixed via skyReflectModTex
+const DBG_SPECULAR: bool            = true; // sun spec lobe (smf_specular)
+const DBG_DETAIL_TEX: bool          = true; // resources.detailTex contribution
+const DBG_SPLAT_NORMAL_PERTURB: bool = true; // tangent-space normal perturb from splat-detail-normals
+const DBG_SPLAT_DETAIL_COLOR: bool   = true; // alpha-channel detail colour from splat-detail-normals
+
+// VISUALISATION: see the comment block above the `return` in fs_main for
+// the channel meanings.
+const DBG_VISUALIZE_SPEC: bool      = false;
+// VISUALISATION: splat detail-normal contribution. Fires unconditionally
+// (NOT gated on the splat path being active), so it also reveals when
+// the renderer hasn't enabled splat at all.
+//   R = (s1.a + 1) * 0.5         -- alpha of splat-detail-normal #1
+//                                   (`splatDetailNormalTex1`), remapped
+//                                   to [0,1]. Mid-grey = no/flat content.
+//   G = distr_sample.r           -- red channel of the splat distribution
+//                                   texture. Should be high at metal-spot
+//                                   locations on Ascendency.
+//   B = camera.splat_params.z    -- renderer's `advanced_splat_enabled`
+//                                   flag (0 or 1). If B is black across
+//                                   the whole map, the splat textures
+//                                   never got uploaded (sync failed).
+// Quick reading:
+//   - All black                  -> splat textures not loaded at all.
+//   - Green only at metal spots  -> distribution OK; check why renderer
+//                                   has B=0 (sync log).
+//   - All three channels present -> path is working; investigate inside.
+const DBG_VISUALIZE_SPLAT_DETAIL: bool = false;
+
+
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
+/// Skybox cubemap from mapinfo's `atmosphere.skyBox` DDS, sampled by the
+/// sky pipeline when `camera.skybox_params.x > 0.5`. Defaults to a 1x1
+/// black cubemap until `update_skybox` uploads real face data.
+@group(0) @binding(1) var skybox_tex: texture_cube<f32>;
+@group(0) @binding(2) var skybox_sam: sampler;
 
 // Group 1: albedo + metalmap + typemap.
 // has_texture drives the albedo path; metalmap/typemap are sampled unconditionally
@@ -57,6 +142,35 @@ struct CameraUniform {
 @group(1) @binding(2) var metalmap_tex: texture_2d<f32>;
 @group(1) @binding(3) var typemap_tex: texture_2d<f32>;
 @group(1) @binding(4) var material_sam: sampler;
+/// Detail texture (mapinfo `resources.detailTex`). Sampled at world XZ
+/// in repeat mode; subtracted by 0.5 before adding to the diffuse so
+/// the texture darkens AND lightens. Defaults to 1x1 (0.5, 0.5, 0.5)
+/// when not uploaded, which makes the subtracted value zero -- a
+/// no-op contribution.
+@group(1) @binding(5) var detail_tex: texture_2d<f32>;
+@group(1) @binding(6) var detail_sam: sampler;
+/// Splat-detail-normal textures + distribution
+/// (`SMF_DETAIL_NORMAL_TEXTURE_SPLATTING` path). Sampled in elmo space
+/// at per-texture scales from `splat_tex_scales`, then weighted by the
+/// distribution * `splat_tex_mults` and combined into a single signed
+/// detail contribution.
+@group(1) @binding(7)  var splat_dn_tex_1: texture_2d<f32>;
+@group(1) @binding(8)  var splat_dn_tex_2: texture_2d<f32>;
+@group(1) @binding(9)  var splat_dn_tex_3: texture_2d<f32>;
+@group(1) @binding(10) var splat_dn_tex_4: texture_2d<f32>;
+@group(1) @binding(11) var splat_distr_tex: texture_2d<f32>;
+/// Per-pixel reflection-strength mask (`skyReflectModTex`). Gates the
+/// engine's `SMF_SKY_REFLECTIONS` path -- where it's bright the
+/// terrain reflects the skybox cubemap; where it's black no reflection.
+@group(1) @binding(12) var sky_reflect_mod_tex: texture_2d<f32>;
+/// Per-pixel specular colour + exponent (`specularTex`). Gates the engine's
+/// `SMF_SPECULAR_LIGHTING` path -- when `skybox_params.w > 0.5`, the
+/// shader samples this texture and uses `.rgb` as the per-pixel specular
+/// colour and `.a * 16` as the per-pixel exponent, instead of the global
+/// `groundSpecularColor` / `groundSpecularExponent` uniforms. Without
+/// this, every lit fragment got the global spec strength (which Ascendancy
+/// authors as 0.5) and the entire sun-facing terrain went hot white.
+@group(1) @binding(13) var specular_tex: texture_2d<f32>;
 
 /// Planar-reflection texture -- rendered in a pre-pass with the camera mirrored
 /// through the water plane. Sampled in the water fragment branch.
@@ -73,9 +187,60 @@ struct CameraUniform {
 /// water.wgsl at bindings 0/1). Format: R32Float, non-filterable -- use textureLoad.
 @group(3) @binding(2) var heightmap_tex: texture_2d<f32>;
 
+/// Shadow map -- see `crates/bar-render/src/shadow.rs`. Group 4 is unused by
+/// the reflection/refraction pre-passes (they bind a dummy receiver group so
+/// the pipeline layout matches).
+struct ShadowUniform {
+    light_view_proj: mat4x4<f32>,
+    sun_dir: vec4<f32>,
+}
+@group(4) @binding(0) var<uniform> shadow_u: ShadowUniform;
+@group(4) @binding(1) var shadow_tex: texture_depth_2d;
+@group(4) @binding(2) var shadow_samp: sampler_comparison;
+
+/// Sample the shadow map at `world_pos` and return 1.0 = lit, 0.0 = shadowed.
+/// Hardware 2x2 PCF via comparison sampler (see `features.wgsl::shadow_factor`
+/// for the same approach). Sharp at silhouettes, soft only across a single
+/// texel. Fragments outside the frustum default to lit.
+fn sample_shadow(world_pos: vec3<f32>) -> f32 {
+    let ls = shadow_u.light_view_proj * vec4<f32>(world_pos, 1.0);
+    let ndc = ls.xyz / ls.w;
+    let uv = vec2<f32>(ndc.x * 0.5 + 0.5, -ndc.y * 0.5 + 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0 || ndc.z > 1.0) {
+        return 1.0;
+    }
+    let bias = 0.0005;
+    return textureSampleCompare(shadow_tex, shadow_samp, uv, ndc.z - bias);
+}
+
 /// Returns true if the fragment is on the kept side of camera.clip_plane.
 fn pass_clip_plane(world_pos: vec3<f32>) -> bool {
     return dot(camera.clip_plane.xyz, world_pos) + camera.clip_plane.w >= 0.0;
+}
+
+/// Apply the mapinfo `custom.fog` height-based tint to a fragment colour.
+/// Returns `color` unchanged when the fog is disabled or the fragment is
+/// above the ceiling. Inside the fog region the colour is *multiplicatively
+/// tinted* toward `fog_color`: at the ceiling `tint = vec3(1)` (no change),
+/// at full attenuation `tint = fog_color` (dims and colour-shifts). This
+/// matches the in-game behaviour where the fog absorbs light selectively
+/// per channel rather than blending the fragment toward a bright fog
+/// colour (which is what a plain `mix(...)` would do and what made the
+/// previous version of this pass look milky/cloudy at depth).
+fn apply_custom_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
+    if (camera.custom_fog_params.x < 0.5) {
+        return color;
+    }
+    let elmo_y = world_pos.y
+        / max(camera.height_scale, 1e-4)
+        * camera.height_range_elmos;
+    let below = camera.custom_fog_params.y - elmo_y;
+    if (below <= 0.0) {
+        return color;
+    }
+    let f = clamp(below * camera.custom_fog_color_atten.w, 0.0, 1.0);
+    let tint = mix(vec3<f32>(1.0), camera.custom_fog_color_atten.xyz, f);
+    return color * tint;
 }
 
 struct VertexInput {
@@ -190,25 +355,20 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             in.clip_position.x / camera.screen_w,
             in.clip_position.y / camera.screen_h,
         );
-        return shade_water(in.world_position, eye_dir, scr_uv);
+        // `clip_position.z` here is the fragment's NDC depth (0..1).
+        // We pass it through so `shade_water` can compare against the
+        // refraction-pass depth texture for the engine's depth-aware
+        // mixback.
+        return shade_water(in.world_position, eye_dir, scr_uv, in.clip_position.z);
     }
 
     let sun_dir = normalize(camera.sun_dir_exp.xyz);
-    let normal = normalize(in.normal);
+    // `normal` is a `var` rather than `let` so the splat-detail-normal
+    // block below can perturb it before we compute lighting. Engine
+    // order: normal perturbation -> lighting (`SMFFragProg.glsl::main`).
+    var normal = normalize(in.normal);
     let view_dir = normalize(camera.camera_pos - in.world_position);
-    let shadow_coeff = 1.0;
-    let cos_diffuse = clamp(dot(sun_dir, normal), 0.0, 1.0);
-    let ground_shade = smf_ground_shade(
-        in.world_position,
-        normal,
-        sun_dir,
-        view_dir,
-        camera.ground_ambient.xyz,
-        camera.ground_diffuse.xyz,
-        camera.ground_specular.xyz,
-        camera.sun_dir_exp.w,
-        shadow_coeff,
-    );
+    let shadow_coeff = sample_shadow(in.world_position);
 
     var color: vec3<f32>;
     if (camera.has_texture != 0u && in.uv.y <= 1.5) {
@@ -218,14 +378,244 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         color = height_color(normalized_height);
     }
 
-    var lit_color = color * ground_shade;
+    // DIAGNOSTIC: fires unconditionally (NOT gated on splat_params.z).
+    // Samples the splat textures directly so we see content even when
+    // the renderer thinks splat is disabled. See the comment above
+    // `DBG_VISUALIZE_SPLAT_DETAIL` for the channel meanings.
+    if (DBG_VISUALIZE_SPLAT_DETAIL && in.uv.y <= 1.5) {
+        let dbg_world_xz_elmos = in.world_position.xz * camera.splat_params.xy;
+        let dbg_s1 = textureSample(
+            splat_dn_tex_1, detail_sam,
+            dbg_world_xz_elmos * camera.splat_tex_scales.x,
+        );
+        let dbg_distr_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let dbg_distr = textureSample(splat_distr_tex, detail_sam, dbg_distr_uv);
+        return vec4<f32>(
+            dbg_s1.a,
+            dbg_distr.r,
+            camera.splat_params.z,
+            1.0,
+        );
+    }
+
+    // Detail texture contribution. Matches `SMFFragProg::GetDetailTextureColor`
+    // -- sample at world.xz with `specularTexGen` (= 1/mapSize in
+    // elmos), which tiles the texture once across the playable area.
+    // Subtracting 0.5 centres it so the texture both lightens AND
+    // darkens the base diffuse rather than only brightening.
+    //
+    // Strength gate from `skybox_params.y`: 0 when the map uses splat
+    // detail (Aurelia, most modern BAR maps -- the engine routes
+    // detailTex to its border shader instead, which we don't render),
+    // 1 otherwise. This is what made the playable area go all-red on
+    // Aurelia previously -- we were stamping the detail texture over
+    // a surface the engine never applies it to.
+    //
+    // Skirts / cap (uv.y > 1.5) get no detail -- they're not surface
+    // terrain.
+    var detail_contrib = vec3<f32>(0.0);
+    if (DBG_DETAIL_TEX && in.uv.y <= 1.5 && camera.skybox_params.y > 0.5) {
+        // world.xz is in render space ([-x_extent, x_extent]). Map
+        // that to [0, 1] so the texture tiles once across, matching
+        // the engine's `vertexWorldPos.xz / mapSize` behaviour.
+        let detail_uv = in.world_position.xz / (2.0 * camera.x_extent) + vec2<f32>(0.5);
+        let detail_sample = textureSample(detail_tex, detail_sam, detail_uv).rgb;
+        detail_contrib = detail_sample - vec3<f32>(0.5);
+    }
+
+    // Advanced splat-detail-normal path (engine
+    // `SMF_DETAIL_NORMAL_TEXTURE_SPLATTING`). Active for Aurelia and
+    // most modern BAR maps. Four detail-normal textures get sampled at
+    // their own per-channel scales (in elmo space), weighted by the
+    // distribution texture * `splat_tex_mults`, summed. The alpha of
+    // the weighted sum provides the detail-colour contribution
+    // (`splatDetailStrength.y` upstream). The RGB provides a
+    // tangent-space normal perturbation that gets rotated into world
+    // space and mixed with the surface normal by `splatDetailStrength.x`
+    // (sum of distribution cofacs, clamped to 1).
+    if (in.uv.y <= 1.5 && camera.splat_params.z > 0.5) {
+        // Convert render XZ -> world elmo XZ. Engine samples in elmo
+        // units, multiplied by the per-channel scales.
+        let world_xz_elmos = in.world_position.xz * camera.splat_params.xy;
+        let s1 = textureSample(splat_dn_tex_1, detail_sam, world_xz_elmos * camera.splat_tex_scales.x)
+            * 2.0 - 1.0;
+        let s2 = textureSample(splat_dn_tex_2, detail_sam, world_xz_elmos * camera.splat_tex_scales.y)
+            * 2.0 - 1.0;
+        let s3 = textureSample(splat_dn_tex_3, detail_sam, world_xz_elmos * camera.splat_tex_scales.z)
+            * 2.0 - 1.0;
+        let s4 = textureSample(splat_dn_tex_4, detail_sam, world_xz_elmos * camera.splat_tex_scales.w)
+            * 2.0 - 1.0;
+
+        // Distribution: tiles once across the playable area
+        // (`specTexCoords = worldXZ / mapSize` upstream).
+        //
+        // V-flip experiment: BAR's engine renders in OpenGL where V=0
+        // is the bottom of the texture; we render in wgpu where V=0 is
+        // the top. If the splat distribution DDS was authored against
+        // the engine convention, sampling it with our convention
+        // produces an N/S-mirrored distribution -- cliff channels land
+        // on the flat ground, ground channels land on the cliffs --
+        // which is what ref3 vs ref4 showed in the original screenshot
+        // comparison.
+        // V-flip on the splat distribution UV. Engine OpenGL stores tex
+        // V=0 at the bottom of the texture; wgpu V=0 is at the top.
+        // Confirmed correct for Azurite Shores; confirmed for at least one
+        // other map that's been spot-checked. If a future map shows
+        // distribution channels swapped N/S after fresh import, the
+        // suspect is map-specific DDS row ordering (some authoring tools
+        // write bottom-up rows) and the right fix is to detect orientation
+        // at DDS load time, not to revisit this flip.
+        let distr_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let splat_cofac = textureSample(splat_distr_tex, detail_sam, distr_uv)
+            * camera.splat_tex_mults;
+
+        // Weighted sum -- one vec4 (RGB + alpha) accumulated across
+        // the 4 textures by their respective distribution channels.
+        var splat_normal = vec4<f32>(0.0);
+        splat_normal = splat_normal + s1 * splat_cofac.r;
+        splat_normal = splat_normal + s2 * splat_cofac.g;
+        splat_normal = splat_normal + s3 * splat_cofac.b;
+        splat_normal = splat_normal + s4 * splat_cofac.a;
+
+        // Alpha-channel detail colour, gated by the diffuse-alpha
+        // flag (mapinfo `splatDetailNormalDiffuseAlpha`).
+        if (DBG_SPLAT_DETAIL_COLOR && camera.splat_params.w > 0.5) {
+            let detail_y = clamp(splat_normal.a, -1.0, 1.0);
+            detail_contrib = vec3<f32>(detail_y);
+        }
+
+        if (DBG_SPLAT_NORMAL_PERTURB) {
+            // Normal perturbation. Engine builds a tangent basis from the
+            // surface normal (`SMFFragProg.glsl::main` for SMF_BLEND_NORMALS):
+            //   tTangent = normalize(cross(normal, vec3(-1, 0, 0)))
+            //   sTangent = cross(normal, tTangent)
+            //   stnMatrix = mat3(sTangent, tTangent, normal)
+            // The tangent-space splat normal is rotated into world space
+            // via `stnMatrix`, then mixed with the surface normal by
+            // `splatDetailStrength.x = clamp(dot(splatCofac, vec4(1)), 0, 1)`.
+            // y = 0.01 floor prevents the perturbed normal from pointing
+            // sideways when all cofacs happen to be zero.
+            splat_normal.y = max(splat_normal.y, 0.01);
+            let s_strength_x = clamp(splat_cofac.r + splat_cofac.g + splat_cofac.b + splat_cofac.a, 0.0, 1.0);
+            let t_tangent = normalize(cross(normal, vec3<f32>(-1.0, 0.0, 0.0)));
+            let s_tangent = cross(normal, t_tangent);
+            let stn = mat3x3<f32>(s_tangent, t_tangent, normal);
+            let world_perturbed = normalize(stn * splat_normal.xyz);
+            normal = normalize(mix(normal, world_perturbed, s_strength_x));
+        }
+    }
+
+    // Sky cube reflection (engine `SMF_SKY_REFLECTIONS` path). Order
+    // matters: applied AFTER normal perturbation so the reflect
+    // direction uses the perturbed surface (engine does
+    // `perturb -> reflect -> shade`). Mixed into `color` BEFORE the
+    // shade multiply so reflection respects ambient + diffuse the way
+    // `SMFFragProg.glsl::main` does:
+    //   diffuseCol = mix(diffuseCol, reflectCol, reflectMod)
+    //   fragColor  = (diffuseCol + detailCol) * shadeInt
+    // Gated on both a real skybox cubemap AND a real reflection-mask
+    // texture -- without the mask we'd reflect uniformly across the
+    // whole terrain, which is wrong.
+    if (DBG_SKY_REFLECTION && in.uv.y <= 1.5 && camera.skybox_params.x > 0.5 && camera.skybox_params.z > 0.5) {
+        let cam_to_frag = in.world_position - camera.camera_pos;
+        let reflect_dir = reflect(cam_to_frag, normal);
+        let reflect_col = textureSample(skybox_tex, skybox_sam, reflect_dir).rgb;
+        // V-flip for the same reason as the splat distribution: whole-map
+        // mask DDS authored against engine OpenGL row-ordering.
+        let mod_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let reflect_mod = textureSample(sky_reflect_mod_tex, detail_sam, mod_uv).rgb;
+        color = mix(color, reflect_col, reflect_mod);
+    }
+
+    // Lighting is computed AFTER any normal perturbation (splat-detail-normal,
+    // future SMF_BLEND_NORMALS, etc.) so the diffuse / specular terms
+    // pick up the perturbed surface. This is what `SMFFragProg.glsl::main`
+    // does: perturb -> shade.
+    let cos_diffuse = clamp(dot(sun_dir, normal), 0.0, 1.0);
+    let ground_shade = smf_ground_shade(
+        in.world_position,
+        normal,
+        sun_dir,
+        camera.ground_ambient.xyz,
+        camera.ground_diffuse.xyz,
+        shadow_coeff,
+    );
+    // Sun specular computed separately so it can be added on top of
+    // the `texture × shade` term -- engine adds `specularInt` after
+    // the texture multiply in `SMFFragProg.glsl::main`. Folding spec
+    // into `shade_int` (which is then multiplied by the terrain
+    // texture) would dim every glint by the local texture brightness.
+    var spec_term = vec3<f32>(0.0);
+    if (DBG_SPECULAR) {
+        // SMF_SPECULAR_LIGHTING path (`SMFFragProg.glsl:300-310`): when
+        // the map ships a `specularTex`, sample it per-fragment for the
+        // local specular colour and exponent. Otherwise fall back to the
+        // global ground_specular / sun_dir_exp.w uniforms.
+        //
+        // Engine encoding:
+        //   specCol.rgb  -> per-pixel specular colour (mostly near-zero on
+        //                   natural terrain; only metal / wet patches
+        //                   are visibly reflective).
+        //   specCol.a*16 -> per-pixel specular exponent (low alpha = broad
+        //                   matte spec, high alpha = tight glint).
+        // Without this path, maps that author non-zero `groundSpecularColor`
+        // (Ascendancy: 0.5) but rely on the texture to gate where spec
+        // actually appears show whole-surface spec blowout.
+        var spec_color: vec3<f32> = camera.ground_specular.xyz;
+        var spec_exp: f32 = camera.sun_dir_exp.w;
+        if (camera.skybox_params.w > 0.5) {
+            // V-flip matches the splat distribution: whole-map DDS authored
+            // against engine OpenGL row-ordering. Without this, the metal-
+            // spot spec content lands at N/S-mirrored XZ and produces
+            // bright glints on the snow opposite the actual metal pads.
+            let spec_uv = vec2<f32>(
+                in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+                1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+            );
+            let spec_sample = textureSample(specular_tex, detail_sam, spec_uv);
+            spec_color = spec_sample.rgb;
+            spec_exp = spec_sample.a * 16.0;
+        }
+        spec_term = smf_specular(
+            normal,
+            sun_dir,
+            view_dir,
+            spec_color,
+            spec_exp,
+            shadow_coeff,
+        );
+    }
+
+    // Engine match (`rts/.../SMFFragProg.glsl:381`):
+    //   fragColor.rgb = (diffuseCol.rgb + detailCol.rgb) * shadeInt.rgb
+    // So we compute the shade (ground or water-absorbed) FIRST, then
+    // multiply by the terrain colour at the end. Previously we did the
+    // colour multiply before the water-absorb branch, which made
+    // `smf_water_absorb` return water_shade alone for deep water --
+    // bypassing the texture multiply entirely. That's what produced the
+    // bright-blue "pool of mercury" deep water: the diffuse texture
+    // (which is normally a dark seabed tint) wasn't darkening the result.
+    var shade_int = ground_shade;
 
     // Underwater absorption (SMF_WATER_ABSORPTION path).
     if (camera.water_y >= 0.0 && in.world_position.y < camera.water_y) {
+        // Render-space Y -> elmo Y. `height_scale` is render-y per unit of
+        // [0,1] normalised heightmap, and `height_range_elmos` is the elmo
+        // span of the same [0,1] range, so the ratio converts between them.
         let elmo_y = (in.world_position.y - camera.water_y)
-            / max(camera.height_scale, 1e-4) * 8.0;
-        lit_color = smf_water_absorb(
-            lit_color,
+            / max(camera.height_scale, 1e-4)
+            * camera.height_range_elmos;
+        shade_int = smf_water_absorb(
+            ground_shade,
             elmo_y,
             cos_diffuse,
             shadow_coeff,
@@ -234,6 +624,46 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             camera.water_min_color.xyz,
         );
     }
+
+    // Engine order: `fragColor = (diffuse + detail) * shadeInt; fragColor += specularInt;`.
+    // Adding spec AFTER the texture multiply is what keeps glints bright.
+    // `detail_contrib` is zero when no detail texture is loaded (default
+    // 1x1 grey - 0.5 = 0), so this stays a no-op for maps without one.
+    var lit_color = (color + detail_contrib) * shade_int + spec_term;
+
+    // Debug viz: short-circuit the shader and output diagnostic channels.
+    //   R = cos_specular  (red: where half_dir aligns with normal)
+    //   G = spec_exp/100  (green: constant tint reveals actual exponent)
+    //   B = spec_term.r*5 (blue: where spec is bright after pow + color)
+    // If G channel is uniformly green = exp is ~100. If G is dim = exp
+    // is much lower than expected. If R is bright everywhere = half_dir
+    // is aligning with normal far too often (input vectors wrong).
+    if (DBG_VISUALIZE_SPEC) {
+        // Re-sample the specularTex directly so we see what the per-fragment
+        // path is actually reading at this pixel. Same UV as the spec path.
+        let spec_uv_dbg = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let spec_sample_dbg = textureSample(specular_tex, detail_sam, spec_uv_dbg);
+        // R = spec_color.r       (raw texture R channel; how reflective the
+        //                         surface is in red. Bright = strong glints.)
+        // G = spec_sample.a      (alpha channel directly. Multiplied by 16
+        //                         to get the actual spec exponent. Max
+        //                         possible value = 1.0 here, which would
+        //                         give spec_exp = 16 - a broad lobe.)
+        // B = cos_specular       (per-fragment half-vector alignment.
+        //                         Bright = many fragments aligned with
+        //                         half_dir at this angle.)
+        let half_dbg = normalize(sun_dir + view_dir);
+        let cos_spec_dbg = clamp(dot(half_dbg, normal), 0.001, 1.0);
+        return vec4<f32>(spec_sample_dbg.r, spec_sample_dbg.a, cos_spec_dbg, 1.0);
+    }
+    // Height-based `custom.fog` post-pass (matches the in-game widget that
+    // ships with BAR). For underwater fragments this is what gives the
+    // seabed its strong cool/blue tint; SMF water-absorption alone leaves
+    // it too warm because the rust-coloured texture dominates.
+    lit_color = apply_custom_fog(lit_color, in.world_position);
 
     // Atmospheric fog removed: it was custom (exponential distance haze
     // toward the sky colour) and isn't part of Recoil's pipeline, so it
@@ -280,18 +710,27 @@ fn vs_sky(@builtin(vertex_index) vid: u32) -> SkyVOut {
 
 @fragment
 fn fs_sky(in: SkyVOut) -> @location(0) vec4<f32> {
+    // The sky lives above the water plane by definition. The reflection
+    // pre-pass keeps the above-water half-space (clip_plane.y > 0) and we
+    // want sky in it. The refraction pre-pass keeps the below-water half
+    // (clip_plane.y < 0) and we DO NOT want sky there -- if we did, the
+    // water shader's refraction sample would be sky-tinted everywhere and
+    // the water would render as a near-mirror.
+    if (camera.clip_plane.y < -0.5) {
+        discard;
+    }
     let clip = vec4<f32>(in.ndc, 1.0, 1.0);
     let world_h = camera.inv_view_proj * clip;
     let world_pos = world_h.xyz / world_h.w;
     let view_dir = normalize(world_pos - camera.camera_pos);
-    // Sky is treated as "infinitely far above water." Sample the clip plane
-    // along the view ray rather than at the back-plane intersection: a
-    // downward-facing ray (refraction pass with camera above water) should
-    // be discarded since the sky is on the kept-out side.
-    let half_space = camera.clip_plane.xyz;
-    if (length(half_space) > 0.5 && dot(half_space, view_dir) < 0.0) {
-        discard;
+    // When the map ships a `skyBox` cubemap (and we've uploaded it),
+    // sample that directly -- it's authored content and overrides the
+    // procedural sky. Fall back to procedural when there's no cubemap.
+    var sky: vec3<f32>;
+    if (camera.skybox_params.x > 0.5) {
+        sky = textureSample(skybox_tex, skybox_sam, view_dir).rgb;
+    } else {
+        sky = sky_color(view_dir);
     }
-    let sky = sky_color(view_dir);
     return vec4<f32>(sky, 1.0);
 }

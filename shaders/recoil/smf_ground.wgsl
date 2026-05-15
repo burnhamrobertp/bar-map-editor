@@ -18,41 +18,51 @@ const SMF_INTENSITY_MULT: f32 = 210.0 / 255.0;
 const SMF_SHALLOW_WATER_DEPTH: f32 = 10.0;
 const SMF_SHALLOW_WATER_DEPTH_INV: f32 = 1.0 / SMF_SHALLOW_WATER_DEPTH;
 
-/// SMF ground lighting — Lambert diffuse + Blinn-Phong specular,
-/// modulated by per-fragment shadow occlusion. Matches the engine's
-/// `GetShadeInt` for the above-water path (no water absorption here;
-/// see `smf_water_shade` for the underwater branch).
-///
-/// `world_pos` is in render-space (matches `vertexWorldPos.xyz`
-/// upstream). `normal` is the shading normal (already normalised).
-/// `sun_dir` is the unit vector pointing TOWARDS the sun. `view_dir`
-/// is the unit vector from fragment to camera. `shadow_coeff` is in
-/// `[0, 1]`: 0 means fully shadowed, 1 means lit.
+/// SMF ground lighting (diffuse + ambient only — specular is added
+/// separately by `smf_specular`, see below). Matches the engine's
+/// `GetShadeInt` for the above-water path:
+///   shadeInt.rgb = (groundAmbientColor + groundDiffuseColor * cosDiff * shadow) * INTENSITY_MULT
+/// and then in `SMFFragProg.glsl::main`:
+///   fragColor.rgb = (diffuseCol.rgb + detailCol.rgb) * shadeInt.rgb;
+///   fragColor.rgb += specularInt;   // <-- spec added ON TOP
+/// So the texture multiply hits ambient+diffuse only; spec is purely
+/// additive. Earlier we baked spec INTO the shade and then multiplied
+/// by texture, which dimmed sun glint by the (often dark) terrain
+/// texture and made high-spec maps look wrong.
 fn smf_ground_shade(
     world_pos: vec3<f32>,
     normal: vec3<f32>,
     sun_dir: vec3<f32>,
-    view_dir: vec3<f32>,
     ambient: vec3<f32>,
     diffuse_color: vec3<f32>,
+    shadow_coeff: f32,
+) -> vec3<f32> {
+    let cos_diffuse = clamp(dot(sun_dir, normal), 0.0, 1.0);
+    let lit = ambient + diffuse_color * (cos_diffuse * shadow_coeff);
+    return lit * SMF_INTENSITY_MULT;
+}
+
+/// Sun specular contribution for ground fragments. Returned separately
+/// from `smf_ground_shade` so the caller can do
+/// `lit_color = (texture × shade) + spec` -- matching the engine's
+/// order. NOT scaled by `SMF_INTENSITY_MULT` (upstream's `specularInt`
+/// is not scaled either; only the diffuse / ambient term is).
+fn smf_specular(
+    normal: vec3<f32>,
+    sun_dir: vec3<f32>,
+    view_dir: vec3<f32>,
     specular_color: vec3<f32>,
     specular_exp: f32,
     shadow_coeff: f32,
 ) -> vec3<f32> {
-    let cos_diffuse = clamp(dot(sun_dir, normal), 0.0, 1.0);
-    // Halfway vector between sun and view — Blinn-Phong's defining
-    // input. Matches upstream's `halfDir` varying.
     let half_dir = normalize(sun_dir + view_dir);
     let cos_specular = clamp(dot(half_dir, normal), 0.001, 1.0);
-
-    var lit = ambient + diffuse_color * (cos_diffuse * shadow_coeff);
-    // Specular contribution is gated on the surface actually facing
-    // the light — otherwise grazing-angle bouncebacks light up
-    // shadowed surfaces. The engine does this via the shadow
-    // multiplier; we keep it explicit.
-    let spec = pow(cos_specular, max(specular_exp, 1.0));
-    lit = lit + specular_color * spec * shadow_coeff;
-    return lit * SMF_INTENSITY_MULT;
+    // Engine passes `specularExp` directly to pow() without a min-clamp
+    // (`SMFFragProg.glsl:334`). Maps that author very low exponents
+    // (broad, dim spec) need that pass-through; our `max(exp, 1.0)`
+    // clamp was changing the lobe shape vs engine on those maps.
+    let spec = pow(cos_specular, specular_exp);
+    return specular_color * spec * shadow_coeff;
 }
 
 /// SMF underwater shading — applied to ground fragments below sea
