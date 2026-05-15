@@ -21,9 +21,14 @@ pub struct PreviewResult {
     pub cache_key: u64,
     pub session_id: u64,
     pub height_scale: f32,
+    /// Map's vertical elmo span (max_h - min_h). Needed by the renderer so
+    /// the underwater-absorption shader can convert render-Y back to elmos.
+    pub height_range_elmos: f32,
+    /// Elmos per unit of render-space XZ. See
+    /// `bar_render::TerrainUpdateParams::elmo_per_render_xz`.
+    pub elmo_per_render_xz: [f32; 2],
     pub water_y: f32,
     pub water_color: [f32; 3],
-    pub smf_lighting: bar_render::SmfLighting,
     pub is_low_res: bool,
     pub x_extent: f32,
     pub z_extent: f32,
@@ -37,19 +42,33 @@ pub struct PreviewResult {
 #[derive(Clone)]
 pub struct OwnedFrame {
     pub height_scale: f32,
+    /// Map's vertical elmo span; see [`PreviewResult::height_range_elmos`].
+    pub height_range_elmos: f32,
+    /// Elmos per unit of render-space XZ.
+    pub elmo_per_render_xz: [f32; 2],
     pub x_extent: f32,
     pub z_extent: f32,
     pub water_y: f32,
     pub water_color: [f32; 3],
     pub quality_high: bool,
-    pub smf_lighting: bar_render::SmfLighting,
+    /// `smf_lighting` is no longer stored in OwnedFrame -- it's read live from
+    /// `app.smf_lighting()` on every render call so map-settings edits (water
+    /// colour, fresnel, etc.) take effect immediately without needing a graph
+    /// re-evaluation to bump the cache key. See `as_frame(time, smf)`.
     /// Texture resolution this frame was evaluated at.
     pub tex_w: u32,
     pub tex_h: u32,
 }
 
 impl OwnedFrame {
-    pub fn as_frame(&self, time: f32) -> bar_render::PreviewFrame {
+    /// Build a renderer-side `PreviewFrame`. `smf_lighting` is supplied
+    /// per-render-call (from `app.smf_lighting()`) so editing the map-info
+    /// water / lighting panel updates the GPU uniforms immediately.
+    pub fn as_frame(
+        &self,
+        time: f32,
+        smf_lighting: bar_render::SmfLighting,
+    ) -> bar_render::PreviewFrame {
         bar_render::PreviewFrame {
             height_scale: self.height_scale,
             x_extent: self.x_extent,
@@ -58,9 +77,23 @@ impl OwnedFrame {
             water_color: self.water_color,
             quality_high: self.quality_high,
             time,
-            smf_lighting: self.smf_lighting,
+            smf_lighting,
+            height_range_elmos: self.height_range_elmos,
+            elmo_per_render_xz: self.elmo_per_render_xz,
         }
     }
+}
+
+/// Read the current map-settings water / lighting block as a `SmfLighting`
+/// suitable for `OwnedFrame::as_frame`. `bar_gui::SmfLightingSnapshot` is
+/// a type alias for `bar_render::SmfLighting`, so this is just a forward
+/// of `app.smf_lighting()` -- kept as a function so existing callers (and
+/// the documentation about why we re-read every frame instead of caching
+/// on OwnedFrame) stay valid. Calling on every render call closes the
+/// data-flow gap that made the mapinfo-editor water panel a no-op
+/// (changes used to be lost because they didn't bump the eval cache key).
+pub fn live_smf_lighting(app: &bar_gui::BarEditorApp) -> bar_render::SmfLighting {
+    app.smf_lighting()
 }
 
 // ── Per-slot state types ──────────────────────────────────────────────────────
@@ -75,6 +108,22 @@ pub struct ViewportCore {
     pub last_water_color: [f32; 3],
     pub session_id: u64,
     pub started_at: Instant,
+    /// Tracks the `(project_dir, skybox_filename)` the renderer's cubemap
+    /// was last loaded for. We re-attempt the upload whenever either side
+    /// of this tuple changes -- not gated on compilation, so the skybox
+    /// shows up the moment a project opens regardless of compile state.
+    /// `None` means "not yet attempted for any project".
+    pub skybox_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for`, but for the detail texture
+    /// from mapinfo's `resources.detailTex`.
+    pub detail_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Tracks `(project_dir, [splat_dn_1..4, splat_distr])`. Cleared
+    /// on project switch so the splat detail upload re-runs.
+    pub splat_loaded_for: Option<(std::path::PathBuf, [String; 5])>,
+    /// Same idea as `skybox_loaded_for` for the sky reflection mask.
+    pub sky_reflect_mod_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for` for the per-pixel specular texture.
+    pub specular_tex_loaded_for: Option<(std::path::PathBuf, String)>,
 }
 
 impl ViewportCore {
@@ -94,8 +143,405 @@ impl ViewportCore {
             last_water_color: [0.0, 0.4, 0.6],
             session_id,
             started_at: Instant::now(),
+            skybox_loaded_for: None,
+            detail_loaded_for: None,
+            splat_loaded_for: None,
+            sky_reflect_mod_loaded_for: None,
+            specular_tex_loaded_for: None,
         }
     }
+}
+
+/// Decode a 2D image file into RGBA8 bytes. Handles the formats BAR
+/// maps actually ship: BMP, TGA, PNG, JPG via the `image` crate, plus
+/// DDS (uncompressed and BC1/3) by reusing the cubemap decoder for
+/// its 2D fallback path.
+fn load_2d_image(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "dds" {
+        // Try the dedicated 2D DDS loader first -- it handles the
+        // BC1 / BC3 / uncompressed pixel formats BAR ships for splat
+        // distribution, splat detail-normals, sky reflection mask, and
+        // map detail textures. The `image` crate v0.25 no longer
+        // includes DDS support so without this path those files don't
+        // decode at all.
+        if let Ok((rgba, w, h)) = bar_data::load_dds_2d(path) {
+            return Some((rgba, w, h));
+        }
+        // Cubemap-flagged DDS: extract face 0 as a 2D image. Some legacy
+        // BAR maps mislabel 2D textures with the CUBEMAP cap; falling
+        // back to the cubemap loader preserves that path too.
+        if let Ok(cm) = bar_data::load_dds_cubemap(path) {
+            return Some((cm.faces[0].clone(), cm.width, cm.height));
+        }
+        // Final fallback to the `image` crate -- catches any DDS variant
+        // outside our supported pixel formats if the user happens to have
+        // an `image` build with the optional `dds` feature enabled.
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let fmt = image::ImageFormat::from_extension(&ext)?;
+    let img = image::load_from_memory_with_format(&bytes, fmt).ok()?;
+    let rgba = img.to_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some((rgba.into_raw(), w, h))
+}
+
+/// Load and upload the map-authored detail texture (mapinfo
+/// `resources.detailTex`). Mirrors the skybox loader -- recursive
+/// case-insensitive search in `passthrough/`, then the project root.
+fn load_map_detail_texture(
+    project_dir: Option<&std::path::Path>,
+    detail_filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    // `project_dir` is the saved .barproj (textures packed under
+    // `passthrough/`) OR the SD7 work_dir before save (textures still in
+    // their archive-relative layout, typically `maps/<file>`). Try the
+    // saved layout first; fall back to a recursive walk of the whole
+    // project_dir so the work_dir layout is also covered. Without the
+    // root fallback the renderer doesn't see splat/detail textures until
+    // the user saves -- save copies them into `passthrough/` -- which
+    // matches the symptom: "textures show up only after save+reimport".
+    let path = find_file_in_dir(&project_dir.join("passthrough"), detail_filename)
+        .or_else(|| find_file_in_dir(project_dir, detail_filename));
+    let Some(path) = path else {
+        tracing::warn!(
+            file = detail_filename,
+            "Detail texture not found in project; using default"
+        );
+        return;
+    };
+    let Some((rgba, w, h)) = load_2d_image(&path) else {
+        tracing::warn!(
+            file = detail_filename,
+            "Failed to decode detail texture; using default"
+        );
+        return;
+    };
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        renderer.update_detail_texture(&gpu.device, &gpu.queue, &rgba, w, h);
+        tracing::info!(file = detail_filename, w, h, "Detail texture uploaded");
+    }
+}
+
+/// Load and upload the map-authored sky reflection mask texture
+/// (mapinfo `resources.skyReflectModTex`). Same resolution path as
+/// the other terrain assets -- recursive case-insensitive walk in
+/// `passthrough/`, decode via `load_2d_image`, upload. Quietly no-ops
+/// when missing; the shader's mix factor stays zero and the SMF sky
+/// reflection effect is off for the map.
+pub fn sync_sky_reflect_mod(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.sky_reflect_mod_loaded_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
+        }
+        core.sky_reflect_mod_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    // Saved-layout (passthrough/) then full-project-recursive fallback
+    // -- see `load_map_detail_texture` for the rationale.
+    let path = find_file_in_dir(&project_dir.join("passthrough"), filename)
+        .or_else(|| find_file_in_dir(project_dir, filename));
+    let Some(path) = path else {
+        tracing::warn!(
+            file = filename,
+            "skyReflectModTex not found in project; sky reflection disabled"
+        );
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
+        }
+        core.sky_reflect_mod_loaded_for = key;
+        return;
+    };
+    let Some((rgba, w, h)) = load_2d_image(&path) else {
+        tracing::warn!(
+            file = filename,
+            "Failed to decode skyReflectModTex; sky reflection disabled"
+        );
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
+        }
+        core.sky_reflect_mod_loaded_for = key;
+        return;
+    };
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        renderer.update_sky_reflect_mod(&gpu.device, &gpu.queue, &rgba, w, h);
+        tracing::info!(file = filename, w, h, "skyReflectModTex uploaded");
+    }
+    core.sky_reflect_mod_loaded_for = key;
+}
+
+/// Load and upload the map-authored specular texture (mapinfo
+/// `resources.specularTex`). Engine path: `SMF_SPECULAR_LIGHTING`. When
+/// uploaded, the terrain fragment shader samples per-pixel specular
+/// colour + exponent instead of using the global `groundSpecularColor`
+/// uniform -- which is what stops maps like Ascendancy (with a non-zero
+/// global spec colour) from washing out the entire sun-facing terrain.
+pub fn sync_specular_tex(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.specular_tex_loaded_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_specular_tex(&gpu.device, &gpu.queue);
+        }
+        core.specular_tex_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let path = find_file_in_dir(&project_dir.join("passthrough"), filename)
+        .or_else(|| find_file_in_dir(project_dir, filename));
+    let Some(path) = path else {
+        tracing::warn!(
+            file = filename,
+            "specularTex not found in project; per-pixel specular disabled"
+        );
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_specular_tex(&gpu.device, &gpu.queue);
+        }
+        core.specular_tex_loaded_for = key;
+        return;
+    };
+    let Some((rgba, w, h)) = load_2d_image(&path) else {
+        tracing::warn!(
+            file = filename,
+            "Failed to decode specularTex; per-pixel specular disabled"
+        );
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_specular_tex(&gpu.device, &gpu.queue);
+        }
+        core.specular_tex_loaded_for = key;
+        return;
+    };
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        renderer.update_specular_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+        tracing::info!(file = filename, w, h, "specularTex uploaded");
+    }
+    core.specular_tex_loaded_for = key;
+}
+
+/// Ensure the renderer's splat-detail textures match the current
+/// project. Pulls the five filenames from `MapSettings.resources`,
+/// resolves them under `<project>/passthrough/`, decodes via
+/// `load_2d_image`, and uploads. Only fires when ALL five textures
+/// resolve -- otherwise the renderer's `advanced_splat_enabled` stays
+/// off and the playable area renders without splat detail. Tracked by
+/// `splat_loaded_for` on `ViewportCore` so a successful load isn't
+/// retried each frame, and a different project triggers re-load.
+pub fn sync_splat_textures(
+    project_dir: Option<&std::path::Path>,
+    settings: &bar_project::ResourcesSettings,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let names = [
+        settings.splat_detail_normal_tex_1.clone(),
+        settings.splat_detail_normal_tex_2.clone(),
+        settings.splat_detail_normal_tex_3.clone(),
+        settings.splat_detail_normal_tex_4.clone(),
+        settings.splat_distr_tex.clone(),
+    ];
+    let key = project_dir.map(|p| (p.to_path_buf(), names.clone()));
+    if core.splat_loaded_for == key {
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+
+    // The distribution texture is required -- without it there's no
+    // per-pixel cofactor and the splat path has no meaning. If it's
+    // empty / missing / fails to decode we disable the whole path.
+    //
+    // The 4 detail-normals are each independently optional. Maps may
+    // reference fewer than 4 channels, and shipped archives sometimes
+    // reference a file they don't actually contain (Ascendency's
+    // mapinfo lists `Ice_1k_dnts.tga` as channel 4 but the .sd7 doesn't
+    // ship it). The engine tolerates per-channel misses by treating
+    // that channel as zero-contribution; we match by substituting a
+    // 1x1 mid-grey mip chain which yields 0 after the shader's
+    // `*2-1` decode.
+    let distr_name = &names[4];
+    if distr_name.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_splat_textures(&gpu.device, &gpu.queue);
+        }
+        core.splat_loaded_for = key;
+        return;
+    }
+
+    let resolve_and_decode = |name: &str| -> Option<Vec<(Vec<u8>, u32, u32)>> {
+        if name.is_empty() {
+            return None;
+        }
+        // Saved-layout (passthrough/) then full-project-recursive
+        // fallback. See `load_map_detail_texture` for why the unsaved
+        // SD7 work_dir path also needs to be searchable here.
+        let path = find_file_in_dir(&project_dir.join("passthrough"), name)
+            .or_else(|| find_file_in_dir(project_dir, name))?;
+        // For DDS sources this returns the file's pre-baked mip pyramid;
+        // for non-DDS sources we get a single base mip.
+        load_2d_image_with_mips(&path)
+    };
+
+    let distr = match resolve_and_decode(distr_name) {
+        Some(m) => m,
+        None => {
+            tracing::warn!(
+                file = %distr_name,
+                "Splat distribution texture missing or failed to decode; advanced splat disabled"
+            );
+            if let Some(renderer) = core.terrain_renderer.as_mut() {
+                renderer.clear_splat_textures(&gpu.device, &gpu.queue);
+            }
+            core.splat_loaded_for = key;
+            return;
+        }
+    };
+
+    type MipChain = Vec<(Vec<u8>, u32, u32)>;
+    let default_mip = || -> MipChain { vec![(vec![127u8, 127, 127, 127], 1, 1)] };
+
+    let mut dn: [Option<MipChain>; 4] = [None, None, None, None];
+    for (i, name) in names[..4].iter().enumerate() {
+        match resolve_and_decode(name) {
+            Some(m) => dn[i] = Some(m),
+            None if name.is_empty() => {}
+            None => {
+                tracing::warn!(
+                    file = %name,
+                    slot = i + 1,
+                    "Splat-detail texture missing; channel will be inactive"
+                );
+            }
+        }
+    }
+
+    let arr: [Vec<(Vec<u8>, u32, u32)>; 5] = [
+        dn[0].take().unwrap_or_else(default_mip),
+        dn[1].take().unwrap_or_else(default_mip),
+        dn[2].take().unwrap_or_else(default_mip),
+        dn[3].take().unwrap_or_else(default_mip),
+        distr,
+    ];
+
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        renderer.update_splat_textures(&gpu.device, &gpu.queue, arr);
+        tracing::info!("Splat detail textures uploaded (with mip chains)");
+    }
+    core.splat_loaded_for = key;
+}
+
+/// Decode a 2D image file and return ALL mip levels as `(rgba, w, h)`.
+/// For DDS sources this is the file's pre-baked mip chain; for other
+/// formats it's a single-entry chain (caller can extend via box filter
+/// if it needs the higher pyramid levels).
+fn load_2d_image_with_mips(path: &std::path::Path) -> Option<Vec<(Vec<u8>, u32, u32)>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "dds" {
+        if let Ok(mips) = bar_data::load_dds_2d_with_mips(path) {
+            return Some(
+                mips.into_iter()
+                    .map(|m| (m.rgba, m.width, m.height))
+                    .collect(),
+            );
+        }
+        if let Ok(cm) = bar_data::load_dds_cubemap(path) {
+            // Mislabeled 2D-as-cubemap fallback. Single mip only -- the
+            // cubemap loader doesn't expose the per-face mip chain.
+            return Some(vec![(cm.faces[0].clone(), cm.width, cm.height)]);
+        }
+    }
+    // Non-DDS or DDS that fell through: produce a single-mip chain so the
+    // caller can decide whether to synthesise additional levels.
+    let (rgba, w, h) = load_2d_image(path)?;
+    Some(vec![(rgba, w, h)])
+}
+
+/// Ensure the renderer's detail texture matches the current project's
+/// `resources.detailTex`. Idempotent: tracks `(project_dir, filename)`
+/// on the core so re-uploads only fire on project / filename change.
+pub fn sync_detail_texture(
+    project_dir: Option<&std::path::Path>,
+    detail_filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), detail_filename.to_string()));
+    if core.detail_loaded_for == key {
+        return;
+    }
+    if detail_filename.is_empty() {
+        // Reset to the 1x1 grey default so the contribution goes to zero.
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            let mid_grey = [128u8, 128, 128, 255];
+            renderer.update_detail_texture(&gpu.device, &gpu.queue, &mid_grey, 1, 1);
+        }
+        core.detail_loaded_for = key;
+        return;
+    }
+    load_map_detail_texture(project_dir, detail_filename, core, gpu);
+    core.detail_loaded_for = key;
+}
+
+/// Ensure the renderer's cubemap matches the current project's
+/// `atmosphere.skyBox`. Idempotent: tracks `(project_dir, filename)` on
+/// the core so the upload only happens on project changes. Decoupled
+/// from the BC1 compile path so the skybox renders even before / without
+/// a compile.
+pub fn sync_skybox(
+    project_dir: Option<&std::path::Path>,
+    skybox_filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), skybox_filename.to_string()));
+    if core.skybox_loaded_for == key {
+        return;
+    }
+    if skybox_filename.is_empty() {
+        // Map switched to one without a skybox -- clear the cubemap so
+        // the procedural sky kicks back in.
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_skybox(&gpu.device, &gpu.queue);
+        }
+        core.skybox_loaded_for = key;
+        return;
+    }
+    load_map_skybox(project_dir, skybox_filename, core, gpu);
+    core.skybox_loaded_for = key;
 }
 
 /// Progressive eval scheduling state for the Sculpt3D slot.
@@ -288,7 +734,11 @@ fn draw_viewport_body(
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
                 let elapsed = core.started_at.elapsed().as_secs_f32();
-                let frame = core.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                let smf = live_smf_lighting(app);
+                let frame = core
+                    .current_frame
+                    .as_ref()
+                    .map(|f| f.as_frame(elapsed, smf));
                 renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
                 update_viewport_texture(
                     &mut core.viewport_texture_id,
@@ -501,7 +951,16 @@ fn handle_camera_input(
                                 let ph = (map_h as f32 - 1.0).max(1.0);
                                 let sx = (pick.world.x / x_extent + 1.0) * 0.5 * pw * 8.0;
                                 let sz = (pick.world.z / z_extent + 1.0) * 0.5 * ph * 8.0;
-                                let threshold = 200.0_f32;
+                                // Tightened from 200 elmos: a typical feature
+                                // footprint is 8-16 elmos (1-2 heightmap pixels),
+                                // and 200 made selection pick anything within
+                                // ~12 features of the click. 24 elmos lets the
+                                // user click within 1-1.5 feature widths -- close
+                                // to "must land on the feature" while still
+                                // forgiving of a couple-pixel cursor jitter.
+                                // True per-feature footprint thresholds would
+                                // need the catalog plumbed through to this fn.
+                                let threshold = 24.0_f32;
                                 let prev = app.map.selected_feature_idx;
                                 let best = app
                                     .map
@@ -553,6 +1012,37 @@ fn handle_camera_input(
         }
     }
 
+    // At the start of an orbit gesture, snap the camera target to the world
+    // point under the cursor so the rotation pivots around what's visually
+    // beneath the cursor instead of the fixed map-centre. With a far-away
+    // target on a zoomed-in camera, even a small azimuth nudge would swing
+    // the camera around the map rather than tilt around the focal point.
+    let orbit_started = response.drag_started_by(egui::PointerButton::Secondary)
+        || (response.drag_started_by(egui::PointerButton::Primary)
+            && !sculpt_active
+            && feature_type.is_none());
+    if orbit_started {
+        if let (Some(uv), Some(hm), Some(renderer)) = (
+            cursor_uv,
+            app.paint.heightmap.as_ref(),
+            core.terrain_renderer.as_ref(),
+        ) {
+            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+            if let Some(pick) = pick_terrain(
+                &core.camera,
+                aspect,
+                uv,
+                hm,
+                x_extent,
+                z_extent,
+                height_scale,
+            ) {
+                core.camera.snap_target_preserving_position(pick.world);
+                camera_changed = true;
+            }
+        }
+    }
+
     if response.dragged_by(egui::PointerButton::Primary) {
         if sculpt_active {
             apply_sculpt_dab_at_cursor(core, gpu_context, response, ctx, app);
@@ -591,6 +1081,33 @@ fn handle_camera_input(
         let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
         if scroll.abs() > 0.1 {
             let factor = (-scroll * 0.0015).clamp(-0.5, 0.5);
+            // Zoom-to-cursor: before applying the distance change, nudge the
+            // camera target toward the world point under the cursor by the
+            // same proportion as the zoom step. Geometrically, the camera
+            // position interpolates toward the cursor pick as you scroll in
+            // -- so the point under the cursor stays roughly under the
+            // cursor across the zoom, instead of drifting toward the screen
+            // centre. Skipped when the cursor isn't over the terrain (no
+            // pick), preserving the prior "zoom toward target" feel offscreen.
+            if let (Some(uv), Some(hm), Some(renderer)) = (
+                cursor_uv,
+                app.paint.heightmap.as_ref(),
+                core.terrain_renderer.as_ref(),
+            ) {
+                let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                if let Some(pick) = pick_terrain(
+                    &core.camera,
+                    aspect,
+                    uv,
+                    hm,
+                    x_extent,
+                    z_extent,
+                    height_scale,
+                ) {
+                    let to_pick = pick.world - core.camera.target;
+                    core.camera.target += to_pick * (-factor);
+                }
+            }
             core.camera.zoom(factor);
             camera_changed = true;
         }
@@ -599,7 +1116,11 @@ fn handle_camera_input(
     if camera_changed {
         if let (Some(ref mut renderer), Some(ref gpu)) = (&mut core.terrain_renderer, gpu_context) {
             let elapsed = core.started_at.elapsed().as_secs_f32();
-            let frame = core.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+            let smf = live_smf_lighting(app);
+            let frame = core
+                .current_frame
+                .as_ref()
+                .map(|f| f.as_frame(elapsed, smf));
             renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
             update_viewport_texture(
                 &mut core.viewport_texture_id,
@@ -692,7 +1213,11 @@ fn apply_sculpt_dab_at_cursor(
             if let Some(ref mut renderer) = core.terrain_renderer {
                 renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
                 let elapsed = core.started_at.elapsed().as_secs_f32();
-                let frame = core.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                let smf = live_smf_lighting(app);
+                let frame = core
+                    .current_frame
+                    .as_ref()
+                    .map(|f| f.as_frame(elapsed, smf));
                 renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
             }
         }
@@ -716,7 +1241,11 @@ fn apply_sculpt_dab_at_cursor(
                     renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
                 }
                 let elapsed = core.started_at.elapsed().as_secs_f32();
-                let frame = core.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                let smf = live_smf_lighting(app);
+                let frame = core
+                    .current_frame
+                    .as_ref()
+                    .map(|f| f.as_frame(elapsed, smf));
                 renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
             }
         }
@@ -801,9 +1330,32 @@ pub fn build_feature_instances(
         let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
 
         let h_render = if let Some(hm) = heightmap {
+            // Bilinear sample so the feature's base matches the *interpolated*
+            // terrain surface between heightmap texels. The terrain mesh
+            // vertex shader stores per-texel Y values, but the rasterizer
+            // interpolates linearly across each quad -- a feature placed at
+            // float coords (12.5, 12.5) sits on a fragment whose actual Y is
+            // bilinear(Y[12,12], Y[13,12], Y[12,13], Y[13,13]). Nearest-texel
+            // sampling here was making features hover above or sink into
+            // their slopes by up to the per-texel height delta, which read
+            // as the shadow detaching from the feature's visible base.
             let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
             let hz = (f.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
-            hm.get(hx as u32, hz as u32).unwrap_or(0.0) * hs
+            let max_x = hm.width().saturating_sub(1);
+            let max_z = hm.height().saturating_sub(1);
+            let x0 = (hx.floor() as u32).min(max_x);
+            let z0 = (hz.floor() as u32).min(max_z);
+            let x1 = (x0 + 1).min(max_x);
+            let z1 = (z0 + 1).min(max_z);
+            let fx = hx - hx.floor();
+            let fz = hz - hz.floor();
+            let h00 = hm.get(x0, z0).unwrap_or(0.0);
+            let h10 = hm.get(x1, z0).unwrap_or(0.0);
+            let h01 = hm.get(x0, z1).unwrap_or(0.0);
+            let h11 = hm.get(x1, z1).unwrap_or(0.0);
+            let h0 = h00 * (1.0 - fx) + h10 * fx;
+            let h1 = h01 * (1.0 - fx) + h11 * fx;
+            (h0 * (1.0 - fz) + h1 * fz) * hs
         } else {
             hs * 0.5
         };
@@ -813,7 +1365,13 @@ pub fn build_feature_instances(
             ((f.y - dims.min_h) / height_range) * hs
         };
 
-        let rot = Quat::from_rotation_y(-f.angle.to_radians());
+        // SMF stores rotation as a float in the engine "heading" range
+        // [-32768, 32767] (full circle = 65536 units). Recoil casts to int16
+        // and computes angle_radians = heading * pi / 32768. Reproduce that
+        // here. Note: bar-engine's own pipeline currently writes radians
+        // through this same field; that's a separate bug, but for any feature
+        // loaded from a real BAR map the value is heading-encoded.
+        let rot = Quat::from_rotation_y(-f.angle * std::f32::consts::PI / 32768.0);
 
         let inst = if loaded_model_names.contains(&lower) {
             // Real S3O model: uniform scale in Spring elmos.
@@ -823,10 +1381,14 @@ pub fn build_feature_instances(
                 Vec3::new(rx, ry, rz),
             );
             let cols = transform.to_cols_array_2d();
+            // Tint multiplies the sampled diffuse in the fragment shader. For a
+            // real textured model the tint must be (1,1,1,1) so the texture's
+            // own colors come through; the green/orange tints are placeholder
+            // hints only. Selected features get a yellow highlight tint.
             let tint = if is_selected {
                 [1.0, 1.0, 0.0, 1.0] // yellow = selected
             } else {
-                [0.2, 0.9, 0.2, 1.0] // green = known model
+                [1.0, 1.0, 1.0, 1.0] // identity = pass texture through unchanged
             };
             let inst = FeatureInstance {
                 col0: cols[0],
@@ -882,11 +1444,98 @@ pub fn build_feature_instances(
 /// Returns `true` on success.
 /// Load the compiled BC1 texture into the Preview slot's terrain renderer.
 /// Returns the native texture dimensions `(w, h)` on success, `None` on failure.
+/// Walk `dir` recursively for a file whose basename matches `name`
+/// (case-insensitive). Used to resolve mapinfo's bare filename
+/// references (skybox, eventually detail textures) into actual disk
+/// paths inside the `.barproj/passthrough/` tree.
+fn find_file_in_dir(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
+    if !dir.is_dir() {
+        return None;
+    }
+    let needle = name.to_ascii_lowercase();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.to_ascii_lowercase() == needle)
+                .unwrap_or(false)
+            {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
+/// Look for the map-authored skybox DDS file and, if found, upload it
+/// as a cubemap to the renderer. The mapinfo `atmosphere.skyBox` field
+/// is just a filename like `"cleardesert.dds"`; we resolve it against
+/// likely locations under the .barproj (passthrough/, or as a direct
+/// child for legacy maps). Quietly no-ops when the file isn't there
+/// -- the shader will keep using procedural ModernSky in that case.
+pub fn load_map_skybox(
+    project_dir: Option<&std::path::Path>,
+    skybox_filename: &str,
+    core: &mut ViewportCore,
+    gpu: &bar_compute::GpuContext,
+) {
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    // Mapinfo's `skyBox = "..."` is just a filename; in the engine's VFS
+    // that resolves recursively across the archive. Our `.barproj` puts
+    // archive contents under `passthrough/`, and maps drop their skybox
+    // in different subdirs (Aurelia: `passthrough/maps/cleardesert.dds`,
+    // others: at `passthrough/` root, etc.). So we walk the passthrough
+    // tree looking for a case-insensitive filename match, then fall back
+    // to a full project_dir walk -- catches the SD7 work_dir layout
+    // (textures at `<work_dir>/maps/<file>`) that's in play between
+    // import and first save. See `load_map_detail_texture`.
+    let path = find_file_in_dir(&project_dir.join("passthrough"), skybox_filename)
+        .or_else(|| find_file_in_dir(project_dir, skybox_filename));
+    let Some(path) = path else {
+        tracing::warn!(
+            file = skybox_filename,
+            "Skybox DDS not found in project; using procedural sky"
+        );
+        return;
+    };
+    let cubemap = match bar_data::load_dds_cubemap(&path) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(
+                file = skybox_filename,
+                err = %e,
+                "Failed to decode skybox DDS; using procedural sky"
+            );
+            return;
+        }
+    };
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        renderer.update_skybox(&gpu.device, &gpu.queue, &cubemap);
+        tracing::info!(
+            file = skybox_filename,
+            w = cubemap.width,
+            h = cubemap.height,
+            "Skybox cubemap uploaded"
+        );
+    }
+}
+
 pub fn load_compiled_bc1(
     project_dir: Option<&std::path::Path>,
     recipe_name: &str,
     core: &mut ViewportCore,
     gpu: &GpuContext,
+    water_color: [f32; 3],
 ) -> Option<(u32, u32)> {
     let project_dir = project_dir?;
     let pkg = bar_engine::PackageDir::open(project_dir).ok()?;
@@ -953,7 +1602,15 @@ pub fn load_compiled_bc1(
         } else {
             -1.0
         };
+        // Elmo XZ conversion: render-XZ is [-extent, extent], world is
+        // [-pw*4, pw*4] elmos (heightmap pixels are 8 elmos apart).
+        let elmo_per_render_xz = [pw * 4.0 / x_extent.max(1e-4), ph * 4.0 / z_extent.max(1e-4)];
         let grid_n = hm.width().max(hm.height()).min(2048);
+        // `water_color` here is the map-authored `water.basecolor` passed in
+        // by the caller; the Preview pipeline reads it from `app.smf_lighting()`
+        // at the BC1-load site so editing the Water tab affects this layout
+        // too (the bind-group reupload still relies on the layout being
+        // re-entered or a recompile triggering reload).
         renderer.update_heightmap(
             &gpu.device,
             &gpu.queue,
@@ -963,18 +1620,21 @@ pub fn load_compiled_bc1(
                 x_extent,
                 z_extent,
                 water_y,
-                water_color: [0.2, 0.45, 0.75],
+                water_color,
                 grid_n,
+                height_range_elmos: height_range,
+                elmo_per_render_xz,
             },
         );
         core.current_frame = Some(OwnedFrame {
             height_scale,
+            height_range_elmos: height_range,
+            elmo_per_render_xz,
             x_extent,
             z_extent,
             water_y,
-            water_color: [0.2, 0.45, 0.75],
+            water_color,
             quality_high: true,
-            smf_lighting: bar_render::SmfLighting::default(),
             tex_w,
             tex_h,
         });

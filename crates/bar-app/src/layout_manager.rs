@@ -17,8 +17,8 @@ use eframe::egui;
 
 use crate::viewport::{
     build_feature_instances, draw_preview_placeholder, draw_preview_viewport, draw_sculpt_viewport,
-    eval_preview, load_compiled_bc1, update_viewport_texture, EvalState, FeatureMapDims,
-    OwnedFrame, PreviewResult, ResolutionStatus, ViewportCore,
+    eval_preview, live_smf_lighting, load_compiled_bc1, update_viewport_texture, EvalState,
+    FeatureMapDims, OwnedFrame, PreviewResult, ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -148,6 +148,55 @@ impl LayoutManager {
             return;
         };
 
+        // Skybox + detail texture: independent of compile state and
+        // graph eval -- keep the renderer in sync with the current
+        // project so they show the moment a project opens, regardless
+        // of which viewport the user is in or whether they've compiled.
+        //
+        // Resolution order: `project.path` (saved .barproj) first, then
+        // `pending_map_data_dir` (the SD7 work dir, set by the runner
+        // immediately after extraction). Without the fallback the
+        // skybox couldn't render after a fresh import until the user
+        // explicitly saved -- pending_map_data_dir is where the DDS
+        // actually lives at that moment.
+        if let Some(ref gpu) = gpu_context {
+            let asset_dir = app
+                .project
+                .path
+                .as_deref()
+                .or(app.project.pending_map_data_dir.as_deref());
+            crate::viewport::sync_skybox(
+                asset_dir,
+                &app.map_settings().atmosphere.skybox,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_detail_texture(
+                asset_dir,
+                &app.map_settings().resources.detail_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_splat_textures(
+                asset_dir,
+                &app.map_settings().resources,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_sky_reflect_mod(
+                asset_dir,
+                &app.map_settings().resources.sky_reflect_mod_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_specular_tex(
+                asset_dir,
+                &app.map_settings().resources.specular_tex,
+                &mut slot.core,
+                gpu,
+            );
+        }
+
         // Force refresh: bump session_id so any in-flight result is rejected.
         if slot.eval.force_refresh_requested {
             slot.eval.force_refresh_requested = false;
@@ -210,6 +259,26 @@ impl LayoutManager {
             );
         }
 
+        // Clear the visible preview when the cache key has moved past the
+        // last result we showed: the user has edited the graph (or any
+        // other input that bumps the key) and the new eval hasn't landed
+        // yet. Without this, the stale preview keeps rendering and the
+        // user can't tell whether their edit (e.g. disconnecting a wire)
+        // has taken effect.
+        let stale =
+            current_key != slot.eval.last_low_res_key && current_key != slot.eval.last_high_res_key;
+        if stale && slot.core.current_frame.is_some() {
+            slot.core.current_frame = None;
+            // Drop the heightmap too so feature-placement / shadow paths
+            // don't keep operating on the prior eval's terrain shape.
+            app.paint.heightmap = None;
+            if let Some(ref gpu) = gpu_context {
+                if let Some(ref mut renderer) = slot.core.terrain_renderer {
+                    renderer.clear_albedo(&gpu.device, &gpu.queue);
+                }
+            }
+        }
+
         // Spawn eval passes as needed.
         if !app.graph().nodes().is_empty() {
             spawn_eval_passes(slot, current_key, app, executor, ctx);
@@ -220,7 +289,7 @@ impl LayoutManager {
             if let Some(ref mut renderer) = slot.core.terrain_renderer {
                 if let Some(ref owned) = slot.core.current_frame {
                     let elapsed = slot.core.started_at.elapsed().as_secs_f32();
-                    let frame = owned.as_frame(elapsed);
+                    let frame = owned.as_frame(elapsed, live_smf_lighting(app));
                     renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, Some(&frame));
                     update_viewport_texture(
                         &mut slot.core.viewport_texture_id,
@@ -260,6 +329,49 @@ impl LayoutManager {
         let Some(ref mut slot) = self.preview else {
             return;
         };
+
+        // Skybox + detail texture sync up front -- decoupled from
+        // BC1 compile state so they show even before / without compilation.
+        // See `update_sculpt3d` for why we fall back to
+        // `pending_map_data_dir` -- it's where assets live after a
+        // fresh SD7 import but before the user has saved.
+        if let Some(ref gpu) = gpu_context {
+            let asset_dir = app
+                .project
+                .path
+                .as_deref()
+                .or(app.project.pending_map_data_dir.as_deref());
+            crate::viewport::sync_skybox(
+                asset_dir,
+                &app.map_settings().atmosphere.skybox,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_detail_texture(
+                asset_dir,
+                &app.map_settings().resources.detail_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_splat_textures(
+                asset_dir,
+                &app.map_settings().resources,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_sky_reflect_mod(
+                asset_dir,
+                &app.map_settings().resources.sky_reflect_mod_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_specular_tex(
+                asset_dir,
+                &app.map_settings().resources.specular_tex,
+                &mut slot.core,
+                gpu,
+            );
+        }
 
         // Feature instances: rebuild when dirty or heightmap changes.
         let hm_rev = app.paint.heightmap_rev;
@@ -324,10 +436,15 @@ impl LayoutManager {
         if !slot.bc1_loaded {
             let project_dir = app.project.path.clone();
             let recipe_name = app.recipe_for_export().name;
+            let water_color_init = app.smf_lighting().water_base;
             if let Some(ref gpu) = gpu_context {
-                if let Some(dims) =
-                    load_compiled_bc1(project_dir.as_deref(), &recipe_name, &mut slot.core, gpu)
-                {
+                if let Some(dims) = load_compiled_bc1(
+                    project_dir.as_deref(),
+                    &recipe_name,
+                    &mut slot.core,
+                    gpu,
+                    water_color_init,
+                ) {
                     slot.bc1_tex_dims = Some(dims);
                     app.set_status("Preview: native-resolution BC1 texture loaded");
                 }
@@ -341,11 +458,12 @@ impl LayoutManager {
         if let Some(ref gpu) = gpu_context {
             if let Some(ref mut renderer) = slot.core.terrain_renderer {
                 let elapsed = slot.core.started_at.elapsed().as_secs_f32();
+                let smf = live_smf_lighting(app);
                 let frame = slot
                     .core
                     .current_frame
                     .as_ref()
-                    .map(|f| f.as_frame(elapsed));
+                    .map(|f| f.as_frame(elapsed, smf));
                 renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, frame.as_ref());
                 update_viewport_texture(
                     &mut slot.core.viewport_texture_id,
@@ -389,21 +507,51 @@ impl LayoutManager {
         }
     }
 
-    /// Upload an S3O model to both slots' feature renderers.
+    /// Upload an S3O model (and its tex1 / tex2, if any) to both slots'
+    /// feature renderers. When a texture is `None` the renderer substitutes a
+    /// default white texture so the mesh still draws (tex1 fallback = white,
+    /// tex2 fallback = white meaning fully opaque).
     pub fn load_feature_mesh(
         &mut self,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         name: &str,
         mesh: &bar_data::S3oMesh,
+        tex1: Option<&crate::runner::TextureRgba>,
+        tex2: Option<&crate::runner::TextureRgba>,
     ) {
+        let bar_tex1 = tex1.map(|t| bar_render::FeatureTexture {
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.as_slice(),
+        });
+        let bar_tex2 = tex2.map(|t| bar_render::FeatureTexture {
+            width: t.width,
+            height: t.height,
+            rgba: t.rgba.as_slice(),
+        });
         if let Some(ref mut slot) = self.sculpt3d {
             if let Some(ref mut renderer) = slot.core.terrain_renderer {
-                renderer.load_feature_mesh(device, name, mesh);
+                renderer.load_feature_mesh(
+                    device,
+                    queue,
+                    name,
+                    mesh,
+                    bar_tex1.as_ref(),
+                    bar_tex2.as_ref(),
+                );
             }
         }
         if let Some(ref mut slot) = self.preview {
             if let Some(ref mut renderer) = slot.core.terrain_renderer {
-                renderer.load_feature_mesh(device, name, mesh);
+                renderer.load_feature_mesh(
+                    device,
+                    queue,
+                    name,
+                    mesh,
+                    bar_tex1.as_ref(),
+                    bar_tex2.as_ref(),
+                );
             }
         }
     }
@@ -451,12 +599,25 @@ fn apply_preview_result(
     let grid_n = if result.is_low_res {
         96
     } else {
+        // Engine renders SMF terrain at 1:1 mesh-to-heightmap density: each
+        // heightmap sample is a vertex. Match that. Cap at 8192 (BAR ships
+        // up to 64-block maps with 8193-sample native heightmap), aligned
+        // with `MAX_HM_RES` in `bar_engine::extract`. The cap is a memory
+        // budget, not a quality choice: 8192 mesh costs ~3.7GB of vertex
+        // + index buffer at the maximum, but the buffer is allocated only
+        // for the currently-loaded map and freed on map switch. Smaller
+        // maps (<= 16-block, the vast majority of BAR maps) are
+        // heightmap-bounded by `min(...)` and unaffected by the cap.
+        // If a future map exceeds 64 blocks OR the worst-case memory
+        // becomes untenable, the engine-faithful next step is chunked
+        // terrain rendering (Recoil drives the patches via
+        // CSMFGroundDrawer / SMFGroundTextures), not a smaller cap.
         let hm_size = result
             .heightmap
             .as_ref()
             .map(|h| h.width().max(h.height()))
             .unwrap_or(1024);
-        hm_size.min(2048)
+        hm_size.min(8192)
     };
 
     if let Some(heightmap) = result.heightmap {
@@ -472,12 +633,13 @@ fn apply_preview_result(
         core.last_water_color = result.water_color;
         core.current_frame = Some(OwnedFrame {
             height_scale: result.height_scale,
+            height_range_elmos: result.height_range_elmos,
+            elmo_per_render_xz: result.elmo_per_render_xz,
             x_extent: result.x_extent,
             z_extent: result.z_extent,
             water_y: result.water_y,
             water_color: result.water_color,
             quality_high: !result.is_low_res,
-            smf_lighting: result.smf_lighting,
             tex_w: result.tex_w,
             tex_h: result.tex_h,
         });
@@ -495,6 +657,8 @@ fn apply_preview_result(
                         water_y: result.water_y,
                         water_color: result.water_color,
                         grid_n,
+                        height_range_elmos: result.height_range_elmos,
+                        elmo_per_render_xz: result.elmo_per_render_xz,
                     },
                 );
                 if let Some(ref tex) = result.texture {
@@ -509,7 +673,11 @@ fn apply_preview_result(
             if let Some(ref gpu) = gpu_context {
                 if let Some(ref mut renderer) = core.terrain_renderer {
                     let elapsed = core.started_at.elapsed().as_secs_f32();
-                    let frame = core.current_frame.as_ref().map(|f| f.as_frame(elapsed));
+                    let smf = live_smf_lighting(app);
+                    let frame = core
+                        .current_frame
+                        .as_ref()
+                        .map(|f| f.as_frame(elapsed, smf));
                     renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
                     update_viewport_texture(
                         &mut core.viewport_texture_id,
@@ -549,23 +717,27 @@ fn spawn_eval_passes(
     let ze = (0.5 * ph / pm).min(0.5);
     let height_range = (max_h - min_h).abs().max(1.0);
     let hs = (height_range / (pm * 8.0)).max(0.005);
+    let height_range_elmos = height_range;
+    // Same XZ conversion as in viewport.rs::load_compiled_bc1 -- elmos
+    // per unit of render-space, needed by the splat-detail shader.
+    let elmo_per_render_xz = [pw * 4.0 / xe.max(1e-4), ph * 4.0 / ze.max(1e-4)];
     let wy = if min_h < 0.0 {
         (-min_h / height_range) * hs
     } else {
         -1.0
     };
-    let water_color = [0.2_f32, 0.45, 0.75];
     let smf = app.smf_lighting();
-    let smf_lighting = bar_render::SmfLighting {
-        sun_dir: smf.sun_dir,
-        ground_ambient: smf.ground_ambient,
-        ground_diffuse: smf.ground_diffuse,
-        ground_specular: smf.ground_specular,
-        specular_exponent: smf.specular_exponent,
-        water_absorb: smf.water_absorb,
-        water_base: smf.water_base,
-        water_min: smf.water_min,
-    };
+    // Refraction pre-pass clear colour: comes from the map's water.basecolor
+    // when authored, otherwise the WaterSettings default. This drives only
+    // the colour visible behind the refraction texture where no terrain is
+    // drawn; surface tint and the underwater-absorption gradient have their
+    // own per-map values (water.surfacecolor / water.absorb / water.mincolor)
+    // plumbed through `WaterParamsUniform`.
+    let water_color = smf.water_base;
+    // `smf_lighting` no longer flows through PreviewResult / OwnedFrame --
+    // it's read live from app.smf_lighting() at render time via
+    // `live_smf_lighting(app)`, so mapinfo-editor edits to water / lighting
+    // values take effect without waiting for the next graph evaluation.
     let height_scale = hs;
     let water_y = wy;
     let x_extent = xe;
@@ -618,9 +790,10 @@ fn spawn_eval_passes(
                 cache_key: current_key,
                 session_id,
                 height_scale,
+                height_range_elmos,
+                elmo_per_render_xz,
                 water_y,
                 water_color,
-                smf_lighting,
                 is_low_res: true,
                 x_extent,
                 z_extent,
@@ -661,9 +834,10 @@ fn spawn_eval_passes(
                 cache_key: current_key,
                 session_id,
                 height_scale,
+                height_range_elmos,
+                elmo_per_render_xz,
                 water_y,
                 water_color,
-                smf_lighting,
                 is_low_res: false,
                 x_extent,
                 z_extent,
