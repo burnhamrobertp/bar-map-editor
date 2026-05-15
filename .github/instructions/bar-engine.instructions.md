@@ -65,11 +65,19 @@ Use `const_hm(w, h, v)` helper for uniform-value test maps.
 loads from the rapid pool via `load_from_rapid_pool` (scans `data/packages/*.sdp`
 manifests and decompresses matching pool files).
 
-Parsing uses a line-by-line Lua state machine (brace-depth tracking). Runs at two
-outer depths (1 = inside a top-level wrapper table, 0 = top-level assignments like
-`featureDefs["name"] = {}`). `extract_feature_name` handles bare identifiers,
-bracket keys `["name"]`, and table-indexed keys `tableName["name"]`. Keys are
-stored lowercase for case-insensitive lookup via `FeatureCatalog::is_known(feature_type)`.
+`parse_feature_lua` is the per-file entry point. It runs the mlua evaluator first
+(`parse_feature_lua_dynamic`) which executes the file in a sandboxed Lua state (TABLE
++ STRING + MATH stdlib, 10 MB memory cap, 500k instruction hook) and reads the
+returned `name -> def` table. Only when mlua produced zero entries does it fall back
+to a line-by-line text parser (`parse_feature_lua_at_depth` at outer depths 1 and 0).
+This order matters: the text parser will happily extract nested keys like `customparams`
+from a `local Base = { customparams = { ... } }` template as a fake feature, which
+would otherwise suppress mlua entirely and lose all the for-loop-generated entries
+(e.g. supreme_isthmus's 32 `euro_birch_tree_*` defs).
+
+The text parser is kept only as a fallback for files that reference engine-only
+globals (`Spring.*`, `VFS.Include`) which mlua cannot resolve. Keys are stored
+lowercase for case-insensitive lookup via `FeatureCatalog::is_known(feature_type)`.
 
 Special case: `features/enginetrees_override.lua` (BAR) uses a programmatic Lua
 loop to define treetype0..255. Parsed by `parse_engine_trees_override` which
