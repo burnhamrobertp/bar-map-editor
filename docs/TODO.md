@@ -1,0 +1,114 @@
+# TODO
+
+Flagged items not yet implemented. Public, committed, and intended as the durable backlog -- distinct from per-session AI memory (which expires) and from `.github/instructions/*.instructions.md` (which describes the code as it currently exists, not what it should become).
+
+## How to use this file
+
+**Add an item** when it's a real, scoped piece of work that isn't going to happen in the current session. Drop it in the most relevant section, or make a new section if none fits. Include enough context (file paths, function names, the symptom that motivated it) that anyone can pick it up cold months later.
+
+**Mark an item DONE** by removing it from this file when the work lands. Don't leave a graveyard of completed items -- the value of the file is in being scannable. If a completed item is worth remembering (non-obvious decision, surprising trade-off), capture it in a `docs/` file describing the actual implementation; this file is for "not yet."
+
+**Remove an item** without doing it if it turns out to be wrong, no longer applicable, or superseded by a different approach. A one-line note in the commit message is enough; don't leave tombstones.
+
+**Cross-reference plans**: when a body of related work has its own plan in `docs/` (e.g. `feature-rendering-plan.md`), an entry here can just be a pointer to that file instead of duplicating its content.
+
+**Don't track here**: per-session debug notes, in-progress design discussion, hypothetical features the user hasn't actually asked for. The bar is "the user wants this and we're not getting to it right now."
+
+## Crashes
+
+- **Sculpting the heightmap in the Sculpt3D layout crashes the editor.** Using a brush tool to deform the terrain via the Sculpt3D viewport reliably crashes BME. Repro: open a project, switch to Sculpt3D, pick a heightmap-paintable layer (PaintedHeightmap or Sculpt node), select a brush (Raise/Lower/Smooth/Flatten), drag in the viewport. Need to capture the panic backtrace to know whether it's a renderer issue (heightmap upload while the previous frame is still in flight?), a brush-math issue, or a graph-eval invariant being broken by mid-stroke mutation.
+
+## History / Undo-Redo
+
+- **Log undo/redo actions as debug.** Each undo or redo should emit a `tracing::debug!` line describing the action being reversed (which node, which param, etc.) AND when undo history is truncated because the user made a new change after undoing several steps, log the entries being dropped. Helps trace user actions when debugging reproducer reports.
+- **Editing map properties should record history.** Changes made via the map-info editor / mapinfo panel (`crates/bar-gui/src/panels/mapinfo_editor.rs`) currently don't push undo snapshots, so an accidental edit to e.g. `groundSpecularColor` can't be undone. Hook the same undo-push that node-param edits use.
+- **Feature placement / edits / deletes should record history.** Adding a feature via the palette, dragging a placed feature, or deleting one (`viewport.rs::handle_camera_input` for placement; inspector for delete) all mutate `app.map.features` directly without pushing an undo entry. Make these undoable.
+
+## UX / UI
+
+- **Animated border travelling glow cuts corners.** `draw_animated_border` in `crates/bar-gui/src/layouts/preview.rs` traces the perimeter via straight edges and ignores the button's 5px corner radius, so the bright moving segment briefly clips through the rounded corner. Fix: arc the corner segments (sample N points along a quarter-circle of radius 5).
+- **Action-bar separator spacing asymmetric.** The gap between the "Test in BAR" button and the separator is wider than between the separator and the "Edit Map Info" button. Caused by `ui.add_space(8.0); ui.separator(); ui.add_space(4.0)` in `crates/bar-gui/src/layouts/shell.rs`. Match the two gaps.
+- **Re-invert middle-mouse pan to in-engine convention.** An earlier fix made middle-mouse pan follow the cursor (drag right -> camera moves right -> scene slides left). User wants the in-engine "grab and drag the world" gesture (drag right -> scene slides right with the cursor -> camera pans left). Negate `delta` at the middle-mouse-pan call site in `crates/bar-app/src/viewport.rs`; leave `Camera::pan_xz` semantics alone.
+- **Resolution-transition badge needs a "loading" affordance.** The badge that shows e.g. `1024 -> 4096` during the low-res-then-high-res eval cycle reads as a static label. Wrap it with the animated border effect (`preview.rs::draw_animated_border` is already parameterised by rect) while the high-res pass is pending. Lives in `crates/bar-app/src/viewport.rs::draw_resolution_badge`.
+- **Action-bar grouping: centered group label variant deferred.** The separator + reorder version of the build-group layout shipped, but the original UX question was "separator OR centered group label above each group (action bar gets taller)". The label variant wasn't prototyped; revisit if the separator alone doesn't read clearly.
+- **Camera rotation jumps on first frame of drag.** When initiating a rotate gesture (right-click drag in the preview viewport), the slightest mouse movement causes the camera to jump to a noticeably different angle/position before the drag begins tracking smoothly. Symptom suggests the first delta is computed against a stale anchor (probably the last cursor position from the previous frame, not the cursor position at the moment the button went down). Look at the rotate-drag handler in `crates/bar-app/src/viewport.rs` and ensure the anchor is captured on the press event, not derived from accumulated deltas.
+- **Expose shader debug visualisation toggles in the viewport.** The terrain shader has a small family of `DBG_VISUALIZE_*` and `DBG_*` constants (`shaders/terrain.wgsl`) that short-circuit the fragment output for diagnostics -- splat-detail channels, spec lobe, sky reflection, normal perturbation, detail color, etc. They're currently hand-edited as `const ... = true | false` and require a rebuild. Surface them as a UI control in the sculpt / preview viewports -- e.g. a small gear in the bottom-left with a single-select dropdown so only one viz mode is active at a time. Needs the constants to become runtime uniforms (one `u32` bitfield or `i32` index) rather than `const`, with a default of "off".
+- **Camera position / orientation overlay (debug).** Toggle inside the same debug menu as the shader viz toggles. When on, draws a small text readout in a corner of the 3D sculpt / preview viewport showing the camera's world-space position (x, y, z) and orientation (yaw / pitch / forward vector, whichever is most useful). Helpful for reproducing rendering bugs against specific viewpoints and for sanity-checking coordinate system conventions while debugging lighting / spec direction issues. Pull from `Camera` state in `crates/bar-app/src/viewport.rs`.
+
+## Preview view
+
+- **Implement non-map "surrounding terrain".** In-engine, the map sits inside a larger landscape that fills the horizon -- the visible terrain extends well past the map boundary so the world doesn't end abruptly at a cliff. BME's preview viewport currently renders only the map itself, with no surrounding context, which makes the boundary look like a void. Need to generate or fake a surrounding skirt -- the engine approach is a flat extension with the edge heightmap row/column extruded outward, textured with the map's edge splat/detail tile.
+- **Prevent camera from going underground.** Currently the orbit/free camera can be moved below the terrain surface, which clips into the heightmap and shows backfaces / black void. Clamp the camera's world-space Y to be above the heightmap sample at its XZ position plus a small epsilon. Lives in the camera update path in `crates/bar-app/src/viewport.rs` (heightmap is already accessible via the renderer's CPU mirror used for picking).
+- **Prevent camera from going out-of-bounds.** Match in-engine behaviour: the camera should stay within (or just slightly past) the map's XZ bounds rather than allowing arbitrary travel into the surrounding-terrain region. Clamp camera world XZ to the map rect (allow a small overshoot so users can see edges from outside). Coordinate with the surrounding-terrain item -- once the skirt exists, the clamp boundary may be the skirt extent rather than the map proper.
+
+## Rendering: terrain / shaders
+
+- **Feature shadow shape.** Small features (trees, crystals) have poorly-shaped shadows. Bilinear feature placement (the "attachment" half) is fixed; the remaining issue is the shadow silhouette itself. Likely needs a cascade or camera-focused shadow frustum rather than the current full-map orthographic one (current setup: `crates/bar-render/src/shadow.rs`, 4096^2 shadow map covering the whole map at uniform per-texel coverage).
+- **Per-pixel terrain normals from a pre-baked normal texture.** Engine samples a per-fragment normal map (`SMFFragProg.glsl::GetFragmentNormal`) rather than interpolating per-vertex normals. Engine-faithful upgrade that would give crisper lighting on cliffs without needing higher mesh density. CPU-generate the normal texture from the heightmap during `update_heightmap`, bind as `Rg8Snorm` or `Rg16Float`, sample per-fragment in `terrain.wgsl::fs_main`, reconstruct `Y = sqrt(1 - X^2 - Z^2)`.
+- **Chunked terrain rendering (for 32+ block maps).** Current renderer uses a single grid mesh capped at 8192^2 vertices. At the largest shipped BAR maps (64-block / 8193 native heightmap) that's ~3.7GB of vertex+index data. Engine handles this via spatial chunks (`CSMFGroundDrawer` / `SMFGroundTextures`) -- only visible patches are tessellated at full density. Deferred until a real memory ceiling is hit (current is fine on dev hardware).
+- **Metal-spot specular blowout on Ascendency (reverse direction + saturation).** Two related symptoms on Ascendency's metal-pad patches: (1) at certain camera angles the spec lobe saturates to pure white across the whole metal-pad region, more aggressively than in-game which shows a brighter-but-bounded response; (2) the camera angles that produce bright vs dim spec appear inverted compared to in-game -- bright when looking away from the sun rather than toward it. Investigation done: confirmed `specularTex` (ASC_speculartex.dds) loads correctly; per-pixel spec_color + spec_exp from the texture are in use (not the global fallback); confirmed `sync_splat_textures` now uploads correctly after the missing-channel fix (`Ice_1k_dnts.tga` absent from .sd7 was killing the whole splat path). Tried negating `sun_dir.z` (no change), then `sun_dir.x` (made spec only visible from underground -- wrong direction). Shader math matches engine exactly (same Blinn-Phong, same `splatDetailStrength.x = min(1.0, dot(splatCofac, vec4(1)))`, same `mix(normal, perturbed, strength)`, same `(texture * shade) + spec` order). Unresolved candidates: (a) perturbed-normal tilt direction differs from engine (possibly a `splat_tex_mults` sign or a tangent-basis derivative-sign difference at slopes); (b) detail-normal sampling UV mirrored vs engine for non-flat terrain. Both need an A/B render against an in-engine debug capture of the same viewpoint to disambiguate; not solvable from shader-side toggle tests alone. Debug viz `DBG_VISUALIZE_SPEC` in `shaders/terrain.wgsl` already wired to output R = spec_color.r, G = spec_sample.a, B = cos_specular when investigating further.
+- **Investigate missing coloured lighting bursts on Azurite Shores around crystals.** In-game, the crystal features on Azurite Shores have small coloured light/glow bursts emanating from them (visible at the crystal bases). These don't render in BME. Candidate causes: (1) the engine `lightEmissionTex` path (`resources.lightEmissionTex`) which provides per-pixel emissive contribution to the ground -- not currently sampled by `shaders/terrain.wgsl`; (2) the engine's separate per-feature light contribution (animated point lights attached to specific features); (3) a particle / sprite effect emitted by a LuaGaia gadget that we don't run. Step 1: extract Azurite Shores' `mapinfo.lua` to check if `lightEmissionTex` is set; if yes, port the engine's `SMF_LIGHT_EMISSION` block (~5 lines, see `vendor/recoil/shaders/GLSL/SMFFragProg.glsl:392`). If `lightEmissionTex` isn't the source, the lights are gadget-driven and out of scope for the renderer alone.
+- **Splat detail-normal CPU mip quality.** When the source splat detail-normal is NOT a DDS with a baked mip chain (rare; nearly all BAR maps ship DDS), `renderer.rs::ensure_full_mip_chain` falls back to a 2x2 box filter on sRGB-encoded RGBA8 bytes without normal renormalisation. The DDS path is fine (artist-baked). Improving the fallback would mean: (a) operate in linear space, (b) renormalise per output texel for the normal channels, (c) optionally Kaiser / Lanczos kernel. Only worth doing if a non-DDS splat texture appears in the wild.
+
+## Rendering: shader-port catalogue
+
+See `docs/recoil-shader-ports.md` for the full status table and per-feature context. Still-open ports cross-referenced here so they show in one backlog place:
+
+- **`SMF_BLEND_NORMALS`** (`detailNormalTex` / `blendNormalsTex`) -- single-normal-map perturbation. Aurelia ships one but its visible contribution overlaps with the splat-detail-normal path that IS done. Low priority, but worth a quick check on maps that ship the texture without the splat variant.
+- **Basic `SMF_DETAIL_TEXTURE_SPLATTING`** -- the simpler 1-texture splat path. Most modern BAR maps use the 4-texture normal-splat variant which is done; the simple path appears on older maps.
+- **`HAVE_INFOTEX`** -- gameplay overlay (FoW, metal, LoS spots). Documented as out-of-scope for the editor preview in `recoil-shader-ports.md`; tracked here in case scope changes.
+- **Shore foam** (`GetShorewaves`) -- needs SDP reader (see below) for `foam.png` / `waverand` plus a CPU-computed coast-distance map.
+- **Caustics** -- needs SDP reader for `caust00..caust31.tga` animation sequence.
+- **Refraction blur** (`BumpWaterCoastBlur`) -- engine blurs the refraction texture before BumpWater samples it; we currently compensate by undershooting the distortion UV magnitude to ~20% of engine's. Adding the blur would let the UV magnitude come back up to engine's value and improve ripple crispness. Pure shader-side pass; no asset dependencies.
+- **Multi-tap reflection blur** (`opt_blurreflection`) -- 7 extra reflection samples + `BlurBase` / `BlurExponent` uniforms. Pure shader. Engine treats it as a user quality setting.
+- **MiniMap port wiring** -- shader is ported (`recoil/minimap.wgsl`) but not GUI-wired. Inspector still draws its own topo view. Switch when there's a concrete user complaint about the topo view.
+
+## Engine asset access
+
+- **SDP reader.** Prerequisite for shore foam, caustics, and any future port of engine-shipped assets (unit shaders, GUI icons, etc.). Format details and engine references are in `docs/recoil-shader-ports.md` under "Prerequisite: SDP reader." Planned location: `crates/bar-data/src/sdp.rs`. Not started.
+
+## 3D painting
+
+See `docs/3d-painting-plan.md` for the full plan. Remaining work:
+
+- **Metalmap density overlay in the renderer.** The metalmap sculpt layer writes to `SculptState.metal_overlay` and persists as `sculpt-metal.png` sidecar, but the 3D viewport doesn't render a visible overlay yet. Was deferred behind embedded-viewport (Phase F). The viewport has since been embedded; this is now unblocked but unscheduled.
+- **Typemap colour overlay in the renderer.** Same shape as the metalmap overlay -- data is captured, persisted, and editable; the visual overlay isn't rendered.
+
+## Features
+
+See `docs/feature-rendering-plan.md`. M1/M2/M3 are complete.
+
+### Editor UI
+
+- **"Add Features" panel should fill available vertical space and show previews.** Currently the panel is a compact list. Expand it to take the available space in the sidebar / palette area, and render each feature entry with a small visual preview (S3O thumbnail or rendered placeholder) in a **2-wide grid layout** so the user can scan available features visually rather than by name alone. Lives in the features panel (most likely `crates/bar-gui/src/panels/palette.rs` or `crates/bar-gui/src/layouts/sculpt3d.rs` -- check current home of the feature picker).
+- **"Features" action bar entry for managing map-bundled features.** Add a new top-level action bar button that opens a management view for the custom features included in this map's data (the `features/`
+  + `objects3d/` + `unittextures/` subtrees copied into the `.barproj` on save). Should let the user list what's bundled, inspect each entry, and add / remove entries. Goes alongside the existing Compile / Bundle / Test-in-BAR / Edit-Map-Info buttons in `crates/bar-gui/src/layouts/shell.rs::TopBottomPanel::top("action_bar")`.
+
+### M4 rendering polish
+
+- Hover tooltip showing feature type name (requires pixel picking integration -- non-trivial).
+- LOD: suppress features below a screen-size threshold when zoomed out.
+- Features in the reflection / refraction passes. Refraction-pass feature rendering is partially in (so underwater features show through water); reflection-pass is not. Verify and finish.
+- Async progressive model loading instead of blocking until all models are ready.
+- **Geovent feature rendering.** Geovents (geothermal vents -- maps designate them as metal-spot-like features that grant continuous energy) currently render as the placeholder yellow cube rather than the engine's animated geovent geometry/effect. Engine renders them as procedural circle of vertices with steam/heat-haze effect, not as an S3O model. Needs a dedicated geovent visualisation path (likely a billboard or screen-space ring + heat shimmer) since there's no S3O to load.
+
+## Logging
+
+- **Fix log filtering controls.** The log panel's filter controls aren't doing what users expect -- the levels / target filters aren't applying correctly. Audit `crates/bar-app/src/app_log_layer.rs` and whatever GUI surface exposes the filter UI; likely either the filter predicate is wrong or the UI state isn't propagating to the layer.
+- **Standardize info vs debug usage.** Far too many tracing calls are landing at `info` level when they're really debug-level diagnostics. Audit the codebase and demote the bulk of them; reserve `info` for events a user would actually want to see during normal operation (load complete, save complete, errors recovered). Also consider adding a dedicated **Status** log type (or a separate channel) for foreground operations the user is actively tracking, so they don't compete with diagnostic info in the same stream.
+
+## Project / workflow
+
+- **Reparse mapinfo on `.barproj` load.** When `ResourcesSettings` (or any other mapinfo-derived field) gains a new field, existing `.barproj` projects don't pick it up until the user re-imports the `.sd7` -- the load path deserialises the saved recipe directly without re-running `apply_mapinfo_overrides`. Fix: if a `passthrough/mapinfo.lua` is present in the loaded project, run the parser against it on top of the saved values, so new parser fields populate retroactively. Files: `bar-gui::project::lifecycle` apply path + `bar-project::apply_mapinfo_overrides`.
+- **PassThrough vs. Edit Map Info: resolve the overlap.** The PassThrough node was the original way to ship miscellaneous files (mapinfo.lua, splat textures, skybox, specular, sky-reflect mask, detail tex, LuaGaia scripts, etc.) into the bundle. Since then the Edit Map Info panel has taken over the textures listed in mapinfo (`MapSettings.resources.*`), which means there are now two sources of truth for "is this texture part of the map":
+    1. The PassThrough node's `files` param (graph topology).
+    2. `MapSettings.resources` and the file actually living in `<barproj>/passthrough/` (Edit Map Info panel + disk state). Symptom: disconnecting PassThrough from Bundler affects only the *export* (the disconnected files won't be packaged into the bundle), but the *preview* keeps loading and rendering textures whose filenames live in `app.map_settings().resources.*` -- the `sync_skybox` / `sync_detail_texture` / `sync_splat_textures` / `sync_sky_reflect_mod` / `sync_specular_tex` functions in `crates/bar-app/src/viewport.rs` read those filenames directly, independent of graph topology.
+
+  Two cleanups worth considering:
+    - **Narrow PassThrough's role.** For the map-info-managed textures, the Edit Map Info panel should be the single source of truth -- removing them from PassThrough's `files` list (or auto-driving that list from `MapSettings.resources`). PassThrough then only ships truly miscellaneous files: Lua gadgets, mapconfig scripts, sound, etc.
+    - **Or: tie sync to graph reachability.** Add a helper on `GraphEngine` like `bundle_files_reachable_from(bundler_id) -> HashSet<String>` that the sync layer consults, so disconnecting PassThrough makes the preview blank the affected textures. The first cleanup is the deeper fix; the second is a band-aid.
+- **Classify remaining PassThrough-only files: Edit Map Settings vs node-driven.** A bunch of files currently only reach the bundle via the PassThrough node (Lua gadgets, mapconfig/featureplacer data, mapoptions, sound configs, custom feature S3O references that aren't in MapSettings.resources, etc.). Decide per-category which belong in the structured Edit Map Settings panel (mapinfo-derived fields, lobby-visible options, settings-shaped data) and which should be exposed as proper graph nodes (placement / generation data that benefits from upstream parameterisation). Anything left over stays as raw PassThrough cargo. Output should be a list per category with a routing decision; informs the PassThrough-overlap cleanup above.
+
+## Open investigations
+
+- **Misplaced dots on Ascendancy ground.** Visible in the 3D preview; user described them as "splat details that are supposed to be on top of metal spots, misaligned." Bisected: NOT from splat rendering (disabling `DBG_SPLAT_NORMAL_PERTURB` + `DBG_SPLAT_DETAIL_COLOR` doesn't make them go away). Possible candidates: metalmap rendering / orientation, feature placeholder positioning, or a separate 2D overlay. Not investigated further; needs descriptive info from the user (size, color, ground-attached vs screen-space) plus a fresh screenshot.
