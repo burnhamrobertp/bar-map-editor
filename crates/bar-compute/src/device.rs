@@ -79,6 +79,11 @@ impl GpuContext {
                         // Allow larger storage buffers for high-res heightmaps (8K = 256MB)
                         max_storage_buffer_binding_size: 512 * 1024 * 1024,
                         max_buffer_size: 512 * 1024 * 1024,
+                        // Terrain pipeline binds 5 groups (camera, textures,
+                        // water_planes, heightmap, shadow). Default cap is 4
+                        // which rejects the shadow group when running CLI /
+                        // headless previews.
+                        max_bind_groups: 8.min(adapter.limits().max_bind_groups),
                         ..wgpu::Limits::default()
                     },
                     ..Default::default()

@@ -142,14 +142,26 @@ pub fn get_heightmap_output(graph: &GraphEngine, outputs: &NodeOutputs) -> Optio
 
 /// Get a heightmap suitable for the interactive preview.
 ///
-/// Prefers the value wired to the Bundler's `heightmap` port. Falls back to
-/// the last evaluated Heightmap in topological order so the viewport stays
-/// live even in simple graphs without a Bundler.
+/// When the graph contains a Bundler, ONLY the value wired to its
+/// `heightmap` port is used -- disconnections show up in the viewport as
+/// the heightmap going away, which is the user-visible behaviour you'd
+/// expect from unhooking the wire.
+///
+/// When the graph has no Bundler at all (early bring-up, stub graphs,
+/// CLI tests with synthetic recipes), we fall back to the last evaluated
+/// Heightmap in topological order so the viewport stays live. Previously
+/// this fallback fired any time the Bundler's `heightmap` port was unwired,
+/// which silently masked disconnections -- the disconnected node was still
+/// being evaluated and its output was being picked up by the topo walk.
 pub fn get_preview_heightmap(graph: &GraphEngine, outputs: &NodeOutputs) -> Option<Heightmap> {
-    if let Some(hm) = get_bundler_heightmap(graph, outputs, "heightmap") {
-        return Some(hm);
+    let has_bundler = graph
+        .nodes()
+        .iter()
+        .any(|(_, n)| n.node_type == NodeType::Bundler);
+    if has_bundler {
+        return get_bundler_heightmap(graph, outputs, "heightmap");
     }
-    // Fallback: last Heightmap value in topo order
+    // No Bundler: fall back to the last Heightmap value in topo order.
     if let Ok(order) = graph.topological_sort() {
         for &node_id in order.iter().rev() {
             if let Some(node_outputs) = outputs.get(&node_id) {
