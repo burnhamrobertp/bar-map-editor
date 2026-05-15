@@ -7,13 +7,18 @@ pub mod color;
 pub mod heightmap;
 pub mod s3o;
 pub mod sd7;
+pub mod skybox;
 pub mod smt;
 
 pub use color::ColorBuffer;
 pub use heightmap::Heightmap;
 pub use s3o::{parse_s3o, S3oError, S3oMesh, S3oVertex};
 pub use sd7::{SmfFeaturePlacement, SmfHeader, SmfMap};
+pub use skybox::{
+    load_dds_2d, load_dds_2d_bytes, load_dds_2d_with_mips, load_dds_cubemap, Cubemap, DdsMip,
+    SkyboxError,
+};
 pub use smt::{
-    assemble_bc1_linear, compress_image_dxt1, decode_tile_dxt1, generate_minimap_dxt1, read_smt,
-    read_smt_raw, write_smt, DXT1_TILE_BYTES, MINIMAP_SIZE,
+    assemble_bc1_linear, compress_image_dxt1, decode_dxt1_block, decode_tile_dxt1,
+    generate_minimap_dxt1, read_smt, read_smt_raw, write_smt, DXT1_TILE_BYTES, MINIMAP_SIZE,
 };

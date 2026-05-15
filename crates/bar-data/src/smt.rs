@@ -44,7 +44,7 @@ pub const DXT1_TILE_BYTES: usize = (TILE_SIZE as usize / 4) * (TILE_SIZE as usiz
 ///
 /// Handles both opaque mode (color0 > color1, 4-color palette) and
 /// 1-bit-alpha mode (color0 <= color1, 3-color + transparent palette).
-fn decode_dxt1_block(block: &[u8; 8]) -> [[u8; 4]; 16] {
+pub fn decode_dxt1_block(block: &[u8; 8]) -> [[u8; 4]; 16] {
     let c0 = u16::from_le_bytes([block[0], block[1]]);
     let c1 = u16::from_le_bytes([block[2], block[3]]);
     let indices = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);

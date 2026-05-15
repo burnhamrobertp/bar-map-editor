@@ -48,6 +48,10 @@ const MAGIC: &[u8; 12] = b"Spring unit\0";
 
 /// Header is 52 bytes; rootPieceOffset lives here.
 const HDR_ROOT_PIECE_OFFSET: usize = 36;
+/// Offsets of texture1/texture2 filename pointers in the S3O header.
+/// Both point to null-terminated ASCII strings elsewhere in the file.
+const HDR_TEXTURE1_OFFSET: usize = 44;
+const HDR_TEXTURE2_OFFSET: usize = 48;
 
 /// Piece struct field offsets (each piece is 52 bytes). From `rts/Rendering/Models/s3o.h`.
 const PIECE_NUM_CHILDREN: usize = 4;
@@ -75,6 +79,14 @@ pub struct S3oMesh {
     pub aabb_min: [f32; 3],
     /// Axis-aligned bounding box maximum (model space).
     pub aabb_max: [f32; 3],
+    /// Filename referenced by header.texture1 (color + team-mask in alpha).
+    /// Empty if the header offset was 0 or the file did not contain a usable
+    /// null-terminated string at that location. Caller resolves it under
+    /// `unittextures/` in the same VFS sources used to load the model.
+    pub texture1: String,
+    /// Filename referenced by header.texture2 (color2 + glow/specular). Empty
+    /// if not present.
+    pub texture2: String,
 }
 
 /// Per-vertex data for S3O models.
@@ -129,12 +141,16 @@ pub fn parse_s3o(data: &[u8]) -> Result<S3oMesh, S3oError> {
     }
 
     let root_offset = read_u32(data, HDR_ROOT_PIECE_OFFSET)? as usize;
+    let tex1_off = read_u32(data, HDR_TEXTURE1_OFFSET)? as usize;
+    let tex2_off = read_u32(data, HDR_TEXTURE2_OFFSET)? as usize;
 
     let mut mesh = S3oMesh {
         vertices: Vec::new(),
         indices: Vec::new(),
         aabb_min: [f32::INFINITY; 3],
         aabb_max: [f32::NEG_INFINITY; 3],
+        texture1: read_cstr(data, tex1_off),
+        texture2: read_cstr(data, tex2_off),
     };
 
     collect_piece(data, root_offset, [0.0f32; 3], &mut mesh)?;
@@ -145,6 +161,20 @@ pub fn parse_s3o(data: &[u8]) -> Result<S3oMesh, S3oError> {
     }
 
     Ok(mesh)
+}
+
+/// Read a null-terminated ASCII string at `offset`. Returns an empty string if
+/// the offset is 0 or out of bounds.
+fn read_cstr(data: &[u8], offset: usize) -> String {
+    if offset == 0 || offset >= data.len() {
+        return String::new();
+    }
+    let end = data[offset..]
+        .iter()
+        .position(|&b| b == 0)
+        .map(|n| offset + n)
+        .unwrap_or(data.len());
+    String::from_utf8_lossy(&data[offset..end]).into_owned()
 }
 
 // -- Piece traversal ----------------------------------------------------------
@@ -199,7 +229,12 @@ fn collect_piece(
             let ny = read_f32(data, v_off + 16)?;
             let nz = read_f32(data, v_off + 20)?;
             let tc_x = read_f32(data, v_off + 24)?;
-            let tc_y = read_f32(data, v_off + 28)?;
+            // Engine OpenGL convention: V=0 is at the bottom of the texture.
+            // wgpu convention: V=0 is at the top. S3O UVs are authored against
+            // the engine convention, so without this flip the texture comes
+            // out V-mirrored on the model (visible as a horizontal seam where
+            // the texture's top and bottom rows meet on a non-aligned UV).
+            let tc_y = 1.0 - read_f32(data, v_off + 28)?;
 
             let px = vx + pos[0];
             let py = vy + pos[1];
@@ -510,6 +545,27 @@ mod tests {
         expand_quads(&[0, 1, 2, 3], 0, &mut out);
         assert_eq!(out.len(), 6);
         assert_eq!(&out, &[0, 1, 2, 0, 2, 3]);
+    }
+
+    /// Header texture1/texture2 offsets point at null-terminated ASCII strings.
+    /// Verify they round-trip through parse_s3o into the mesh fields.
+    #[test]
+    fn texture_filenames_are_extracted() {
+        // Embed two short texture filenames at the very end of the file,
+        // after the indices, and patch the header offsets to point at them.
+        let mut data = minimal_s3o();
+        let tex1 = b"birch_tree_03_1.tga\0";
+        let tex2 = b"birch_tree_03_normal.tga\0";
+        let tex1_off = data.len() as u32;
+        data.extend_from_slice(tex1);
+        let tex2_off = data.len() as u32;
+        data.extend_from_slice(tex2);
+        data[44..48].copy_from_slice(&tex1_off.to_le_bytes());
+        data[48..52].copy_from_slice(&tex2_off.to_le_bytes());
+
+        let mesh = parse_s3o(&data).expect("should parse");
+        assert_eq!(mesh.texture1, "birch_tree_03_1.tga");
+        assert_eq!(mesh.texture2, "birch_tree_03_normal.tga");
     }
 
     /// Verify that shifted index encoding (index << 8) is detected and decoded.
