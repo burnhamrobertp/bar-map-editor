@@ -112,11 +112,15 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
                 height: 80.0,
             },
         );
+        // Heightmap is stored at full SMF precision (f32 per pixel) -- u8
+        // quantisation produced visible terracing on every map with more
+        // than ~256 elevation levels. See `extract.rs::MAX_HM_RES` and
+        // `downsample_f32_to_f32_bytes` for the upstream side.
         pending.push(PendingAsset {
             node_key: key.to_string(),
             id,
             header: AssetHeader {
-                kind: AssetKind::GrayscaleU8,
+                kind: AssetKind::GrayscaleF32,
                 width: res,
                 height: res,
             },
@@ -392,11 +396,14 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
 
     let (width, height) = scan.map_dims.unwrap_or((256, 256));
     let (min_height, max_height) = scan.height_range.unwrap_or((0.0, 800.0));
-    let map_settings = MapSettings {
+    let mut map_settings = MapSettings {
         min_height,
         max_height,
         ..MapSettings::default()
     };
+    if let Some(lua) = scan.mapinfo_lua.as_deref() {
+        crate::mapinfo::apply_mapinfo_overrides(lua, &mut map_settings);
+    }
 
     let recipe = Recipe {
         schema_version: RECIPE_SCHEMA_VERSION,
@@ -456,6 +463,7 @@ mod tests {
             texture_res: 0,
             tile_indices: Vec::new(),
             features: Vec::new(),
+            mapinfo_lua: None,
         }
     }
 
@@ -672,4 +680,12 @@ pub struct WorkDirScan {
 
     /// Feature placements extracted from the SMF feature section.
     pub features: Vec<crate::recipe::PlacedFeature>,
+
+    /// Raw contents of `mapinfo.lua` from the work directory, if present.
+    /// `scan_to_project` parses water/lighting/etc. overrides from this so
+    /// per-map values (fresnel, sun direction, etc.) land in the recipe's
+    /// `MapSettings`. The UI-driven SD7 import path goes through this
+    /// scan; the parsing previously lived in `bar-engine::importer` and
+    /// was bypassed here, leaving every imported map at the defaults.
+    pub mapinfo_lua: Option<String>,
 }

@@ -186,6 +186,14 @@ pub struct MapSettings {
     #[serde(default)]
     pub water: WaterSettings,
 
+    /// Height-based custom fog (mapinfo `custom.fog`).
+    #[serde(default)]
+    pub custom_fog: CustomFogSettings,
+
+    /// Per-map asset filenames from mapinfo `resources = { ... }`.
+    #[serde(default)]
+    pub resources: ResourcesSettings,
+
     /// Team start positions as [(x, z)] in Spring world coordinates.
     /// If empty, auto-generated at 25%/75% corners.
     #[serde(default)]
@@ -207,6 +215,13 @@ fn default_tex_scale() -> f32 {
 }
 
 /// Atmosphere configuration for mapinfo.lua.
+///
+/// The wind / fog fields drive gameplay + the engine's standard distance fog.
+/// The `sun_*`, `sky_*`, `cloud_*` fields feed the procedural sky shader
+/// (`shaders/recoil/modern_sky.wgsl`) so each map gets its authored sky
+/// instead of a single hard-coded one. `skybox` is the asset name for a
+/// cubemap DDS; not currently rendered, but stored so it round-trips
+/// through `.barproj` and is available when cubemap skybox support lands.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AtmosphereSettings {
@@ -215,6 +230,15 @@ pub struct AtmosphereSettings {
     pub fog_start: f32,
     pub fog_end: f32,
     pub fog_color: [f32; 3],
+    pub sun_color: [f32; 3],
+    pub sky_color: [f32; 3],
+    pub sky_dir: [f32; 3],
+    pub cloud_density: f32,
+    pub cloud_color: [f32; 3],
+    /// Filename of the cubemap DDS for skybox rendering (mapinfo's
+    /// `skyBox = "..."`). Empty when the map uses the procedural sky.
+    /// Stored but not yet sampled by the renderer.
+    pub skybox: String,
 }
 
 impl Default for AtmosphereSettings {
@@ -225,8 +249,78 @@ impl Default for AtmosphereSettings {
             fog_start: 0.1,
             fog_end: 1.0,
             fog_color: [0.7, 0.7, 0.8],
+            // Sky defaults from `mapgenerator/mapinfo_template.lua` in the
+            // engine -- the values a freshly-generated BAR map gets.
+            sun_color: [1.0, 1.0, 1.0],
+            sky_color: [0.1, 0.15, 0.7],
+            sky_dir: [0.0, 0.0, -1.0],
+            cloud_density: 0.5,
+            cloud_color: [1.0, 1.0, 1.0],
+            skybox: String::new(),
         }
     }
+}
+
+/// Asset references from mapinfo's `resources = { ... }` block. These
+/// are filename-only references (`detailTex = "detailtexblurred.bmp"`);
+/// the renderer resolves them against the `.barproj/passthrough/`
+/// tree at load time. Empty string = unspecified, fall back to the
+/// engine's "no detail" default in the shader.
+///
+/// Currently only `detail_tex` is wired -- the engine has many more
+/// (`specularTex`, `splatDistrTex`, `splatDetailTex`, four detail
+/// normal textures, etc). The struct exists so they can be added
+/// incrementally without further schema migrations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ResourcesSettings {
+    /// Legacy single detail texture (mapinfo `detailTex`). Tiles
+    /// across the map; the shader subtracts 0.5 to centre it so the
+    /// texture both lightens and darkens the base diffuse.
+    pub detail_tex: String,
+    /// 4-channel splat distribution map (mapinfo `splatDistrTex`).
+    /// Each channel R/G/B/A weights one splat-detail texture.
+    pub splat_distr_tex: String,
+    /// Four splat-detail-normal textures (mapinfo `splatDetailNormalTex1`
+    /// through `4`). Used by the engine's `SMF_DETAIL_NORMAL_TEXTURE_SPLATTING`
+    /// path. RGB encodes a tangent-space normal perturbation; alpha
+    /// (when `splat_detail_normal_diffuse_alpha = true`) is the
+    /// per-pixel detail brightness contribution.
+    pub splat_detail_normal_tex_1: String,
+    pub splat_detail_normal_tex_2: String,
+    pub splat_detail_normal_tex_3: String,
+    pub splat_detail_normal_tex_4: String,
+    /// When true, the alpha channel of each splat-detail-normal texture
+    /// provides the detail brightness (Aurelia sets this). When false,
+    /// only the normal perturbation is used and detail brightness is
+    /// constant 0.
+    pub splat_detail_normal_diffuse_alpha: bool,
+    /// Per-channel UV scale for splat-detail sampling (mapinfo
+    /// `splats.texScales`). Multiplied against the world XZ before
+    /// the texture sample so each detail layer can tile at its own
+    /// rate. Aurelia: `{0.0032, 0.0063, 0.0044, 0.0055}`.
+    pub splat_tex_scales: [f32; 4],
+    /// Per-channel mix multiplier (mapinfo `splats.texMults`).
+    /// Used only by the basic splat path (`SMF_DETAIL_TEXTURE_SPLATTING`);
+    /// stored here for completeness so it round-trips through .barproj.
+    pub splat_tex_mults: [f32; 4],
+    /// Per-pixel reflection-strength mask (mapinfo `skyReflectModTex`).
+    /// When set, the terrain shader samples this 2D texture to decide
+    /// where the skybox cubemap reflects on the surface. Pixels with
+    /// rgb=(0,0,0) get no reflection; (1,1,1) gets full reflection.
+    /// Engine path: `SMF_SKY_REFLECTIONS`.
+    pub sky_reflect_mod_tex: String,
+    /// Per-pixel specular-strength texture (mapinfo `specularTex`).
+    /// Engine path: `SMF_SPECULAR_LIGHTING`. When set, the terrain shader
+    /// samples this texture instead of using the global
+    /// `groundSpecularColor` -- `texture.rgb` = per-pixel specular color,
+    /// `texture.a * 16` = per-pixel specular exponent. Most natural
+    /// terrain has near-zero values here (only water pools / metal /
+    /// ice are visibly reflective); without this texture, the shader
+    /// applies the global `groundSpecularColor` everywhere, which is
+    /// why maps like Ascendancy (`groundSpecularColor = {0.5, 0.5, 0.5}`)
+    /// were producing sun-side hotspots across the whole map.
+    pub specular_tex: String,
 }
 
 /// Lighting configuration for mapinfo.lua.
@@ -240,6 +334,38 @@ pub struct LightingSettings {
     pub spec_exponent: f32,
 }
 
+/// Height-based "custom" fog (mapinfo's `custom.fog = { color, height, fogatten }`
+/// block). Not part of the engine's core SMF/BumpWater pipeline; in-game it's
+/// applied by a Lua widget that tints fragments below `height` by `color`,
+/// attenuated by `atten` per elmo of depth. We do the same thing here as a
+/// final post-pass in the terrain and water fragment shaders so previews
+/// match the in-game look (this is what gives underwater terrain its deep
+/// blue cast on maps like Aurelia, where the SMF water-absorption alone
+/// leaves the seabed too warm).
+///
+/// `enabled` gates the whole pass; when false the shaders bypass the mix.
+/// `height_elmos` is the resolved height (mapinfo allows "40%" of MaxHeight
+/// which the importer must resolve into absolute elmos before storing here).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomFogSettings {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub height_elmos: f32,
+    pub atten: f32,
+}
+
+impl Default for CustomFogSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: [0.0, 0.0, 0.0],
+            height_elmos: 0.0,
+            atten: 0.0,
+        }
+    }
+}
+
 impl Default for LightingSettings {
     fn default() -> Self {
         Self {
@@ -247,12 +373,22 @@ impl Default for LightingSettings {
             ground_ambient: [0.5, 0.5, 0.5],
             ground_diffuse: [0.5, 0.5, 0.5],
             ground_specular: [0.1, 0.1, 0.1],
-            spec_exponent: 10.0,
+            // Engine default (MapInfo.cpp::ReadLight). Previously 10.0 here,
+            // which made the spec lobe broad enough that any map shipping
+            // `groundSpecularColor >= 0.3` without overriding `specularExponent`
+            // would wash out to white at near-overhead camera angles (Ascendancy:
+            // groundSpecularColor=0.5, no exponent override). Maps that
+            // intentionally want a broad/dim lobe still override this in
+            // mapinfo.lua.
+            spec_exponent: 100.0,
         }
     }
 }
 
-/// Water configuration for mapinfo.lua.
+/// Water configuration for mapinfo.lua. Defaults match Recoil's
+/// `rts/Map/MapInfo.cpp` (where the engine's BumpWater shader gets its
+/// per-map values from). Keys we don't parse from mapinfo yet still have
+/// reasonable defaults so a freshly-created project renders sensibly.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct WaterSettings {
@@ -260,6 +396,19 @@ pub struct WaterSettings {
     pub absorb: [f32; 3],
     pub base_color: [f32; 3],
     pub min_color: [f32; 3],
+    pub surface_color: [f32; 3],
+    pub surface_alpha: f32,
+    pub diffuse_color: [f32; 3],
+    pub specular_color: [f32; 3],
+    pub ambient_factor: f32,
+    pub diffuse_factor: f32,
+    pub specular_factor: f32,
+    pub specular_power: f32,
+    pub fresnel_min: f32,
+    pub fresnel_max: f32,
+    pub fresnel_power: f32,
+    pub reflection_distortion: f32,
+    pub perlin_amplitude: f32,
 }
 
 impl Default for WaterSettings {
@@ -269,6 +418,20 @@ impl Default for WaterSettings {
             absorb: [0.0, 0.0, 0.0],
             base_color: [0.6, 0.6, 0.8],
             min_color: [0.0, 0.0, 0.0],
+            // From `rts/Map/MapInfo.cpp:250-266`.
+            surface_color: [0.75, 0.8, 0.85],
+            surface_alpha: 0.55,
+            diffuse_color: [1.0, 1.0, 1.0],
+            specular_color: [1.0, 1.0, 1.0],
+            ambient_factor: 1.0,
+            diffuse_factor: 1.0,
+            specular_factor: 1.0,
+            specular_power: 20.0,
+            fresnel_min: 0.2,
+            fresnel_max: 0.8,
+            fresnel_power: 4.0,
+            reflection_distortion: 1.0,
+            perlin_amplitude: 0.9,
         }
     }
 }
@@ -291,6 +454,8 @@ impl Default for MapSettings {
             atmosphere: AtmosphereSettings::default(),
             lighting: LightingSettings::default(),
             water: WaterSettings::default(),
+            custom_fog: CustomFogSettings::default(),
+            resources: ResourcesSettings::default(),
             start_positions: Vec::new(),
         }
     }
