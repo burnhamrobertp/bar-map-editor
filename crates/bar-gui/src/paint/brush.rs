@@ -418,13 +418,13 @@ impl BarEditorApp {
         self.paint.brush.flatten_target = None;
     }
 
-    /// Persist the live FC-layer buffer to disk. Mints an asset id +
-    /// path on first paint (writing to
-    /// `<project>/final_composition/<uuid>.bin`); subsequent strokes
-    /// overwrite the same file. Captures the pre-stroke asset bytes in
-    /// the undo snapshot first so undo can revert to the prior layer
-    /// state. Heightmap layer encodes as `GrayscaleU8` deltas
-    /// (matching `composite_heightmap_layer` in the executor).
+    /// Persist the live FC-layer buffer to disk. FC's per-kind
+    /// `{kind}_layer_asset_id` and `{kind}_layer_asset_path` are
+    /// guaranteed to be populated at project bootstrap (scan, new
+    /// project, macro drop, load) -- so this just resolves the path,
+    /// snapshots the pre-stroke file bytes for undo, and writes the
+    /// new bytes. The asset file itself comes into existence here on
+    /// the first stroke into a kind.
     fn flush_live_paint_to_fc_layer(&mut self, kind: FCLayerKind) {
         let key = PaintKey::FCLayer(kind);
         let Some(buffer) = self.paint.live_paint.remove(&key) else {
@@ -433,39 +433,31 @@ impl BarEditorApp {
         let Some(fc_node_id) = find_final_composition_node(&self.graph) else {
             return;
         };
-        // Snapshot BEFORE `ensure_fc_layer_asset` mints anything.
-        //
-        // - First stroke on a fresh layer: at this point FC's
-        //   `<kind>_layer_asset_id` is empty in graph params. The
-        //   snapshot captures that "no layer" graph state; on undo,
-        //   FC reverts to empty asset_id, the composite skips the
-        //   layer, and the eval result equals the upstream procedural
-        //   input -- which IS the pre-stroke state. No file bytes need
-        //   to be written back (and none CAN be, since no file
-        //   existed at snapshot time).
-        // - Subsequent strokes: the asset file already exists at the
-        //   path FC knows about. We capture its pre-stroke bytes so
-        //   undo can write them back. Graph state is unchanged across
-        //   the stroke since `ensure_fc_layer_asset` is a no-op when
-        //   asset_id is already set.
-        let pre_mint_path = fc_layer_asset_path(&self.graph, fc_node_id, kind);
-        let paths_to_capture: Vec<std::path::PathBuf> = pre_mint_path
-            .as_ref()
-            .map(|p| vec![std::path::PathBuf::from(p)])
-            .unwrap_or_default();
-        self.push_undo_with_painted("Paint FC layer", paths_to_capture);
-        // Now mint the asset_id / asset_path on first stroke, or
-        // return the existing path on subsequent strokes.
-        let asset_path = match self.ensure_fc_layer_asset(fc_node_id, kind) {
-            Some(p) => p,
-            None => {
-                tracing::warn!(
-                    ?kind,
-                    "Paint flush: could not allocate FC layer asset path; painted edits dropped"
-                );
+        let Some(asset_path) = fc_layer_asset_path(&self.graph, fc_node_id, kind) else {
+            tracing::warn!(
+                ?kind,
+                "Paint flush: FC layer asset_path missing (should have been populated at bootstrap)"
+            );
+            return;
+        };
+        // Snapshot for undo. If the file already exists, its current
+        // bytes get interned in paint_history; if not (first stroke
+        // into this kind), the snapshot captures an "asset absent"
+        // state and undo restores that by deleting the file -- the
+        // composite then falls through to pass-through.
+        self.push_undo_with_painted(
+            "Paint FC layer",
+            vec![std::path::PathBuf::from(&asset_path)],
+        );
+        // Ensure the asset directory exists -- the file is created
+        // lazily on first paint, so the directory might not exist yet
+        // either.
+        if let Some(parent) = std::path::Path::new(&asset_path).parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(error = %e, dir = %parent.display(), "Could not create FC asset dir");
                 return;
             }
-        };
+        }
         // Per-kind on-disk encoding:
         //   Heightmap         -> GrayscaleU8 deltas (128 = neutral).
         //   Color             -> RgbaU8 (alpha=0 is the untouched mask).
@@ -497,55 +489,6 @@ impl BarEditorApp {
         if let Some(node) = self.graph.get_node_mut(fc_node_id) {
             node.mark_dirty();
         }
-    }
-
-    /// Ensure FC's per-kind layer slot has an `asset_id` + `asset_path`
-    /// set, creating both on first call. Returns the absolute on-disk
-    /// path for the layer asset. Returns `None` if no project dir
-    /// is known yet (can't determine where to place the file).
-    fn ensure_fc_layer_asset(&mut self, fc_node_id: NodeId, kind: FCLayerKind) -> Option<String> {
-        let prefix = kind.param_prefix();
-        let id_key = format!("{prefix}_layer_asset_id");
-        let path_key = format!("{prefix}_layer_asset_path");
-        // Check current state.
-        let (cur_id, cur_path) = {
-            let node = self.graph.get_node(fc_node_id)?;
-            let id = match node.params.get(&id_key) {
-                Some(ParamValue::String(s)) => s.clone(),
-                _ => String::new(),
-            };
-            let path = match node.params.get(&path_key) {
-                Some(ParamValue::String(s)) => s.clone(),
-                _ => String::new(),
-            };
-            (id, path)
-        };
-        if !cur_id.is_empty() && !cur_path.is_empty() {
-            return Some(cur_path);
-        }
-        // Need to mint. Determine the FC asset directory: if the
-        // project is saved, use `<project>/final_composition/`; if not,
-        // fall back to the editor's temp asset dir (matches the rest
-        // of the loaded-pre-save asset flow).
-        let dir = match self.project.path.as_ref() {
-            Some(p) => p.join("final_composition"),
-            None => std::env::temp_dir()
-                .join("bar-editor-assets")
-                .join("final_composition"),
-        };
-        if let Err(e) = std::fs::create_dir_all(&dir) {
-            tracing::error!(error = %e, dir = %dir.display(), "Could not create FC asset dir");
-            return None;
-        }
-        let id = bar_project::AssetId::new().0;
-        let path = dir.join(format!("{id}.bin"));
-        let path_str = path.to_string_lossy().into_owned();
-        if let Some(node) = self.graph.get_node_mut(fc_node_id) {
-            node.params.insert(id_key, ParamValue::String(id));
-            node.params
-                .insert(path_key, ParamValue::String(path_str.clone()));
-        }
-        Some(path_str)
     }
 }
 

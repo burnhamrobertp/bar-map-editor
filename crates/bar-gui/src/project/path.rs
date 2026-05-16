@@ -266,6 +266,20 @@ pub(crate) fn pack_raw_asset(
         .map_err(|e| format!("Cannot create assets dir {}: {e}", assets_dir.display()))?;
     let src = std::path::Path::new(&asset_path);
     let dest = assets_dir.join(format!("{asset_id}.{ext}"));
+    // FC paint layers ship with a stable asset_id from project
+    // creation but the underlying file only comes into existence when
+    // the user paints into that kind. "src missing" is a normal,
+    // non-error state for FC -- it means an unpainted layer. Rewrite
+    // the path to where the file *would* live after save (so any
+    // future strokes write to the project dir, not the stale temp
+    // path) and skip the copy.
+    if !src.exists() {
+        params.insert(
+            path_param.to_string(),
+            ParamValue::String(dest.to_string_lossy().into_owned()),
+        );
+        return Ok(());
+    }
     if !dest.exists()
         || src.metadata().map(|m| m.len()).unwrap_or(0)
             != dest.metadata().map(|m| m.len()).unwrap_or(1)

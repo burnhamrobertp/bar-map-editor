@@ -11,6 +11,7 @@
 //! This crate deliberately has no dependency on `bar-engine` (executors, export
 //! pipeline, archive I/O).  Both the GUI and the engine depend on it.
 
+pub mod fc;
 pub mod mapinfo;
 pub mod package;
 pub mod project;
@@ -18,6 +19,7 @@ pub mod recipe;
 pub mod scan;
 pub mod validation;
 
+pub use fc::{mint_fc_layer_ids, populate_fc_layer_paths, FC_LAYER_KINDS};
 pub use mapinfo::{
     apply_mapinfo_overrides, parse_mapinfo_number, parse_mapinfo_smf_heights, parse_mapinfo_vec3,
 };

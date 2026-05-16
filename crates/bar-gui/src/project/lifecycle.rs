@@ -123,19 +123,45 @@ impl BarEditorApp {
     pub(crate) fn do_new_project(&mut self) {
         self.reset_project();
 
-        // Drop the Bundler terminal node near the right edge of the canvas
-        // so the user can build their pipeline left-to-right.
-        let bundler_pos = self.starter_bundler_position();
-        let bundler_id =
-            self.graph
-                .add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
+        // Drop the FinalComposition terminal node near the right edge of
+        // the canvas so the user can build their pipeline left-to-right.
+        let fc_pos = self.starter_bundler_position();
+        let fc_id = self.add_final_composition_node("Final Composition");
         self.visuals.node_visuals.insert(
-            bundler_id,
+            fc_id,
             NodeVisual {
-                position: bundler_pos,
+                position: fc_pos,
                 size: egui::vec2(210.0, 240.0),
             },
         );
+    }
+
+    /// Add a fresh FinalComposition node to the graph with all four
+    /// paint-layer asset ids minted and their asset paths pointing at
+    /// the editor's current temp asset dir. Used by every code path
+    /// that creates an FC from scratch in the GUI (do_new_project,
+    /// welcome_blank_project, start_with_macro, finish_open_map's
+    /// post-scan fixup). The layer files themselves are NOT written
+    /// here -- they come into existence on first paint.
+    pub(crate) fn add_final_composition_node(&mut self, label: &str) -> NodeId {
+        let mut node = Node::new(NodeId(0), NodeType::FinalComposition, label);
+        bar_project::mint_fc_layer_ids(&mut node.params);
+        bar_project::populate_fc_layer_paths(&mut node.params, &self.fc_layer_base_dir());
+        self.graph.add_node(node)
+    }
+
+    /// Where FC layer asset files live for the currently-loaded
+    /// project. For saved projects, `<project>/final_composition/`;
+    /// for unsaved sessions, a per-editor temp dir under the OS temp
+    /// root. Matches the location chosen by `pack_assets_for_save`
+    /// for the saved case.
+    pub(crate) fn fc_layer_base_dir(&self) -> std::path::PathBuf {
+        match self.project.path.as_ref() {
+            Some(p) => p.join("final_composition"),
+            None => std::env::temp_dir()
+                .join("bar-editor-assets")
+                .join("final_composition"),
+        }
     }
 
     /// Where to place the Bundler terminal node on a fresh project.
@@ -157,17 +183,15 @@ impl BarEditorApp {
         egui::pos2(bundler_x, 80.0)
     }
 
-    /// Drop the Bundler terminal node onto an empty graph -- the
-    /// welcome panel's "Empty graph" entry point.
+    /// Drop the FinalComposition terminal node onto an empty graph --
+    /// the welcome panel's "Empty graph" entry point.
     pub(crate) fn welcome_blank_project(&mut self) {
-        let bundler_pos = self.starter_bundler_position();
-        let bundler_id =
-            self.graph
-                .add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
+        let fc_pos = self.starter_bundler_position();
+        let fc_id = self.add_final_composition_node("Final Composition");
         self.visuals.node_visuals.insert(
-            bundler_id,
+            fc_id,
             NodeVisual {
-                position: bundler_pos,
+                position: fc_pos,
                 size: egui::vec2(210.0, 240.0),
             },
         );
@@ -346,6 +370,20 @@ impl BarEditorApp {
         // directly rather than calling .parent().
         if let Some(project_dir) = path.as_ref() {
             self.resolve_relative_paths(project_dir);
+        }
+
+        // FC layers carry per-kind asset ids from project creation
+        // forward. Mint any that are still empty (any FC built before
+        // pre-allocation was added) and stamp the runtime asset_path
+        // against the effective base dir (project dir for loaded
+        // projects, temp dir for fresh-from-scan). Idempotent: kinds
+        // that already have ids are left alone.
+        let fc_base = self.fc_layer_base_dir();
+        for (_, node) in self.graph.nodes_mut() {
+            if node.node_type == NodeType::FinalComposition {
+                bar_project::mint_fc_layer_ids(&mut node.params);
+                bar_project::populate_fc_layer_paths(&mut node.params, &fc_base);
+            }
         }
 
         // Restore node positions and sizes. Build a key->id map for
@@ -690,6 +728,12 @@ impl BarEditorApp {
                 }
             }
         }
+        // FC asset_path injection is handled centrally by
+        // `apply_project` above (called via this method) -- it sees
+        // every freshly-installed graph and stamps temp-dir paths for
+        // any FC node that lacks them, so the brush can write strokes
+        // immediately without a separate mint/ensure step.
+
         // Imported project hasn't been saved yet.
         self.project.is_dirty = true;
     }
@@ -755,11 +799,10 @@ impl BarEditorApp {
             None => return,
         };
 
-        // Bundler — for export. Always present so the project is
-        // shippable out of the box.
-        let mut bundler = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
-        bundler.label = "Bundler".to_string();
-        let bundler_id = self.graph.add_node(bundler);
+        // FinalComposition -- the terminal node every project ships
+        // with. Always present so the project is shippable out of
+        // the box.
+        let bundler_id = self.add_final_composition_node("Final Composition");
         self.visuals.node_visuals.insert(
             bundler_id,
             NodeVisual {
