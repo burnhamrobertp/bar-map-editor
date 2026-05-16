@@ -109,6 +109,12 @@ pub struct PaintSession {
     pub heightmap: Option<bar_data::Heightmap>,
     /// Bumped whenever `heightmap` is replaced.
     pub heightmap_rev: u64,
+    /// Bumped whenever a paint asset file is mutated by the brush flush
+    /// or restored by an undo/redo. Mixed into `preview_cache_key` so
+    /// the eval re-fires even when the graph params didn't change (the
+    /// painted bytes live in `<project>/assets/*.bin`, not in the graph,
+    /// so the upstream content hash on its own is blind to them).
+    pub asset_revision: u64,
     /// Cached egui texture for the 2D inspector backdrop.
     pub texture: Option<egui::TextureHandle>,
     pub texture_rev: u64,
@@ -131,6 +137,7 @@ impl Default for PaintSession {
             sculpt_brush_strength: 0.5,
             heightmap: None,
             heightmap_rev: 0,
+            asset_revision: 0,
             texture: None,
             texture_rev: 0,
             color_buffer: None,

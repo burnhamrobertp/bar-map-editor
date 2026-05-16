@@ -206,6 +206,10 @@ impl BarEditorApp {
         if let Some(node) = self.graph.get_node_mut(node_id) {
             node.mark_dirty();
         }
+        // The asset file's bytes just changed but no graph param did,
+        // so bump `asset_revision` to force `preview_cache_key` to move
+        // and re-fire the eval (which will reload the asset from disk).
+        self.paint.asset_revision = self.paint.asset_revision.wrapping_add(1);
     }
 
     /// End a 3D viewport sculpt stroke: flush the live buffer to the graph,

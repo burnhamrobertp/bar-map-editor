@@ -746,6 +746,12 @@ impl BarEditorApp {
         self.map.height.hash(&mut h);
         self.map.min_height.to_bits().hash(&mut h);
         self.map.max_height.to_bits().hash(&mut h);
+        // Paint asset bytes live outside the graph (in
+        // `<project>/assets/*.bin`), so changing them doesn't bump
+        // `upstream_content_hash`. Mix in a counter that's incremented
+        // by `flush_live_paint` and by paint-asset restores in
+        // `restore_snapshot` so any paint mutation re-fires eval.
+        self.paint.asset_revision.hash(&mut h);
         h.finish()
     }
 

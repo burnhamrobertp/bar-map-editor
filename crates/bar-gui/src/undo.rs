@@ -208,6 +208,10 @@ impl BarEditorApp {
         if touched_any {
             self.paint.heightmap = None;
             self.paint.color_buffer = None;
+            // Same reason as in `flush_live_paint`: the asset bytes
+            // changed but no graph param did, so bump the revision to
+            // force `preview_cache_key` to move and re-fire the eval.
+            self.paint.asset_revision = self.paint.asset_revision.wrapping_add(1);
         }
     }
 
