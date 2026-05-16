@@ -167,6 +167,7 @@ pub struct EditorState {
     pub groups: HashMap<u64, GroupRuntime>,
     pub node_to_group: HashMap<NodeId, u64>,
     pub next_group_id: u64,
+    pub map: MapStateSnapshot,
 }
 
 impl EditorState {
@@ -179,6 +180,27 @@ impl EditorState {
             groups: HashMap::new(),
             node_to_group: HashMap::new(),
             next_group_id: 1,
+            map: MapStateSnapshot::default(),
         }
     }
+}
+
+/// The undo-relevant subset of `editor::map::MapState`. Excludes
+/// transient UI state (drag-in-progress index, placement-dirty flag,
+/// current selection) so undo doesn't restore stale UI cursors --
+/// only the persisted map fields (dimensions, height range, mapinfo
+/// settings, recipe identity, feature placements) round-trip.
+///
+/// Map-info editor edits and feature placement / edit / deletion
+/// all mutate the live `MapState` directly, so the snapshot has to
+/// carry these to make those operations undoable.
+#[derive(Clone, Debug, Default)]
+pub struct MapStateSnapshot {
+    pub width: u32,
+    pub height: u32,
+    pub min_height: f32,
+    pub max_height: f32,
+    pub settings: bar_project::MapSettings,
+    pub recipe_meta: crate::editor::RecipeMeta,
+    pub features: Vec<bar_project::recipe::PlacedFeature>,
 }

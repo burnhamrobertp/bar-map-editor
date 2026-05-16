@@ -108,6 +108,18 @@ pub struct DialogState {
     pub show_validation_panel: bool,
     pub show_inspector: bool,
     pub show_mapinfo_editor: bool,
+    /// True while the map-info editor modal is in an active session.
+    /// Used by `panels::mapinfo_editor::draw` to detect the
+    /// closed-to-open transition so it can capture a pre-edit
+    /// snapshot exactly once per session (rather than every frame).
+    /// Cleared when the modal closes.
+    pub(crate) mapinfo_editor_session_active: bool,
+    /// Snapshot captured the moment the map-info editor opened. Pushed
+    /// onto the undo stack the first time any field is dirtied during
+    /// this session (so opening + closing the modal without edits
+    /// doesn't bloat undo history). Discarded if the user closes the
+    /// modal without changing anything.
+    pub(crate) mapinfo_editor_pending_undo: Option<crate::undo::Snapshot>,
     pub show_settings: bool,
     pub show_about: bool,
     /// True while the "pick which file is the map info" picker modal is open.

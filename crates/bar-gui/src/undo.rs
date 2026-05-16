@@ -152,6 +152,15 @@ impl BarEditorApp {
                 groups: self.visuals.groups.clone(),
                 node_to_group: self.visuals.node_to_group.clone(),
                 next_group_id: self.visuals.next_group_id,
+                map: crate::state::MapStateSnapshot {
+                    width: self.map.width,
+                    height: self.map.height,
+                    min_height: self.map.min_height,
+                    max_height: self.map.max_height,
+                    settings: self.map.settings.clone(),
+                    recipe_meta: self.map.recipe_meta.clone(),
+                    features: self.map.features.clone(),
+                },
             },
             description: description.to_string(),
             painted_assets,
@@ -189,6 +198,21 @@ impl BarEditorApp {
         self.visuals.groups = snap.state.groups;
         self.visuals.node_to_group = snap.state.node_to_group;
         self.visuals.next_group_id = snap.state.next_group_id;
+        // Restore map state (dimensions, height range, mapinfo settings,
+        // recipe identity, feature placements). Skips transient UI
+        // state -- in-progress drags, current selection, and the
+        // placement-dirty flag -- which would feel intrusive if reset
+        // by an unrelated undo.
+        self.map.width = snap.state.map.width;
+        self.map.height = snap.state.map.height;
+        self.map.min_height = snap.state.map.min_height;
+        self.map.max_height = snap.state.map.max_height;
+        self.map.settings = snap.state.map.settings;
+        self.map.recipe_meta = snap.state.map.recipe_meta;
+        self.map.features = snap.state.map.features;
+        // Force a GPU instance rebuild on the next layout-manager
+        // tick in case features changed (cheap when they didn't).
+        self.map.features_placement_dirty = true;
         self.clear_selection();
         // Replay painted-asset captures: write the recorded bytes back
         // to the asset path. Then clear the cached preview heightmap /
@@ -312,6 +336,82 @@ mod tests {
         let mut history = UndoHistory::new(50);
         let current = make_snapshot("current", 1);
         assert!(history.undo(current).is_none());
+    }
+
+    #[test]
+    fn undo_restores_map_state() {
+        // End-to-end: dirty MapState, push_undo, mutate further,
+        // undo -> MapState reverts to the snapshotted values. This
+        // is the core invariant that makes mapinfo-editor edits and
+        // feature-placement edits undoable.
+        let mut app = BarEditorApp::default();
+        app.map.width = 513;
+        app.map.height = 513;
+        app.map.settings.water.fresnel_power = 4.0;
+        app.map.features.clear();
+        app.push_undo("baseline");
+
+        // Simulate "user edits mapinfo + adds a feature".
+        app.map.settings.water.fresnel_power = 6.5;
+        app.map.features.push(bar_project::recipe::PlacedFeature {
+            feature_type: "arborreal".into(),
+            x: 1.0,
+            y: 0.0,
+            z: 2.0,
+            angle: 0.0,
+            taken_damage: 0,
+        });
+
+        app.undo();
+        assert!(
+            (app.map.settings.water.fresnel_power - 4.0).abs() < 1e-6,
+            "fresnel_power should revert to baseline 4.0, got {}",
+            app.map.settings.water.fresnel_power
+        );
+        assert!(
+            app.map.features.is_empty(),
+            "features should revert to empty, got {} entries",
+            app.map.features.len()
+        );
+    }
+
+    #[test]
+    fn snapshot_carries_map_state() {
+        // Map state (dimensions, height range, mapinfo settings,
+        // recipe identity, features) round-trips through the snapshot
+        // clone -- this is what makes mapinfo / feature edits undoable.
+        let mut state = EditorState::empty();
+        state.map.width = 513;
+        state.map.height = 1025;
+        state.map.min_height = -50.0;
+        state.map.max_height = 800.0;
+        state.map.settings.water.fresnel_power = 6.5;
+        state.map.recipe_meta.author = Some("test_author".into());
+        state.map.features.push(bar_project::recipe::PlacedFeature {
+            feature_type: "arborreal".into(),
+            x: 100.0,
+            y: 0.0,
+            z: 200.0,
+            angle: 0.0,
+            taken_damage: 0,
+        });
+        let snap = Snapshot {
+            state: state.clone(),
+            description: "with-map".into(),
+            painted_assets: HashMap::new(),
+        };
+        let cloned = snap.clone();
+        assert_eq!(cloned.state.map.width, 513);
+        assert_eq!(cloned.state.map.height, 1025);
+        assert!((cloned.state.map.min_height - (-50.0)).abs() < 1e-6);
+        assert!((cloned.state.map.max_height - 800.0).abs() < 1e-6);
+        assert!((cloned.state.map.settings.water.fresnel_power - 6.5).abs() < 1e-6);
+        assert_eq!(
+            cloned.state.map.recipe_meta.author.as_deref(),
+            Some("test_author")
+        );
+        assert_eq!(cloned.state.map.features.len(), 1);
+        assert_eq!(cloned.state.map.features[0].feature_type, "arborreal");
     }
 
     #[test]

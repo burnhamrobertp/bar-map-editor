@@ -170,8 +170,23 @@ fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) -> bool {
 }
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
-    if !app.dialog.show_mapinfo_editor {
+    // Detect closed -> open transition: capture a pre-edit snapshot
+    // now so the first dirty edit this session can push it. If the
+    // user opens and closes the modal without edits, the snapshot is
+    // discarded (see below) and never makes it onto the undo stack.
+    let was_open = app.dialog.mapinfo_editor_session_active;
+    let is_open = app.dialog.show_mapinfo_editor;
+    if was_open && !is_open {
+        app.dialog.mapinfo_editor_pending_undo = None;
+        app.dialog.mapinfo_editor_session_active = false;
+    }
+    if !is_open {
         return;
+    }
+    if !was_open {
+        let snap = app.snapshot("Edit map info");
+        app.dialog.mapinfo_editor_pending_undo = Some(snap);
+        app.dialog.mapinfo_editor_session_active = true;
     }
     let mut open = app.dialog.show_mapinfo_editor;
     let mut dirty = false;
@@ -629,6 +644,15 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         });
     app.dialog.show_mapinfo_editor = open;
     if dirty {
+        // First dirty edit this session: push the pre-edit snapshot
+        // captured at modal-open onto the undo stack. Subsequent
+        // dirties in the same session find `pending_undo` empty and
+        // don't push again -- so a long slider drag or a batch of
+        // field tweaks collapses to a single undo entry that reverts
+        // the entire session.
+        if let Some(snap) = app.dialog.mapinfo_editor_pending_undo.take() {
+            app.history.push(snap);
+        }
         app.mark_dirty();
     }
 }
