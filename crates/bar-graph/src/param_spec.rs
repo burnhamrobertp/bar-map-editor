@@ -287,6 +287,7 @@ mod tests {
         // Additional combiners
         NodeType::MaskSelect,
         // Bundler/packaging
+        NodeType::FinalComposition,
         NodeType::Bundler,
         NodeType::FileReference,
         // Source nodes

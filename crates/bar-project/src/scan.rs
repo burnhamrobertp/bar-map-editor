@@ -64,8 +64,9 @@ pub struct PendingRawFile {
 /// written to `<proj_dir>/assets/<id>.<ext>` (no BARASSET header).
 pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<PendingRawFile>) {
     let source_x = 80.0_f32;
-    let bundler_x = 700.0_f32;
-    let nm_x = (source_x + 165.0 + bundler_x) / 2.0;
+    let final_comp_x = 540.0_f32;
+    let bundler_x = 800.0_f32;
+    let nm_x = (source_x + 165.0 + final_comp_x) / 2.0;
 
     let mut nodes: Vec<RecipeNode> = Vec::new();
     let mut connections: Vec<RecipeConnection> = Vec::new();
@@ -325,6 +326,34 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         );
     }
 
+    // FinalComposition (always; mandatory anchor for paint layers).
+    // Procedural outputs wire INTO this node, which forwards each
+    // input to its matching output. The Bundler then reads strictly
+    // from FinalComposition's outputs -- no direct procedural → Bundler
+    // wires.
+    {
+        nodes.push(RecipeNode {
+            key: "final_composition".to_string(),
+            node_type: NodeType::FinalComposition,
+            label: "Final Composition".to_string(),
+            params: HashMap::new(),
+        });
+        node_positions.insert(
+            "final_composition".to_string(),
+            Position {
+                x: final_comp_x,
+                y: 270.0,
+            },
+        );
+        node_sizes.insert(
+            "final_composition".to_string(),
+            NodeSize {
+                width: 165.0,
+                height: 210.0,
+            },
+        );
+    }
+
     // Bundler (always)
     {
         let mut params = HashMap::new();
@@ -354,11 +383,31 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         );
     }
 
-    // Connections
+    // Auto-wire FinalComposition -> Bundler for every port pair.
+    // These wires are conceptually "system" wires -- the user can't
+    // disconnect them and they're not part of the graph topology the
+    // user authors.
+    for port in [
+        "heightmap",
+        "texture",
+        "normalmap",
+        "metalmap",
+        "typemap",
+        "grassmap",
+        "specular",
+        "files",
+    ] {
+        connections.push(RecipeConnection {
+            from: format!("final_composition.{port}"),
+            to: format!("bundler.{port}"),
+        });
+    }
+
+    // Connections: procedural sources feed FinalComposition.
     if has_heightmap {
         connections.push(RecipeConnection {
             from: "hm.output".to_string(),
-            to: "bundler.heightmap".to_string(),
+            to: "final_composition.heightmap".to_string(),
         });
         connections.push(RecipeConnection {
             from: "hm.output".to_string(),
@@ -366,31 +415,31 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         });
         connections.push(RecipeConnection {
             from: "nm.output".to_string(),
-            to: "bundler.normalmap".to_string(),
+            to: "final_composition.normalmap".to_string(),
         });
     }
     if !scan.metalmap_data.is_empty() {
         connections.push(RecipeConnection {
             from: "metal.output".to_string(),
-            to: "bundler.metalmap".to_string(),
+            to: "final_composition.metalmap".to_string(),
         });
     }
     if !scan.typemap_data.is_empty() {
         connections.push(RecipeConnection {
             from: "type.output".to_string(),
-            to: "bundler.typemap".to_string(),
+            to: "final_composition.typemap".to_string(),
         });
     }
     if has_texture {
         connections.push(RecipeConnection {
             from: "tex.output".to_string(),
-            to: "bundler.texture".to_string(),
+            to: "final_composition.texture".to_string(),
         });
     }
     if has_pass {
         connections.push(RecipeConnection {
             from: "pass.files".to_string(),
-            to: "bundler.files".to_string(),
+            to: "final_composition.files".to_string(),
         });
     }
 
@@ -482,13 +531,17 @@ mod tests {
     }
 
     #[test]
-    fn empty_scan_produces_only_bundler() {
+    fn empty_scan_produces_final_composition_and_bundler() {
+        // Every project (even one bootstrapped from an empty scan) has
+        // FinalComposition + Bundler, wired together by the eight system
+        // connections (one per Bundler input port).
         let scan = empty_scan("test_map");
         let (p, pending, raw) = scan_to_project(&scan);
-        assert_eq!(p.recipe.nodes.len(), 1);
-        assert_eq!(p.recipe.nodes[0].key, "bundler");
-        assert_eq!(p.recipe.nodes[0].node_type, NodeType::Bundler);
-        assert!(p.recipe.connections.is_empty());
+        assert_eq!(p.recipe.nodes.len(), 2);
+        let kinds: Vec<_> = p.recipe.nodes.iter().map(|n| &n.node_type).collect();
+        assert!(kinds.contains(&&NodeType::FinalComposition));
+        assert!(kinds.contains(&&NodeType::Bundler));
+        assert_eq!(p.recipe.connections.len(), 8);
         assert!(pending.is_empty());
         assert!(raw.is_empty());
     }
@@ -607,7 +660,10 @@ mod tests {
     }
 
     #[test]
-    fn passthrough_files_create_pass_node_and_connect_to_bundler() {
+    fn passthrough_files_create_pass_node_and_connect_to_final_composition() {
+        // Pass-through files wire into FinalComposition's `files`
+        // input; FC forwards them to Bundler via the system FC→Bundler
+        // wire that scan adds for every port pair.
         let mut scan = empty_scan("pass");
         scan.passthrough_files = vec![(
             PathBuf::from("/tmp/mapinfo.lua"),
@@ -616,12 +672,24 @@ mod tests {
         let (p, _, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
         assert!(keys.contains(&"pass"), "missing pass");
-        let has_conn = p
+        let pass_to_fc = p
             .recipe
             .connections
             .iter()
-            .any(|c| c.from == "pass.files" && c.to == "bundler.files");
-        assert!(has_conn, "pass.files -> bundler.files connection missing");
+            .any(|c| c.from == "pass.files" && c.to == "final_composition.files");
+        assert!(
+            pass_to_fc,
+            "pass.files -> final_composition.files connection missing"
+        );
+        let fc_to_bundler = p
+            .recipe
+            .connections
+            .iter()
+            .any(|c| c.from == "final_composition.files" && c.to == "bundler.files");
+        assert!(
+            fc_to_bundler,
+            "final_composition.files -> bundler.files connection missing"
+        );
     }
 }
 
