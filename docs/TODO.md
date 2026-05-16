@@ -32,7 +32,7 @@ Items below are paused while the Sculpt3D / 3D-painting subsystem is being recon
 ## History / Undo-Redo
 
 - **Log undo/redo actions as debug.** Each undo or redo should emit a `tracing::debug!` line describing the action being reversed (which node, which param, etc.) AND when undo history is truncated because the user made a new change after undoing several steps, log the entries being dropped. Helps trace user actions when debugging reproducer reports.
-- **Feature placement / edits / deletes should record history.** Adding a feature via the palette, dragging a placed feature, or deleting one (`viewport.rs::handle_camera_input` for placement; inspector for delete) all mutate `app.map.features` directly without pushing an undo entry. Make these undoable. (Note: the snapshot infrastructure now covers `app.map.features` -- see `state.rs::MapStateSnapshot` -- so this is just a matter of inserting `push_undo` calls at the right places.)
+- **Drag-to-move a placed feature should be undoable.** Placement and delete now push undo entries; whenever click-again-to-move lands (see Features section), it also needs to call `app.push_undo("Move feature")` before mutating the dragged feature's coordinates.
 
 ## UX / UI
 

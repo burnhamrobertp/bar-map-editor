@@ -222,6 +222,7 @@ fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                                 .on_hover_text("Remove this feature (Del)")
                                 .clicked()
                             {
+                                app.push_undo("Delete feature");
                                 app.map.features.remove(idx);
                                 app.map.selected_feature_idx = None;
                                 app.map.features_placement_dirty = true;

@@ -918,6 +918,7 @@ fn handle_camera_input(
                                     * 0.5
                                     * map_h.max(1) as f32
                                     * 8.0;
+                                app.push_undo("Place feature");
                                 app.map.features.push(PlacedFeature {
                                     feature_type: feature_type.clone(),
                                     x: spring_x,
@@ -994,6 +995,7 @@ fn handle_camera_input(
             if ctx.input(|i| i.key_pressed(egui::Key::Delete)) {
                 if let Some(idx) = app.map.selected_feature_idx.take() {
                     if idx < app.map.features.len() {
+                        app.push_undo("Delete feature");
                         app.map.features.remove(idx);
                         app.map.features_placement_dirty = true;
                     }

@@ -169,7 +169,12 @@ impl BarEditorApp {
 
     /// Push the current state onto the undo stack before a mutation.
     /// Pair every user-visible mutation with one of these calls.
-    pub(crate) fn push_undo(&mut self, description: &str) {
+    ///
+    /// Public so cross-crate UI surfaces (e.g. `bar-app::viewport`
+    /// when handling feature placement / deletion in the 3D
+    /// viewport) can record undoable actions without reaching into
+    /// the editor's internal state.
+    pub fn push_undo(&mut self, description: &str) {
         let snap = self.snapshot(description);
         self.history.push(snap);
         self.project.is_dirty = true;
@@ -373,6 +378,69 @@ mod tests {
             "features should revert to empty, got {} entries",
             app.map.features.len()
         );
+    }
+
+    #[test]
+    fn undo_redo_round_trips_feature_placement() {
+        // The viewport feature-placement / delete code paths call
+        // `push_undo` before mutating `app.map.features`. This test
+        // exercises that round-trip: place, delete, undo twice, redo
+        // twice. After each step the features Vec should match the
+        // expected state, proving the snapshot/restore covers feature
+        // edits end-to-end.
+        let mut app = BarEditorApp::default();
+        app.map.features.clear();
+        app.push_undo("baseline");
+
+        // Place feature 1.
+        app.push_undo("Place feature");
+        app.map.features.push(bar_project::recipe::PlacedFeature {
+            feature_type: "tree".into(),
+            x: 1.0,
+            y: 0.0,
+            z: 1.0,
+            angle: 0.0,
+            taken_damage: 0,
+        });
+        // Place feature 2.
+        app.push_undo("Place feature");
+        app.map.features.push(bar_project::recipe::PlacedFeature {
+            feature_type: "rock".into(),
+            x: 2.0,
+            y: 0.0,
+            z: 2.0,
+            angle: 0.0,
+            taken_damage: 0,
+        });
+        // Delete feature 1 (index 0 after both placements).
+        app.push_undo("Delete feature");
+        app.map.features.remove(0);
+        assert_eq!(app.map.features.len(), 1);
+        assert_eq!(app.map.features[0].feature_type, "rock");
+
+        // Undo the delete -> back to two features in original order.
+        app.undo();
+        assert_eq!(app.map.features.len(), 2);
+        assert_eq!(app.map.features[0].feature_type, "tree");
+        assert_eq!(app.map.features[1].feature_type, "rock");
+
+        // Undo the rock placement -> just the tree.
+        app.undo();
+        assert_eq!(app.map.features.len(), 1);
+        assert_eq!(app.map.features[0].feature_type, "tree");
+
+        // Undo the tree placement -> empty.
+        app.undo();
+        assert!(app.map.features.is_empty());
+
+        // Redo all three -> back to one feature ("rock") after the delete.
+        app.redo();
+        assert_eq!(app.map.features.len(), 1);
+        app.redo();
+        assert_eq!(app.map.features.len(), 2);
+        app.redo();
+        assert_eq!(app.map.features.len(), 1);
+        assert_eq!(app.map.features[0].feature_type, "rock");
     }
 
     #[test]
