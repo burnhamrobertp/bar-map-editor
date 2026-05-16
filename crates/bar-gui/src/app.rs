@@ -198,7 +198,12 @@ pub enum Layout {
 impl Layout {
     /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
     /// Ctrl+2, etc. Extend this slice when new layouts are added.
-    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Sculpt3D, Layout::Preview];
+    ///
+    /// `Sculpt3D` is intentionally omitted: the subsystem is on hold
+    /// (see `docs/TODO.md` "On hold" section). The variant remains
+    /// defined so dispatch and existing references keep compiling;
+    /// re-add it here to bring the layout back into the UI.
+    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Preview];
 
     /// i18n key for this layout's display name.
     pub(crate) fn i18n_key(self) -> &'static str {
@@ -316,6 +321,13 @@ impl BarEditorApp {
         // back to `Default` when settings are absent or pre-date
         // the field.
         app.active_layout = app.settings.active_layout;
+        // Sculpt3D is currently hidden from the UI (see Layout::ALL).
+        // Coerce a stale persisted choice back to the default so the
+        // user lands somewhere visible on launch.
+        if !Layout::ALL.contains(&app.active_layout) {
+            app.active_layout = Layout::default();
+            app.settings.active_layout = app.active_layout;
+        }
         // Drop recents that no longer exist on disk so the menu stays useful.
         app.settings.recent_files.retain(|p| p.exists());
         // Reopen the most-recently-loaded project on launch so the
