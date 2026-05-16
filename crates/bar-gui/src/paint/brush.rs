@@ -206,10 +206,13 @@ impl BarEditorApp {
         if let Some(node) = self.graph.get_node_mut(node_id) {
             node.mark_dirty();
         }
-        // The asset file's bytes just changed but no graph param did,
-        // so bump `asset_revision` to force `preview_cache_key` to move
-        // and re-fire the eval (which will reload the asset from disk).
-        self.paint.asset_revision = self.paint.asset_revision.wrapping_add(1);
+        // NOTE: deliberately do NOT bump `paint.asset_revision` here.
+        // The brush has already uploaded the painted heightmap directly
+        // to the GPU and overwritten the inspector mirror in
+        // `apply_brush_to_sculpt_layer`, so re-firing the eval would
+        // produce identical output after a visible "reload" gap while
+        // the eval thread runs. The asset file is now the source of
+        // truth for any future eval (e.g. after undo / a graph edit).
     }
 
     /// End a 3D viewport sculpt stroke: flush the live buffer to the graph,
