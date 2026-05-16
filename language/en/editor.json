@@ -64,6 +64,7 @@
       "view": "View",
       "node_graph": "Node Graph",
       "sculpt_3d": "3D Sculpt",
+      "preview": "Preview",
       "log": "Log"
     },
     "log": {
