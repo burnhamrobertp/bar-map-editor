@@ -374,15 +374,32 @@ impl BarEditorApp {
 
         // FC layers carry per-kind asset ids from project creation
         // forward. Mint any that are still empty (any FC built before
-        // pre-allocation was added) and stamp the runtime asset_path
-        // against the effective base dir (project dir for loaded
-        // projects, temp dir for fresh-from-scan). Idempotent: kinds
-        // that already have ids are left alone.
-        let fc_base = self.fc_layer_base_dir();
+        // pre-allocation was added). For loaded projects,
+        // `resolve_relative_paths` above already stamped the correct
+        // `<project>/final_composition/<id>.bin` asset_path; only
+        // populate paths here for the no-path (fresh-from-scan, untitled
+        // projects) case, where the brush flow needs SOMEWHERE to
+        // write strokes pre-Save. We can't call `fc_layer_base_dir()`
+        // because `self.project.path` is set further down in this
+        // method, but at this point the `path` parameter tells us
+        // everything we need.
+        let fc_base: Option<std::path::PathBuf> = if path.is_some() {
+            // Loaded saved project: `resolve_relative_paths` set the
+            // correct asset_path; nothing more to do for path injection.
+            None
+        } else {
+            Some(
+                std::env::temp_dir()
+                    .join("bar-editor-assets")
+                    .join("final_composition"),
+            )
+        };
         for (_, node) in self.graph.nodes_mut() {
             if node.node_type == NodeType::FinalComposition {
                 bar_project::mint_fc_layer_ids(&mut node.params);
-                bar_project::populate_fc_layer_paths(&mut node.params, &fc_base);
+                if let Some(base) = fc_base.as_deref() {
+                    bar_project::populate_fc_layer_paths(&mut node.params, base);
+                }
             }
         }
 
