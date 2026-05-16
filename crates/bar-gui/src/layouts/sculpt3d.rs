@@ -1,5 +1,19 @@
 //! Sculpt3D layout -- left layer panel + central 3D viewport.
 //!
+//! **STATUS: TEMPORARILY BROKEN / ON HOLD.** Sculpt3D is currently
+//! hidden from the UI (removed from `Layout::ALL` in
+//! `crate::app`). The subsystem -- brush flow, FC paint-layer
+//! composite, undo of painted bytes, layer panel -- has known
+//! correctness issues that need a rethink before the layout comes
+//! back. See `docs/TODO.md` "On hold" section for the list of items
+//! paused under this umbrella, and `docs/3d-painting-plan.md` for
+//! the broader plan context. Don't pick up sculpt work without
+//! agreeing on a new direction first.
+//!
+//! The code below is kept compiling (not deleted) so the existing
+//! integration -- dispatch wiring, paint-state types, FC composite
+//! plumbing -- stays as reference for the eventual replacement.
+//!
 //! The layer panel derives its contents from the live node graph via
 //! `compute_sculpt_layers`. Selecting a layer sets
 //! `paint.selected_sculpt_layer`; brush strokes then write into that
