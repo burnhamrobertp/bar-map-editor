@@ -96,6 +96,15 @@ impl BrushTool {
 pub enum LivePaintBuffer {
     Height(bar_data::Heightmap),
     Color(bar_data::ColorBuffer),
+    /// Per-pixel value + "has been painted this stroke" mask. Used by
+    /// the quantised FC paint layers (metalmap, typemap) where the
+    /// encoded on-disk byte reserves `0xFF` as a "no paint" sentinel,
+    /// so the live buffer needs to track which pixels are touched
+    /// separately from the value at them.
+    MaskedValue {
+        value: bar_data::Heightmap,
+        touched: Vec<bool>,
+    },
 }
 
 /// Live brush configuration shared between the 2D Inspector and the 3D

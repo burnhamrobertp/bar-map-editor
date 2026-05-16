@@ -139,12 +139,50 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             }
             return;
         }
-        if let Some(kind) = fc_kind {
-            ui.weak(format!(
-                "{} layer brush UX coming soon -- selecting the kind \
-                 won't write strokes yet.",
-                kind.label()
-            ));
+        if fc_kind == Some(crate::FCLayerKind::Color) {
+            // FC color layer: pick a colour, then click-and-drag in the
+            // viewport. Stamped pixels overwrite the upstream colour;
+            // unpainted pixels pass it through. Brush radius slider
+            // shared with other kinds; tools list is irrelevant
+            // (Paint is the only operation).
+            ui.horizontal(|ui| {
+                ui.label("Colour");
+                let [r, g, b] = app.paint.brush.color_rgb;
+                let mut c = egui::Color32::from_rgb(r, g, b);
+                if ui.color_edit_button_srgba(&mut c).changed() {
+                    app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
+                }
+            });
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
+            }
+            return;
+        }
+        if matches!(
+            fc_kind,
+            Some(crate::FCLayerKind::Metalmap | crate::FCLayerKind::Typemap)
+        ) {
+            // FC metalmap / typemap: stamp a quantised value at the
+            // painted pixels. Use a slider for the value in [0, 1];
+            // typemap users currently get the same slider (a proper
+            // terrain-type-ID picker is a UX follow-up). Strokes are
+            // committed on flush as a sentinel-encoded U8 layer so
+            // the FC composite knows which pixels were painted.
+            let label = if fc_kind == Some(crate::FCLayerKind::Metalmap) {
+                "Metal density"
+            } else {
+                "Type ID (0..1)"
+            };
+            ui.horizontal(|ui| {
+                ui.label(label);
+                ui.add(egui::Slider::new(
+                    &mut app.paint.brush.paint_value,
+                    0.0..=1.0,
+                ));
+            });
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
+            }
             return;
         }
 

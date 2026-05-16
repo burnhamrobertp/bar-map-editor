@@ -7,7 +7,7 @@
 use bar_graph::{NodeId, ParamValue};
 
 use crate::app::BarEditorApp;
-use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer};
+use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer, stamp_value_dab};
 use crate::paint::{BrushTool, FCLayerKind, LivePaintBuffer, PaintKey};
 
 /// Native resolution of a PaintedTexture canvas (matches executor.rs constant).
@@ -198,6 +198,20 @@ impl BarEditorApp {
                     return;
                 }
             }
+            LivePaintBuffer::MaskedValue { .. } => {
+                // PaintedHeightmap / PaintedTexture (2D paint nodes)
+                // don't use the masked-value buffer -- that's only
+                // produced by FC metalmap / typemap brush handlers,
+                // flushed via `flush_live_paint_to_fc_layer`. Reaching
+                // here means someone stuck the wrong variant in the
+                // 2D-paint key; just drop it loudly rather than write
+                // garbage to disk.
+                tracing::warn!(
+                    ?node_id,
+                    "Paint flush: MaskedValue live buffer found for a 2D-paint node; dropped"
+                );
+                return;
+            }
         }
         if let Some(node) = self.graph.get_node_mut(node_id) {
             node.mark_dirty();
@@ -305,6 +319,95 @@ impl BarEditorApp {
         true
     }
 
+    /// Apply the color brush to `FinalComposition`'s color paint layer.
+    /// Stamps `brush.color_rgb` at the painted pixels into a live
+    /// `ColorBuffer` whose alpha channel doubles as the per-pixel
+    /// "painted this layer" mask (RGB+alpha=255 = painted; alpha=0 =
+    /// passes the underlying graph color through).
+    pub fn apply_color_brush_to_fc_color_layer(&mut self, hx: f32, hy: f32) -> bool {
+        let (hm_w, hm_h) = match self.paint.heightmap.as_ref() {
+            Some(hm) => (hm.width(), hm.height()),
+            None => return false,
+        };
+        let Some(fc_node_id) = find_final_composition_node(&self.graph) else {
+            return false;
+        };
+        let map_dim = (hm_w.max(hm_h) as f32).max(1.0);
+        let u = (hx / hm_w as f32).clamp(0.0, 1.0);
+        let v = (hy / hm_h as f32).clamp(0.0, 1.0);
+        let ru = (self.paint.brush.radius_px / map_dim).max(0.001);
+        let [r, g, b] = self.paint.brush.color_rgb;
+
+        let key = PaintKey::FCLayer(FCLayerKind::Color);
+        if !self.paint.live_paint.contains_key(&key) {
+            let asset_path = fc_layer_asset_path(&self.graph, fc_node_id, FCLayerKind::Color);
+            let cb = asset_path
+                .as_deref()
+                .and_then(read_rgba_color_asset)
+                .unwrap_or_else(|| {
+                    // Fresh layer: all-transparent RGBA (alpha=0 means
+                    // "this pixel passes the upstream colour through").
+                    bar_data::ColorBuffer::new(hm_w, hm_h).unwrap()
+                });
+            self.paint
+                .live_paint
+                .insert(key, LivePaintBuffer::Color(cb));
+        }
+        if let Some(LivePaintBuffer::Color(live_cb)) = self.paint.live_paint.get_mut(&key) {
+            // The existing stamp helper writes alpha=1.0 at painted
+            // pixels, which is exactly the "mask" semantic the FC
+            // color layer's composite expects.
+            stamp_color_dab_in_buffer(live_cb, u, v, ru, [r, g, b]);
+        }
+        // Mirror into the color_buffer cache for instant viewport
+        // feedback (same path the PaintedTexture brush uses).
+        if let Some(ref mut cb) = self.paint.color_buffer {
+            stamp_color_dab_in_buffer(cb, u, v, ru, [r, g, b]);
+        }
+
+        self.paint.brush_stroking = true;
+        self.project.is_dirty = true;
+        true
+    }
+
+    /// Apply the value-stamping brush to FC's metalmap or typemap
+    /// paint layer. Uses `brush.paint_value` as the stamped value
+    /// (range `[0, 1]`); painted pixels get marked as "touched" so
+    /// the flush logic can write byte values vs the `0xFF` "untouched"
+    /// sentinel that the FC executor's overlay composite expects.
+    pub fn apply_value_brush_to_fc_layer(&mut self, kind: FCLayerKind, hx: f32, hy: f32) -> bool {
+        debug_assert!(matches!(kind, FCLayerKind::Metalmap | FCLayerKind::Typemap));
+        let (map_w, map_h) = match self.paint.heightmap.as_ref() {
+            Some(hm) => (hm.width(), hm.height()),
+            None => return false,
+        };
+        let Some(_fc_node_id) = find_final_composition_node(&self.graph) else {
+            return false;
+        };
+        let key = PaintKey::FCLayer(kind);
+        self.paint.live_paint.entry(key).or_insert_with(|| {
+            // Fresh: zero-value buffer, no pixels touched yet.
+            let value = bar_data::Heightmap::new(map_w, map_h).unwrap();
+            let touched = vec![false; (map_w as usize) * (map_h as usize)];
+            LivePaintBuffer::MaskedValue { value, touched }
+        });
+        if let Some(LivePaintBuffer::MaskedValue { value, touched }) =
+            self.paint.live_paint.get_mut(&key)
+        {
+            stamp_value_dab(
+                value,
+                touched,
+                hx,
+                hy,
+                self.paint.brush.radius_px,
+                self.paint.brush.paint_value,
+            );
+        }
+        self.paint.brush_stroking = true;
+        self.project.is_dirty = true;
+        true
+    }
+
     /// End an FC-layer brush stroke: flush the live buffer to disk
     /// (encoding to the layer's on-disk format), stamp the FC node's
     /// asset id / path on first use, clear stroke flags. Mirror of
@@ -344,16 +447,26 @@ impl BarEditorApp {
         // Snapshot the pre-stroke bytes for undo.
         let path_buf = std::path::PathBuf::from(&asset_path);
         self.push_undo_with_painted("Paint FC layer", std::iter::once(path_buf));
-        // Per-kind encoding. Heightmap = U8 deltas; the other kinds
-        // (color, metalmap, typemap) land in follow-up commits.
+        // Per-kind on-disk encoding:
+        //   Heightmap         -> GrayscaleU8 deltas (128 = neutral).
+        //   Color             -> RgbaU8 (alpha=0 is the untouched mask).
+        //   Metalmap, Typemap -> GrayscaleU8 sentinel (0xFF = untouched,
+        //                        else value*254).
         let write_result = match (buffer, kind) {
             (LivePaintBuffer::Height(hm), FCLayerKind::Heightmap) => {
                 write_height_asset(&asset_path, &hm, bar_project::AssetKind::GrayscaleU8)
             }
-            (LivePaintBuffer::Height(_), _) | (LivePaintBuffer::Color(_), _) => {
+            (LivePaintBuffer::Color(cb), FCLayerKind::Color) => {
+                write_rgba_color_asset(&asset_path, &cb)
+            }
+            (
+                LivePaintBuffer::MaskedValue { value, touched },
+                FCLayerKind::Metalmap | FCLayerKind::Typemap,
+            ) => write_sentinel_value_asset(&asset_path, &value, &touched),
+            _ => {
                 tracing::warn!(
                     ?kind,
-                    "Paint flush: FC layer kind not yet supported by Sculpt3D"
+                    "Paint flush: live buffer variant doesn't match FC layer kind"
                 );
                 return;
             }
@@ -443,6 +556,106 @@ pub(crate) fn fc_layer_asset_path(
         Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
         _ => None,
     }
+}
+
+/// Load an `RgbaU8` FC color-layer asset into a `ColorBuffer`. The
+/// alpha channel doubles as the per-pixel "painted" mask (alpha=0 ==
+/// untouched, passes upstream colour through; alpha=255 == painted).
+/// Returns `None` if the file is missing / wrong kind / wrong size.
+fn read_rgba_color_asset(asset_path: &str) -> Option<bar_data::ColorBuffer> {
+    let path = std::path::Path::new(asset_path);
+    if !path.exists() {
+        return None;
+    }
+    let (header, data) = bar_project::read_asset_file(path).ok()?;
+    if !matches!(header.kind, bar_project::AssetKind::RgbaU8) {
+        return None;
+    }
+    let w = header.width.max(1);
+    let h = header.height.max(1);
+    let need = (w as usize) * (h as usize) * 4;
+    if data.len() != need {
+        return None;
+    }
+    let mut cb = bar_data::ColorBuffer::new(w, h).ok()?;
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            cb.set(
+                x,
+                y,
+                [
+                    data[idx] as f32 / 255.0,
+                    data[idx + 1] as f32 / 255.0,
+                    data[idx + 2] as f32 / 255.0,
+                    data[idx + 3] as f32 / 255.0,
+                ],
+            );
+        }
+    }
+    Some(cb)
+}
+
+/// Persist an FC color-layer live buffer as `RgbaU8`. Alpha is carried
+/// straight through from the buffer (the brush stamp sets it to 1.0
+/// at painted pixels and the unpainted defaults stay at 0.0, which is
+/// the "untouched" sentinel the executor's overlay composite reads).
+fn write_rgba_color_asset(
+    asset_path: &str,
+    cb: &bar_data::ColorBuffer,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let w = cb.width();
+    let h = cb.height();
+    let mut bytes = Vec::with_capacity((w as usize) * (h as usize) * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let rgba = cb.get(x, y).unwrap_or([0.0; 4]);
+            bytes.push((rgba[0] * 255.0).round() as u8);
+            bytes.push((rgba[1] * 255.0).round() as u8);
+            bytes.push((rgba[2] * 255.0).round() as u8);
+            bytes.push((rgba[3] * 255.0).round() as u8);
+        }
+    }
+    let header = bar_project::AssetHeader {
+        kind: bar_project::AssetKind::RgbaU8,
+        width: w,
+        height: h,
+    };
+    bar_project::write_asset_file(std::path::Path::new(asset_path), header, &bytes)
+        .map_err(|e| e.into())
+}
+
+/// Persist a `MaskedValue` live buffer (metalmap / typemap) as
+/// `GrayscaleU8` with the executor's sentinel encoding: byte `0xFF`
+/// at untouched pixels (so the composite passes the upstream value
+/// through), `(value * 254).round()` at touched pixels.
+fn write_sentinel_value_asset(
+    asset_path: &str,
+    value: &bar_data::Heightmap,
+    touched: &[bool],
+) -> Result<(), Box<dyn std::error::Error>> {
+    let w = value.width();
+    let h = value.height();
+    if touched.len() != (w as usize) * (h as usize) {
+        return Err("write_sentinel_value_asset: touched mask size mismatch".into());
+    }
+    let mut bytes = Vec::with_capacity(touched.len());
+    let data = value.data();
+    for (i, &t) in touched.iter().enumerate() {
+        if !t {
+            bytes.push(0xFFu8);
+        } else {
+            let v = data[i].clamp(0.0, 1.0);
+            bytes.push((v * 254.0).round() as u8);
+        }
+    }
+    let header = bar_project::AssetHeader {
+        kind: bar_project::AssetKind::GrayscaleU8,
+        width: w,
+        height: h,
+    };
+    bar_project::write_asset_file(std::path::Path::new(asset_path), header, &bytes)
+        .map_err(|e| e.into())
 }
 
 /// Load the on-disk paint state for a `PaintedHeightmap` / `Sculpt` node

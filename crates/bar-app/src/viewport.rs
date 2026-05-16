@@ -1191,10 +1191,10 @@ fn apply_sculpt_dab_at_cursor(
             bar_gui::FCLayerKind::Heightmap => {
                 app.apply_brush_to_fc_heightmap_layer(p.hm_x, p.hm_y, stroke_starting)
             }
-            // Color / Metalmap / Typemap FC-layer brush handlers land
-            // in follow-up commits (Phase 3b/3c/3d). For now the tool
-            // button selects the kind but strokes are a no-op.
-            _ => false,
+            bar_gui::FCLayerKind::Color => app.apply_color_brush_to_fc_color_layer(p.hm_x, p.hm_y),
+            bar_gui::FCLayerKind::Metalmap | bar_gui::FCLayerKind::Typemap => {
+                app.apply_value_brush_to_fc_layer(kind, p.hm_x, p.hm_y)
+            }
         }
     } else if let Some((node_id, ref node_type)) = selected_node {
         let paintable = matches!(
@@ -1218,10 +1218,28 @@ fn apply_sculpt_dab_at_cursor(
         return;
     }
 
-    let is_color = selected_node
-        .as_ref()
-        .map(|(_, nt)| matches!(nt, bar_graph::NodeType::PaintedTexture))
-        .unwrap_or(false);
+    // GPU upload dispatch: PaintedTexture nodes and FC color layer
+    // updates go through the albedo path (mirror in
+    // `paint.color_buffer`); everything else (PaintedHeightmap, FC
+    // heightmap layer) goes through the heightmap region upload. FC
+    // metalmap / typemap layers don't have an instant-feedback path
+    // yet -- their changes only become visible on next eval, which
+    // is acceptable since those overlays don't render in the
+    // sculpt3d view anyway.
+    let is_color = matches!(fc_selected, Some(bar_gui::FCLayerKind::Color))
+        || selected_node
+            .as_ref()
+            .map(|(_, nt)| matches!(nt, bar_graph::NodeType::PaintedTexture))
+            .unwrap_or(false);
+    let is_value_only = matches!(
+        fc_selected,
+        Some(bar_gui::FCLayerKind::Metalmap | bar_gui::FCLayerKind::Typemap)
+    );
+    if is_value_only {
+        // No GPU upload path; just bail (live buffer accumulates, flush
+        // on mouse-up writes the asset, next eval reads it).
+        return;
+    }
 
     if is_color {
         if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.color_buffer.clone()) {

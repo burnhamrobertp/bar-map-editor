@@ -142,6 +142,53 @@ pub(crate) fn stamp_color_dab_in_buffer(
     }
 }
 
+/// Stamp a quantised value into a `MaskedValue` live buffer. Used by
+/// the FC metalmap / typemap paint layers where each painted pixel
+/// gets the same `value` (no falloff: metalmap density / typemap IDs
+/// are quantised, so blending into neighbouring values would alias the
+/// encoded byte). Pixels inside the dab radius set
+/// `touched[idx] = true`, which the flush logic uses to decide whether
+/// to write the value byte or the `0xFF` "untouched" sentinel.
+pub(crate) fn stamp_value_dab(
+    value: &mut bar_data::Heightmap,
+    touched: &mut [bool],
+    cx: f32,
+    cy: f32,
+    radius_px: f32,
+    paint_value: f32,
+) {
+    let w = value.width() as i32;
+    let h = value.height() as i32;
+    let radius = radius_px.max(1.0);
+    let r_i = radius.ceil() as i32;
+    let cx_i = cx.round() as i32;
+    let cy_i = cy.round() as i32;
+    let x0 = (cx_i - r_i).max(0);
+    let y0 = (cy_i - r_i).max(0);
+    let x1 = (cx_i + r_i).min(w - 1);
+    let y1 = (cy_i + r_i).min(h - 1);
+    if x1 < x0 || y1 < y0 {
+        return;
+    }
+    let r2 = radius * radius;
+    let v = paint_value.clamp(0.0, 1.0);
+    let row_stride = value.width() as usize;
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let dx = (x - cx_i) as f32;
+            let dy = (y - cy_i) as f32;
+            if dx * dx + dy * dy > r2 {
+                continue;
+            }
+            let _ = value.set(x as u32, y as u32, v);
+            let idx = (y as usize) * row_stride + (x as usize);
+            if let Some(slot) = touched.get_mut(idx) {
+                *slot = true;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
