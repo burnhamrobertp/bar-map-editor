@@ -342,7 +342,7 @@ mod tests {
         let mut engine = GraphEngine::new();
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-        let output = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let output = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
         let noise_id = engine.add_node(noise);
         let output_id = engine.add_node(output);
 
@@ -365,7 +365,7 @@ mod tests {
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
         let blur = Node::new(NodeId(0), NodeType::Blur, "Blur");
-        let output = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let output = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
 
         let noise_id = engine.add_node(noise);
         let blur_id = engine.add_node(blur);
@@ -418,7 +418,7 @@ mod tests {
         // add_node
         let r0 = engine.revision();
         let a = engine.add_node(Node::new(NodeId(0), NodeType::PerlinNoise, "A"));
-        let b = engine.add_node(Node::new(NodeId(0), NodeType::Bundler, "B"));
+        let b = engine.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "B"));
         assert!(engine.revision() > r0, "add_node should bump revision");
 
         // connect

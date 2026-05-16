@@ -138,7 +138,7 @@ fn check_bundler(graph: &GraphEngine, out: &mut Vec<Finding>) {
     let bundler_count = graph
         .nodes()
         .values()
-        .filter(|n| n.node_type == NodeType::Bundler)
+        .filter(|n| n.node_type == NodeType::FinalComposition)
         .count();
     if bundler_count == 0 {
         out.push(Finding::err(
@@ -547,7 +547,7 @@ fn check_bundler_inputs(graph: &GraphEngine, out: &mut Vec<Finding>) {
     let bundler_ids: Vec<NodeId> = graph
         .nodes()
         .iter()
-        .filter(|(_, n)| n.node_type == NodeType::Bundler)
+        .filter(|(_, n)| n.node_type == NodeType::FinalComposition)
         .map(|(id, _)| *id)
         .collect();
     for id in bundler_ids {
@@ -585,7 +585,7 @@ fn check_orphaned_nodes(graph: &GraphEngine, out: &mut Vec<Finding>) {
     let mut frontier: Vec<NodeId> = graph
         .nodes()
         .iter()
-        .filter(|(_, n)| n.node_type == NodeType::Bundler)
+        .filter(|(_, n)| n.node_type == NodeType::FinalComposition)
         .map(|(id, _)| *id)
         .collect();
     while let Some(id) = frontier.pop() {
@@ -606,7 +606,7 @@ fn check_orphaned_nodes(graph: &GraphEngine, out: &mut Vec<Finding>) {
         .filter(|(id, n)| {
             !reachable.contains(id)
                 // Bundlers are seeds (reachability starts from them).
-                && n.node_type != NodeType::Bundler
+                && n.node_type != NodeType::FinalComposition
         })
         .map(|(_, n)| n.label.clone())
         .collect();
@@ -691,7 +691,7 @@ fn check_input_sources_present(graph: &GraphEngine, out: &mut Vec<Finding>) {
             .push(conn.from.node_id);
     }
     for (bid, bnode) in graph.nodes() {
-        if bnode.node_type != NodeType::Bundler {
+        if bnode.node_type != NodeType::FinalComposition {
             continue;
         }
         // BFS upstream from this Bundler; stop when we find any source
@@ -755,7 +755,7 @@ fn check_disconnected_filter_inputs(graph: &GraphEngine, out: &mut Vec<Finding>)
         // sense — handled by other validators.
         if matches!(
             node.node_type,
-            NodeType::PassThrough | NodeType::FileReference | NodeType::Bundler
+            NodeType::PassThrough | NodeType::FileReference | NodeType::FinalComposition
         ) {
             continue;
         }
@@ -822,7 +822,7 @@ mod tests {
     #[test]
     fn dimensions_must_be_multiple_of_64_plus_one() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "b"));
         let bad = validate_project(&graph, &MapSettings::default(), 256, 256);
         assert!(
             bad.iter()
@@ -841,7 +841,7 @@ mod tests {
     #[test]
     fn rejects_inverted_height_range() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "b"));
         let settings = MapSettings {
             min_height: 100.0,
             max_height: 50.0,
@@ -860,7 +860,7 @@ mod tests {
     #[test]
     fn flags_spawn_outside_map() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "b"));
         let mut settings = MapSettings::default();
         settings.start_positions.push([99_999, 99_999]);
         let f = validate_project(&graph, &settings, 257, 257);
@@ -875,7 +875,7 @@ mod tests {
     #[test]
     fn flags_bundler_without_inputs() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         let f = validate_project(&graph, &MapSettings::default(), 257, 257);
         assert!(
             f.iter().any(|x| x.category == "bundler"
@@ -890,7 +890,7 @@ mod tests {
     fn flags_orphaned_node_as_warning() {
         use bar_graph::PortId;
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         graph.add_node(Node::new(NodeId(1), NodeType::PerlinNoise, "Connected"));
         graph.add_node(Node::new(NodeId(2), NodeType::PerlinNoise, "Orphan"));
         // Connect node 1 to the bundler so only #2 is orphaned.
@@ -921,7 +921,7 @@ mod tests {
     fn flags_missing_source_when_bundler_has_only_filters() {
         use bar_graph::PortId;
         let mut graph = empty_graph();
-        let bundler = graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        let bundler = graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         let blur = graph.add_node(Node::new(NodeId(0), NodeType::Blur, "Blur"));
         // Wire Blur → Bundler.heightmap with no source feeding Blur.
         graph
@@ -948,7 +948,7 @@ mod tests {
     #[test]
     fn flags_disconnected_filter_input_as_warning() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         graph.add_node(Node::new(NodeId(0), NodeType::Blur, "Blur"));
         let f = validate_project(&graph, &MapSettings::default(), 257, 257);
         assert!(
@@ -963,7 +963,7 @@ mod tests {
     fn does_not_flag_filter_with_connected_input() {
         use bar_graph::PortId;
         let mut graph = empty_graph();
-        let bundler = graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        let bundler = graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         let source = graph.add_node(Node::new(NodeId(0), NodeType::PerlinNoise, "Source"));
         let blur = graph.add_node(Node::new(NodeId(0), NodeType::Blur, "Blur"));
         graph
@@ -1003,7 +1003,7 @@ mod tests {
     #[test]
     fn flags_passthrough_path_collision() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         let mut a = Node::new(NodeId(1), NodeType::PassThrough, "A");
         a.params.insert(
             "files".to_string(),
@@ -1036,7 +1036,7 @@ mod tests {
     // range keep the unrelated validators quiet.
     fn quiet_setup() -> (GraphEngine, MapSettings) {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "b"));
         let mut s = MapSettings::default();
         s.start_positions.push([512, 512]);
         s.start_positions.push([1536, 1536]);
@@ -1185,7 +1185,7 @@ mod tests {
     #[test]
     fn dimensions_field_tagged_correctly() {
         let mut graph = empty_graph();
-        graph.add_node(Node::new(NodeId(0), NodeType::Bundler, "b"));
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "b"));
         // Bad width but valid depth.
         let f = validate_project(&graph, &MapSettings::default(), 256, 257);
         let width_findings: Vec<&Finding> = f

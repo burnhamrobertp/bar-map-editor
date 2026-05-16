@@ -214,13 +214,13 @@ impl eframe::App for AppRunner {
 
         // Handle Run / export button.
         let run_all = self.app.preview.take_run_requested();
-        let run_bundler_node = self.app.preview.take_run_bundler_node();
-        let run_filter_label = run_bundler_node
+        let run_export_node = self.app.preview.take_run_export_node();
+        let run_filter_label = run_export_node
             .and_then(|id| self.app.graph().get_node(id))
             .map(|n| n.label.clone());
         let no_export_in_flight =
             self.export_result_rx.is_none() && self.pending_export_dir.is_none();
-        let should_request_dir = (run_all || run_bundler_node.is_some()) && no_export_in_flight;
+        let should_request_dir = (run_all || run_export_node.is_some()) && no_export_in_flight;
 
         if should_request_dir {
             let (tx, rx) = mpsc::channel::<Option<std::path::PathBuf>>();
@@ -239,7 +239,7 @@ impl eframe::App for AppRunner {
                 rx,
                 run_filter_label,
             });
-            self.export_status = match run_bundler_node {
+            self.export_status = match run_export_node {
                 Some(id) => bar_gui::ExportStatus::One(id),
                 None => bar_gui::ExportStatus::All,
             };

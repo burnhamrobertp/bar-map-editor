@@ -183,7 +183,7 @@ fn try_direct_smt_copy(graph: &GraphEngine, dest: &Path) -> Result<Option<(u32, 
         let Some(to_node) = graph.get_node(conn.to.node_id) else {
             continue;
         };
-        if to_node.node_type != NodeType::Bundler {
+        if to_node.node_type != NodeType::FinalComposition {
             continue;
         }
         let Some(from_node) = graph.get_node(conn.from.node_id) else {

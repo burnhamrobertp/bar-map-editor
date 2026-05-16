@@ -137,7 +137,7 @@ fn test_complex_recipe_with_combiners() {
             },
             RecipeNode {
                 key: "out".to_string(),
-                node_type: NodeType::Bundler,
+                node_type: NodeType::FinalComposition,
                 label: "Export".to_string(),
                 params: HashMap::new(),
             },
@@ -248,7 +248,7 @@ fn test_recipe_with_erosion_pipeline() {
             },
             RecipeNode {
                 key: "out".to_string(),
-                node_type: NodeType::Bundler,
+                node_type: NodeType::FinalComposition,
                 label: "Export".to_string(),
                 params: HashMap::new(),
             },
@@ -360,7 +360,7 @@ fn test_mask_operations_pipeline() {
             },
             RecipeNode {
                 key: "out".to_string(),
-                node_type: NodeType::Bundler,
+                node_type: NodeType::FinalComposition,
                 label: "Export".to_string(),
                 params: HashMap::new(),
             },

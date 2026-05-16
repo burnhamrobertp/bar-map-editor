@@ -9,8 +9,8 @@ use crate::undo::UndoHistory;
 // Re-export icon painters so that `use crate::app::*` in panel modules keeps
 // finding them after they moved to panels/icons.rs.
 pub(crate) use crate::panels::icons::{
-    draw_io_icon, paint_bar_icon, paint_busy_dot, paint_compile_icon, paint_export_icon,
-    paint_inspector_icon, paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
+    draw_io_icon, paint_bar_icon, paint_compile_icon, paint_export_icon, paint_inspector_icon,
+    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.
@@ -735,7 +735,7 @@ impl BarEditorApp {
             .graph
             .nodes()
             .iter()
-            .find(|(_, n)| n.node_type == bar_graph::NodeType::Bundler)
+            .find(|(_, n)| n.node_type == bar_graph::NodeType::FinalComposition)
             .map(|(id, _)| *id);
         if let Some(bn) = bundler_id {
             self.graph.upstream_content_hash(bn).hash(&mut h);

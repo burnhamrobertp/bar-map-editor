@@ -221,7 +221,10 @@ pub(crate) fn paint_compile_icon(painter: &egui::Painter, rect: egui::Rect, colo
 }
 
 /// Rotating dot in the top-right corner of a button rect to signal a running
-/// operation. `time` is `ui.input(|i| i.time)` in seconds.
+/// operation. `time` is `ui.input(|i| i.time)` in seconds. Unused right
+/// now that the export button no longer lives on the FC node body --
+/// retained because the top action bar may need the same affordance.
+#[allow(dead_code)]
 pub(crate) fn paint_busy_dot(painter: &egui::Painter, rect: egui::Rect, time: f64) {
     let radius = 3.0_f32;
     let orbit = 6.0_f32;

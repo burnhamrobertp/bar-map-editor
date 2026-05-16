@@ -270,15 +270,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
                 ParamValue::String(String::new()),
             ),
         ],
-        NodeType::Bundler => vec![
-            // bar-editor only ever exports spring-smf packaged as
-            // 7z (the BAR map format). Those format choices used to
-            // be exposed as `target` / `archive_format` params; they
-            // were dropped because there's nothing to vary. Leave
-            // map_name + output_path: those genuinely differ per map.
-            ("map_name", ParamValue::String("my_map".to_string())),
-            ("output_path", ParamValue::String("{name}.sd7".to_string())),
-        ],
         NodeType::FileReference => vec![
             ("path", ParamValue::String(String::new())),
             ("bundle_path", ParamValue::String(String::new())),

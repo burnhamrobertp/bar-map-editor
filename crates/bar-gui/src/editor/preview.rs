@@ -64,8 +64,8 @@ pub struct PreviewState {
     /// `bar-app` consumes via `take_test_in_bar`.
     pub test_in_bar_requested: bool,
     /// Set when the user runs a single bundler node (rather than all).
-    /// `bar-app` consumes via `take_run_bundler_node`.
-    pub run_bundler_node: Option<NodeId>,
+    /// `bar-app` consumes via `take_run_export_node`.
+    pub run_export_node: Option<NodeId>,
     /// Live export busy-state. Set by `bar-app` to gate the run buttons
     /// in the GUI.
     pub export_status: ExportStatus,
@@ -93,8 +93,8 @@ impl PreviewState {
     }
 
     /// Consume the one-frame "run this specific bundler node" pulse.
-    pub fn take_run_bundler_node(&mut self) -> Option<NodeId> {
-        self.run_bundler_node.take()
+    pub fn take_run_export_node(&mut self) -> Option<NodeId> {
+        self.run_export_node.take()
     }
 
     pub fn export_status(&self) -> ExportStatus {

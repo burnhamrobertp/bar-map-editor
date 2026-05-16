@@ -157,7 +157,7 @@ pub fn get_preview_heightmap(graph: &GraphEngine, outputs: &NodeOutputs) -> Opti
     let has_bundler = graph
         .nodes()
         .iter()
-        .any(|(_, n)| n.node_type == NodeType::Bundler);
+        .any(|(_, n)| n.node_type == NodeType::FinalComposition);
     if has_bundler {
         return get_bundler_heightmap(graph, outputs, "heightmap");
     }
@@ -297,7 +297,7 @@ fn get_bundler_heightmap(
     port: &str,
 ) -> Option<Heightmap> {
     for (node_id, node) in graph.nodes() {
-        if node.node_type == NodeType::Bundler {
+        if node.node_type == NodeType::FinalComposition {
             for conn in graph.connections() {
                 if conn.to.node_id == *node_id && conn.to.port_name == port {
                     if let Some(upstream) = outputs.get(&conn.from.node_id) {
@@ -319,7 +319,7 @@ fn get_bundler_color(
     port: &str,
 ) -> Option<bar_data::ColorBuffer> {
     for (node_id, node) in graph.nodes() {
-        if node.node_type == NodeType::Bundler {
+        if node.node_type == NodeType::FinalComposition {
             for conn in graph.connections() {
                 if conn.to.node_id == *node_id && conn.to.port_name == port {
                     if let Some(upstream) = outputs.get(&conn.from.node_id) {
@@ -363,7 +363,7 @@ mod tests {
                         .map_err(|e| EvalError::Compute(e.to_string()))?;
                     outputs.insert("output".to_string(), PortValue::Heightmap(hm));
                 }
-                NodeType::Bundler => {
+                NodeType::FinalComposition => {
                     // Terminal node — pass inputs through keyed by port name
                     for (k, v) in inputs {
                         outputs.insert(k.clone(), v.clone());
@@ -386,7 +386,7 @@ mod tests {
         let mut graph = GraphEngine::new();
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-        let bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let bundler = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
         let noise_id = graph.add_node(noise);
         let bundler_id = graph.add_node(bundler);
 

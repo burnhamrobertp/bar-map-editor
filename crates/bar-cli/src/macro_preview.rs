@@ -294,7 +294,7 @@ fn build_recipe(
     // Add the Bundler.
     nodes.push(RecipeNode {
         key: "_bundler".to_string(),
-        node_type: NodeType::Bundler,
+        node_type: NodeType::FinalComposition,
         label: "Bundler".to_string(),
         params: HashMap::new(),
     });

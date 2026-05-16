@@ -747,10 +747,6 @@ impl NodeExecutor for CpuExecutor {
                 );
             }
 
-            NodeType::Bundler => {
-                // Terminal node — inputs are collected after graph evaluation by execute_bundlers().
-            }
-
             NodeType::ImportedTexture => {
                 let asset_path = get_string(params, "asset_path", "");
                 let idx_path = get_string(params, "tile_index_path", "");
@@ -3325,7 +3321,7 @@ mod tests {
         let mut graph = GraphEngine::new();
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-        let bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let bundler = Node::new(NodeId(0), NodeType::FinalComposition, "Final Composition");
         let noise_id = graph.add_node(noise);
         let bundler_id = graph.add_node(bundler);
 

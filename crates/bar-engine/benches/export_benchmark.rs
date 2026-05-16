@@ -33,7 +33,7 @@ fn build_graph() -> GraphEngine {
         .insert("seed".to_string(), ParamValue::UInt(0));
     let noise_id = graph.add_node(noise_node);
 
-    let mut bundler_node = Node::new(NodeId(0), NodeType::Bundler, "BAR Export");
+    let mut bundler_node = Node::new(NodeId(0), NodeType::FinalComposition, "BAR Export");
     bundler_node.params.insert(
         "target".to_string(),
         ParamValue::String("spring-smf".to_string()),

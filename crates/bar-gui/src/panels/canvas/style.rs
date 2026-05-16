@@ -114,9 +114,7 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::MaskExpand
         | NodeType::MaskShrink => tokens::NODE_CAT_MASK,
 
-        NodeType::Bundler | NodeType::FinalComposition | NodeType::FileReference => {
-            tokens::NODE_CAT_BUNDLER
-        }
+        NodeType::FinalComposition | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
 
         NodeType::PassThrough | NodeType::ImportedTexture => tokens::NODE_CAT_SOURCE,
 

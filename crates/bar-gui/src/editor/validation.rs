@@ -193,7 +193,7 @@ impl BarEditorApp {
     /// - if there are errors, opens the panel and refuses to start
     ///   the export (returns `false`);
     /// - otherwise, the caller is cleared to set `run_requested` /
-    ///   `run_bundler_node` (returns `true`).
+    ///   `run_export_node` (returns `true`).
     pub(crate) fn validate_before_export(&mut self, action_label: &str) -> bool {
         self.run_validation();
         if self.validation_has_errors() {

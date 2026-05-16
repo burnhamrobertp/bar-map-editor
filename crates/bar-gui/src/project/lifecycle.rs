@@ -126,9 +126,9 @@ impl BarEditorApp {
         // Drop the Bundler terminal node near the right edge of the canvas
         // so the user can build their pipeline left-to-right.
         let bundler_pos = self.starter_bundler_position();
-        let bundler_id = self
-            .graph
-            .add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        let bundler_id =
+            self.graph
+                .add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         self.visuals.node_visuals.insert(
             bundler_id,
             NodeVisual {
@@ -161,9 +161,9 @@ impl BarEditorApp {
     /// welcome panel's "Empty graph" entry point.
     pub(crate) fn welcome_blank_project(&mut self) {
         let bundler_pos = self.starter_bundler_position();
-        let bundler_id = self
-            .graph
-            .add_node(Node::new(NodeId(0), NodeType::Bundler, "Bundler"));
+        let bundler_id =
+            self.graph
+                .add_node(Node::new(NodeId(0), NodeType::FinalComposition, "Bundler"));
         self.visuals.node_visuals.insert(
             bundler_id,
             NodeVisual {
@@ -757,7 +757,7 @@ impl BarEditorApp {
 
         // Bundler — for export. Always present so the project is
         // shippable out of the box.
-        let mut bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let mut bundler = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
         bundler.label = "Bundler".to_string();
         let bundler_id = self.graph.add_node(bundler);
         self.visuals.node_visuals.insert(

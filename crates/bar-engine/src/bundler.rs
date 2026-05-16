@@ -37,7 +37,7 @@ pub fn find_bundler_nodes(graph: &GraphEngine) -> Vec<NodeId> {
     graph
         .nodes()
         .iter()
-        .filter(|(_, node)| node.node_type == NodeType::Bundler)
+        .filter(|(_, node)| node.node_type == NodeType::FinalComposition)
         .map(|(&id, _)| id)
         .collect()
 }
@@ -379,7 +379,7 @@ mod tests {
         let mut graph = GraphEngine::new();
         let perlin = Node::new(NodeId(0), NodeType::PerlinNoise, "Perlin");
         graph.add_node(perlin);
-        let bundler = Node::new(NodeId(0), NodeType::Bundler, "BAR Export");
+        let bundler = Node::new(NodeId(0), NodeType::FinalComposition, "BAR Export");
         let bid = graph.add_node(bundler);
 
         let bundlers = find_bundler_nodes(&graph);

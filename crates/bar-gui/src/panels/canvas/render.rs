@@ -1084,41 +1084,9 @@ impl BarEditorApp {
                 draw_passthrough_body(&painter, node_rect, files);
             }
 
-            // Bundler: Export button — top-right, 44x36.
-            let has_export_button = node_type == NodeType::Bundler;
-            let export_rect: Option<egui::Rect> = if has_export_button {
-                let btn = egui::vec2(44.0, 36.0);
-                Some(egui::Rect::from_min_size(
-                    egui::pos2(node_rect.max.x - 6.0 - btn.x, node_rect.min.y + 26.0),
-                    btn,
-                ))
-            } else {
-                None
-            };
-
-            // Paint Bundler's Export button.
-            if let Some(export_rect) = export_rect {
-                let ptr = ui.ctx().pointer_latest_pos();
-                let busy = self.preview.export_status.affects(*node_id);
-                let any_running = self.preview.export_status.is_running();
-
-                let export_hov = ptr.is_some_and(|p| export_rect.contains(p));
-                let export_bg = if busy {
-                    egui::Color32::from_rgb(80, 80, 30)
-                } else if any_running {
-                    egui::Color32::from_rgb(40, 60, 40)
-                } else if export_hov {
-                    egui::Color32::from_rgb(48, 132, 62)
-                } else {
-                    egui::Color32::from_rgb(35, 110, 50)
-                };
-                painter.rect_filled(export_rect, 5.0, export_bg);
-                paint_export_icon(&painter, export_rect, egui::Color32::WHITE);
-                if busy {
-                    paint_busy_dot(&painter, export_rect, ui.input(|i| i.time));
-                    ui.ctx().request_repaint();
-                }
-            }
+            // Export / Compile / Test-in-BAR actions live on the
+            // application-level top action bar, not on the
+            // FinalComposition node itself.
 
             // ── Interaction ──────────────────────────────────────────────────────────
             // Node interact is registered FIRST.  Button interacts are registered
@@ -1132,39 +1100,14 @@ impl BarEditorApp {
                 egui::Sense::click_and_drag(),
             );
 
-            // Button interactions — registered AFTER node so they capture clicks first.
-            let mut run_clicked = false;
-            if let Some(export_rect) = export_rect {
-                let any_running = self.preview.export_status.is_running();
-                let busy_self = self.preview.export_status.affects(*node_id);
-                let run_tooltip = if busy_self {
-                    "Exporting…"
-                } else if any_running {
-                    "Another export is running"
-                } else {
-                    "Export Bundle"
-                };
-                let run_sense = if any_running {
-                    egui::Sense::hover()
-                } else {
-                    egui::Sense::click()
-                };
-                let run_resp = ui
-                    .interact(
-                        export_rect,
-                        egui::Id::new(("bundler_run", node_id.0)),
-                        run_sense,
-                    )
-                    .on_hover_text(run_tooltip);
-                run_clicked = !any_running && run_resp.clicked();
-            }
+            // No node-body action buttons -- export / compile run from
+            // the top-level action bar instead.
 
-            // Node selection — only when neither action button was
-            // clicked. Also arm the contextual Properties panel: the
-            // click is the user's intent to "look at" this node;
+            // Node selection. Also arm the contextual Properties panel:
+            // the click is the user's intent to "look at" this node;
             // the 100 ms hover gate filters out accidental clicks on
             // the way to dragging.
-            if node_response.clicked() && !run_clicked {
+            if node_response.clicked() {
                 let additive = ui.ctx().input(|i| i.modifiers.ctrl || i.modifiers.command);
                 new_selection = Some((*node_id, additive));
                 // Ctrl-click is "build a multi-selection", not "look
@@ -1345,9 +1288,8 @@ impl BarEditorApp {
                 }
             }
 
-            if run_clicked && self.validate_before_export("Bundle") {
-                self.preview.run_bundler_node = Some(*node_id);
-            }
+            // Export trigger moved to the top-level action bar; no
+            // node-body button to dispatch from here.
 
             // Resize corner handles (8 px squares; processed after node interact so they
             // are "on top" in egui's interaction stack)

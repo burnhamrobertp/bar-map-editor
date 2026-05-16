@@ -94,7 +94,7 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         },
         RecipeNode {
             key: "bundler".to_string(),
-            node_type: NodeType::Bundler,
+            node_type: NodeType::FinalComposition,
             label: "Export".to_string(),
             params: HashMap::new(),
         },

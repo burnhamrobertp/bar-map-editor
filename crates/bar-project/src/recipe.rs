@@ -737,7 +737,7 @@ impl Recipe {
                 },
                 RecipeNode {
                     key: "output".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: "Export".to_string(),
                     params: HashMap::new(),
                 },
@@ -853,7 +853,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -886,7 +886,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "dupe".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -1017,7 +1017,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -1069,7 +1069,7 @@ mod tests {
                 make_subout("sub_slope", "Slope"),    // was "Heightmap"
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -1131,7 +1131,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
