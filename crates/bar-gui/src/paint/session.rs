@@ -10,6 +10,53 @@ use bar_graph::NodeId;
 use eframe::egui;
 use std::collections::HashMap;
 
+/// Key into `PaintSession::live_paint`. Distinguishes 2D-paint nodes
+/// (each with its own asset) from `FinalComposition`'s per-kind paint
+/// layers. A single `PaintSession` may hold live buffers for both
+/// (e.g. user paints PaintedHeightmap then switches to FC heightmap
+/// without flushing -- each accumulates separately).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PaintKey {
+    /// 2D-paint graph node (PaintedHeightmap, PaintedTexture).
+    Node(NodeId),
+    /// FinalComposition paint layer of a specific kind.
+    FCLayer(FCLayerKind),
+}
+
+/// Which paint layer of `FinalComposition` a brush stroke targets.
+/// Set by the Sculpt3D layer tool buttons; consumed by the brush flow
+/// in `viewport.rs` and the flush logic in `paint/brush.rs`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub enum FCLayerKind {
+    Heightmap,
+    Color,
+    Metalmap,
+    Typemap,
+}
+
+impl FCLayerKind {
+    /// Snake-case prefix used in `FinalComposition` node params:
+    /// `<prefix>_layer_asset_id`, `<prefix>_layer_asset_path`.
+    pub fn param_prefix(self) -> &'static str {
+        match self {
+            Self::Heightmap => "heightmap",
+            Self::Color => "color",
+            Self::Metalmap => "metalmap",
+            Self::Typemap => "typemap",
+        }
+    }
+
+    /// Human-readable label for tool buttons / panels.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Heightmap => "Heightmap",
+            Self::Color => "Color",
+            Self::Metalmap => "Metalmap",
+            Self::Typemap => "Typemap",
+        }
+    }
+}
+
 /// What primary action a left-click + drag in the 2D Inspector does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InspectorMode {
@@ -97,9 +144,19 @@ pub struct PaintSession {
     /// The node currently active in the sculpt layer panel.
     /// Brush strokes in the 3D viewport write to this node's live buffer.
     pub selected_sculpt_layer: Option<NodeId>,
-    /// Per-node live paint buffers, held for the duration of one stroke.
-    /// Cleared when the stroke ends and the buffer is flushed to node params.
-    pub live_paint: HashMap<NodeId, LivePaintBuffer>,
+    /// Which `FinalComposition` paint layer the Sculpt3D layer panel
+    /// has selected. When `Some`, brush strokes write to FC's
+    /// per-kind layer asset rather than to a 2D-paint node. The two
+    /// selections (`selected_sculpt_layer` vs `selected_fc_layer`) are
+    /// mutually exclusive -- whichever was set most recently is the
+    /// active brush target.
+    pub selected_fc_layer: Option<FCLayerKind>,
+    /// Per-target live paint buffers, held for the duration of one stroke.
+    /// Cleared when the stroke ends and the buffer is flushed to disk.
+    /// Keys distinguish 2D-paint nodes (`Node(id)`) from FC layers
+    /// (`FCLayer(kind)`) so a single stroke on either path uses the
+    /// right buffer.
+    pub live_paint: HashMap<PaintKey, LivePaintBuffer>,
     /// Brush radius (heightmap pixels) for `PaintedHeightmap` /
     /// `PaintedTexture` / `Sculpt` in-node paint canvases.
     pub paint_brush_radius: f32,
@@ -132,6 +189,7 @@ impl Default for PaintSession {
             brush: BrushState::default(),
             brush_stroking: false,
             selected_sculpt_layer: None,
+            selected_fc_layer: None,
             live_paint: HashMap::new(),
             paint_brush_radius: 4.0,
             sculpt_brush_strength: 0.5,
@@ -155,6 +213,7 @@ impl PaintSession {
         self.brush = BrushState::default();
         self.brush_stroking = false;
         self.selected_sculpt_layer = None;
+        self.selected_fc_layer = None;
         self.live_paint.clear();
         self.heightmap = None;
         self.heightmap_rev = self.heightmap_rev.wrapping_add(1);

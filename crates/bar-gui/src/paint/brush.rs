@@ -8,7 +8,7 @@ use bar_graph::{NodeId, ParamValue};
 
 use crate::app::BarEditorApp;
 use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer};
-use crate::paint::{BrushTool, LivePaintBuffer};
+use crate::paint::{BrushTool, FCLayerKind, LivePaintBuffer, PaintKey};
 
 /// Native resolution of a PaintedTexture canvas (matches executor.rs constant).
 const PAINTED_TEXTURE_RES: u32 = 256;
@@ -54,7 +54,7 @@ impl BarEditorApp {
         // reads the same asset, so what we paint into the buffer must match
         // the current on-disk state -- otherwise the first stroke replaces
         // the existing heightmap with zeros plus the dab).
-        if !self.paint.live_paint.contains_key(&node_id) {
+        if !self.paint.live_paint.contains_key(&PaintKey::Node(node_id)) {
             let asset_path = self
                 .graph
                 .get_node(node_id)
@@ -69,7 +69,7 @@ impl BarEditorApp {
                 .unwrap_or_else(|| bar_data::Heightmap::new(node_res, node_res).unwrap());
             self.paint
                 .live_paint
-                .insert(node_id, LivePaintBuffer::Height(live_hm));
+                .insert(PaintKey::Node(node_id), LivePaintBuffer::Height(live_hm));
         }
 
         // Scale coordinates and radius from map resolution to node resolution.
@@ -80,7 +80,9 @@ impl BarEditorApp {
         let scaled_hx = hx * scale_x;
         let scaled_hy = hy * scale_y;
 
-        if let Some(LivePaintBuffer::Height(live_hm)) = self.paint.live_paint.get_mut(&node_id) {
+        if let Some(LivePaintBuffer::Height(live_hm)) =
+            self.paint.live_paint.get_mut(&PaintKey::Node(node_id))
+        {
             apply_brush_dab(live_hm, scaled_hx, scaled_hy, &scaled_brush);
         }
 
@@ -113,7 +115,7 @@ impl BarEditorApp {
         // Initialise live color buffer from the node's binary asset (the
         // executor reads the same asset, so what we paint into the buffer
         // must match the current on-disk state).
-        if !self.paint.live_paint.contains_key(&node_id) {
+        if !self.paint.live_paint.contains_key(&PaintKey::Node(node_id)) {
             let asset_path = self
                 .graph
                 .get_node(node_id)
@@ -130,11 +132,13 @@ impl BarEditorApp {
                 });
             self.paint
                 .live_paint
-                .insert(node_id, LivePaintBuffer::Color(cb));
+                .insert(PaintKey::Node(node_id), LivePaintBuffer::Color(cb));
         }
 
         // Apply dab to the live color buffer at native texture resolution.
-        if let Some(LivePaintBuffer::Color(live_cb)) = self.paint.live_paint.get_mut(&node_id) {
+        if let Some(LivePaintBuffer::Color(live_cb)) =
+            self.paint.live_paint.get_mut(&PaintKey::Node(node_id))
+        {
             stamp_color_dab_in_buffer(live_cb, u, v, ru, [r, g, b]);
         }
 
@@ -154,7 +158,7 @@ impl BarEditorApp {
     /// snapshot and marks the node dirty so the preview re-evaluates.
     /// Removes the buffer from `live_paint`.
     pub fn flush_live_paint(&mut self, node_id: NodeId) {
-        let Some(buffer) = self.paint.live_paint.remove(&node_id) else {
+        let Some(buffer) = self.paint.live_paint.remove(&PaintKey::Node(node_id)) else {
             return;
         };
         let asset_path = self
@@ -220,6 +224,224 @@ impl BarEditorApp {
     pub fn end_brush_stroke(&mut self) {
         self.paint.brush_stroking = false;
         self.paint.brush.flatten_target = None;
+    }
+
+    /// Apply the heightmap brush to `FinalComposition`'s heightmap
+    /// layer. Mirrors `apply_brush_to_sculpt_layer` but targets FC's
+    /// per-kind asset slot instead of a graph node's own asset.
+    /// On the first stroke of an unpainted slot, mints a new asset
+    /// id + path (under `<project>/final_composition/<id>.bin`) and
+    /// stamps it onto the FC node params, then creates the file with
+    /// "neutral" bytes so the live buffer can read it back.
+    pub fn apply_brush_to_fc_heightmap_layer(
+        &mut self,
+        hx: f32,
+        hy: f32,
+        stroke_starting: bool,
+    ) -> bool {
+        let (map_w, map_h) = match self.paint.heightmap.as_ref() {
+            Some(hm) => (hm.width() as f32, hm.height() as f32),
+            None => return false,
+        };
+
+        // Capture flatten target at stroke start.
+        if stroke_starting && self.paint.brush.tool == BrushTool::Flatten {
+            if let Some(hm) = self.paint.heightmap.as_ref() {
+                let ix = (hx.round() as i32).clamp(0, hm.width() as i32 - 1) as u32;
+                let iy = (hy.round() as i32).clamp(0, hm.height() as i32 - 1) as u32;
+                self.paint.brush.flatten_target = hm.get(ix, iy);
+            }
+        }
+
+        let Some(fc_node_id) = find_final_composition_node(&self.graph) else {
+            return false;
+        };
+
+        // Layer resolution. FC heightmap layers are u8 deltas at a
+        // fixed working resolution that matches the inspector heightmap;
+        // there's no per-layer `resolution` param yet (the heightmap
+        // layer just tracks the inspector's dims so dabs round-trip
+        // without resampling).
+        let node_res = map_w.max(map_h) as u32;
+
+        let key = PaintKey::FCLayer(FCLayerKind::Heightmap);
+
+        // Initialise live buffer from the FC heightmap-layer asset.
+        // If the slot is unpainted (asset_id empty), seed the buffer
+        // with neutral deltas (all 0.5 in [0,1] f32, == byte 128).
+        if !self.paint.live_paint.contains_key(&key) {
+            let asset_path = fc_layer_asset_path(&self.graph, fc_node_id, FCLayerKind::Heightmap);
+            let live_hm = asset_path
+                .as_deref()
+                .and_then(read_height_asset)
+                .unwrap_or_else(|| {
+                    // Fresh layer: all-neutral delta buffer.
+                    let mut hm = bar_data::Heightmap::new(node_res, node_res).unwrap();
+                    for y in 0..hm.height() {
+                        for x in 0..hm.width() {
+                            let _ = hm.set(x, y, 0.5);
+                        }
+                    }
+                    hm
+                });
+            self.paint
+                .live_paint
+                .insert(key, LivePaintBuffer::Height(live_hm));
+        }
+
+        // Live buffer is at map resolution -- scale is 1:1 for FC heightmap.
+        if let Some(LivePaintBuffer::Height(live_hm)) = self.paint.live_paint.get_mut(&key) {
+            apply_brush_dab(live_hm, hx, hy, &self.paint.brush);
+        }
+
+        // Mutate the inspector heightmap for instant 3D viewport feedback.
+        if let Some(hm) = self.paint.heightmap.as_mut() {
+            apply_brush_dab(hm, hx, hy, &self.paint.brush);
+            self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
+        }
+
+        self.paint.brush_stroking = true;
+        self.project.is_dirty = true;
+        true
+    }
+
+    /// End an FC-layer brush stroke: flush the live buffer to disk
+    /// (encoding to the layer's on-disk format), stamp the FC node's
+    /// asset id / path on first use, clear stroke flags. Mirror of
+    /// `end_brush_stroke_on_layer` but for FC layer targets.
+    pub fn end_brush_stroke_on_fc_layer(&mut self, kind: FCLayerKind) {
+        self.flush_live_paint_to_fc_layer(kind);
+        self.paint.brush_stroking = false;
+        self.paint.brush.flatten_target = None;
+    }
+
+    /// Persist the live FC-layer buffer to disk. Mints an asset id +
+    /// path on first paint (writing to
+    /// `<project>/final_composition/<uuid>.bin`); subsequent strokes
+    /// overwrite the same file. Captures the pre-stroke asset bytes in
+    /// the undo snapshot first so undo can revert to the prior layer
+    /// state. Heightmap layer encodes as `GrayscaleU8` deltas
+    /// (matching `composite_heightmap_layer` in the executor).
+    fn flush_live_paint_to_fc_layer(&mut self, kind: FCLayerKind) {
+        let key = PaintKey::FCLayer(kind);
+        let Some(buffer) = self.paint.live_paint.remove(&key) else {
+            return;
+        };
+        let Some(fc_node_id) = find_final_composition_node(&self.graph) else {
+            return;
+        };
+        // Resolve target path (mint asset id + path on first stroke).
+        let asset_path = match self.ensure_fc_layer_asset(fc_node_id, kind) {
+            Some(p) => p,
+            None => {
+                tracing::warn!(
+                    ?kind,
+                    "Paint flush: could not allocate FC layer asset path; painted edits dropped"
+                );
+                return;
+            }
+        };
+        // Snapshot the pre-stroke bytes for undo.
+        let path_buf = std::path::PathBuf::from(&asset_path);
+        self.push_undo_with_painted("Paint FC layer", std::iter::once(path_buf));
+        // Per-kind encoding. Heightmap = U8 deltas; the other kinds
+        // (color, metalmap, typemap) land in follow-up commits.
+        let write_result = match (buffer, kind) {
+            (LivePaintBuffer::Height(hm), FCLayerKind::Heightmap) => {
+                write_height_asset(&asset_path, &hm, bar_project::AssetKind::GrayscaleU8)
+            }
+            (LivePaintBuffer::Height(_), _) | (LivePaintBuffer::Color(_), _) => {
+                tracing::warn!(
+                    ?kind,
+                    "Paint flush: FC layer kind not yet supported by Sculpt3D"
+                );
+                return;
+            }
+        };
+        if let Err(e) = write_result {
+            tracing::error!(error = %e, path = %asset_path, "Paint flush: write FC layer asset failed");
+            return;
+        }
+        if let Some(node) = self.graph.get_node_mut(fc_node_id) {
+            node.mark_dirty();
+        }
+    }
+
+    /// Ensure FC's per-kind layer slot has an `asset_id` + `asset_path`
+    /// set, creating both on first call. Returns the absolute on-disk
+    /// path for the layer asset. Returns `None` if no project dir
+    /// is known yet (can't determine where to place the file).
+    fn ensure_fc_layer_asset(&mut self, fc_node_id: NodeId, kind: FCLayerKind) -> Option<String> {
+        let prefix = kind.param_prefix();
+        let id_key = format!("{prefix}_layer_asset_id");
+        let path_key = format!("{prefix}_layer_asset_path");
+        // Check current state.
+        let (cur_id, cur_path) = {
+            let node = self.graph.get_node(fc_node_id)?;
+            let id = match node.params.get(&id_key) {
+                Some(ParamValue::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            let path = match node.params.get(&path_key) {
+                Some(ParamValue::String(s)) => s.clone(),
+                _ => String::new(),
+            };
+            (id, path)
+        };
+        if !cur_id.is_empty() && !cur_path.is_empty() {
+            return Some(cur_path);
+        }
+        // Need to mint. Determine the FC asset directory: if the
+        // project is saved, use `<project>/final_composition/`; if not,
+        // fall back to the editor's temp asset dir (matches the rest
+        // of the loaded-pre-save asset flow).
+        let dir = match self.project.path.as_ref() {
+            Some(p) => p.join("final_composition"),
+            None => std::env::temp_dir()
+                .join("bar-editor-assets")
+                .join("final_composition"),
+        };
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            tracing::error!(error = %e, dir = %dir.display(), "Could not create FC asset dir");
+            return None;
+        }
+        let id = bar_project::AssetId::new().0;
+        let path = dir.join(format!("{id}.bin"));
+        let path_str = path.to_string_lossy().into_owned();
+        if let Some(node) = self.graph.get_node_mut(fc_node_id) {
+            node.params.insert(id_key, ParamValue::String(id));
+            node.params
+                .insert(path_key, ParamValue::String(path_str.clone()));
+        }
+        Some(path_str)
+    }
+}
+
+/// Walk the graph for the project's single `FinalComposition` node.
+/// Returns `None` only if FC is missing (should never happen after the
+/// auto-insert in `scan_to_project`, but the brush flow tolerates it
+/// by no-op'ing rather than panicking).
+pub(crate) fn find_final_composition_node(graph: &bar_graph::GraphEngine) -> Option<NodeId> {
+    graph
+        .nodes()
+        .iter()
+        .find(|(_, n)| n.node_type == bar_graph::NodeType::FinalComposition)
+        .map(|(&id, _)| id)
+}
+
+/// Look up FC's per-kind layer asset path. Returns `None` when the
+/// slot is unpainted (asset_path empty / unset) or when the FC node
+/// itself can't be found.
+pub(crate) fn fc_layer_asset_path(
+    graph: &bar_graph::GraphEngine,
+    fc_node_id: NodeId,
+    kind: FCLayerKind,
+) -> Option<String> {
+    let path_key = format!("{}_layer_asset_path", kind.param_prefix());
+    let node = graph.get_node(fc_node_id)?;
+    match node.params.get(&path_key) {
+        Some(ParamValue::String(s)) if !s.is_empty() => Some(s.clone()),
+        _ => None,
     }
 }
 

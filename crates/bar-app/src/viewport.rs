@@ -1053,7 +1053,9 @@ fn handle_camera_input(
         }
     }
     if sculpt_active && response.drag_stopped_by(egui::PointerButton::Primary) {
-        if let Some(node_id) = app.paint.selected_sculpt_layer {
+        if let Some(kind) = app.paint.selected_fc_layer {
+            app.end_brush_stroke_on_fc_layer(kind);
+        } else if let Some(node_id) = app.paint.selected_sculpt_layer {
             app.end_brush_stroke_on_layer(node_id);
         } else {
             app.end_brush_stroke();
@@ -1179,7 +1181,22 @@ fn apply_sculpt_dab_at_cursor(
         .selected_sculpt_layer
         .and_then(|id| app.graph().get_node(id).map(|n| (id, n.node_type.clone())));
 
-    let changed = if let Some((node_id, ref node_type)) = selected_node {
+    // The FC-layer selection takes priority over the 2D-paint-node
+    // selection when both are set (the Sculpt3D layer panel always
+    // sets one or the other, but be defensive).
+    let fc_selected = app.paint.selected_fc_layer;
+
+    let changed = if let Some(kind) = fc_selected {
+        match kind {
+            bar_gui::FCLayerKind::Heightmap => {
+                app.apply_brush_to_fc_heightmap_layer(p.hm_x, p.hm_y, stroke_starting)
+            }
+            // Color / Metalmap / Typemap FC-layer brush handlers land
+            // in follow-up commits (Phase 3b/3c/3d). For now the tool
+            // button selects the kind but strokes are a no-op.
+            _ => false,
+        }
+    } else if let Some((node_id, ref node_type)) = selected_node {
         let paintable = matches!(
             node_type,
             bar_graph::NodeType::PaintedHeightmap | bar_graph::NodeType::PaintedTexture

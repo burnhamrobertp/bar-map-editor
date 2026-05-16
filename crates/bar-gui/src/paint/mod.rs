@@ -9,4 +9,6 @@ pub(crate) mod brush;
 pub(crate) mod brush_math;
 pub(crate) mod session;
 
-pub use session::{BrushState, BrushTool, InspectorMode, LivePaintBuffer, PaintSession};
+pub use session::{
+    BrushState, BrushTool, FCLayerKind, InspectorMode, LivePaintBuffer, PaintKey, PaintSession,
+};

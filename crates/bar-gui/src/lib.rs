@@ -22,5 +22,6 @@ pub mod undo;
 pub use app::{BarEditorApp, BrushTool, ExportStatus, Layout, SmfLightingSnapshot};
 pub use io::ParentWindow;
 pub use log::LogLevel;
+pub use paint::FCLayerKind;
 pub use settings::{Settings, WindowState};
 pub use undo::{Snapshot, UndoHistory};

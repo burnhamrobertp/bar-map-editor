@@ -28,10 +28,38 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
 fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let entries = compute_sculpt_layers(&app.graph);
 
-    // --- LAYERS section ---
+    // --- FINAL COMPOSITION LAYERS (four pinned slots, one per kind) ---
+    // These are the post-graph paint layers stored on the project's
+    // `FinalComposition` node. Selecting one makes it the brush target;
+    // clears any 2D-paint-node selection so the two paths don't fight.
     ui.add_space(4.0);
+    ui.strong("Composition");
+    ui.separator();
+    for kind in [
+        crate::FCLayerKind::Heightmap,
+        crate::FCLayerKind::Color,
+        crate::FCLayerKind::Metalmap,
+        crate::FCLayerKind::Typemap,
+    ] {
+        let selected = app.paint.selected_fc_layer == Some(kind);
+        if ui.selectable_label(selected, kind.label()).clicked() {
+            app.paint.selected_fc_layer = Some(kind);
+            app.paint.selected_sculpt_layer = None;
+            // Default the brush tool to something sensible for the
+            // selected kind. Heightmap = Raise. Others (until their
+            // brush UX lands) inherit whatever was there.
+            if kind == crate::FCLayerKind::Heightmap
+                && matches!(app.paint.brush.tool, BrushTool::Pointer)
+            {
+                app.paint.brush.tool = BrushTool::Raise;
+            }
+        }
+    }
+
+    // --- 2D PAINT NODE LAYERS (PaintedHeightmap / PaintedTexture) ---
+    ui.add_space(8.0);
     ui.horizontal(|ui| {
-        ui.strong("Layers");
+        ui.strong("2D Paint Nodes");
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if ui.small_button("+").clicked() {
                 add_paint_layer(app);
@@ -53,6 +81,7 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     {
         app.paint.brush.tool = BrushTool::Pointer;
         app.paint.selected_sculpt_layer = None;
+        app.paint.selected_fc_layer = None;
     }
 
     if entries.is_empty() {
@@ -83,7 +112,41 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             .and_then(|id| app.graph.get_node(id))
             .map(|n| n.node_type.clone());
 
+        let fc_kind = app.paint.selected_fc_layer;
         let has_terrain = app.paint.heightmap.is_some();
+
+        // FC heightmap layer uses the same brush-tool surface as
+        // PaintedHeightmap (Raise / Lower / Smooth / Flatten). The
+        // other FC kinds (color / metalmap / typemap) don't have a
+        // brush UX yet -- their tool sections land in follow-up
+        // commits as part of Phase 3b / 3c / 3d.
+        if fc_kind == Some(crate::FCLayerKind::Heightmap) {
+            ui.horizontal_wrapped(|ui| {
+                let cur = app.paint.brush.tool;
+                for tool in [
+                    BrushTool::Raise,
+                    BrushTool::Lower,
+                    BrushTool::Smooth,
+                    BrushTool::Flatten,
+                ] {
+                    if ui.selectable_label(cur == tool, tool.label()).clicked() {
+                        app.paint.brush.tool = tool;
+                    }
+                }
+            });
+            if !has_terrain {
+                draw_no_terrain_hint(app, ui);
+            }
+            return;
+        }
+        if let Some(kind) = fc_kind {
+            ui.weak(format!(
+                "{} layer brush UX coming soon -- selecting the kind \
+                 won't write strokes yet.",
+                kind.label()
+            ));
+            return;
+        }
 
         match selected_kind {
             Some(bar_graph::NodeType::PaintedHeightmap) => {
@@ -288,6 +351,7 @@ fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayer
 
     if clicked {
         app.paint.selected_sculpt_layer = Some(node_id);
+        app.paint.selected_fc_layer = None;
         if app.paint.brush.tool == BrushTool::Pointer {
             app.paint.brush.tool = BrushTool::Raise;
             app.selected_feature_type = None;
