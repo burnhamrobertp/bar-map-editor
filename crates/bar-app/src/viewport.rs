@@ -1055,8 +1055,6 @@ fn handle_camera_input(
     if sculpt_active && response.drag_stopped_by(egui::PointerButton::Primary) {
         if let Some(kind) = app.paint.selected_fc_layer {
             app.end_brush_stroke_on_fc_layer(kind);
-        } else if let Some(node_id) = app.paint.selected_sculpt_layer {
-            app.end_brush_stroke_on_layer(node_id);
         } else {
             app.end_brush_stroke();
         }
@@ -1176,14 +1174,9 @@ fn apply_sculpt_dab_at_cursor(
     let stroke_starting = !response.dragged_by(egui::PointerButton::Primary)
         || response.drag_started_by(egui::PointerButton::Primary);
 
-    let selected_node: Option<(bar_graph::NodeId, bar_graph::NodeType)> = app
-        .paint
-        .selected_sculpt_layer
-        .and_then(|id| app.graph().get_node(id).map(|n| (id, n.node_type.clone())));
-
-    // The FC-layer selection takes priority over the 2D-paint-node
-    // selection when both are set (the Sculpt3D layer panel always
-    // sets one or the other, but be defensive).
+    // Sculpt3D drives paint exclusively into FinalComposition's per-kind
+    // layers. The 2D paint nodes (PaintedHeightmap / PaintedTexture) are
+    // edited via the 2D inspector, never from this viewport.
     let fc_selected = app.paint.selected_fc_layer;
 
     let changed = if let Some(kind) = fc_selected {
@@ -1196,20 +1189,6 @@ fn apply_sculpt_dab_at_cursor(
                 app.apply_value_brush_to_fc_layer(kind, p.hm_x, p.hm_y)
             }
         }
-    } else if let Some((node_id, ref node_type)) = selected_node {
-        let paintable = matches!(
-            node_type,
-            bar_graph::NodeType::PaintedHeightmap | bar_graph::NodeType::PaintedTexture
-        );
-        if paintable {
-            if matches!(node_type, bar_graph::NodeType::PaintedTexture) {
-                app.apply_color_brush_to_sculpt_layer(node_id, p.hm_x, p.hm_y)
-            } else {
-                app.apply_brush_to_sculpt_layer(node_id, p.hm_x, p.hm_y, stroke_starting)
-            }
-        } else {
-            false
-        }
     } else {
         false
     };
@@ -1218,19 +1197,14 @@ fn apply_sculpt_dab_at_cursor(
         return;
     }
 
-    // GPU upload dispatch: PaintedTexture nodes and FC color layer
-    // updates go through the albedo path (mirror in
-    // `paint.color_buffer`); everything else (PaintedHeightmap, FC
-    // heightmap layer) goes through the heightmap region upload. FC
-    // metalmap / typemap layers don't have an instant-feedback path
-    // yet -- their changes only become visible on next eval, which
-    // is acceptable since those overlays don't render in the
-    // sculpt3d view anyway.
-    let is_color = matches!(fc_selected, Some(bar_gui::FCLayerKind::Color))
-        || selected_node
-            .as_ref()
-            .map(|(_, nt)| matches!(nt, bar_graph::NodeType::PaintedTexture))
-            .unwrap_or(false);
+    // GPU upload dispatch: FC color layer updates go through the
+    // albedo path (mirror in `paint.color_buffer`); FC heightmap
+    // layer goes through the heightmap region upload. FC metalmap /
+    // typemap layers don't have an instant-feedback path yet --
+    // their changes only become visible on next eval, which is
+    // acceptable since those overlays don't render in the sculpt3d
+    // view anyway.
+    let is_color = matches!(fc_selected, Some(bar_gui::FCLayerKind::Color));
     let is_value_only = matches!(
         fc_selected,
         Some(bar_gui::FCLayerKind::Metalmap | bar_gui::FCLayerKind::Typemap)

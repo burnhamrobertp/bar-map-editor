@@ -12,7 +12,6 @@ use eframe::egui;
 use eframe::egui::Color32;
 
 use crate::app::{BarEditorApp, BrushTool};
-use crate::panels::canvas::sculpt_layers::{compute_sculpt_layers, SculptLayerEntry};
 
 /// Draw the Sculpt3D layout.
 pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -26,50 +25,11 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
 }
 
 fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
-    let entries = compute_sculpt_layers(&app.graph);
-
-    // --- FINAL COMPOSITION LAYERS (four pinned slots, one per kind) ---
-    // These are the post-graph paint layers stored on the project's
-    // `FinalComposition` node. Selecting one makes it the brush target;
-    // clears any 2D-paint-node selection so the two paths don't fight.
-    ui.add_space(4.0);
-    ui.strong("Composition");
-    ui.separator();
-    for kind in [
-        crate::FCLayerKind::Heightmap,
-        crate::FCLayerKind::Color,
-        crate::FCLayerKind::Metalmap,
-        crate::FCLayerKind::Typemap,
-    ] {
-        let selected = app.paint.selected_fc_layer == Some(kind);
-        if ui.selectable_label(selected, kind.label()).clicked() {
-            app.paint.selected_fc_layer = Some(kind);
-            app.paint.selected_sculpt_layer = None;
-            // Default the brush tool to something sensible for the
-            // selected kind. Heightmap = Raise. Others (until their
-            // brush UX lands) inherit whatever was there.
-            if kind == crate::FCLayerKind::Heightmap
-                && matches!(app.paint.brush.tool, BrushTool::Pointer)
-            {
-                app.paint.brush.tool = BrushTool::Raise;
-            }
-        }
-    }
-
-    // --- 2D PAINT NODE LAYERS (PaintedHeightmap / PaintedTexture) ---
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.strong("2D Paint Nodes");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("+").clicked() {
-                add_paint_layer(app);
-            }
-        });
-    });
-    ui.separator();
-
-    // Features pseudo-layer -- always present at the top of the list.
+    // Features pseudo-layer -- always present at the top of the
+    // sculpt-side list. Selecting it switches the brush to Pointer
+    // (no sculpting) and clears any FC layer selection.
     let features_selected = app.paint.brush.tool == BrushTool::Pointer;
+    ui.add_space(4.0);
     if ui
         .horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
@@ -84,16 +44,42 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         app.paint.selected_fc_layer = None;
     }
 
-    if entries.is_empty() {
-        ui.weak("Add a Bundler node to enable sculpting.");
-    } else {
-        egui::ScrollArea::vertical()
-            .max_height(300.0)
-            .show(ui, |ui| {
-                for entry in &entries {
-                    draw_layer_row(app, ui, entry);
-                }
-            });
+    // --- COMPOSITION LAYERS (Final Composition paint stacks) ---
+    // These are the post-graph paint layers stored on the project's
+    // `FinalComposition` node. The 2D paint nodes (PaintedHeightmap /
+    // PaintedTexture) live IN the node graph and are edited from the
+    // 2D inspector -- they are intentionally NOT shown here so
+    // Sculpt3D is unambiguously "paint into FC".
+    ui.add_space(8.0);
+    ui.strong("Layers");
+    ui.separator();
+    for kind in [
+        crate::FCLayerKind::Heightmap,
+        crate::FCLayerKind::Color,
+        crate::FCLayerKind::Metalmap,
+        crate::FCLayerKind::Typemap,
+    ] {
+        let selected = app.paint.selected_fc_layer == Some(kind);
+        if ui.selectable_label(selected, kind.label()).clicked() {
+            app.paint.selected_fc_layer = Some(kind);
+            app.paint.selected_sculpt_layer = None;
+            // Default the brush tool to something sensible for the
+            // selected kind. Heightmap defaults to Raise. Other kinds
+            // inherit whatever brush tool was active; their tool list
+            // is rendered below as a single Paint operation.
+            if kind == crate::FCLayerKind::Heightmap
+                && matches!(app.paint.brush.tool, BrushTool::Pointer)
+            {
+                app.paint.brush.tool = BrushTool::Raise;
+            }
+            if kind != crate::FCLayerKind::Heightmap
+                && matches!(app.paint.brush.tool, BrushTool::Pointer)
+            {
+                // Non-heightmap kinds use any non-Pointer brush so the
+                // Tools section renders.
+                app.paint.brush.tool = BrushTool::Raise;
+            }
+        }
     }
 
     ui.add_space(8.0);
@@ -106,88 +92,11 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ui.strong("Tools");
         ui.add_space(4.0);
 
-        let selected_kind = app
-            .paint
-            .selected_sculpt_layer
-            .and_then(|id| app.graph.get_node(id))
-            .map(|n| n.node_type.clone());
-
         let fc_kind = app.paint.selected_fc_layer;
         let has_terrain = app.paint.heightmap.is_some();
 
-        // FC heightmap layer uses the same brush-tool surface as
-        // PaintedHeightmap (Raise / Lower / Smooth / Flatten). The
-        // other FC kinds (color / metalmap / typemap) don't have a
-        // brush UX yet -- their tool sections land in follow-up
-        // commits as part of Phase 3b / 3c / 3d.
-        if fc_kind == Some(crate::FCLayerKind::Heightmap) {
-            ui.horizontal_wrapped(|ui| {
-                let cur = app.paint.brush.tool;
-                for tool in [
-                    BrushTool::Raise,
-                    BrushTool::Lower,
-                    BrushTool::Smooth,
-                    BrushTool::Flatten,
-                ] {
-                    if ui.selectable_label(cur == tool, tool.label()).clicked() {
-                        app.paint.brush.tool = tool;
-                    }
-                }
-            });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
-            }
-            return;
-        }
-        if fc_kind == Some(crate::FCLayerKind::Color) {
-            // FC color layer: pick a colour, then click-and-drag in the
-            // viewport. Stamped pixels overwrite the upstream colour;
-            // unpainted pixels pass it through. Brush radius slider
-            // shared with other kinds; tools list is irrelevant
-            // (Paint is the only operation).
-            ui.horizontal(|ui| {
-                ui.label("Colour");
-                let [r, g, b] = app.paint.brush.color_rgb;
-                let mut c = egui::Color32::from_rgb(r, g, b);
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
-                }
-            });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
-            }
-            return;
-        }
-        if matches!(
-            fc_kind,
-            Some(crate::FCLayerKind::Metalmap | crate::FCLayerKind::Typemap)
-        ) {
-            // FC metalmap / typemap: stamp a quantised value at the
-            // painted pixels. Use a slider for the value in [0, 1];
-            // typemap users currently get the same slider (a proper
-            // terrain-type-ID picker is a UX follow-up). Strokes are
-            // committed on flush as a sentinel-encoded U8 layer so
-            // the FC composite knows which pixels were painted.
-            let label = if fc_kind == Some(crate::FCLayerKind::Metalmap) {
-                "Metal density"
-            } else {
-                "Type ID (0..1)"
-            };
-            ui.horizontal(|ui| {
-                ui.label(label);
-                ui.add(egui::Slider::new(
-                    &mut app.paint.brush.paint_value,
-                    0.0..=1.0,
-                ));
-            });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
-            }
-            return;
-        }
-
-        match selected_kind {
-            Some(bar_graph::NodeType::PaintedHeightmap) => {
+        match fc_kind {
+            Some(crate::FCLayerKind::Heightmap) => {
                 ui.horizontal_wrapped(|ui| {
                     let cur = app.paint.brush.tool;
                     for tool in [
@@ -201,11 +110,11 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                         }
                     }
                 });
-                if !has_terrain {
-                    draw_no_terrain_hint(app, ui);
-                }
             }
-            Some(bar_graph::NodeType::PaintedTexture) => {
+            Some(crate::FCLayerKind::Color) => {
+                // Color layer: stamp the picked colour at brush
+                // radius. No tool variants -- the only operation is
+                // "paint this colour".
                 ui.horizontal(|ui| {
                     ui.label("Colour");
                     let [r, g, b] = app.paint.brush.color_rgb;
@@ -214,13 +123,30 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                         app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
                     }
                 });
-                if !has_terrain {
-                    draw_no_terrain_hint(app, ui);
-                }
             }
-            _ => {
-                ui.weak("Select a paintable layer.");
+            Some(kind @ (crate::FCLayerKind::Metalmap | crate::FCLayerKind::Typemap)) => {
+                // Value-stamp kinds: pick a value in [0, 1], stamp
+                // touched pixels with it. (A proper terrain-type-ID
+                // picker for typemap is a UX follow-up.)
+                let label = if kind == crate::FCLayerKind::Metalmap {
+                    "Metal density"
+                } else {
+                    "Type ID (0..1)"
+                };
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    ui.add(egui::Slider::new(
+                        &mut app.paint.brush.paint_value,
+                        0.0..=1.0,
+                    ));
+                });
             }
+            None => {
+                ui.weak("Select a Composition layer to paint.");
+            }
+        }
+        if fc_kind.is_some() && !has_terrain {
+            draw_no_terrain_hint(app, ui);
         }
 
         ui.add_space(8.0);
@@ -357,65 +283,6 @@ fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         });
 }
 
-fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayerEntry) {
-    let indent_px = entry.indent as f32 * 16.0;
-    let is_selected =
-        !entry.is_compositor && app.paint.selected_sculpt_layer == Some(entry.node_id);
-    let node_id = entry.node_id;
-    let is_compositor = entry.is_compositor;
-    let is_paintable = entry.is_paintable;
-    let label = entry.label.clone();
-    let channel = entry.channel.clone();
-
-    let clicked = ui
-        .horizontal(|ui| {
-            if indent_px > 0.0 {
-                ui.add_space(indent_px);
-            }
-            paint_channel_dot(ui, &channel);
-            if is_compositor {
-                ui.weak(format!("> {}", label));
-                false
-            } else {
-                let label_text = if is_paintable {
-                    label
-                } else {
-                    format!("{} [locked]", label)
-                };
-                ui.selectable_label(is_selected, &label_text).clicked()
-            }
-        })
-        .inner;
-
-    if clicked {
-        app.paint.selected_sculpt_layer = Some(node_id);
-        app.paint.selected_fc_layer = None;
-        if app.paint.brush.tool == BrushTool::Pointer {
-            app.paint.brush.tool = BrushTool::Raise;
-            app.selected_feature_type = None;
-        }
-    }
-}
-
-fn paint_channel_dot(ui: &mut egui::Ui, channel: &str) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-    ui.painter()
-        .circle_filled(rect.center(), 4.0, channel_color(channel));
-}
-
-fn channel_color(channel: &str) -> Color32 {
-    match channel {
-        "heightmap" => Color32::from_rgb(100, 200, 100),
-        "texture" => Color32::from_rgb(180, 100, 220),
-        "metalmap" => Color32::from_rgb(220, 120, 60),
-        "typemap" => Color32::from_rgb(80, 140, 210),
-        "grassmap" => Color32::from_rgb(80, 195, 140),
-        "specular" => Color32::from_rgb(210, 195, 70),
-        "normalmap" => Color32::from_rgb(130, 90, 210),
-        _ => Color32::from_rgb(160, 160, 160),
-    }
-}
-
 fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.weak("No terrain loaded --");
@@ -423,31 +290,4 @@ fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             app.preview.run_requested = true;
         }
     });
-}
-
-/// Create a disconnected PaintedHeightmap node and notify the user to wire it.
-fn add_paint_layer(app: &mut BarEditorApp) {
-    use crate::state::NodeVisual;
-    use bar_graph::{Node, NodeId, NodeType};
-
-    let label = app.next_label_for("Painted Layer");
-    let node = Node::new(NodeId(0), NodeType::PaintedHeightmap, &label);
-    let id = app.graph.add_node(node);
-
-    // Place it near the top-left of the visible canvas area.
-    let pos = app.canvas.offset + egui::vec2(80.0, 80.0);
-    app.visuals.node_visuals.insert(
-        id,
-        NodeVisual {
-            position: egui::pos2(pos.x, pos.y),
-            size: egui::vec2(150.0, 80.0),
-        },
-    );
-    app.push_undo("Add paint layer");
-    app.paint.selected_sculpt_layer = Some(id);
-    app.mark_dirty();
-    app.dialog.toast = Some((
-        format!("Added '{}' -- wire it into the canvas.", label),
-        std::time::Instant::now(),
-    ));
 }

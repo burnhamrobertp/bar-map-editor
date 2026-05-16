@@ -259,29 +259,20 @@ impl LayoutManager {
             );
         }
 
-        // Clear the visible preview when the cache key has moved past
-        // the last result we showed: the user has edited the graph (or
-        // any other input that bumps the key) and the new eval hasn't
-        // landed yet. Without this, the stale preview keeps rendering
-        // and the user can't tell whether their edit (e.g. disconnecting
-        // a wire) has taken effect.
+        // (Previously this branch cleared `current_frame` and the
+        // albedo when the cache key moved past the last result we
+        // showed -- the intent was to make graph edits "visibly take
+        // effect" while the new eval ran. In practice the only thing
+        // it accomplished was to blink the viewport into a spinner
+        // for ~100ms on every undo / redo / param tweak.
         //
-        // Paint changes intentionally don't blank `paint.heightmap` --
-        // `restore_snapshot` keeps the post-stroke bytes visible while
-        // the re-eval runs, so undo/redo morphs the terrain instead of
-        // flashing through a spinner state. We still null `current_frame`
-        // here so the renderer rebuilds the frame from the new eval,
-        // but the heightmap state remains.
-        let stale =
-            current_key != slot.eval.last_low_res_key && current_key != slot.eval.last_high_res_key;
-        if stale && slot.core.current_frame.is_some() {
-            slot.core.current_frame = None;
-            if let Some(ref gpu) = gpu_context {
-                if let Some(ref mut renderer) = slot.core.terrain_renderer {
-                    renderer.clear_albedo(&gpu.device, &gpu.queue);
-                }
-            }
-        }
+        // The eval still spawns below for any genuine key change, so
+        // the new heightmap / texture lands in the renderer the
+        // moment it's ready -- the user sees the previous frame
+        // until then, which is a much less jarring transition than
+        // a blank "Loading" state. If a future graph edit fails to
+        // re-fire eval, that's a bug in the eval spawn path, not
+        // something to mask by clearing the viewport here.)
 
         // Spawn eval passes as needed.
         if !app.graph().nodes().is_empty() {
