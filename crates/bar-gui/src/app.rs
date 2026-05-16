@@ -755,35 +755,6 @@ impl BarEditorApp {
         h.finish()
     }
 
-    /// Same as `preview_cache_key` but excluding the paint-asset
-    /// revision. The layout manager uses this to distinguish "graph or
-    /// map dims changed" (clear the visible preview because the user's
-    /// edit invalidates the current frame's topology) from "only the
-    /// painted asset content changed" (don't clear -- the existing
-    /// frame is a close-enough approximation while the eval re-runs;
-    /// clearing would produce a jarring blink on undo / redo).
-    pub fn preview_cache_key_graph_only(&self) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        let bundler_id = self
-            .graph
-            .nodes()
-            .iter()
-            .find(|(_, n)| n.node_type == bar_graph::NodeType::Bundler)
-            .map(|(id, _)| *id);
-        if let Some(bn) = bundler_id {
-            self.graph.upstream_content_hash(bn).hash(&mut h);
-        } else {
-            self.graph.revision().hash(&mut h);
-        }
-        self.map.width.hash(&mut h);
-        self.map.height.hash(&mut h);
-        self.map.min_height.to_bits().hash(&mut h);
-        self.map.max_height.to_bits().hash(&mut h);
-        h.finish()
-    }
-
     /// Build a `Recipe` snapshot with the live identity / dimensions /
     /// `MapSettings` the user has been editing. Used by `bar-app` when it
     /// fires off an export thread — the bundler reads identity from

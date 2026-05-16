@@ -206,11 +206,15 @@ impl BarEditorApp {
             touched_any = true;
         }
         if touched_any {
-            self.paint.heightmap = None;
-            self.paint.color_buffer = None;
-            // Same reason as in `flush_live_paint`: the asset bytes
-            // changed but no graph param did, so bump the revision to
-            // force `preview_cache_key` to move and re-fire the eval.
+            // Deliberately do NOT clear `paint.heightmap` /
+            // `paint.color_buffer` here. They still hold the
+            // post-stroke painted bytes; that's only a few frames
+            // out-of-date until the eval triggered by
+            // `asset_revision` runs and overwrites them with the
+            // restored pre-stroke bytes. Showing the slightly-stale
+            // post-stroke state for ~50-100ms is dramatically less
+            // jarring than blanking the sculpt view to the
+            // "no terrain" spinner while waiting.
             self.paint.asset_revision = self.paint.asset_revision.wrapping_add(1);
         }
     }

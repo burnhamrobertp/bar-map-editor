@@ -259,20 +259,23 @@ impl LayoutManager {
             );
         }
 
-        // Clear the visible preview only when the GRAPH-level state has
-        // moved past the last result we showed (a wire disconnected, a
-        // node param edited, map dims changed). The full cache key also
-        // includes the paint-asset revision (bumped by undo/redo of
-        // brush strokes); we DON'T want to clear on those because the
-        // existing frame is a close approximation of what the re-eval
-        // will produce, and clearing it blinks the viewport black for
-        // ~500ms while the eval thread runs. Keeping it visible
-        // produces a much less jarring undo / redo experience.
-        let graph_key = app.preview_cache_key_graph_only();
-        let stale = graph_key != slot.eval.last_graph_key;
+        // Clear the visible preview when the cache key has moved past
+        // the last result we showed: the user has edited the graph (or
+        // any other input that bumps the key) and the new eval hasn't
+        // landed yet. Without this, the stale preview keeps rendering
+        // and the user can't tell whether their edit (e.g. disconnecting
+        // a wire) has taken effect.
+        //
+        // Paint changes intentionally don't blank `paint.heightmap` --
+        // `restore_snapshot` keeps the post-stroke bytes visible while
+        // the re-eval runs, so undo/redo morphs the terrain instead of
+        // flashing through a spinner state. We still null `current_frame`
+        // here so the renderer rebuilds the frame from the new eval,
+        // but the heightmap state remains.
+        let stale =
+            current_key != slot.eval.last_low_res_key && current_key != slot.eval.last_high_res_key;
         if stale && slot.core.current_frame.is_some() {
             slot.core.current_frame = None;
-            app.paint.heightmap = None;
             if let Some(ref gpu) = gpu_context {
                 if let Some(ref mut renderer) = slot.core.terrain_renderer {
                     renderer.clear_albedo(&gpu.device, &gpu.queue);
@@ -699,7 +702,6 @@ fn apply_preview_result(
     } else {
         eval.last_high_res_key = result.cache_key;
     }
-    eval.last_graph_key = result.graph_key;
 }
 
 fn spawn_eval_passes(
@@ -709,7 +711,6 @@ fn spawn_eval_passes(
     executor: &Arc<dyn NodeExecutor + Send + Sync>,
     ctx: &egui::Context,
 ) {
-    let graph_key = app.preview_cache_key_graph_only();
     let (w, h) = app.map.dimensions();
     let (min_h, max_h) = app.map.height_range();
 
@@ -791,7 +792,6 @@ fn spawn_eval_passes(
                 heightmap,
                 texture,
                 cache_key: current_key,
-                graph_key,
                 session_id,
                 height_scale,
                 height_range_elmos,
@@ -836,7 +836,6 @@ fn spawn_eval_passes(
                 heightmap,
                 texture,
                 cache_key: current_key,
-                graph_key,
                 session_id,
                 height_scale,
                 height_range_elmos,
