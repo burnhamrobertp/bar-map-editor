@@ -1227,7 +1227,10 @@ impl BarEditorApp {
                     ui.close_menu();
                 }
                 ui.separator();
-                if ui.button("Delete node").clicked() {
+                // FinalComposition is the project's singleton terminal
+                // node and can't be deleted. Hide the entry entirely
+                // for it (right-click → no Delete option).
+                if self.graph.can_delete_node(this_id) && ui.button("Delete node").clicked() {
                     if !multi_active {
                         self.select_only_node(this_id);
                     }

@@ -716,8 +716,18 @@ impl BarEditorApp {
                         self.selection.node = members.first().copied();
                         // Delete nodes inline (don't go through
                         // delete_selected_node, which would push another
-                        // undo and split the action).
-                        let to_delete: Vec<NodeId> = self.selection.nodes.iter().copied().collect();
+                        // undo and split the action). Skip
+                        // FinalComposition -- it's a singleton terminal
+                        // and `remove_node` would refuse anyway, but
+                        // doing the filter here keeps the visuals /
+                        // group-membership cleanup consistent.
+                        let to_delete: Vec<NodeId> = self
+                            .selection
+                            .nodes
+                            .iter()
+                            .copied()
+                            .filter(|id| self.graph.can_delete_node(*id))
+                            .collect();
                         for node_id in &to_delete {
                             let _ = self.graph.remove_node(*node_id);
                             self.visuals.node_visuals.remove(node_id);

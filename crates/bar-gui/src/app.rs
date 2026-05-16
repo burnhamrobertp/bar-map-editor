@@ -650,6 +650,9 @@ impl BarEditorApp {
             self.selection.group = None;
         }
         for nid in &members {
+            if !self.graph.can_delete_node(*nid) {
+                continue;
+            }
             let _ = self.graph.remove_node(*nid);
             self.visuals.node_visuals.remove(nid);
             self.remove_node_from_group(*nid);
@@ -661,14 +664,23 @@ impl BarEditorApp {
     pub(crate) fn delete_selected_node(&mut self) {
         // Snapshot the IDs to delete: the primary plus everything else
         // in the multi-selection set. (The set always includes the
-        // primary by invariant.)
-        let to_delete: Vec<NodeId> = if !self.selection.nodes.is_empty() {
+        // primary by invariant.) FinalComposition is filtered out
+        // here -- it's the singleton terminal node and deleting it
+        // would orphan everything downstream of the eval graph.
+        let raw: Vec<NodeId> = if !self.selection.nodes.is_empty() {
             self.selection.nodes.iter().copied().collect()
         } else if let Some(id) = self.selection.node {
             vec![id]
         } else {
             return;
         };
+        let to_delete: Vec<NodeId> = raw
+            .into_iter()
+            .filter(|id| self.graph.can_delete_node(*id))
+            .collect();
+        if to_delete.is_empty() {
+            return;
+        }
         self.push_undo("Delete node");
         for node_id in &to_delete {
             let _ = self.graph.remove_node(*node_id);
