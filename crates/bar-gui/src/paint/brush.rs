@@ -433,7 +433,29 @@ impl BarEditorApp {
         let Some(fc_node_id) = find_final_composition_node(&self.graph) else {
             return;
         };
-        // Resolve target path (mint asset id + path on first stroke).
+        // Snapshot BEFORE `ensure_fc_layer_asset` mints anything.
+        //
+        // - First stroke on a fresh layer: at this point FC's
+        //   `<kind>_layer_asset_id` is empty in graph params. The
+        //   snapshot captures that "no layer" graph state; on undo,
+        //   FC reverts to empty asset_id, the composite skips the
+        //   layer, and the eval result equals the upstream procedural
+        //   input -- which IS the pre-stroke state. No file bytes need
+        //   to be written back (and none CAN be, since no file
+        //   existed at snapshot time).
+        // - Subsequent strokes: the asset file already exists at the
+        //   path FC knows about. We capture its pre-stroke bytes so
+        //   undo can write them back. Graph state is unchanged across
+        //   the stroke since `ensure_fc_layer_asset` is a no-op when
+        //   asset_id is already set.
+        let pre_mint_path = fc_layer_asset_path(&self.graph, fc_node_id, kind);
+        let paths_to_capture: Vec<std::path::PathBuf> = pre_mint_path
+            .as_ref()
+            .map(|p| vec![std::path::PathBuf::from(p)])
+            .unwrap_or_default();
+        self.push_undo_with_painted("Paint FC layer", paths_to_capture);
+        // Now mint the asset_id / asset_path on first stroke, or
+        // return the existing path on subsequent strokes.
         let asset_path = match self.ensure_fc_layer_asset(fc_node_id, kind) {
             Some(p) => p,
             None => {
@@ -444,9 +466,6 @@ impl BarEditorApp {
                 return;
             }
         };
-        // Snapshot the pre-stroke bytes for undo.
-        let path_buf = std::path::PathBuf::from(&asset_path);
-        self.push_undo_with_painted("Paint FC layer", std::iter::once(path_buf));
         // Per-kind on-disk encoding:
         //   Heightmap         -> GrayscaleU8 deltas (128 = neutral).
         //   Color             -> RgbaU8 (alpha=0 is the untouched mask).
