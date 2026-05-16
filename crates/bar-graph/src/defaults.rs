@@ -238,11 +238,38 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("snow_specular", ParamValue::Float(0.7)),
             ("snow_height", ParamValue::Float(0.85)),
         ],
-        // FinalComposition has no graph-visible params today -- its
-        // paint-layer state lives outside the params map (the project
-        // owns it, edited via Sculpt3D, persisted in the recipe under
-        // its own key, NOT as a node param).
-        NodeType::FinalComposition => vec![],
+        // FinalComposition stores its paint-layer state as a pair of
+        // (asset_id, asset_path) params per paintable kind. asset_id is
+        // a UUID stamped on layer creation and persisted in the recipe;
+        // asset_path is the absolute path on disk, injected at load
+        // time by `resolve_relative_paths` and never persisted. An
+        // empty asset_id means "no layer" -- FC's executor treats the
+        // corresponding input as pure pass-through. The four paintable
+        // kinds are heightmap, color (texture), metalmap, and typemap;
+        // the rest (normalmap, grassmap, specular, files) are always
+        // pass-through and have no layer storage.
+        NodeType::FinalComposition => vec![
+            (
+                "heightmap_layer_asset_id",
+                ParamValue::String(String::new()),
+            ),
+            (
+                "heightmap_layer_asset_path",
+                ParamValue::String(String::new()),
+            ),
+            ("color_layer_asset_id", ParamValue::String(String::new())),
+            ("color_layer_asset_path", ParamValue::String(String::new())),
+            ("metalmap_layer_asset_id", ParamValue::String(String::new())),
+            (
+                "metalmap_layer_asset_path",
+                ParamValue::String(String::new()),
+            ),
+            ("typemap_layer_asset_id", ParamValue::String(String::new())),
+            (
+                "typemap_layer_asset_path",
+                ParamValue::String(String::new()),
+            ),
+        ],
         NodeType::Bundler => vec![
             // bar-editor only ever exports spring-smf packaged as
             // 7z (the BAR map format). Those format choices used to

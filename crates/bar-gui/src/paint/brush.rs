@@ -251,7 +251,7 @@ fn read_height_asset(asset_path: &str) -> Option<bar_data::Heightmap> {
             let f32_data: Vec<f32> = data.iter().map(|&b| (b as f32) / 255.0).collect();
             bar_data::Heightmap::frbar_data(w, h, f32_data).ok()
         }
-        bar_project::AssetKind::RgbU8 => None,
+        bar_project::AssetKind::RgbU8 | bar_project::AssetKind::RgbaU8 => None,
     }
 }
 
@@ -288,8 +288,10 @@ fn write_height_asset(
             .iter()
             .map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)
             .collect(),
-        bar_project::AssetKind::RgbU8 => {
-            return Err("write_height_asset: RgbU8 not supported (use write_color_asset)".into());
+        bar_project::AssetKind::RgbU8 | bar_project::AssetKind::RgbaU8 => {
+            return Err(
+                "write_height_asset: Rgb / Rgba kinds not supported (use write_color_asset)".into(),
+            );
         }
     };
     let header = bar_project::AssetHeader {

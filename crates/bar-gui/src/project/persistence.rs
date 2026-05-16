@@ -93,6 +93,29 @@ impl BarEditorApp {
                         }
                     }
                 }
+                NodeType::FinalComposition => {
+                    // Paint layers live under `<project>/final_composition/`,
+                    // NOT `assets/`, so the on-disk story matches the
+                    // logical ownership (paint state owned by Sculpt3D
+                    // via FC, separate from procedural graph assets).
+                    let fc_dir = project_dir.join("final_composition");
+                    for kind in ["heightmap", "color", "metalmap", "typemap"] {
+                        let id_key = format!("{kind}_layer_asset_id");
+                        let path_key = format!("{kind}_layer_asset_path");
+                        if let Some(bar_graph::ParamValue::String(id)) =
+                            node.params.get(&id_key).cloned()
+                        {
+                            if !id.is_empty() {
+                                let abs = fc_dir
+                                    .join(format!("{id}.bin"))
+                                    .to_string_lossy()
+                                    .into_owned();
+                                node.params
+                                    .insert(path_key, bar_graph::ParamValue::String(abs));
+                            }
+                        }
+                    }
+                }
                 NodeType::ImportedTexture => {
                     if let Some(bar_graph::ParamValue::String(id)) =
                         node.params.get("asset_id").cloned()
@@ -140,6 +163,7 @@ impl BarEditorApp {
     ) -> Result<(), String> {
         let assets_dir = project_dir.join("assets");
         let passthrough_dir = project_dir.join("passthrough");
+        let fc_dir = project_dir.join("final_composition");
 
         for (_, node) in self.graph.nodes_mut() {
             match node.node_type {
@@ -151,6 +175,20 @@ impl BarEditorApp {
                 }
                 NodeType::PaintedHeightmap | NodeType::PaintedTexture => {
                     pack_painted_asset(&mut node.params, project_dir, &assets_dir)?;
+                }
+                NodeType::FinalComposition => {
+                    // FC paint-layer assets live under
+                    // `<project>/final_composition/`. Pack each kind's
+                    // (asset_id, asset_path) pair the same way as the
+                    // other binary assets -- copy in from wherever the
+                    // session stamped it (temp dir, prior project dir)
+                    // and rewrite the asset_path to point at the
+                    // packed location.
+                    for kind in ["heightmap", "color", "metalmap", "typemap"] {
+                        let id_param = format!("{kind}_layer_asset_id");
+                        let path_param = format!("{kind}_layer_asset_path");
+                        pack_raw_asset(&mut node.params, &fc_dir, &id_param, &path_param, "bin")?;
+                    }
                 }
                 NodeType::ImportedTexture => {
                     pack_raw_asset(

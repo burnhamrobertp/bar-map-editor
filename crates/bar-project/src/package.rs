@@ -52,6 +52,11 @@ pub enum AssetKind {
     GrayscaleU8 = 0x01,
     GrayscaleF32 = 0x02,
     RgbU8 = 0x03,
+    /// 4-byte RGBA. The alpha channel doubles as a paint mask: alpha=0
+    /// means "this pixel was never painted" (the FC composite passes
+    /// the underlying input through) and alpha=255 means "fully
+    /// painted" (overwrite). Used by `FinalComposition`'s color layer.
+    RgbaU8 = 0x04,
 }
 
 impl AssetKind {
@@ -60,6 +65,7 @@ impl AssetKind {
             0x01 => Some(Self::GrayscaleU8),
             0x02 => Some(Self::GrayscaleF32),
             0x03 => Some(Self::RgbU8),
+            0x04 => Some(Self::RgbaU8),
             _ => None,
         }
     }
@@ -70,6 +76,7 @@ impl AssetKind {
             Self::GrayscaleU8 => 1,
             Self::GrayscaleF32 => 4,
             Self::RgbU8 => 3,
+            Self::RgbaU8 => 4,
         }
     }
 }
