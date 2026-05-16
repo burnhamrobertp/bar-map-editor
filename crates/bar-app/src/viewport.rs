@@ -19,6 +19,10 @@ pub struct PreviewResult {
     pub heightmap: Option<bar_data::Heightmap>,
     pub texture: Option<bar_data::ColorBuffer>,
     pub cache_key: u64,
+    /// Graph-only fingerprint at eval-spawn time (excludes paint-asset
+    /// revision). Used by the layout manager's stale check so that
+    /// paint-only changes don't blink the viewport.
+    pub graph_key: u64,
     pub session_id: u64,
     pub height_scale: f32,
     /// Map's vertical elmo span (max_h - min_h). Needed by the renderer so
@@ -550,6 +554,13 @@ pub struct EvalState {
     pub preview_rx: mpsc::Receiver<PreviewResult>,
     pub last_low_res_key: u64,
     pub last_high_res_key: u64,
+    /// Graph-only fingerprint of the last completed eval (excludes
+    /// paint-asset revision). Used by the stale check to keep the
+    /// previous frame visible while a paint-only re-eval runs in the
+    /// background -- a graph change still clears immediately so the
+    /// user can see their edit took effect, but an undo or redo of a
+    /// paint stroke does NOT blink the viewport.
+    pub last_graph_key: u64,
     pub low_res_pending: bool,
     pub high_res_pending: bool,
     pub low_res_completed_at: Option<Instant>,
@@ -573,6 +584,7 @@ impl EvalState {
             preview_rx,
             last_low_res_key: u64::MAX,
             last_high_res_key: u64::MAX,
+            last_graph_key: u64::MAX,
             low_res_pending: false,
             high_res_pending: false,
             low_res_completed_at: None,
