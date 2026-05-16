@@ -86,7 +86,7 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         let has_terrain = app.paint.heightmap.is_some();
 
         match selected_kind {
-            Some(bar_graph::NodeType::PaintedHeightmap) | Some(bar_graph::NodeType::Sculpt) => {
+            Some(bar_graph::NodeType::PaintedHeightmap) => {
                 ui.horizontal_wrapped(|ui| {
                     let cur = app.paint.brush.tool;
                     for tool in [

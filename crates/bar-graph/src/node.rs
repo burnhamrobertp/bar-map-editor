@@ -72,11 +72,6 @@ pub enum NodeType {
 
     /// A 2D sculpt layer. Takes a heightmap input, applies a sequence of
     /// recorded brush dabs (stored as JSON in `params["dabs"]`), and
-    /// outputs the modified heightmap. Works for any greyscale layer
-    /// (terrain height, metalmap, typemap) — wire it wherever you need
-    /// hand-authored edits mid-pipeline.
-    Sculpt,
-
     // Mask Operations
     MaskThreshold,
     MaskInvert,
@@ -162,6 +157,14 @@ pub enum NodeType {
     MaskSelect,
 
     // Bundler/Packaging
+    /// Final composition step before bundling. Mandatory; one per
+    /// project. Accepts every kind the Bundler accepts and forwards
+    /// each, optionally compositing a per-kind paint layer (heightmap
+    /// delta, color RGBA overlay, metalmap / typemap sparse overlay)
+    /// authored by the Sculpt3D viewport on top of the procedural
+    /// input. Layers live in `.barproj/final_composition/`; the node's
+    /// internals are edited via Sculpt3D, not the inspector.
+    FinalComposition,
     /// Packages graph outputs into a deliverable archive.
     Bundler,
     /// External file reference included in a bundle without modification.
@@ -498,14 +501,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Specular", PortKind::Heightmap)],
         ),
 
-        NodeType::Sculpt => (
-            vec![
-                Port::new("input", "Input", PortKind::Heightmap),
-                Port::new("mask", "Mask", PortKind::Mask),
-            ],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
-
         // Mask: generates a mask output
         NodeType::Mask => (
             vec![
@@ -672,6 +667,34 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         ),
 
         // --- Bundler/Packaging ---
+        // FinalComposition mirrors Bundler's input set exactly. Each
+        // input has a same-named, same-kind output; the Bundler is
+        // wired strictly to FC's outputs (1-to-1), so the eval surface
+        // exposed to the bundler is unchanged. Paintable kinds
+        // (heightmap, texture, metalmap, typemap) gain compositing in
+        // Phase 2; until then FC is a pure pass-through.
+        NodeType::FinalComposition => (
+            vec![
+                Port::new("heightmap", "Heightmap", PortKind::Heightmap),
+                Port::new("texture", "Texture", PortKind::Color),
+                Port::new("normalmap", "Normal Map", PortKind::Color),
+                Port::new("metalmap", "Metal Map", PortKind::Heightmap),
+                Port::new("typemap", "Type Map", PortKind::Heightmap),
+                Port::new("grassmap", "Grass Map", PortKind::Heightmap),
+                Port::new("specular", "Specular", PortKind::Heightmap),
+                Port::new_many("files", "Files", PortKind::FileList),
+            ],
+            vec![
+                Port::new("heightmap", "Heightmap", PortKind::Heightmap),
+                Port::new("texture", "Texture", PortKind::Color),
+                Port::new("normalmap", "Normal Map", PortKind::Color),
+                Port::new("metalmap", "Metal Map", PortKind::Heightmap),
+                Port::new("typemap", "Type Map", PortKind::Heightmap),
+                Port::new("grassmap", "Grass Map", PortKind::Heightmap),
+                Port::new("specular", "Specular", PortKind::Heightmap),
+                Port::new_many("files", "Files", PortKind::FileList),
+            ],
+        ),
         NodeType::Bundler => (
             vec![
                 Port::new("heightmap", "Heightmap", PortKind::Heightmap),

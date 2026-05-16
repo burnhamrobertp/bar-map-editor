@@ -1182,9 +1182,7 @@ fn apply_sculpt_dab_at_cursor(
     let changed = if let Some((node_id, ref node_type)) = selected_node {
         let paintable = matches!(
             node_type,
-            bar_graph::NodeType::PaintedHeightmap
-                | bar_graph::NodeType::PaintedTexture
-                | bar_graph::NodeType::Sculpt
+            bar_graph::NodeType::PaintedHeightmap | bar_graph::NodeType::PaintedTexture
         );
         if paintable {
             if matches!(node_type, bar_graph::NodeType::PaintedTexture) {

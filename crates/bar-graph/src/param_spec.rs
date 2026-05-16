@@ -249,7 +249,6 @@ mod tests {
         NodeType::NormalMap,
         NodeType::GrassMap,
         NodeType::SpecularMap,
-        NodeType::Sculpt,
         // Mask operations
         NodeType::MaskThreshold,
         NodeType::MaskInvert,

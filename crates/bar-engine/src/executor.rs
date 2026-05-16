@@ -482,20 +482,25 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
-            NodeType::Sculpt => {
-                let input = get_input_heightmap(inputs, "input")?;
-                let mask = get_optional_heightmap(inputs, "mask");
-                let asset_path = get_string(params, "asset_path", "");
-                let mut sculpted = input.clone();
-                if !asset_path.is_empty() {
-                    let src_res = get_uint(params, "resolution", 256).max(1);
-                    let scale = get_float(params, "scale", 0.5);
-                    let pixels = read_asset_bytes(asset_path);
-                    apply_sculpt_delta(&mut sculpted, &pixels, src_res, scale);
+            NodeType::FinalComposition => {
+                // Phase 1: pure pass-through. Each input port maps to
+                // a same-named output port; whichever value is wired
+                // (or the kind's default if unwired) is forwarded
+                // verbatim. Layer compositing for `heightmap`, `texture`,
+                // `metalmap`, `typemap` lands in Phase 2.
+                for port_name in [
+                    "heightmap",
+                    "texture",
+                    "normalmap",
+                    "metalmap",
+                    "typemap",
+                    "grassmap",
+                    "specular",
+                ] {
+                    if let Some(value) = inputs.get(port_name) {
+                        outputs.insert(port_name.to_string(), value.clone());
+                    }
                 }
-                // Mask confines sculpt delta to specific areas (mask=0: original, mask=1: sculpted)
-                let hm = apply_modulation(&input, sculpted, None, mask.as_ref());
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
             NodeType::PaintedTexture => {
                 let path = get_string(params, "asset_path", "");
@@ -2474,6 +2479,13 @@ fn apply_chooser(a: &Heightmap, b: &Heightmap, mask: &Heightmap) -> Heightmap {
 /// Read raw pixel bytes from a binary asset file at `path`.
 /// Returns empty Vec on empty path or any I/O error; the executor treats
 /// empty data as "no paint" and produces a flat/zero output.
+///
+/// Currently only used by `apply_sculpt_delta`, which is unused after
+/// removing the `Sculpt` node type. Both will return when
+/// `FinalComposition`'s heightmap-layer compositing lands (Phase 2 of
+/// the FC refactor) -- the same delta encoding (u8, 128 = neutral) is
+/// what the heightmap paint layer uses.
+#[allow(dead_code)]
 fn read_asset_bytes(path: &str) -> Vec<u8> {
     if path.is_empty() {
         return Vec::new();
@@ -2496,6 +2508,11 @@ pub(crate) const PAINTED_TEXTURE_RES: u32 = 256;
 /// 0 = max subtract, 255 = max add. `scale` controls the maximum magnitude
 /// of the applied delta (e.g. 0.5 = max ±50% shift). If `pixels` is empty
 /// or wrong length the heightmap is left unchanged.
+///
+/// Unused after the `Sculpt` node type was removed. Returns in Phase 2
+/// as the compositing helper for `FinalComposition`'s heightmap layer
+/// (same encoding semantics).
+#[allow(dead_code)]
 fn apply_sculpt_delta(hm: &mut Heightmap, pixels: &[u8], src_res: u32, scale: f32) {
     let out_w = hm.width();
     let out_h = hm.height();

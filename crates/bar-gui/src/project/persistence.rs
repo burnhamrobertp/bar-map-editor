@@ -77,7 +77,7 @@ impl BarEditorApp {
                 NodeType::PassThrough => {
                     resolve_passthrough_files(&mut node.params, project_dir);
                 }
-                NodeType::PaintedHeightmap | NodeType::PaintedTexture | NodeType::Sculpt => {
+                NodeType::PaintedHeightmap | NodeType::PaintedTexture => {
                     if let Some(bar_graph::ParamValue::String(id)) =
                         node.params.get("asset_id").cloned()
                     {
@@ -149,7 +149,7 @@ impl BarEditorApp {
                 NodeType::PassThrough => {
                     pack_passthrough_files(&mut node.params, project_dir, &passthrough_dir)?;
                 }
-                NodeType::PaintedHeightmap | NodeType::PaintedTexture | NodeType::Sculpt => {
+                NodeType::PaintedHeightmap | NodeType::PaintedTexture => {
                     pack_painted_asset(&mut node.params, project_dir, &assets_dir)?;
                 }
                 NodeType::ImportedTexture => {

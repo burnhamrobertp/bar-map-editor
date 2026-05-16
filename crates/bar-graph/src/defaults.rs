@@ -238,18 +238,11 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("snow_specular", ParamValue::Float(0.7)),
             ("snow_height", ParamValue::Float(0.85)),
         ],
-        NodeType::Sculpt => vec![
-            // UUID of the binary asset holding the u8 delta buffer.
-            // 128 = no change; 0 = maximum subtract; 255 = maximum add.
-            // Empty string means no deltas applied -- node is a pure passthrough.
-            ("asset_id", ParamValue::String(String::new())),
-            // Absolute path injected at load time; never persisted.
-            ("asset_path", ParamValue::String(String::new())),
-            // Canvas resolution.
-            ("resolution", ParamValue::UInt(256)),
-            // Max delta magnitude: delta_applied = (v - 128) / 128 * scale.
-            ("scale", ParamValue::Float(0.5)),
-        ],
+        // FinalComposition has no graph-visible params today -- its
+        // paint-layer state lives outside the params map (the project
+        // owns it, edited via Sculpt3D, persisted in the recipe under
+        // its own key, NOT as a node param).
+        NodeType::FinalComposition => vec![],
         NodeType::Bundler => vec![
             // bar-editor only ever exports spring-smf packaged as
             // 7z (the BAR map format). Those format choices used to
@@ -641,7 +634,6 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (BiasGain, "bias") | (BiasGain, "gain") => (0.0, 1.0),
         (Displacement, "strength") => (0.0, 1.0),
         (Blend, "factor") => (0.0, 1.0),
-        (Sculpt, "scale") => (0.0, 1.0),
         // Erosion
         (HydraulicErosion, "erosion_rate") | (HydraulicErosion, "deposition_rate") => (0.0, 0.1),
         (ThermalErosion, "talus_angle") => (0.0, 1.0),

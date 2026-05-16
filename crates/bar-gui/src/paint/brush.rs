@@ -4,7 +4,7 @@
 //! `paint` live cache and the graph. The pure math lives in
 //! `super::brush_math`; this file wires it into the editor's per-stroke flow.
 
-use bar_graph::{NodeId, NodeType, ParamValue};
+use bar_graph::{NodeId, ParamValue};
 
 use crate::app::BarEditorApp;
 use crate::paint::brush_math::{apply_brush_dab, stamp_color_dab_in_buffer};
@@ -172,25 +172,17 @@ impl BarEditorApp {
             );
             return;
         };
-        // Node type drives the on-disk encoding:
-        //   PaintedHeightmap -> GrayscaleF32 (absolute heights in [0,1])
-        //   Sculpt           -> GrayscaleU8 (deltas: 128 = neutral)
-        //   PaintedTexture   -> RgbU8
-        // Sculpt's u8 delta encoding maps cleanly onto the live buffer's
-        // [0,1] f32 range -- 0.5 = neutral, Raise pushes toward 1.0, Lower
-        // toward 0.0 -- so the brush math is unchanged; only the format
-        // tag in the asset header differs.
-        let node_type = self.graph.get_node(node_id).map(|n| n.node_type.clone());
         // Record undo BEFORE writing so the snapshot captures the
         // pre-stroke asset bytes (read off disk inside push_undo).
         let path_buf = std::path::PathBuf::from(&asset_path);
         self.push_undo_with_painted("Paint layer", std::iter::once(path_buf));
         match buffer {
             LivePaintBuffer::Height(hm) => {
-                let kind = match node_type {
-                    Some(NodeType::Sculpt) => bar_project::AssetKind::GrayscaleU8,
-                    _ => bar_project::AssetKind::GrayscaleF32,
-                };
+                // PaintedHeightmap is the only Height-buffer node now
+                // (Sculpt was removed). FinalComposition paint layers
+                // in Phase 2 will dispatch encoding by layer kind, not
+                // by node_type.
+                let kind = bar_project::AssetKind::GrayscaleF32;
                 if let Err(e) = write_height_asset(&asset_path, &hm, kind) {
                     tracing::error!(error = %e, path = %asset_path, "Paint flush: write heightmap asset failed");
                     return;

@@ -827,7 +827,7 @@ fn resolve_relative_paths_in_graph(graph: &mut bar_graph::GraphEngine, project_d
         }
         if matches!(
             node.node_type,
-            NodeType::PaintedHeightmap | NodeType::PaintedTexture | NodeType::Sculpt
+            NodeType::PaintedHeightmap | NodeType::PaintedTexture
         ) {
             if let Some(ParamValue::String(id)) = node.params.get("asset_id").cloned() {
                 if !id.is_empty() {

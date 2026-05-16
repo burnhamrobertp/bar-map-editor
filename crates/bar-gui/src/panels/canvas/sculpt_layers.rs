@@ -167,10 +167,7 @@ fn collect_relevant_items(
 }
 
 fn is_paintable_node(t: &NodeType) -> bool {
-    matches!(
-        t,
-        NodeType::PaintedHeightmap | NodeType::PaintedTexture | NodeType::Sculpt
-    )
+    matches!(t, NodeType::PaintedHeightmap | NodeType::PaintedTexture)
 }
 
 fn is_combiner_node(t: &NodeType) -> bool {
@@ -206,7 +203,6 @@ fn node_type_fallback_name(t: &NodeType) -> &'static str {
         NodeType::MaskSelect => "Mask Select",
         NodeType::PaintedHeightmap => "Painted Heightmap",
         NodeType::PaintedTexture => "Painted Texture",
-        NodeType::Sculpt => "Sculpt",
         _ => "Node",
     }
 }
