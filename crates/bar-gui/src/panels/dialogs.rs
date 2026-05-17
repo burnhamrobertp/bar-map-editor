@@ -189,16 +189,21 @@ pub(crate) fn draw_import_progress(app: &BarEditorApp, ctx: &egui::Context) {
         .resizable(false)
         .collapsible(false)
         .title_bar(false)
+        .fixed_size(egui::vec2(340.0, 0.0))
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
-            ui.set_min_width(280.0);
             ui.vertical_centered(|ui| {
                 ui.add_space(8.0);
                 ui.heading(t!("editor.import.title"));
                 ui.add_space(8.0);
                 ui.add(egui::Spinner::new().size(28.0));
                 ui.add_space(8.0);
-                ui.label(format!("{step}..."));
+                // `Truncate` mode keeps the modal height stable as
+                // labels change length; egui adds an ellipsis if the
+                // step text overflows the fixed modal width.
+                ui.add(
+                    egui::Label::new(format!("{step}...")).wrap_mode(egui::TextWrapMode::Truncate),
+                );
                 ui.add_space(8.0);
             });
         });

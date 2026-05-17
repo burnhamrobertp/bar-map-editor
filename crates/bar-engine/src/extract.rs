@@ -91,8 +91,24 @@ pub fn extract_sd7_to_work_dir_with_progress(
         std::fs::create_dir_all(&work_dir)
             .with_context(|| format!("Failed to create work directory: {}", work_dir.display()))?;
         progress("Extracting archive");
-        sevenz_rust::decompress_file(archive, &work_dir)
-            .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
+        // Per-entry hook so the modal shows the file currently being
+        // extracted. sevenz-rust's bare `decompress_file` blocks for
+        // the entire decompression with no inner feedback, which made
+        // the modal read as frozen on large maps. We delegate the
+        // actual extraction to `default_entry_extract_fn` and only
+        // wrap the progress emission.
+        sevenz_rust::decompress_file_with_extract_fn(
+            archive,
+            &work_dir,
+            |entry, reader, dest_path| {
+                if !entry.is_directory() {
+                    let label = format!("Extracting {}", entry.name());
+                    progress(&label);
+                }
+                sevenz_rust::default_entry_extract_fn(entry, reader, dest_path)
+            },
+        )
+        .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
     } else {
         progress("Reusing cached work directory");
     }
