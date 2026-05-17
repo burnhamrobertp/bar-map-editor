@@ -197,12 +197,7 @@ pub enum Layout {
 impl Layout {
     /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
     /// Ctrl+2, etc. Extend this slice when new layouts are added.
-    ///
-    /// `Sculpt3D` is intentionally omitted: the subsystem is on hold
-    /// (see `docs/TODO.md` "On hold" section). The variant remains
-    /// defined so dispatch and existing references keep compiling;
-    /// re-add it here to bring the layout back into the UI.
-    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Preview];
+    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Sculpt3D, Layout::Preview];
 
     /// i18n key for this layout's display name.
     pub(crate) fn i18n_key(self) -> &'static str {

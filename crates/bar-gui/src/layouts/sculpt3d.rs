@@ -1,23 +1,12 @@
-//! Sculpt3D layout -- left layer panel + central 3D viewport.
+//! Sculpt3D layout -- left feature panel + central 3D viewport.
 //!
-//! **STATUS: TEMPORARILY BROKEN / ON HOLD.** Sculpt3D is currently
-//! hidden from the UI (removed from `Layout::ALL` in
-//! `crate::app`). The subsystem -- brush flow, FC paint-layer
-//! composite, undo of painted bytes, layer panel -- has known
-//! correctness issues that need a rethink before the layout comes
-//! back. See `docs/TODO.md` "On hold" section for the list of items
-//! paused under this umbrella, and `docs/3d-painting-plan.md` for
-//! the broader plan context. Don't pick up sculpt work without
-//! agreeing on a new direction first.
-//!
-//! The code below is kept compiling (not deleted) so the existing
-//! integration -- dispatch wiring, paint-state types, FC composite
-//! plumbing -- stays as reference for the eventual replacement.
-//!
-//! The layer panel derives its contents from the live node graph via
-//! `compute_sculpt_layers`. Selecting a layer sets
-//! `paint.selected_sculpt_layer`; brush strokes then write into that
-//! node's live buffer and flush to node params on stroke end.
+//! Currently scoped to feature placement only. The brush / sculpt
+//! flow (FC paint-layer composite, live-paint buffers, layer
+//! selection) is on hold -- the Composition Layers section that
+//! would expose it is commented out below, which makes the
+//! conditional brush-tool palette unreachable. The dispatch wiring
+//! and paint-state types stay in place so the on-hold subsystem can
+//! be brought back without re-threading anything.
 //!
 //! The central panel is left unclaimed here -- bar-app draws the 3D
 //! viewport there after this function returns.
@@ -58,12 +47,16 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         app.paint.selected_fc_layer = None;
     }
 
-    // --- COMPOSITION LAYERS (Final Composition paint stacks) ---
-    // These are the post-graph paint layers stored on the project's
-    // `FinalComposition` node. The 2D paint nodes (PaintedHeightmap /
-    // PaintedTexture) live IN the node graph and are edited from the
-    // 2D inspector -- they are intentionally NOT shown here so
-    // Sculpt3D is unambiguously "paint into FC".
+    // --- COMPOSITION LAYERS (on hold) ---
+    // The FC paint-layer subsystem is paused; rendering this section
+    // would expose entry points into the broken brush flow. The block
+    // is commented out rather than deleted so the on-hold subsystem
+    // can be reattached without re-threading the UI. With this block
+    // gone, `paint.selected_fc_layer` stays None and `brush.tool`
+    // stays Pointer, which short-circuits both the conditional
+    // brush-tool palette below and the sculpt-dab path in
+    // `viewport.rs::handle_camera_input`.
+    /*
     ui.add_space(8.0);
     ui.strong("Layers");
     ui.separator();
@@ -77,10 +70,6 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         if ui.selectable_label(selected, kind.label()).clicked() {
             app.paint.selected_fc_layer = Some(kind);
             app.paint.selected_sculpt_layer = None;
-            // Default the brush tool to something sensible for the
-            // selected kind. Heightmap defaults to Raise. Other kinds
-            // inherit whatever brush tool was active; their tool list
-            // is rendered below as a single Paint operation.
             if kind == crate::FCLayerKind::Heightmap
                 && matches!(app.paint.brush.tool, BrushTool::Pointer)
             {
@@ -89,8 +78,6 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             if kind != crate::FCLayerKind::Heightmap
                 && matches!(app.paint.brush.tool, BrushTool::Pointer)
             {
-                // Non-heightmap kinds use any non-Pointer brush so the
-                // Tools section renders.
                 app.paint.brush.tool = BrushTool::Raise;
             }
         }
@@ -98,6 +85,7 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 
     ui.add_space(8.0);
     ui.separator();
+    */
 
     if app.paint.brush.tool == BrushTool::Pointer {
         draw_features_panel(app, ui);
