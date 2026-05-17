@@ -1116,6 +1116,32 @@ fn handle_camera_input(
     }
 
     if camera_changed {
+        // Keep the camera above terrain before rendering. Orbit /
+        // zoom / pan can each push the camera underground; without
+        // this clamp the user gets backfaces + the black void below
+        // the heightmap. Sampled at the camera's projected XZ
+        // against the same heightmap pick_terrain uses for cursor
+        // picking, with a small epsilon so the camera floats just
+        // above the surface rather than skimming inside it.
+        if let (Some(renderer), Some(hm)) =
+            (core.terrain_renderer.as_ref(), app.paint.heightmap.as_ref())
+        {
+            const TERRAIN_FLOOR_EPSILON: f32 = 0.005;
+            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+            let pos = core.camera.position();
+            if let Some(terrain_y) = bar_render::terrain_y_at_world_xz(
+                pos.x,
+                pos.z,
+                hm,
+                x_extent,
+                z_extent,
+                height_scale,
+            ) {
+                core.camera
+                    .clamp_position_above_y(terrain_y + TERRAIN_FLOOR_EPSILON);
+            }
+        }
+
         if let (Some(ref mut renderer), Some(ref gpu)) = (&mut core.terrain_renderer, gpu_context) {
             let elapsed = core.started_at.elapsed().as_secs_f32();
             let smf = live_smf_lighting(app);

@@ -186,6 +186,26 @@ fn ray_y_above_terrain(
     Some(p.y - terrain_y)
 }
 
+/// Sample the terrain's world-space Y at the given world-space XZ.
+/// Returns `None` if the XZ falls outside the mesh bounds. Uses the
+/// same bilinear-sampling math as `pick_terrain`'s ray-march so a
+/// caller comparing camera position against terrain Y (e.g. to
+/// prevent the camera from clipping through the ground) gets a
+/// result consistent with what `pick_terrain` would report at the
+/// same XZ.
+pub fn terrain_y_at_world_xz(
+    world_x: f32,
+    world_z: f32,
+    hm: &Heightmap,
+    x_extent: f32,
+    z_extent: f32,
+    height_scale: f32,
+) -> Option<f32> {
+    let p = Vec3::new(world_x, 0.0, world_z);
+    let (hx, hy) = world_to_heightmap(p, x_extent, z_extent, hm)?;
+    Some(sample_bilinear(hm, hx, hy) * height_scale)
+}
+
 /// Convert a world-space point's XZ to heightmap pixel coordinates.
 /// Returns `None` if outside the mesh bounds.
 fn world_to_heightmap(p: Vec3, x_extent: f32, z_extent: f32, hm: &Heightmap) -> Option<(f32, f32)> {
@@ -248,6 +268,27 @@ mod tests {
         // Centre pixel is (32, 32) in a 65×65 hm.
         assert!((p.hm_x - 32.0).abs() < 1.0, "hm_x={}", p.hm_x);
         assert!((p.hm_y - 32.0).abs() < 1.0, "hm_y={}", p.hm_y);
+    }
+
+    #[test]
+    fn terrain_y_at_world_xz_returns_height_scaled_value() {
+        // Flat heightmap at value 0.5, height_scale 1.0 -> terrain Y
+        // is 0.5 anywhere within bounds.
+        let hm = flat_hm(33, 33, 0.5);
+        let y = terrain_y_at_world_xz(0.0, 0.0, &hm, 0.5, 0.5, 1.0);
+        assert!(y.is_some());
+        assert!((y.unwrap() - 0.5).abs() < 1e-3);
+        // And a non-trivial height_scale multiplies through.
+        let y2 = terrain_y_at_world_xz(0.0, 0.0, &hm, 0.5, 0.5, 0.02);
+        assert!((y2.unwrap() - 0.01).abs() < 1e-4);
+    }
+
+    #[test]
+    fn terrain_y_at_world_xz_is_none_outside_mesh() {
+        let hm = flat_hm(33, 33, 0.5);
+        // x_extent / z_extent = 0.5; query at 1.0 is well outside.
+        assert!(terrain_y_at_world_xz(1.0, 0.0, &hm, 0.5, 0.5, 1.0).is_none());
+        assert!(terrain_y_at_world_xz(0.0, -2.0, &hm, 0.5, 0.5, 1.0).is_none());
     }
 
     #[test]
