@@ -247,8 +247,8 @@ fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                         ui.add_space(6.0);
                         ui.separator();
                         ui.add_space(4.0);
-                        ui.strong("In-engine lights");
-                        ui.weak(
+                        ui.strong("Lights");
+                        ui.label(
                             "Coloured markers above the feature show where BAR will \
                              attach point lights at runtime. BME doesn't render the \
                              actual glow.",
