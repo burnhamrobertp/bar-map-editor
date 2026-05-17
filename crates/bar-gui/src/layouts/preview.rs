@@ -76,13 +76,17 @@ fn draw_info_bar(app: &mut BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
 /// animated outline reads as part of the button rather than a separate frame.
 /// Earlier the function `expand(2.0)`'d the rect and used a 4px corner radius,
 /// which left a visible square ring around a rounded button.
+/// Corner radius of the animated border + its base outline. Must match
+/// the value passed to `rect_stroke` below; the travelling glow's
+/// perimeter walk uses it to arc through the corners cleanly instead
+/// of cutting straight across them.
+const BORDER_CORNER_R: f32 = 5.0;
+
 pub fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
     let time = ui.input(|i| i.time) as f32;
     let phase = (time * 0.75).fract();
 
-    let w = rect.width();
-    let h = rect.height();
-    let perimeter = 2.0 * (w + h);
+    let perimeter = rounded_perimeter(rect, BORDER_CORNER_R);
     let segment_len = perimeter * 0.4;
     let head = phase * perimeter;
 
@@ -92,7 +96,7 @@ pub fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
     // visible button edge instead of floating outside it.
     painter.rect_stroke(
         rect,
-        5.0,
+        BORDER_CORNER_R,
         egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(80, 140, 255, 50)),
         egui::StrokeKind::Inside,
     );
@@ -107,8 +111,8 @@ pub fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
         if t0 < t1 {
             continue;
         }
-        let p0 = perimeter_point(rect, t0 / perimeter);
-        let p1 = perimeter_point(rect, t1 / perimeter);
+        let p0 = perimeter_point(rect, BORDER_CORNER_R, t0 / perimeter);
+        let p1 = perimeter_point(rect, BORDER_CORNER_R, t1 / perimeter);
         let alpha = ((1.0 - i as f32 / steps as f32) * 230.0) as u8;
         painter.line_segment(
             [p0, p1],
@@ -122,19 +126,199 @@ pub fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
     ui.ctx().request_repaint();
 }
 
-/// Map `t` in [0, 1) to a point on the perimeter of `rect`, clockwise from
-/// the top-left corner.
-fn perimeter_point(rect: egui::Rect, t: f32) -> egui::Pos2 {
+/// Total perimeter of a rounded rectangle with corner radius `r`.
+/// Each sharp corner contributes `2r` of straight edge; each rounded
+/// corner replaces that with a quarter-arc of length `(π/2)·r`. Net
+/// difference per corner: `r·(π/2 - 2)` (slightly shorter than the
+/// sharp-corner version).
+fn rounded_perimeter(rect: egui::Rect, r: f32) -> f32 {
     let w = rect.width();
     let h = rect.height();
-    let pos = t * 2.0 * (w + h);
-    if pos < w {
-        egui::pos2(rect.left() + pos, rect.top())
-    } else if pos < w + h {
-        egui::pos2(rect.right(), rect.top() + pos - w)
-    } else if pos < 2.0 * w + h {
-        egui::pos2(rect.right() - (pos - w - h), rect.bottom())
-    } else {
-        egui::pos2(rect.left(), rect.bottom() - (pos - 2.0 * w - h))
+    let r = r.min(w * 0.5).min(h * 0.5).max(0.0);
+    2.0 * (w - 2.0 * r) + 2.0 * (h - 2.0 * r) + 2.0 * std::f32::consts::PI * r
+}
+
+/// Map `t` in [0, 1) to a point on the perimeter of `rect` with
+/// corner radius `r`, walking clockwise from the top edge.
+///
+/// Walk order: top edge -> top-right arc -> right edge -> bottom-right
+/// arc -> bottom edge -> bottom-left arc -> left edge -> top-left arc.
+/// Each arc spans π/2 radians; arc-length parameter `s` maps to angle
+/// `s/r`. Reduces to the sharp-cornered rectangle when r = 0.
+fn perimeter_point(rect: egui::Rect, r: f32, t: f32) -> egui::Pos2 {
+    let w = rect.width();
+    let h = rect.height();
+    let r = r.min(w * 0.5).min(h * 0.5).max(0.0);
+    let perimeter = rounded_perimeter(rect, r);
+
+    let l_edge_top = w - 2.0 * r;
+    let l_edge_side = h - 2.0 * r;
+    let l_arc = std::f32::consts::FRAC_PI_2 * r;
+
+    let mut pos = t * perimeter;
+
+    // Top edge: (left + r, top) -> (right - r, top).
+    if pos < l_edge_top {
+        return egui::pos2(rect.left() + r + pos, rect.top());
+    }
+    pos -= l_edge_top;
+
+    // Top-right arc. Center (right - r, top + r); parameter
+    // theta in [0, pi/2], point = center + (r*sin(theta), -r*cos(theta)).
+    if pos < l_arc {
+        let theta = if r > 0.0 { pos / r } else { 0.0 };
+        let cx = rect.right() - r;
+        let cy = rect.top() + r;
+        return egui::pos2(cx + r * theta.sin(), cy - r * theta.cos());
+    }
+    pos -= l_arc;
+
+    // Right edge: (right, top + r) -> (right, bottom - r).
+    if pos < l_edge_side {
+        return egui::pos2(rect.right(), rect.top() + r + pos);
+    }
+    pos -= l_edge_side;
+
+    // Bottom-right arc. Center (right - r, bottom - r); point =
+    // center + (r*cos(theta), r*sin(theta)).
+    if pos < l_arc {
+        let theta = if r > 0.0 { pos / r } else { 0.0 };
+        let cx = rect.right() - r;
+        let cy = rect.bottom() - r;
+        return egui::pos2(cx + r * theta.cos(), cy + r * theta.sin());
+    }
+    pos -= l_arc;
+
+    // Bottom edge: (right - r, bottom) -> (left + r, bottom).
+    if pos < l_edge_top {
+        return egui::pos2(rect.right() - r - pos, rect.bottom());
+    }
+    pos -= l_edge_top;
+
+    // Bottom-left arc. Center (left + r, bottom - r); point =
+    // center + (-r*sin(theta), r*cos(theta)).
+    if pos < l_arc {
+        let theta = if r > 0.0 { pos / r } else { 0.0 };
+        let cx = rect.left() + r;
+        let cy = rect.bottom() - r;
+        return egui::pos2(cx - r * theta.sin(), cy + r * theta.cos());
+    }
+    pos -= l_arc;
+
+    // Left edge: (left, bottom - r) -> (left, top + r).
+    if pos < l_edge_side {
+        return egui::pos2(rect.left(), rect.bottom() - r - pos);
+    }
+    pos -= l_edge_side;
+
+    // Top-left arc. Center (left + r, top + r); point =
+    // center + (-r*cos(theta), -r*sin(theta)).
+    let theta = if r > 0.0 { pos / r } else { 0.0 };
+    let cx = rect.left() + r;
+    let cy = rect.top() + r;
+    egui::pos2(cx - r * theta.cos(), cy - r * theta.sin())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(w: f32, h: f32) -> egui::Rect {
+        egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(w, h))
+    }
+
+    fn approx(a: egui::Pos2, b: egui::Pos2) -> bool {
+        (a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3
+    }
+
+    #[test]
+    fn rounded_perimeter_zero_radius_equals_2wh() {
+        // r = 0 -> rounded perimeter degenerates to sharp-corner case.
+        let p = rounded_perimeter(rect(100.0, 50.0), 0.0);
+        assert!((p - 300.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn rounded_perimeter_shorter_than_sharp() {
+        // Each rounded corner is shorter than the two `r`-length
+        // straight segments it replaces (chord < arc only for inward
+        // arcs; here the corner cuts inside the sharp version).
+        let r = 5.0;
+        let sharp = 2.0 * (100.0 + 50.0);
+        let rounded = rounded_perimeter(rect(100.0, 50.0), r);
+        assert!(
+            rounded < sharp,
+            "rounded ({rounded}) should be < sharp ({sharp})"
+        );
+    }
+
+    #[test]
+    fn perimeter_walk_starts_at_top_edge_after_tl_arc() {
+        // t = 0 -> first point on the top-edge run, which begins at
+        // (left + r, top) (i.e. immediately after the top-left arc
+        // ends).
+        let r = 5.0;
+        let p = perimeter_point(rect(100.0, 50.0), r, 0.0);
+        assert!(approx(p, egui::pos2(r, 0.0)), "expected (r, 0), got {p:?}");
+    }
+
+    #[test]
+    fn perimeter_walk_hits_each_arc_midpoint() {
+        // Midpoint of each quarter-arc lies on the 45-degree diagonal
+        // from the corner center, at distance r. Verifies that the
+        // walk does NOT cut straight across corners (the original
+        // bug). For r = 5 in a 100x50 rect, the TR corner center is
+        // (95, 5); midpoint of the TR arc is (95 + r*sin(pi/4), 5 -
+        // r*cos(pi/4)) ~= (98.536, 1.464).
+        let r = 5.0;
+        let w = 100.0;
+        let h = 50.0;
+        let rect_ = rect(w, h);
+        let perim = rounded_perimeter(rect_, r);
+        let l_edge_top = w - 2.0 * r;
+        let l_arc = std::f32::consts::FRAC_PI_2 * r;
+
+        // TR mid: top edge + half arc.
+        let t_tr_mid = (l_edge_top + l_arc * 0.5) / perim;
+        let tr_mid = perimeter_point(rect_, r, t_tr_mid);
+        let s = std::f32::consts::FRAC_1_SQRT_2; // sin(pi/4) = cos(pi/4)
+        let cx = w - r;
+        let cy = r;
+        assert!(
+            approx(tr_mid, egui::pos2(cx + r * s, cy - r * s)),
+            "TR arc midpoint: expected ({}, {}), got {tr_mid:?}",
+            cx + r * s,
+            cy - r * s,
+        );
+        // Distance from corner center should equal r (point sits on
+        // the arc, not inside / outside the rounded edge).
+        let dx = tr_mid.x - cx;
+        let dy = tr_mid.y - cy;
+        let d = (dx * dx + dy * dy).sqrt();
+        assert!(
+            (d - r).abs() < 1e-3,
+            "TR arc midpoint distance from center: expected {r}, got {d}"
+        );
+    }
+
+    #[test]
+    fn perimeter_walk_stays_inside_bounding_rect() {
+        // No sampled point should ever lie outside the rect (the bug
+        // was the glow CUTTING across corners, i.e. inside; verify it
+        // also doesn't escape outward).
+        let r = 5.0;
+        let rect_ = rect(120.0, 60.0);
+        for i in 0..200 {
+            let t = i as f32 / 200.0;
+            let p = perimeter_point(rect_, r, t);
+            assert!(
+                p.x >= rect_.left() - 1e-3 && p.x <= rect_.right() + 1e-3,
+                "x out of bounds at t = {t}: {p:?}"
+            );
+            assert!(
+                p.y >= rect_.top() - 1e-3 && p.y <= rect_.bottom() + 1e-3,
+                "y out of bounds at t = {t}: {p:?}"
+            );
+        }
     }
 }

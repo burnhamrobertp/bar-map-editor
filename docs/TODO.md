@@ -35,7 +35,6 @@ Items below are paused while the Sculpt3D / 3D-painting subsystem is being recon
 
 ## UX / UI
 
-- **Animated border travelling glow cuts corners.** `draw_animated_border` in `crates/bar-gui/src/layouts/preview.rs` traces the perimeter via straight edges and ignores the button's 5px corner radius, so the bright moving segment briefly clips through the rounded corner. Fix: arc the corner segments (sample N points along a quarter-circle of radius 5).
 - **Action-bar separator spacing asymmetric.** The gap between the "Test in BAR" button and the separator is wider than between the separator and the "Edit Map Info" button. Caused by `ui.add_space(8.0); ui.separator(); ui.add_space(4.0)` in `crates/bar-gui/src/layouts/shell.rs`. Match the two gaps.
 - **Re-invert middle-mouse pan to in-engine convention.** An earlier fix made middle-mouse pan follow the cursor (drag right -> camera moves right -> scene slides left). User wants the in-engine "grab and drag the world" gesture (drag right -> scene slides right with the cursor -> camera pans left). Negate `delta` at the middle-mouse-pan call site in `crates/bar-app/src/viewport.rs`; leave `Camera::pan_xz` semantics alone.
 - **Resolution-transition badge needs a "loading" affordance.** The badge that shows e.g. `1024 -> 4096` during the low-res-then-high-res eval cycle reads as a static label. Wrap it with the animated border effect (`preview.rs::draw_animated_border` is already parameterised by rect) while the high-res pass is pending. Lives in `crates/bar-app/src/viewport.rs::draw_resolution_badge`.
