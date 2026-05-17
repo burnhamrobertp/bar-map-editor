@@ -372,6 +372,33 @@ impl BarEditorApp {
             self.resolve_relative_paths(project_dir);
         }
 
+        // Retroactively populate any mapinfo-derived MapSettings field
+        // that's still at its default value from the project's
+        // bundled `passthrough/mapinfo.lua`. This lets existing
+        // `.barproj` projects pick up new parser fields without a
+        // re-import: when a future editor version teaches the parser
+        // about a new lua key (e.g. a new `resources.*` entry),
+        // already-saved projects auto-fill that field on next load.
+        // User edits to old fields (anything diverging from default)
+        // are preserved -- see `fill_mapinfo_defaults_from_lua`
+        // docstring.
+        if let Some(project_dir) = path.as_ref() {
+            let bundle_path = self
+                .project
+                .map_info_file
+                .as_deref()
+                .unwrap_or("mapinfo.lua");
+            let lua_path = project_dir.join("passthrough").join(bundle_path);
+            if let Ok(lua) = std::fs::read_to_string(&lua_path) {
+                bar_project::fill_mapinfo_defaults_from_lua(&lua, &mut self.map.settings);
+                // min_height / max_height shadow MapSettings; if the
+                // fill changed them (it doesn't today, but defensively),
+                // resync the live shadows.
+                self.map.min_height = self.map.settings.min_height;
+                self.map.max_height = self.map.settings.max_height;
+            }
+        }
+
         // FC layers carry per-kind asset ids from project creation
         // forward. Mint any that are still empty (any FC built before
         // pre-allocation was added). For loaded projects,
@@ -1166,6 +1193,70 @@ mod session_reset_tests {
         assert_eq!(app.canvas.offset, egui::Vec2::ZERO);
         // do_new_project drops a single Bundler terminal node.
         assert_eq!(app.graph.nodes().len(), 1);
+    }
+
+    /// Round-trip: save a project whose MapSettings has a field at
+    /// the default value, plant a `passthrough/mapinfo.lua` next to it
+    /// that specifies a non-default value for that field, reload, and
+    /// verify the load path filled the field from the lua.
+    ///
+    /// This is the "new mapinfo parser field added in a later editor
+    /// version" scenario: existing barprojs auto-populate the new
+    /// field without requiring a re-import.
+    #[test]
+    fn apply_project_fills_mapinfo_defaults_from_passthrough_lua() {
+        use bar_project::{EditorLayout, OutputConfig, Project, Recipe, RECIPE_SCHEMA_VERSION};
+        use std::collections::HashMap;
+
+        // Create a temp project dir with a passthrough/mapinfo.lua.
+        let tmp =
+            std::env::temp_dir().join(format!("bme_mapinfo_reparse_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        let passthrough_dir = tmp.join("passthrough");
+        std::fs::create_dir_all(&passthrough_dir).unwrap();
+        std::fs::write(
+            passthrough_dir.join("mapinfo.lua"),
+            "gravity = 175\nfresnelMin = 0.42\n",
+        )
+        .unwrap();
+
+        // Build a Project whose settings are all defaults (simulates
+        // an older save that didn't have these fields populated).
+        let project = Project {
+            recipe: Recipe {
+                schema_version: RECIPE_SCHEMA_VERSION,
+                name: "test".into(),
+                shortname: None,
+                description: String::new(),
+                author: None,
+                version: None,
+                nodes: Vec::new(),
+                connections: Vec::new(),
+                output: OutputConfig {
+                    width: 257,
+                    height: 257,
+                    map_settings: bar_project::MapSettings::default(),
+                },
+                features: Vec::new(),
+            },
+            layout: EditorLayout {
+                node_positions: HashMap::new(),
+                node_sizes: HashMap::new(),
+                canvas_offset: (0.0, 0.0),
+                map_info_file: None,
+                groups: Vec::new(),
+                open_tabs: Vec::new(),
+                active_tab: 0,
+            },
+        };
+
+        let mut app = BarEditorApp::default();
+        app.apply_project(project, Some(tmp.clone()), "test".into(), "loaded".into());
+        // Both fields were at default on save; the lua fills them.
+        assert_eq!(app.map.settings.gravity, 175.0);
+        assert!((app.map.settings.water.fresnel_min - 0.42).abs() < 1e-6);
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 
     #[test]

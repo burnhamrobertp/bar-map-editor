@@ -198,6 +198,82 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     }
 }
 
+/// Fill `settings` fields that are still at their default value with
+/// the corresponding lua-parsed value. Fields that diverge from
+/// default (either set at import time or edited by the user) are
+/// preserved verbatim.
+///
+/// Used by the `.barproj` load path so that new mapinfo parser fields
+/// added in a later editor version populate retroactively for already-
+/// saved projects -- without clobbering user edits to old fields.
+///
+/// Edge case: a user who explicitly sets a field back to the default
+/// value loses that "set to default" decision on next load (the field
+/// is indistinguishable from "never touched" and will be refilled from
+/// lua). Acceptable given the alternative is a per-field "user-edited"
+/// bitset on the schema.
+pub fn fill_mapinfo_defaults_from_lua(lua: &str, settings: &mut MapSettings) {
+    let mut from_lua = MapSettings::default();
+    apply_mapinfo_overrides(lua, &mut from_lua);
+    let default = MapSettings::default();
+
+    let saved_json = match serde_json::to_value(&*settings) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let lua_json = match serde_json::to_value(&from_lua) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let default_json = match serde_json::to_value(&default) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let merged = merge_defaults_with_lua(saved_json, lua_json, default_json);
+    if let Ok(deserialized) = serde_json::from_value::<MapSettings>(merged) {
+        *settings = deserialized;
+    }
+}
+
+/// Tree-walk merge: at each leaf, if `saved == default` use `from_lua`
+/// (the field is still at its default and the lua may have a per-map
+/// value to fill in); otherwise keep `saved`. Objects recurse
+/// key-by-key so a sub-struct can have some leaf fields filled and
+/// others preserved.
+fn merge_defaults_with_lua(
+    saved: serde_json::Value,
+    from_lua: serde_json::Value,
+    default: serde_json::Value,
+) -> serde_json::Value {
+    use serde_json::Value;
+    match (saved, from_lua, default) {
+        (Value::Object(saved_map), Value::Object(lua_map), Value::Object(default_map)) => {
+            let mut keys: std::collections::BTreeSet<String> = saved_map.keys().cloned().collect();
+            for k in lua_map.keys() {
+                keys.insert(k.clone());
+            }
+            for k in default_map.keys() {
+                keys.insert(k.clone());
+            }
+            let mut out = serde_json::Map::new();
+            for k in keys {
+                let s = saved_map.get(&k).cloned().unwrap_or(Value::Null);
+                let l = lua_map.get(&k).cloned().unwrap_or(Value::Null);
+                let d = default_map.get(&k).cloned().unwrap_or(Value::Null);
+                out.insert(k, merge_defaults_with_lua(s, l, d));
+            }
+            Value::Object(out)
+        }
+        (saved, from_lua, default) => {
+            if saved == default {
+                from_lua
+            } else {
+                saved
+            }
+        }
+    }
+}
+
 /// Parse a string field of the form `key = "value"` or `key = 'value'`.
 /// Used for `skyBox = "cleardesert.dds"` style settings. Returns None
 /// when the key isn't found or the value isn't quoted.
@@ -874,5 +950,61 @@ custom = {
         apply_mapinfo_overrides(lua, &mut settings);
         assert!(settings.custom_fog.enabled);
         assert_eq!(settings.custom_fog.height_elmos, 50.0);
+    }
+
+    #[test]
+    fn fill_defaults_populates_untouched_fields() {
+        // Simulates the "new parser field added in a later editor
+        // version" case: the saved settings has a default value for a
+        // field, the lua specifies a value -> we adopt the lua value.
+        let lua = "gravity = 99\nfresnelMin = 0.42\n";
+        let mut settings = MapSettings::default();
+        fill_mapinfo_defaults_from_lua(lua, &mut settings);
+        assert_eq!(settings.gravity, 99.0);
+        assert!((settings.water.fresnel_min - 0.42).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fill_defaults_preserves_user_edits() {
+        // Simulates: user edited a field via the Map Settings modal
+        // (gravity now diverges from default). On reload, the lua
+        // still says gravity=130 but we should keep the user's 250.
+        let lua = "gravity = 130\nfresnelMin = 0.5\n";
+        let mut settings = MapSettings {
+            gravity: 250.0, // user edit
+            ..MapSettings::default()
+        };
+        fill_mapinfo_defaults_from_lua(lua, &mut settings);
+        assert_eq!(settings.gravity, 250.0, "user edit clobbered");
+        // fresnelMin was untouched (still default) -> fills from lua.
+        assert!((settings.water.fresnel_min - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fill_defaults_handles_subfield_granularity() {
+        // User edited water.base_color but not water.fresnel_min.
+        // Lua specifies both. Result: base_color preserved,
+        // fresnel_min filled from lua.
+        let lua = "basecolor = { 0.1, 0.2, 0.3 }\nfresnelMin = 0.7\n";
+        let mut settings = MapSettings::default();
+        settings.water.base_color = [0.9, 0.1, 0.1]; // user edit
+        fill_mapinfo_defaults_from_lua(lua, &mut settings);
+        assert_eq!(
+            settings.water.base_color,
+            [0.9, 0.1, 0.1],
+            "user edit to base_color clobbered"
+        );
+        assert!((settings.water.fresnel_min - 0.7).abs() < 1e-6);
+    }
+
+    #[test]
+    fn fill_defaults_no_op_when_lua_is_silent() {
+        // Lua doesn't specify gravity -> stays at default. Lua
+        // doesn't specify fresnelMin -> stays at default.
+        let lua = "name = \"empty\"";
+        let mut settings = MapSettings::default();
+        let original_gravity = settings.gravity;
+        fill_mapinfo_defaults_from_lua(lua, &mut settings);
+        assert_eq!(settings.gravity, original_gravity);
     }
 }
