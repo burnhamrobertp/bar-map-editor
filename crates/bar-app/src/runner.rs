@@ -48,6 +48,12 @@ pub struct AppRunner {
     pub progress_rx: Option<mpsc::Receiver<String>>,
     pub export_status: bar_gui::ExportStatus,
     pub sd7_extract_rx: Option<mpsc::Receiver<Result<bar_engine::WorkDirScan, String>>>,
+    /// Side channel paired with `sd7_extract_rx`. The worker thread
+    /// sends short step labels (e.g. "Extracting archive") here at
+    /// the start of each import phase; the GUI polls them per frame
+    /// into `app.project.import_status` so the centered progress
+    /// modal shows the current step.
+    pub sd7_progress_rx: Option<mpsc::Receiver<String>>,
     pub compile_result_rx: Option<mpsc::Receiver<Result<(), String>>>,
     pub test_in_bar_rx: Option<mpsc::Receiver<Result<(std::path::PathBuf, String), String>>>,
     pub pending_export_dir: Option<PendingExportDir>,
@@ -511,6 +517,17 @@ impl eframe::App for AppRunner {
             self.layout_manager.mark_features_dirty();
         }
 
+        // Drain the SD7 progress side channel into `import_status`
+        // BEFORE polling the result channel below, so the user sees
+        // intermediate steps land before the final modal-close
+        // happens. Only the most recent message matters; older
+        // messages are superseded.
+        if let Some(ref rx) = self.sd7_progress_rx {
+            while let Ok(step) = rx.try_recv() {
+                self.app.project.import_status = Some(step);
+            }
+        }
+
         // Poll SD7 extraction.
         if let Some(ref rx) = self.sd7_extract_rx {
             match rx.try_recv() {
@@ -536,30 +553,51 @@ impl eframe::App for AppRunner {
                     }
                     self.app.finish_open_map(scan);
                     self.app.project.features_changed = false; // handled here, not by the generic poll below
+                    self.app.project.import_status = None;
                     self.sd7_extract_rx = None;
+                    self.sd7_progress_rx = None;
                     self.model_rx = None;
                     self.spawn_model_loader(ctx);
                 }
                 Ok(Err(e)) => {
                     self.app.set_status(format!("Failed to open: {e}"));
+                    self.app.project.import_status = None;
                     self.sd7_extract_rx = None;
+                    self.sd7_progress_rx = None;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.app
                         .set_status("Open operation failed unexpectedly".to_string());
+                    self.app.project.import_status = None;
                     self.sd7_extract_rx = None;
+                    self.sd7_progress_rx = None;
                 }
             }
         }
         if let Some(sd7_path) = self.app.project.sd7_open_request.take() {
-            let (tx, rx) = mpsc::channel::<Result<bar_engine::WorkDirScan, String>>();
-            self.sd7_extract_rx = Some(rx);
+            let (result_tx, result_rx) = mpsc::channel::<Result<bar_engine::WorkDirScan, String>>();
+            let (progress_tx, progress_rx) = mpsc::channel::<String>();
+            self.sd7_extract_rx = Some(result_rx);
+            self.sd7_progress_rx = Some(progress_rx);
+            // Seed an initial step so the modal renders immediately --
+            // worker startup latency would otherwise leave a blank
+            // modal for a frame or two.
+            self.app.project.import_status = Some("Starting import".to_string());
             let ctx_clone = ctx.clone();
             std::thread::spawn(move || {
+                let progress_tx_inner = progress_tx.clone();
+                let ctx_for_progress = ctx_clone.clone();
+                let progress = move |step: &str| {
+                    let _ = progress_tx_inner.send(step.to_string());
+                    // Wake the GUI loop so the modal updates without
+                    // waiting on the next user-input frame.
+                    ctx_for_progress.request_repaint();
+                };
                 let result =
-                    bar_engine::extract_sd7_to_work_dir(&sd7_path).map_err(|e| e.to_string());
-                let _ = tx.send(result);
+                    bar_engine::extract_sd7_to_work_dir_with_progress(&sd7_path, &progress)
+                        .map_err(|e| e.to_string());
+                let _ = result_tx.send(result);
                 ctx_clone.request_repaint();
             });
         }

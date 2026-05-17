@@ -126,6 +126,9 @@
       "sculpt_controls_hint": "LMB: sculpt | RMB: rotate | Scroll: zoom | MMB: pan",
       "force_refresh": "Force re-render preview"
     },
+    "import": {
+      "title": "Importing map"
+    },
     "map_settings": {
       "title": "Map settings",
       "map_size_label": "Map Size",

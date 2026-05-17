@@ -174,3 +174,34 @@ pub(crate) fn draw_about(app: &mut BarEditorApp, ctx: &egui::Context) {
         });
     app.dialog.show_about = open;
 }
+
+/// Centered modal shown while a `.sd7` import is in flight. The
+/// step string comes from `app.project.import_status`, which
+/// `bar-app::runner` updates from the worker thread's progress
+/// callback. Cleared (modal closes) when the worker reports success
+/// or failure. Non-dismissable -- the import runs to completion
+/// regardless of user input, so no close button.
+pub(crate) fn draw_import_progress(app: &BarEditorApp, ctx: &egui::Context) {
+    let Some(step) = app.project.import_status.as_deref() else {
+        return;
+    };
+    egui::Window::new(t!("editor.import.title"))
+        .resizable(false)
+        .collapsible(false)
+        .title_bar(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.set_min_width(280.0);
+            ui.vertical_centered(|ui| {
+                ui.add_space(8.0);
+                ui.heading(t!("editor.import.title"));
+                ui.add_space(8.0);
+                ui.add(egui::Spinner::new().size(28.0));
+                ui.add_space(8.0);
+                ui.label(format!("{step}..."));
+                ui.add_space(8.0);
+            });
+        });
+    // Keep the GUI loop ticking so the spinner animates.
+    ctx.request_repaint();
+}

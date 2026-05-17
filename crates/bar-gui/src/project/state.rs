@@ -31,6 +31,12 @@ pub struct ProjectState {
     /// editor's per-frame poll picks it up and opens the resulting
     /// project.
     pub sd7_open_request: Option<std::path::PathBuf>,
+    /// Set by `bar-app` while a `.sd7` import is in flight; the GUI
+    /// renders a centered progress modal whenever this is `Some`.
+    /// The string is the current import step (e.g. "Extracting
+    /// archive"). `bar-app` clears this to `None` when the worker
+    /// signals success or failure.
+    pub import_status: Option<String>,
     /// Receiver for an in-flight Open dialog. The native file dialog
     /// runs on a worker thread and the result lands here.
     pub pending_open_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,

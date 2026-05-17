@@ -50,6 +50,30 @@ fn work_dir_for(archive: &Path) -> PathBuf {
 /// If the work directory already exists and is non-empty, extraction is skipped
 /// so that any edits the user has made are preserved.
 pub fn extract_sd7_to_work_dir(archive: &Path) -> Result<WorkDirScan> {
+    extract_sd7_to_work_dir_with_progress(archive, &|_| {})
+}
+
+/// Variant that reports the current step to a caller-supplied
+/// callback. Used by the GUI so it can show a centered progress
+/// modal during import. The callback is invoked synchronously from
+/// whichever thread is driving extraction; if the caller is using a
+/// worker thread, they typically forward updates via an `mpsc`
+/// channel so the GUI thread can pick them up on its next frame.
+///
+/// Step strings are short user-facing labels (e.g. "Extracting
+/// archive"). The callback is called at the START of each phase --
+/// missing intermediate progress is fine; the goal is to keep the
+/// user from staring at a frozen screen, not to give precise
+/// fraction-done feedback.
+///
+/// The callback type is bare `dyn Fn(&str)` (no `Send`/`Sync` bound)
+/// since extraction runs on a single thread; callers that capture
+/// non-Sync senders (e.g. `mpsc::Sender`) can pass their closure
+/// directly without `Arc<Mutex<_>>` gymnastics.
+pub fn extract_sd7_to_work_dir_with_progress(
+    archive: &Path,
+    progress: &dyn Fn(&str),
+) -> Result<WorkDirScan> {
     let stem = archive
         .file_stem()
         .and_then(|s| s.to_str())
@@ -63,13 +87,17 @@ pub fn extract_sd7_to_work_dir(archive: &Path) -> Result<WorkDirScan> {
             .unwrap_or(true);
 
     if should_extract {
+        progress("Preparing work directory");
         std::fs::create_dir_all(&work_dir)
             .with_context(|| format!("Failed to create work directory: {}", work_dir.display()))?;
+        progress("Extracting archive");
         sevenz_rust::decompress_file(archive, &work_dir)
             .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
+    } else {
+        progress("Reusing cached work directory");
     }
 
-    scan_work_dir(work_dir, map_name)
+    scan_work_dir(work_dir, map_name, progress)
 }
 
 /// Delete work directories under [`work_dir_root`] whose mtime is older than
@@ -101,13 +129,18 @@ pub fn prune_old_work_dirs(max_age: Duration) {
     }
 }
 
-fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
+fn scan_work_dir(
+    work_dir: PathBuf,
+    map_name: String,
+    progress: &dyn Fn(&str),
+) -> Result<WorkDirScan> {
     let mut smf_abs: Option<PathBuf> = None;
     let mut smf_rel: Option<PathBuf> = None;
     let mut smt_abs: Option<PathBuf> = None;
     let mut smt_rel: Option<PathBuf> = None;
     let mut passthrough_files: Vec<(PathBuf, PathBuf)> = Vec::new();
 
+    progress("Scanning files");
     scan_dir_recursive(
         &work_dir,
         &work_dir,
@@ -122,6 +155,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
     if smf_abs.is_none() {
         tracing::warn!("No .smf file found in extracted .sd7 archive");
     }
+    progress("Reading heightmap");
     let smf_data = smf_abs.as_ref().and_then(|abs| {
         let file = std::fs::File::open(abs).ok()?;
         match bar_data::SmfMap::read(&mut std::io::BufReader::new(file)) {
@@ -206,6 +240,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         .unwrap_or_default();
 
     // Assemble SMT texture as raw RGB bytes for PaintedTexture.
+    progress("Reading texture tiles");
     const TEX_RES: u32 = 2048;
     let (texture_data, texture_res) =
         if let (Some(smt_path), Some(smf)) = (smt_abs.as_ref(), smf_data.as_ref()) {
@@ -241,6 +276,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
     // Modern BAR maps store the bulk of their features in
     // mapconfig/featureplacer/set.lua; the SMF section often has only a handful
     // of legacy entries (or none).
+    progress("Parsing feature placements");
     let mut features: Vec<bar_project::recipe::PlacedFeature> = smf_data
         .as_ref()
         .map(|smf| {
@@ -275,6 +311,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         .map(|s| s.tile_indices.clone())
         .unwrap_or_default();
 
+    progress("Finalizing");
     Ok(WorkDirScan {
         work_dir,
         map_name,

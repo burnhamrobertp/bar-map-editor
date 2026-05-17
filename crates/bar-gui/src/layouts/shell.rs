@@ -788,6 +788,11 @@ impl BarEditorApp {
         // ── Modal: About ─────────────────────────────────────────────────────
         crate::panels::dialogs::draw_about(self, ctx);
 
+        // ── Modal: SD7 import progress ───────────────────────────────────────
+        // No-op when no import is in flight; otherwise centered
+        // non-dismissable modal showing the current import step.
+        crate::panels::dialogs::draw_import_progress(self, ctx);
+
         // ── Modal: Log window ────────────────────────────────────────────────
         self.draw_log_window(ctx);
 

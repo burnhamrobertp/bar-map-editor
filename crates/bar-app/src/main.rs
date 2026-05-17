@@ -148,6 +148,7 @@ fn main() -> Result<()> {
                 progress_rx: None,
                 export_status: bar_gui::ExportStatus::Idle,
                 sd7_extract_rx: None,
+                sd7_progress_rx: None,
                 compile_result_rx: None,
                 test_in_bar_rx: None,
                 pending_export_dir: None,
