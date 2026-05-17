@@ -1513,26 +1513,28 @@ pub fn build_feature_instances(
         unknowns.push(inst);
     }
 
-    // Emit per-feature light markers. BAR's deferred-rendering widget
-    // attaches point lights to certain feature defs (most visible:
-    // `pilha_crystal_*`). BME doesn't run the widget but renders a
-    // small coloured marker at each light's position so map authors
-    // can see where lights will appear in-engine. Markers reuse the
-    // placeholder-cube pipeline -- same instance struct, smaller
-    // scale, light-coloured tint.
+    // Emit per-feature light markers for the SELECTED feature only.
+    // BAR's deferred-rendering widget attaches point lights to certain
+    // feature defs (most visible: `pilha_crystal_*`). BME doesn't run
+    // the widget but renders a small coloured marker at each light's
+    // position so map authors can see where lights will appear
+    // in-engine. The marker reuses the placeholder-cube pipeline --
+    // same instance struct, smaller scale, light-coloured tint.
     //
-    // Second pass so markers fire for both real-model features (the
-    // crystals, which the loop above `continue`s past once their
-    // instance is pushed into `groups`) and placeholder features.
-    // Heightmap sampling matches the first pass exactly so the
-    // marker base sits on the same ry the feature does.
+    // Gated on selection so a crystal-dense map (e.g. Azurite Shores)
+    // isn't littered with constant marker cubes; the selected-feature
+    // panel surfaces the same data textually for any feature.
+    //
+    // Heightmap sampling matches the first pass exactly so the marker
+    // base sits on the same ry the feature does.
     const MARKER_SIZE_ELMOS: f32 = 8.0;
     let marker_scale = MARKER_SIZE_ELMOS * elmo_scale;
-    for f in features.iter() {
+    let selected_feature = selected_idx.and_then(|i| features.get(i).map(|f| (i, f)));
+    if let Some((_idx, f)) = selected_feature {
         let lower = f.feature_type.to_lowercase();
         let lights = bar_render::lights_for_feature_def(&lower);
         if lights.is_empty() {
-            continue;
+            return (groups, unknowns);
         }
         let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
         let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;

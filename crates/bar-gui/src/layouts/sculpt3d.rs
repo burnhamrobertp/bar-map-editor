@@ -234,6 +234,70 @@ fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                             ui.label(format!("{} / {}", idx, app.map.features.len()));
                             ui.end_row();
                         });
+
+                    // Per-feature in-engine light info. BAR's deferred
+                    // rendering widget attaches point lights to certain
+                    // feature defs (crystals etc.) -- BME shows a
+                    // marker cube at each light position while this
+                    // feature is selected and surfaces the same data
+                    // textually here. The actual lighting effect is a
+                    // game-runtime cosmetic, not rendered by BME.
+                    let lights = bar_render::lights_for_feature_def(&ftype);
+                    if !lights.is_empty() {
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+                        ui.strong("In-engine lights");
+                        ui.weak(
+                            "Coloured markers above the feature show where BAR will \
+                             attach point lights at runtime. BME doesn't render the \
+                             actual glow.",
+                        );
+                        ui.add_space(4.0);
+                        for (li, light) in lights.iter().enumerate() {
+                            if lights.len() > 1 {
+                                ui.weak(format!("Light {}", li + 1));
+                            }
+                            egui::Grid::new(format!("feature_light_info_{}", li))
+                                .num_columns(2)
+                                .spacing([8.0, 2.0])
+                                .show(ui, |ui| {
+                                    ui.weak("Colour");
+                                    ui.horizontal(|ui| {
+                                        let swatch = egui::Color32::from_rgb(
+                                            (light.color[0].clamp(0.0, 1.0) * 255.0) as u8,
+                                            (light.color[1].clamp(0.0, 1.0) * 255.0) as u8,
+                                            (light.color[2].clamp(0.0, 1.0) * 255.0) as u8,
+                                        );
+                                        let (rect, _) = ui.allocate_exact_size(
+                                            egui::vec2(14.0, 14.0),
+                                            egui::Sense::hover(),
+                                        );
+                                        ui.painter().rect_filled(rect, 2.0, swatch);
+                                        ui.label(format!(
+                                            "{:.2}, {:.2}, {:.2}",
+                                            light.color[0], light.color[1], light.color[2]
+                                        ));
+                                    });
+                                    ui.end_row();
+                                    ui.weak("Radius");
+                                    ui.label(format!("{:.0} elmos", light.radius));
+                                    ui.end_row();
+                                    ui.weak("Offset");
+                                    ui.label(format!(
+                                        "{:.0}, {:.0}, {:.0} elmos",
+                                        light.offset[0], light.offset[1], light.offset[2]
+                                    ));
+                                    ui.end_row();
+                                    ui.weak("Intensity");
+                                    ui.label(format!("{:.2}", light.intensity));
+                                    ui.end_row();
+                                });
+                            if li + 1 < lights.len() {
+                                ui.add_space(4.0);
+                            }
+                        }
+                    }
                 });
             ui.add_space(4.0);
             ui.separator();
