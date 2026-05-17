@@ -21,8 +21,7 @@ pub mod validation;
 
 pub use fc::{mint_fc_layer_ids, populate_fc_layer_paths, FC_LAYER_KINDS};
 pub use mapinfo::{
-    apply_mapinfo_overrides, fill_mapinfo_defaults_from_lua, parse_mapinfo_number,
-    parse_mapinfo_smf_heights, parse_mapinfo_vec3,
+    apply_mapinfo_overrides, parse_mapinfo_number, parse_mapinfo_smf_heights, parse_mapinfo_vec3,
 };
 pub use package::{
     read_asset_file, write_asset_file, AssetHeader, AssetId, AssetKind, AssetStat, Fingerprint,

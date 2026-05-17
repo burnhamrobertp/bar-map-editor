@@ -31,6 +31,7 @@ pub enum MapInfoTab {
     Atmosphere,
     Lighting,
     Water,
+    Resources,
 }
 
 /// Snapshot of every input `validate_project` reads, in a form cheap

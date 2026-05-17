@@ -156,6 +156,28 @@ fn edit_optional_string(
     changed
 }
 
+/// Single-line `String` editor used by the Resources tab for the
+/// `mapinfo.lua` texture-filename fields. Returns true when the value
+/// changed this frame so the caller can fold into the modal's
+/// `dirty` accumulator.
+fn text_field(ui: &mut egui::Ui, label: &str, value: &mut String) -> bool {
+    let mut changed = false;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let resp = ui.add(
+                egui::TextEdit::singleline(value)
+                    .hint_text("(empty = unset)")
+                    .desired_width(200.0),
+            );
+            if resp.changed() {
+                changed = true;
+            }
+        });
+    });
+    changed
+}
+
 fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) -> bool {
     let mut changed = false;
     ui.horizontal(|ui| {
@@ -256,12 +278,14 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 let atmosphere = t!("editor.map_settings.tab.atmosphere");
                 let lighting = t!("editor.map_settings.tab.lighting");
                 let water = t!("editor.map_settings.tab.water");
+                let resources = t!("editor.map_settings.tab.resources");
                 tab(ui, MapInfoTab::Identity, &identity, "identity");
                 tab(ui, MapInfoTab::Dimensions, &dimensions, "dimensions");
                 tab(ui, MapInfoTab::Physics, &physics, "physics");
                 tab(ui, MapInfoTab::Atmosphere, &atmosphere, "atmosphere");
                 tab(ui, MapInfoTab::Lighting, &lighting, "lighting");
                 tab(ui, MapInfoTab::Water, &water, "water");
+                tab(ui, MapInfoTab::Resources, &resources, "resources");
             });
             app.set_mapinfo_tab(active_tab);
             ui.add_space(8.0);
@@ -638,6 +662,100 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                                 ui.heading("Wave normals");
                                 ui.label("Per-octave amplitude falloff for the 4-octave normal map sampling. Higher = more pronounced ripples.");
                                 dirty |= drag_f32(ui, "Perlin amplitude", &mut w.perlin_amplitude, 0.0, 2.0);
+                            });
+                    }
+                    MapInfoTab::Resources => {
+                        // Texture filenames that mapinfo's `resources = { ... }`
+                        // table references. Stored as bare filenames; the
+                        // renderer resolves them against the project's
+                        // `passthrough/` directory at sample time. Bool /
+                        // float fields control how those textures get
+                        // sampled (e.g. splat detail-normal alpha
+                        // contribution, per-channel UV scale).
+                        let r = &mut app.map_settings_mut().resources;
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                ui.heading("Splat distribution");
+                                ui.label(
+                                    "Four-channel mask that selects which of the four detail-normal textures contributes per pixel. Without it the engine falls back to the legacy single-detail path.",
+                                );
+                                dirty |= text_field(ui, "splatDistrTex", &mut r.splat_distr_tex);
+
+                                ui.add_space(8.0);
+                                ui.heading("Splat detail-normal textures");
+                                ui.label(
+                                    "Four tiling normal-perturbation textures sampled per splat channel. RGB is the tangent-space normal; alpha (when `diffuse alpha contribution` is enabled) modulates per-pixel detail brightness.",
+                                );
+                                dirty |= text_field(
+                                    ui,
+                                    "splatDetailNormalTex1",
+                                    &mut r.splat_detail_normal_tex_1,
+                                );
+                                dirty |= text_field(
+                                    ui,
+                                    "splatDetailNormalTex2",
+                                    &mut r.splat_detail_normal_tex_2,
+                                );
+                                dirty |= text_field(
+                                    ui,
+                                    "splatDetailNormalTex3",
+                                    &mut r.splat_detail_normal_tex_3,
+                                );
+                                dirty |= text_field(
+                                    ui,
+                                    "splatDetailNormalTex4",
+                                    &mut r.splat_detail_normal_tex_4,
+                                );
+                                dirty |= ui
+                                    .checkbox(
+                                        &mut r.splat_detail_normal_diffuse_alpha,
+                                        "Diffuse alpha contribution",
+                                    )
+                                    .changed();
+
+                                ui.add_space(8.0);
+                                ui.heading("Per-channel sampling");
+                                ui.label(
+                                    "UV scale per splat channel (`splats.texScales`) and mix multiplier (`splats.texMults`).",
+                                );
+                                for (i, label) in ["R", "G", "B", "A"].iter().enumerate() {
+                                    dirty |= drag_f32(
+                                        ui,
+                                        &format!("texScales {label}"),
+                                        &mut r.splat_tex_scales[i],
+                                        0.0001,
+                                        1.0,
+                                    );
+                                }
+                                for (i, label) in ["R", "G", "B", "A"].iter().enumerate() {
+                                    dirty |= drag_f32(
+                                        ui,
+                                        &format!("texMults {label}"),
+                                        &mut r.splat_tex_mults[i],
+                                        0.0,
+                                        16.0,
+                                    );
+                                }
+
+                                ui.add_space(8.0);
+                                ui.heading("Legacy detail texture");
+                                ui.label(
+                                    "Older single-tiling-texture path that still appears on some maps. The renderer uses this when no splat distribution texture is set.",
+                                );
+                                dirty |= text_field(ui, "detailTex", &mut r.detail_tex);
+
+                                ui.add_space(8.0);
+                                ui.heading("Per-pixel masks");
+                                ui.label(
+                                    "Optional per-pixel modulation textures. `specularTex` overrides the global ground specular colour (rgb = colour, alpha*16 = exponent). `skyReflectModTex` masks where the skybox reflects.",
+                                );
+                                dirty |= text_field(ui, "specularTex", &mut r.specular_tex);
+                                dirty |= text_field(
+                                    ui,
+                                    "skyReflectModTex",
+                                    &mut r.sky_reflect_mod_tex,
+                                );
                             });
                     }
                 });

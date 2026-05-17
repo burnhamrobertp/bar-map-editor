@@ -135,7 +135,8 @@
         "physics": "Physics",
         "atmosphere": "Atmosphere",
         "lighting": "Lighting",
-        "water": "Water"
+        "water": "Water",
+        "resources": "Resources"
       }
     },
     "validation": {

@@ -75,15 +75,19 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
     let mut pending: Vec<PendingAsset> = Vec::new();
     let mut raw_files: Vec<PendingRawFile> = Vec::new();
 
-    // Passthrough covers ancillary files only (mapinfo.lua, scripts, sounds,
-    // etc.). The original .smf/.smt are NOT included -- they are regenerated
-    // on export from the embedded node data below.
+    // Passthrough covers ancillary files only (LuaGaia gadgets,
+    // LuaRules scripts, custom features under `features/`, sounds,
+    // etc.) -- everything BME doesn't yet structurally model. Config
+    // files BME owns in the recipe (currently `mapinfo.lua`) are
+    // filtered out at the extract.rs boundary and must not appear
+    // here. The original .smf/.smt are also excluded -- regenerated
+    // on export from embedded node data.
     let passthrough_entries: Vec<(PathBuf, PathBuf)> = scan.passthrough_files.clone();
 
-    let map_info_file: Option<String> = passthrough_entries
-        .iter()
-        .map(|(_, rel)| rel.to_string_lossy().replace('\\', "/"))
-        .find(|p| p.eq_ignore_ascii_case("mapinfo.lua"));
+    // `map_info_file` was the legacy "designate which passthrough
+    // file is the mapinfo" pointer. With mapinfo.lua now owned by
+    // the recipe (and absent from passthrough), this stays None.
+    let map_info_file: Option<String> = None;
 
     // Helper: add a PaintedHeightmap node backed by a binary asset.
     let add_hm = |key: &str,
@@ -271,7 +275,8 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         });
     }
 
-    // PassThrough for ancillary files (mapinfo.lua, scripts, etc.)
+    // PassThrough for ancillary files (LuaGaia / LuaRules scripts,
+    // custom feature definitions, sounds, etc.)
     // Absolute paths point into the work dir; the GUI save flow copies
     // them into <proj_dir>/passthrough/ on first save.
     let has_pass = !passthrough_entries.is_empty();
@@ -615,10 +620,13 @@ mod tests {
     fn passthrough_files_create_pass_node_and_connect_to_final_composition() {
         // Pass-through files wire directly into FinalComposition's
         // `files` input (FC is the terminal node; no separate Bundler).
+        // Use a LuaGaia gadget here -- legitimate passthrough content.
+        // `mapinfo.lua` would be wrong: it's owned by the recipe and
+        // filtered out at the extract boundary.
         let mut scan = empty_scan("pass");
         scan.passthrough_files = vec![(
-            PathBuf::from("/tmp/mapinfo.lua"),
-            PathBuf::from("mapinfo.lua"),
+            PathBuf::from("/tmp/LuaGaia/main.lua"),
+            PathBuf::from("LuaGaia/main.lua"),
         )];
         let (p, _, _) = scan_to_project(&scan);
         let keys = node_keys(&p);

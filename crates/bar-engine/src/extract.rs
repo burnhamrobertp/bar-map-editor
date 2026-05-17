@@ -421,6 +421,15 @@ fn scan_dir_recursive(
                     *smt_abs = Some(abs);
                     *smt_rel = Some(rel);
                 }
+                _ if is_recipe_owned_config(&rel) => {
+                    // Don't passthrough: the recipe is the source of
+                    // truth for this file's data after import, and the
+                    // exporter regenerates the file from the recipe.
+                    // Keeping it in passthrough would create two
+                    // sources of truth (drift trap on save / reload).
+                    // See `bar-map-format.md` for the full set of
+                    // config files BME structurally owns.
+                }
                 _ => {
                     pass.push((abs, rel));
                 }
@@ -428,6 +437,28 @@ fn scan_dir_recursive(
         }
     }
     Ok(())
+}
+
+/// True when `rel` (archive-relative path) is a configuration file
+/// BME parses structurally into the recipe and regenerates on export.
+/// Such files are deliberately omitted from `passthrough_files` at
+/// import time so the recipe stays the unambiguous source of truth.
+///
+/// Currently recognises:
+/// - `mapinfo.lua` at the archive root
+/// - `maphelper/mapinfo.lua` (stub forwarder some maps emit)
+///
+/// As BME grows parsers for the remaining structured config files
+/// listed in `bar-map-format.md` (`mapoptions.lua`,
+/// `mapconfig/featureplacer/*`, `mapconfig/map_startboxes.lua`,
+/// `mapconfig/map_metal_layout.lua`, etc.), each gets added here
+/// once its parse-into-recipe + regenerate-on-export pair lands.
+fn is_recipe_owned_config(rel: &Path) -> bool {
+    let normalized = rel
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    matches!(normalized.as_str(), "mapinfo.lua" | "maphelper/mapinfo.lua")
 }
 
 /// Parse a Spring FeaturePlacer `set.lua` and return placed features.
@@ -542,5 +573,32 @@ mod tests {
         let data = vec![42u8; 8 * 8];
         let out = downsample_u8_to_square(&data, 8, 8, 4);
         assert!(out.iter().all(|&v| v == 42));
+    }
+
+    #[test]
+    fn recipe_owned_config_recognises_mapinfo() {
+        assert!(is_recipe_owned_config(Path::new("mapinfo.lua")));
+        assert!(is_recipe_owned_config(Path::new("maphelper/mapinfo.lua")));
+        // Case-insensitive (Windows-extracted archives may upper-case).
+        assert!(is_recipe_owned_config(Path::new("MapInfo.lua")));
+        // Backslash path separators.
+        assert!(is_recipe_owned_config(Path::new(r"maphelper\mapinfo.lua")));
+    }
+
+    #[test]
+    fn recipe_owned_config_rejects_legitimate_passthrough() {
+        // Gameplay logic, lobby options, custom features, sounds,
+        // bitmaps -- all currently legitimate passthrough.
+        assert!(!is_recipe_owned_config(Path::new("LuaGaia/main.lua")));
+        assert!(!is_recipe_owned_config(Path::new("LuaRules/gadget.lua")));
+        assert!(!is_recipe_owned_config(Path::new("features/oak.lua")));
+        assert!(!is_recipe_owned_config(Path::new("mapoptions.lua")));
+        assert!(!is_recipe_owned_config(Path::new(
+            "mapconfig/featureplacer/set.lua"
+        )));
+        assert!(!is_recipe_owned_config(Path::new("bitmaps/foam.png")));
+        // A `mapinfo.lua` nested below `LuaGaia/` is NOT the canonical
+        // root mapinfo and should pass through verbatim.
+        assert!(!is_recipe_owned_config(Path::new("LuaGaia/mapinfo.lua")));
     }
 }
