@@ -1068,7 +1068,12 @@ fn handle_camera_input(
     if response.dragged_by(egui::PointerButton::Middle) {
         let delta = drag_delta_after_start(egui::PointerButton::Middle);
         let speed = core.camera.distance * 0.0015;
-        core.camera.pan_xz(delta.x * speed, -delta.y * speed);
+        // Grab-and-drag-the-world: cursor stays anchored to a point
+        // on the terrain. Drag the cursor right and the world slides
+        // right with it, which means the camera target moves left
+        // (negative right). Same logic on Y: drag down and the world
+        // slides down, so the target moves forward into the scene.
+        core.camera.pan_xz(-delta.x * speed, delta.y * speed);
         camera_changed = true;
     }
 
