@@ -136,20 +136,6 @@ impl Camera {
     pub fn pan(&mut self, delta: Vec3) {
         self.target += delta;
     }
-
-    /// Lift `target.y` so the camera position is at least `min_y` in
-    /// world space. No-op when the camera is already above `min_y`.
-    /// The view direction is preserved (target and position rise by
-    /// the same delta), so the framing shifts upward by the lift
-    /// amount but the angle and content stay the same. Used by the
-    /// viewport code to keep the camera from clipping through
-    /// terrain.
-    pub fn clamp_position_above_y(&mut self, min_y: f32) {
-        let pos = self.position();
-        if pos.y < min_y {
-            self.target.y += min_y - pos.y;
-        }
-    }
 }
 
 #[cfg(test)]
@@ -173,42 +159,6 @@ mod tests {
         let pos_after = cam.position();
         // Position should change after orbit
         assert!((pos_before - pos_after).length() > 0.01);
-    }
-
-    #[test]
-    fn clamp_above_lifts_target_when_position_below_floor() {
-        let mut cam = Camera::default();
-        let original_pos_y = cam.position().y;
-        // Pick a floor well above current position.y; clamp should
-        // lift target.y by (floor - pos.y).
-        let floor = original_pos_y + 0.5;
-        let original_target_y = cam.target.y;
-        cam.clamp_position_above_y(floor);
-        assert!((cam.target.y - (original_target_y + 0.5)).abs() < 1e-5);
-        // Camera position should now be exactly at the floor.
-        assert!((cam.position().y - floor).abs() < 1e-5);
-    }
-
-    #[test]
-    fn clamp_above_is_noop_when_already_above_floor() {
-        let mut cam = Camera::default();
-        let pos_before = cam.position();
-        let target_before = cam.target;
-        // Floor well below current position.
-        cam.clamp_position_above_y(pos_before.y - 0.5);
-        assert_eq!(cam.target, target_before, "target should not move");
-        assert_eq!(cam.position(), pos_before, "position should not move");
-    }
-
-    #[test]
-    fn clamp_above_preserves_view_direction() {
-        let mut cam = Camera::default();
-        let original_dir = (cam.target - cam.position()).normalize();
-        cam.clamp_position_above_y(cam.position().y + 0.3);
-        let new_dir = (cam.target - cam.position()).normalize();
-        // Lift moves both target and position by the same Y delta
-        // so the look vector direction stays the same.
-        assert!((new_dir - original_dir).length() < 1e-5);
     }
 
     #[test]

@@ -852,6 +852,14 @@ fn handle_camera_input(
     ctx: &egui::Context,
     app: &mut bar_gui::BarEditorApp,
 ) {
+    // Snapshot camera state before any per-frame mutation so we can
+    // revert at the end if the net effect would have pushed the
+    // camera below the terrain. Reverting (rather than clamping
+    // target.y to a floor) is what prevents the camera from sliding
+    // along the terrain surface when the user keeps orbiting against
+    // the constraint: each frame's mutation is dropped wholesale, so
+    // the camera freezes at the last valid orientation.
+    let pre_camera = core.camera.clone();
     let mut camera_changed = false;
     let sculpt_active = app.sculpt_input_active();
 
@@ -1116,32 +1124,39 @@ fn handle_camera_input(
     }
 
     if camera_changed {
-        // Keep the camera above terrain before rendering. Orbit /
-        // zoom / pan can each push the camera underground; without
-        // this clamp the user gets backfaces + the black void below
-        // the heightmap. Sampled at the camera's projected XZ
-        // against the same heightmap pick_terrain uses for cursor
-        // picking, with a small epsilon so the camera floats just
-        // above the surface rather than skimming inside it.
+        // If the net effect of this frame's mutations would put the
+        // camera underground, revert to the pre-frame state -- the
+        // user's gesture does nothing instead of sliding the camera
+        // along the terrain surface. Allow upward "escape" mutations
+        // from a degenerate pre-below state so the user isn't stuck.
         if let (Some(renderer), Some(hm)) =
             (core.terrain_renderer.as_ref(), app.paint.heightmap.as_ref())
         {
             const TERRAIN_FLOOR_EPSILON: f32 = 0.005;
             let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
-            let pos = core.camera.position();
-            if let Some(terrain_y) = bar_render::terrain_y_at_world_xz(
-                pos.x,
-                pos.z,
-                hm,
-                x_extent,
-                z_extent,
-                height_scale,
-            ) {
-                core.camera
-                    .clamp_position_above_y(terrain_y + TERRAIN_FLOOR_EPSILON);
+            let floor_at = |x: f32, z: f32| -> Option<f32> {
+                bar_render::terrain_y_at_world_xz(x, z, hm, x_extent, z_extent, height_scale)
+                    .map(|y| y + TERRAIN_FLOOR_EPSILON)
+            };
+            let post_pos = core.camera.position();
+            let post_below = floor_at(post_pos.x, post_pos.z)
+                .map(|f| post_pos.y < f)
+                .unwrap_or(false);
+            if post_below {
+                let pre_pos = pre_camera.position();
+                let pre_below = floor_at(pre_pos.x, pre_pos.z)
+                    .map(|f| pre_pos.y < f)
+                    .unwrap_or(false);
+                let escape_upward = pre_below && post_pos.y > pre_pos.y;
+                if !escape_upward {
+                    core.camera = pre_camera;
+                    camera_changed = false;
+                }
             }
         }
+    }
 
+    if camera_changed {
         if let (Some(ref mut renderer), Some(ref gpu)) = (&mut core.terrain_renderer, gpu_context) {
             let elapsed = core.started_at.elapsed().as_secs_f32();
             let smf = live_smf_lighting(app);
