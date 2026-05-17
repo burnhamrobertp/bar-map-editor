@@ -69,19 +69,16 @@ fn draw_info_bar(app: &mut BarEditorApp, ui: &mut egui::Ui, is_compiled: bool) {
     });
 }
 
-/// Draw a bright segment travelling clockwise around `rect` to indicate activity.
-///
-/// `rect` should be the button's own rect; the border is rendered flush with
-/// the button edge (no gap) and shares the button's 5px corner radius so the
-/// animated outline reads as part of the button rather than a separate frame.
-/// Earlier the function `expand(2.0)`'d the rect and used a 4px corner radius,
-/// which left a visible square ring around a rounded button.
-/// Corner radius of the animated border + its base outline. Must match
-/// the value passed to `rect_stroke` below; the travelling glow's
-/// perimeter walk uses it to arc through the corners cleanly instead
-/// of cutting straight across them.
+/// Corner radius of the animated border + its base outline. The
+/// `perimeter_point` walk uses it to arc through the corners cleanly
+/// instead of cutting straight across them.
 const BORDER_CORNER_R: f32 = 5.0;
 
+/// Draw a bright segment travelling clockwise around `rect` to
+/// indicate activity. `rect` should be the button's own rect; the
+/// border renders flush with the button edge (no gap) and shares the
+/// `BORDER_CORNER_R` corner radius so the animated outline reads as
+/// part of the button rather than a separate frame.
 pub fn draw_animated_border(ui: &mut egui::Ui, rect: egui::Rect) {
     let time = ui.input(|i| i.time) as f32;
     let phase = (time * 0.75).fract();
