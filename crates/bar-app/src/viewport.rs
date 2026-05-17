@@ -801,7 +801,7 @@ fn fmt_tex_res(w: u32, h: u32) -> String {
     }
 }
 
-fn draw_resolution_badge(ui: &egui::Ui, viewport_rect: &egui::Rect, res: &ResolutionStatus) {
+fn draw_resolution_badge(ui: &mut egui::Ui, viewport_rect: &egui::Rect, res: &ResolutionStatus) {
     let target_dims = if res.low_pending {
         res.low_tex_dims
     } else if res.high_pending {
@@ -819,7 +819,6 @@ fn draw_resolution_badge(ui: &egui::Ui, viewport_rect: &egui::Rect, res: &Resolu
         (None, None) => return,
     };
 
-    let painter = ui.painter();
     let font = egui::FontId::monospace(11.0);
     let text_color = if target_dims.is_some() {
         egui::Color32::from_rgba_unmultiplied(255, 200, 80, 230)
@@ -827,19 +826,27 @@ fn draw_resolution_badge(ui: &egui::Ui, viewport_rect: &egui::Rect, res: &Resolu
         egui::Color32::from_rgba_unmultiplied(160, 200, 160, 200)
     };
 
-    let galley = painter.layout_no_wrap(label, font, text_color);
+    let galley = ui.painter().layout_no_wrap(label, font, text_color);
     let padding = egui::vec2(6.0, 3.0);
     let badge_size = galley.size() + padding * 2.0;
     let badge_pos =
         viewport_rect.right_bottom() - egui::vec2(badge_size.x + 8.0, badge_size.y + 8.0);
     let badge_rect = egui::Rect::from_min_size(badge_pos, badge_size);
 
-    painter.rect_filled(
+    ui.painter().rect_filled(
         badge_rect,
-        4.0,
+        5.0,
         egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160),
     );
-    painter.galley(badge_pos + padding, galley, text_color);
+    ui.painter().galley(badge_pos + padding, galley, text_color);
+
+    // Loading affordance: when the high-res pass is still working,
+    // wrap the badge with the same travelling-glow outline used on
+    // the Compile button so it reads as an active state rather than
+    // a static label.
+    if res.high_pending {
+        bar_gui::layouts::preview::draw_animated_border(ui, badge_rect);
+    }
 }
 
 // ── Camera and sculpt input ───────────────────────────────────────────────────
