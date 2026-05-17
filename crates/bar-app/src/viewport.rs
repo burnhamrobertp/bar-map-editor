@@ -1053,11 +1053,27 @@ fn handle_camera_input(
         }
     }
 
+    // On the frame egui first recognises a drag, `drag_delta` is the
+    // motion from the press point through the drag-recognition
+    // threshold (a few pixels). Applying it produces a visible
+    // single-frame jump on the camera. Subsequent frames give clean
+    // incremental motion. Helper returns the per-frame delta after
+    // suppressing this initial threshold-cross frame; sculpt
+    // dabbing uses cursor position rather than delta so it's not
+    // affected by this gating.
+    let drag_delta_after_start = |button: egui::PointerButton| -> egui::Vec2 {
+        if response.drag_started_by(button) {
+            egui::Vec2::ZERO
+        } else {
+            response.drag_delta()
+        }
+    };
+
     if response.dragged_by(egui::PointerButton::Primary) {
         if sculpt_active {
             apply_sculpt_dab_at_cursor(core, gpu_context, response, ctx, app);
         } else if feature_type.is_none() {
-            let delta = response.drag_delta();
+            let delta = drag_delta_after_start(egui::PointerButton::Primary);
             core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
             camera_changed = true;
         }
@@ -1071,7 +1087,7 @@ fn handle_camera_input(
     }
 
     if response.dragged_by(egui::PointerButton::Secondary) {
-        let delta = response.drag_delta();
+        let delta = drag_delta_after_start(egui::PointerButton::Secondary);
         core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
         camera_changed = true;
     }
@@ -1081,7 +1097,7 @@ fn handle_camera_input(
     }
 
     if response.dragged_by(egui::PointerButton::Middle) {
-        let delta = response.drag_delta();
+        let delta = drag_delta_after_start(egui::PointerButton::Middle);
         let speed = core.camera.distance * 0.0015;
         core.camera.pan_xz(delta.x * speed, -delta.y * speed);
         camera_changed = true;
