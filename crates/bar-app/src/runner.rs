@@ -643,6 +643,7 @@ impl AppRunner {
             .collect();
         let to_load: Vec<(String, String)> = unique_types
             .iter()
+            .filter(|name| !self.layout_manager.has_feature_model(name))
             .filter_map(|name| {
                 let def = catalog.features.get(name)?;
                 if def.object.is_empty() {
@@ -658,10 +659,8 @@ impl AppRunner {
             })
             .collect();
         if to_load.is_empty() {
-            self.app.set_status(format!(
-                "Feature catalog loaded ({} entries); no models matched map features",
-                catalog.features.len()
-            ));
+            // All required types already loaded (or absent from the
+            // catalog); no work and nothing to say.
             return;
         }
         self.app

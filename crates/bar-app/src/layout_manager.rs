@@ -68,6 +68,11 @@ pub struct LayoutManager {
     pub sculpt3d: Option<RenderSlot>,
     pub preview: Option<PreviewSlot>,
     next_session_id: u64,
+    /// Last observed value of `app.map.selected_feature_idx`. Selection
+    /// changes flip per-instance highlight colour in the feature
+    /// instance buffer but don't change the type-set, so they only
+    /// need an instance-buffer rebuild -- not a model reload.
+    last_selected_feature: Option<usize>,
 }
 
 impl LayoutManager {
@@ -76,6 +81,7 @@ impl LayoutManager {
             sculpt3d: None,
             preview: None,
             next_session_id: 0,
+            last_selected_feature: None,
         }
     }
 
@@ -107,6 +113,19 @@ impl LayoutManager {
         // Propagate placement changes to both slots before layout dispatch.
         if app.map.features_placement_dirty {
             app.map.features_placement_dirty = false;
+            if let Some(ref mut s) = self.sculpt3d {
+                s.eval.features_dirty = true;
+            }
+            if let Some(ref mut s) = self.preview {
+                s.features_dirty = true;
+            }
+        }
+        // Selection-only changes (no add/remove/type swap) still need
+        // the instance buffer rebuilt so the highlight tint follows
+        // the new selection -- but explicitly do not go through
+        // `features_placement_dirty`, which kicks the model loader.
+        if app.map.selected_feature_idx != self.last_selected_feature {
+            self.last_selected_feature = app.map.selected_feature_idx;
             if let Some(ref mut s) = self.sculpt3d {
                 s.eval.features_dirty = true;
             }
@@ -510,6 +529,28 @@ impl LayoutManager {
         egui::CentralPanel::default().show(ctx, |ui| {
             draw_preview_viewport(core, &res, gpu_context, render_state, ui, ctx, app);
         });
+    }
+
+    /// True if both render slots already hold a loaded S3O mesh for
+    /// the given feature type. Used by the runner to dedupe model
+    /// loading when the features array changes shape but no genuinely
+    /// new type was introduced (e.g. delete).
+    pub fn has_feature_model(&self, feature_type: &str) -> bool {
+        let in_sculpt = self
+            .sculpt3d
+            .as_ref()
+            .and_then(|s| s.core.terrain_renderer.as_ref())
+            .and_then(|r| r.feature_renderer())
+            .map(|fr| fr.has_model(feature_type))
+            .unwrap_or(false);
+        let in_preview = self
+            .preview
+            .as_ref()
+            .and_then(|s| s.core.terrain_renderer.as_ref())
+            .and_then(|r| r.feature_renderer())
+            .map(|fr| fr.has_model(feature_type))
+            .unwrap_or(false);
+        in_sculpt && in_preview
     }
 
     /// Mark feature instances as dirty on all slots (e.g. after catalog load or model arrival).

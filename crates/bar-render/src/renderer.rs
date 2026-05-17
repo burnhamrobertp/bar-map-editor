@@ -3741,6 +3741,12 @@ impl TerrainRenderer {
         self.feature_renderer.as_mut()
     }
 
+    /// Read-only access to the feature renderer for queries like
+    /// `has_model`.
+    pub fn feature_renderer(&self) -> Option<&crate::features::FeatureRenderer> {
+        self.feature_renderer.as_ref()
+    }
+
     /// Upload an S3O model and its two textures for a named feature type.
     /// `tex1` is the diffuse (rgb) + team mask (a) channel; `tex2` is the
     /// shading (rgb) + opacity (a) channel. When either is `None` the feature

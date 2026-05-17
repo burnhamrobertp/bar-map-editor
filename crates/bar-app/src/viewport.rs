@@ -1013,7 +1013,6 @@ fn handle_camera_input(
                                 // True per-feature footprint thresholds would
                                 // need the catalog plumbed through to this fn.
                                 let threshold = 24.0_f32;
-                                let prev = app.map.selected_feature_idx;
                                 let best = app
                                     .map
                                     .features
@@ -1031,9 +1030,6 @@ fn handle_camera_input(
                                     })
                                     .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
                                 app.map.selected_feature_idx = best.map(|(i, _)| i);
-                                if app.map.selected_feature_idx != prev {
-                                    app.map.features_placement_dirty = true;
-                                }
                             }
                         }
                     }
@@ -1059,7 +1055,6 @@ fn handle_camera_input(
                     app.selected_feature_type = None;
                 } else if app.map.selected_feature_idx.is_some() {
                     app.map.selected_feature_idx = None;
-                    app.map.features_placement_dirty = true;
                 }
             }
         }
