@@ -1077,8 +1077,11 @@ impl BarEditorApp {
                     // project-metadata / inspection group (Edit Map Info,
                     // 2D Inspector, etc.). The build buttons share an
                     // operational pipeline; everything past this separator
-                    // operates on the project source instead.
-                    ui.add_space(8.0);
+                    // operates on the project source instead. Symmetric
+                    // padding so the separator reads as a clean divider
+                    // -- earlier code used 8/4 which left the right side
+                    // visibly tighter than the left.
+                    ui.add_space(4.0);
                     ui.separator();
                     ui.add_space(4.0);
 
