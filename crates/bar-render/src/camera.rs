@@ -81,36 +81,6 @@ impl Camera {
         self.distance = (self.distance * (1.0 + factor)).clamp(0.05, 1000.0);
     }
 
-    /// Snap the look-at target to `new_target` while preserving the camera's
-    /// world position (and therefore the visual frame). Recomputes
-    /// `distance`, `azimuth`, `elevation` so the camera looks at the new
-    /// target from the same point in space.
-    ///
-    /// Used at the start of an orbit drag to put the rotation pivot under
-    /// the cursor: without this, orbit spins around the map-centre regardless
-    /// of zoom level, which makes close-up rotation feel like the camera is
-    /// flying through the scene.
-    pub fn snap_target_preserving_position(&mut self, new_target: Vec3) {
-        let pos = self.position();
-        let view_vec = pos - new_target;
-        let new_distance = view_vec.length();
-        if new_distance < 1e-4 {
-            // Degenerate -- new target coincides with camera. Leave camera
-            // untouched.
-            return;
-        }
-        let dir = view_vec / new_distance;
-        let elev = dir.y.clamp(-1.0, 1.0).asin().clamp(
-            -std::f32::consts::FRAC_PI_2 + 0.01,
-            std::f32::consts::FRAC_PI_2 - 0.01,
-        );
-        let azim = dir.z.atan2(dir.x);
-        self.elevation = elev;
-        self.azimuth = azim;
-        self.distance = new_distance.clamp(0.05, 1000.0);
-        self.target = new_target;
-    }
-
     /// Pan the camera target along the camera's apparent ground-plane axes.
     /// `right` moves along the camera's screen-right axis (projected onto
     /// the XZ plane); `forward` moves into/out of the scene along the

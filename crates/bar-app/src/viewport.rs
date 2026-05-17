@@ -1022,37 +1022,6 @@ fn handle_camera_input(
         }
     }
 
-    // At the start of an orbit gesture, snap the camera target to the world
-    // point under the cursor so the rotation pivots around what's visually
-    // beneath the cursor instead of the fixed map-centre. With a far-away
-    // target on a zoomed-in camera, even a small azimuth nudge would swing
-    // the camera around the map rather than tilt around the focal point.
-    let orbit_started = response.drag_started_by(egui::PointerButton::Secondary)
-        || (response.drag_started_by(egui::PointerButton::Primary)
-            && !sculpt_active
-            && feature_type.is_none());
-    if orbit_started {
-        if let (Some(uv), Some(hm), Some(renderer)) = (
-            cursor_uv,
-            app.paint.heightmap.as_ref(),
-            core.terrain_renderer.as_ref(),
-        ) {
-            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
-            if let Some(pick) = pick_terrain(
-                &core.camera,
-                aspect,
-                uv,
-                hm,
-                x_extent,
-                z_extent,
-                height_scale,
-            ) {
-                core.camera.snap_target_preserving_position(pick.world);
-                camera_changed = true;
-            }
-        }
-    }
-
     // On the frame egui first recognises a drag, `drag_delta` is the
     // motion from the press point through the drag-recognition
     // threshold (a few pixels). Applying it produces a visible
