@@ -763,6 +763,42 @@ fn draw_viewport_body(
         }
 
         handle_camera_input(core, gpu_context, render_state, &response, ctx, app);
+
+        // Floating feature popover -- anchors next to the selected
+        // feature in the viewport when one is selected. Hidden when
+        // the feature is offscreen or behind the camera. Projection
+        // is computed first (immutable borrows of app); the draw call
+        // takes &mut app for the delete-button path, so the borrows
+        // are split intentionally.
+        if let Some(frame) = core.current_frame.as_ref() {
+            let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
+            let view_projection = core.camera.view_projection(aspect);
+            let dims = bar_gui::panels::feature_popover::PopoverDims {
+                map_w: app.map.width,
+                map_h: app.map.height,
+                min_height: app.map.min_height,
+                max_height: app.map.max_height,
+                x_extent: frame.x_extent,
+                z_extent: frame.z_extent,
+                height_scale: frame.height_scale,
+            };
+            let anchor = app
+                .map
+                .selected_feature_idx
+                .and_then(|idx| app.map.features.get(idx))
+                .and_then(|feature| {
+                    bar_gui::panels::feature_popover::project_feature_to_screen(
+                        feature,
+                        &dims,
+                        app.paint.heightmap.as_ref(),
+                        view_projection,
+                        response.rect,
+                    )
+                });
+            if let Some(anchor) = anchor {
+                bar_gui::panels::feature_popover::draw(ctx, app, anchor);
+            }
+        }
     } else {
         // No frame yet -- show a loading message with the target resolution.
         let target = if res.low_pending {

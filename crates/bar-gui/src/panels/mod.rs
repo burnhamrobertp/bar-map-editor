@@ -16,6 +16,7 @@
 
 pub mod canvas;
 pub mod dialogs;
+pub mod feature_popover;
 pub mod icons;
 pub mod inspector;
 pub mod log;

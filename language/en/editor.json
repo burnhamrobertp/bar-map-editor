@@ -129,6 +129,28 @@
     "import": {
       "title": "Importing map"
     },
+    "feature_popover": {
+      "delete_hover": "Remove this feature (Del)",
+      "field": {
+        "position": "Position",
+        "angle": "Angle",
+        "angle_unit": "deg"
+      },
+      "feature_lights": {
+        "title": "Feature Lights",
+        "info_tooltip": "Coloured markers above the feature show where BAR will attach point lights at runtime. BME doesn't render the actual glow.",
+        "info_icon": "ⓘ",
+        "light_n": "Light %{n}",
+        "field": {
+          "colour": "Colour",
+          "radius": "Radius",
+          "radius_unit": "elmos",
+          "offset": "Offset",
+          "offset_unit": "elmos",
+          "intensity": "Intensity"
+        }
+      }
+    },
     "map_settings": {
       "title": "Map settings",
       "map_size_label": "Map Size",
