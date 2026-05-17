@@ -133,9 +133,8 @@ pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32
 }
 
 pub(crate) use crate::dialog::{
-    confirm_key_display_name, ConfirmAction, ConfirmDialog, DialogState, FileEditor,
-    GroupDeleteChoice, PassthroughEdit, PendingAction, UnsavedDecision,
-    CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    confirm_key_display_name, ConfirmAction, ConfirmDialog, DialogState, GroupDeleteChoice,
+    PassthroughEdit, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 pub(crate) use crate::editor::DragConnection;
 
@@ -617,23 +616,6 @@ impl BarEditorApp {
         self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
     }
 
-    /// Load `abs_path` from disk and open the in-app editor for it.
-    pub(crate) fn open_file_editor(&mut self, abs_path: String, archive_path: String) {
-        let content = match std::fs::read_to_string(&abs_path) {
-            Ok(s) => s,
-            Err(e) => {
-                self.dialog.status_message = Some(format!("Failed to read file: {e}"));
-                return;
-            }
-        };
-        self.dialog.file_editor = Some(FileEditor {
-            abs_path,
-            archive_path,
-            content,
-            is_dirty: false,
-        });
-    }
-
     /// Perform the actual node deletion (the destructive-confirm path runs
     /// the dialog first; the no-confirm path calls this directly).
     /// Delete a SubGraph + every member node it owns, in one undo
@@ -895,7 +877,6 @@ impl BarEditorApp {
         // Close windows that are only meaningful in the layout we just left.
         // Map info editor is the exception -- it spans all layouts.
         self.dialog.show_inspector = false;
-        self.dialog.file_editor = None;
         self.dialog.show_validation_panel = false;
         self.props.active = None;
         self.dialog.pending_props_open = None;

@@ -32,19 +32,6 @@ pub struct PassthroughEdit {
     pub is_dirty: bool,
 }
 
-/// Floating in-app text editor -- used by the Edit Map Info button and any
-/// future "open this file" action. Lives outside the side panels so it can
-/// be resized and scrolled freely.
-#[derive(Debug, Clone)]
-pub struct FileEditor {
-    /// Absolute path on disk; what we read from and write back to.
-    pub(crate) abs_path: String,
-    /// Bundle-relative path (forward slashes) for display.
-    pub(crate) archive_path: String,
-    pub(crate) content: String,
-    pub(crate) is_dirty: bool,
-}
-
 /// Action waiting on the user's response to an unsaved-changes confirmation.
 /// Once the dialog resolves, the chosen action is performed.
 #[derive(Clone, Debug)]
@@ -122,8 +109,6 @@ pub struct DialogState {
     pub(crate) mapinfo_editor_pending_undo: Option<crate::undo::Snapshot>,
     pub show_settings: bool,
     pub show_about: bool,
-    /// True while the "pick which file is the map info" picker modal is open.
-    pub show_map_info_picker: bool,
     /// True for one frame after the user accepts an unsaved-changes
     /// close so `bar-app` can let the window actually close.
     pub allow_close: bool,
@@ -132,9 +117,6 @@ pub struct DialogState {
     /// Pending action blocked on the unsaved-changes confirm dialog.
     /// `Some` means a modal is currently open.
     pub(crate) pending_action: Option<PendingAction>,
-    /// In-app floating text editor (Edit Map Info / future "open
-    /// file" triggers). `None` when no editor is open.
-    pub(crate) file_editor: Option<FileEditor>,
     /// True when the log window is visible.
     pub(crate) show_log: bool,
     /// Level filter for the log window (None = show all).

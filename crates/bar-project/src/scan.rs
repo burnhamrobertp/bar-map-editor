@@ -84,11 +84,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
     // on export from embedded node data.
     let passthrough_entries: Vec<(PathBuf, PathBuf)> = scan.passthrough_files.clone();
 
-    // `map_info_file` was the legacy "designate which passthrough
-    // file is the mapinfo" pointer. With mapinfo.lua now owned by
-    // the recipe (and absent from passthrough), this stays None.
-    let map_info_file: Option<String> = None;
-
     // Helper: add a PaintedHeightmap node backed by a binary asset.
     let add_hm = |key: &str,
                   label: &str,
@@ -438,7 +433,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         node_positions,
         node_sizes,
         canvas_offset: (0.0, 0.0),
-        map_info_file,
         groups: Vec::new(),
         open_tabs: Vec::new(),
         active_tab: 0,

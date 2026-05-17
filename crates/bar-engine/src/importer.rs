@@ -151,7 +151,6 @@ pub fn import_sd7_to_project(archive_path: &Path, output_dir: &Path) -> Result<P
         },
         node_sizes: HashMap::new(),
         canvas_offset: (0.0, 0.0),
-        map_info_file: None,
         groups: Vec::new(),
         open_tabs: Vec::new(),
         active_tab: 0,

@@ -13,7 +13,7 @@
 
 use std::collections::HashMap;
 
-use bar_graph::{GraphEngine, NodeType, ParamValue};
+use bar_graph::ParamValue;
 
 /// Marker for project-relative paths in saved `.barproj` files. Anything
 /// starting with this prefix is resolved against the project's directory
@@ -313,20 +313,4 @@ pub(crate) fn files_equal(a: &std::path::Path, b: &std::path::Path) -> bool {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => false,
     }
-}
-
-/// Walk every PassThrough node in the graph and return its (abs_path,
-/// archive_path) entries flattened. Used by the Edit Map Info picker so the
-/// user can pick from any text file currently in the bundle.
-pub(crate) fn collect_all_passthrough_files(graph: &GraphEngine) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for node in graph.nodes().values() {
-        if node.node_type != NodeType::PassThrough {
-            continue;
-        }
-        if let Some(ParamValue::String(s)) = node.params.get("files") {
-            out.extend(parse_passthrough_files(s));
-        }
-    }
-    out
 }

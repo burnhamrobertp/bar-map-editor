@@ -36,13 +36,6 @@ pub struct EditorLayout {
     /// Canvas pan offset.
     #[serde(default)]
     pub canvas_offset: (f32, f32),
-    /// Bundle path (forward-slash, archive-relative) of the file the user
-    /// has designated as the project's map-info file (e.g. `mapinfo.lua`
-    /// for Spring/BAR). Resolved at click time by scanning PassThrough nodes
-    /// for a matching bundle path. `None` means the user hasn't picked one
-    /// yet; the editor will prompt on first use of the Edit Map Info button.
-    #[serde(default)]
-    pub map_info_file: Option<String>,
     /// Visual node groupings. Purely organisational — they don't change
     /// graph topology or evaluation. The chip-style "subgraph as a
     /// reusable component" model lives at a separate layer once it

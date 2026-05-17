@@ -27,10 +27,6 @@ pub struct ProjectState {
     /// Timestamp of the last successful autosave, used as the gate
     /// for the autosave-interval timer.
     pub last_autosave_at: Option<Instant>,
-    /// Bundle path (archive-relative, forward slashes) of the file
-    /// the user has designated as the project's map-info file. None
-    /// means the user hasn't picked one yet.
-    pub map_info_file: Option<String>,
     /// Set by `bar-app` after a `.sd7` extraction lands on disk; the
     /// editor's per-frame poll picks it up and opens the resulting
     /// project.

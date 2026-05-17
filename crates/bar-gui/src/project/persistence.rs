@@ -303,7 +303,6 @@ impl BarEditorApp {
                 node_positions: layout_positions,
                 node_sizes: layout_sizes,
                 canvas_offset: (self.canvas.offset.x, self.canvas.offset.y),
-                map_info_file: self.project.map_info_file.clone(),
                 groups: self
                     .visuals
                     .groups

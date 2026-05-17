@@ -16,10 +16,8 @@ use crate::app::{
     ConfirmDialog, ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab,
     PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
-use crate::io::is_text_file;
 use crate::panels::log::level_color;
 use crate::panels::tokens;
-use crate::project::path::collect_all_passthrough_files;
 use crate::t;
 
 /// Maps a 0-based layout index to its Ctrl+# trigger key (Num1..Num9).
@@ -786,143 +784,6 @@ impl BarEditorApp {
 
         // ── Modal: Preferences ───────────────────────────────────────────────
         crate::panels::dialogs::draw_settings(self, ctx);
-
-        // ── Modal: Edit Map Info picker ──────────────────────────────────────
-        if self.dialog.show_map_info_picker {
-            let candidates = collect_all_passthrough_files(&self.graph);
-            // Heuristic: text files first, with .lua nudged to the top so
-            // mapinfo.lua appears at the obvious spot for BAR/Spring users.
-            let mut sorted = candidates.clone();
-            sorted.sort_by_key(|(_, archive)| {
-                let lua = archive.to_lowercase().ends_with("mapinfo.lua");
-                let text = is_text_file(archive);
-                (!lua, !text, archive.clone())
-            });
-
-            let mut open = self.dialog.show_map_info_picker;
-            let mut chosen: Option<(String, String)> = None;
-            let mut cleared = false;
-            egui::Window::new("Choose map info file")
-                .open(&mut open)
-                .resizable(true)
-                .collapsible(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                .show(ctx, |ui| {
-                    if sorted.is_empty() {
-                        ui.label(
-                            "No passthrough files in this project. Open or import a map \
-                             with a mapinfo.lua first.",
-                        );
-                    } else {
-                        ui.label("Pick the file that holds this project's map configuration:");
-                        ui.add_space(4.0);
-                        egui::ScrollArea::vertical()
-                            .max_height(280.0)
-                            .show(ui, |ui| {
-                                for (abs, archive) in &sorted {
-                                    let label_text = if is_text_file(archive) {
-                                        archive.clone()
-                                    } else {
-                                        format!("{archive} (binary — won't open in text editor)")
-                                    };
-                                    if ui.button(label_text).on_hover_text(abs).clicked() {
-                                        chosen = Some((abs.clone(), archive.clone()));
-                                    }
-                                }
-                            });
-                    }
-                    ui.add_space(8.0);
-                    if self.project.map_info_file.is_some()
-                        && ui.button("Clear current selection").clicked()
-                    {
-                        cleared = true;
-                    }
-                });
-            self.dialog.show_map_info_picker = open;
-            if cleared {
-                self.project.map_info_file = None;
-                self.project.is_dirty = true;
-                self.dialog.show_map_info_picker = false;
-            }
-            if let Some((abs, archive)) = chosen {
-                self.project.map_info_file = Some(archive.clone());
-                self.project.is_dirty = true;
-                self.dialog.show_map_info_picker = false;
-                self.open_file_editor(abs, archive);
-            }
-        }
-
-        // ── Modal: in-app file editor ────────────────────────────────────────
-        if self.dialog.file_editor.is_some() {
-            let mut save_request = false;
-            let mut close_request = false;
-            // Take ownership briefly so we can borrow the editor mutably for
-            // the text widget while still calling self.* methods after.
-            let mut editor = self.dialog.file_editor.take().expect("checked Some above");
-            let dirty_marker = if editor.is_dirty { " *" } else { "" };
-            let title = format!("Edit — {}{}", editor.archive_path, dirty_marker);
-            let mut open = true;
-            egui::Window::new(title)
-                .id(egui::Id::new("file_editor_window"))
-                .resizable(true)
-                .collapsible(false)
-                .default_size(egui::vec2(640.0, 480.0))
-                .open(&mut open)
-                .show(ctx, |ui| {
-                    ui.weak(&editor.abs_path);
-                    ui.add_space(4.0);
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false; 2])
-                        .show(ui, |ui| {
-                            let resp = ui.add_sized(
-                                ui.available_size() - egui::vec2(0.0, 32.0),
-                                egui::TextEdit::multiline(&mut editor.content)
-                                    .code_editor()
-                                    .desired_width(f32::INFINITY),
-                            );
-                            if resp.changed() {
-                                editor.is_dirty = true;
-                            }
-                        });
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        if ui
-                            .add_enabled(editor.is_dirty, egui::Button::new("Save"))
-                            .clicked()
-                        {
-                            save_request = true;
-                        }
-                        if ui.button("Close").clicked() {
-                            close_request = true;
-                        }
-                    });
-                });
-
-            // The X-button on the window translates to !open; treat it as Close.
-            if !open {
-                close_request = true;
-            }
-
-            if save_request {
-                match std::fs::write(&editor.abs_path, &editor.content) {
-                    Ok(()) => {
-                        editor.is_dirty = false;
-                        self.log_info(format!("Saved {}", editor.archive_path));
-                    }
-                    Err(e) => {
-                        self.log_error(format!("Save failed: {e}"));
-                    }
-                }
-            }
-
-            if close_request {
-                // If unsaved, drop the changes silently for now — user explicitly
-                // dismissed. (We could prompt later if this becomes a footgun.)
-                self.dialog.file_editor = None;
-            } else {
-                self.dialog.file_editor = Some(editor);
-            }
-        }
 
         // ── Modal: About ─────────────────────────────────────────────────────
         crate::panels::dialogs::draw_about(self, ctx);

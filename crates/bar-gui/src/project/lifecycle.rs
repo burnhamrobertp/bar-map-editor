@@ -39,7 +39,6 @@ impl BarEditorApp {
         self.project.path = None;
         self.project.loaded_name = None;
         self.project.is_dirty = false;
-        self.project.map_info_file = None;
         self.map.settings = bar_project::MapSettings::default();
         self.map.width = 513;
         self.map.height = 513;
@@ -75,8 +74,6 @@ impl BarEditorApp {
         // to open with no dialogs up.
         self.dialog.show_inspector = false;
         self.dialog.show_mapinfo_editor = false;
-        self.dialog.show_map_info_picker = false;
-        self.dialog.file_editor = None;
         self.dialog.confirm_dialog = None;
         self.dialog.pending_action = None;
         self.selection.pending_group_delete = None;
@@ -349,7 +346,6 @@ impl BarEditorApp {
         );
         self.map.width = project.recipe.output.width;
         self.map.height = project.recipe.output.height;
-        self.project.map_info_file = project.layout.map_info_file.clone();
         self.map.settings = project.recipe.output.map_settings.clone();
         self.map.recipe_meta = RecipeMeta {
             shortname: project.recipe.shortname.clone(),
