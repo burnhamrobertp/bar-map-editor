@@ -79,7 +79,7 @@ fn draw_body(
     // we don't need a separate title.
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let trash_size = egui::vec2(18.0, 18.0);
+            let trash_size = egui::vec2(16.0, 16.0);
             let (rect, resp) = ui.allocate_exact_size(trash_size, egui::Sense::click());
             let color = if resp.hovered() {
                 egui::Color32::from_rgb(255, 110, 110)

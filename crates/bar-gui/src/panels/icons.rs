@@ -517,26 +517,33 @@ pub(crate) fn draw_io_icon(painter: &egui::Painter, rect: egui::Rect, is_input: 
 
 /// Trash-can icon for delete buttons. Drawn with line segments so it
 /// stays crisp at any DPI and tints cleanly via the `color` argument.
-/// Sized to fit a ~20-pixel-square rect.
+/// Geometry is derived from `rect`, so the icon fills its bounding
+/// box at any size (matches the visual weight of other painter icons
+/// like `paint_info_icon`).
 pub fn paint_trash_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let stroke = egui::Stroke::new(1.4, color);
     let cx = rect.center().x;
-    let cy = rect.center().y;
+    let s = rect.width().min(rect.height());
+
+    // Vertical extents: handle at the top, body bottom near the rect
+    // floor. Leaves ~1px padding on top + bottom.
+    let top = rect.top() + s * 0.06;
+    let bot = rect.bottom() - s * 0.06;
+    let lid_y = top + s * 0.18;
+    let body_top_y = lid_y + s * 0.06;
 
     // Handle: short horizontal cap above the lid.
-    let handle_half_w = 2.0;
-    let handle_y = cy - 6.0;
+    let handle_half_w = s * 0.12;
     painter.line_segment(
         [
-            egui::pos2(cx - handle_half_w, handle_y),
-            egui::pos2(cx + handle_half_w, handle_y),
+            egui::pos2(cx - handle_half_w, top),
+            egui::pos2(cx + handle_half_w, top),
         ],
         stroke,
     );
 
     // Lid: wider horizontal line just below the handle.
-    let lid_half_w = 5.0;
-    let lid_y = cy - 4.0;
+    let lid_half_w = s * 0.36;
     painter.line_segment(
         [
             egui::pos2(cx - lid_half_w, lid_y),
@@ -546,36 +553,34 @@ pub fn paint_trash_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::
     );
 
     // Body: slightly tapered trapezoid below the lid.
-    let body_top_half_w = 4.0;
-    let body_bot_half_w = 3.0;
-    let body_top_y = lid_y + 1.0;
-    let body_bot_y = body_top_y + 8.0;
+    let body_top_half_w = s * 0.28;
+    let body_bot_half_w = s * 0.22;
     painter.line_segment(
         [
             egui::pos2(cx - body_top_half_w, body_top_y),
-            egui::pos2(cx - body_bot_half_w, body_bot_y),
+            egui::pos2(cx - body_bot_half_w, bot),
         ],
         stroke,
     );
     painter.line_segment(
         [
             egui::pos2(cx + body_top_half_w, body_top_y),
-            egui::pos2(cx + body_bot_half_w, body_bot_y),
+            egui::pos2(cx + body_bot_half_w, bot),
         ],
         stroke,
     );
     painter.line_segment(
         [
-            egui::pos2(cx - body_bot_half_w, body_bot_y),
-            egui::pos2(cx + body_bot_half_w, body_bot_y),
+            egui::pos2(cx - body_bot_half_w, bot),
+            egui::pos2(cx + body_bot_half_w, bot),
         ],
         stroke,
     );
 
     // Two short slats inside the body to read clearly as a trash bin.
-    let slat_top_y = body_top_y + 1.5;
-    let slat_bot_y = body_bot_y - 1.0;
-    let slat_offset = 1.5;
+    let slat_top_y = body_top_y + s * 0.08;
+    let slat_bot_y = bot - s * 0.06;
+    let slat_offset = s * 0.09;
     painter.line_segment(
         [
             egui::pos2(cx - slat_offset, slat_top_y),
