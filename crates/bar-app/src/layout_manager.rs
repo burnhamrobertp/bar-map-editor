@@ -433,14 +433,34 @@ impl LayoutManager {
             let recipe_name = app.recipe_for_export().name;
             let water_color_init = app.smf_lighting().water_base;
             if let Some(ref gpu) = gpu_context {
-                if let Some(dims) = load_compiled_bc1(
+                if let Some(loaded) = load_compiled_bc1(
                     project_dir.as_deref(),
                     &recipe_name,
                     &mut slot.core,
                     gpu,
                     water_color_init,
                 ) {
-                    slot.bc1_tex_dims = Some(dims);
+                    slot.bc1_tex_dims = Some(loaded.tex_dims);
+                    // Install the compiled heightmap into `app.paint.heightmap`
+                    // if nothing has populated it yet (typical when the user
+                    // jumps straight to Preview without visiting Sculpt3D /
+                    // an eval-spawning layout first). Without this, terrain
+                    // picking -- zoom-to-cursor, orbit snap, feature
+                    // placement / rendering -- silently no-ops in Preview
+                    // because `pick_terrain` needs `paint.heightmap` to
+                    // project screen rays onto the surface. If something
+                    // else already populated a higher-res heightmap, prefer
+                    // it (Preview's compiled mesh is at most 2048 grid_n,
+                    // Sculpt3D eval can produce up to 8192).
+                    if app.paint.heightmap.is_none() {
+                        if let Some(hm) = loaded.heightmap {
+                            app.set_inspector_heightmap(hm);
+                            // Feature instances depend on the heightmap; ask
+                            // the next pass to rebuild them now that one
+                            // exists.
+                            slot.features_dirty = true;
+                        }
+                    }
                     app.set_status("Preview: native-resolution BC1 texture loaded");
                 }
             }

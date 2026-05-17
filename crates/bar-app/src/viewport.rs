@@ -1539,13 +1539,25 @@ pub fn load_map_skybox(
     }
 }
 
+/// Result of loading the compiled BC1 albedo + heightmap into the
+/// Preview layout's renderer. `heightmap` is returned separately so
+/// the caller can install it on `app.paint.heightmap` -- without it,
+/// terrain picking (zoom-to-cursor, orbit-snap, feature rendering)
+/// silently no-ops in the Preview layout because `pick_terrain`
+/// needs `app.paint.heightmap` to project screen rays onto the
+/// surface.
+pub struct LoadedBc1 {
+    pub tex_dims: (u32, u32),
+    pub heightmap: Option<bar_data::Heightmap>,
+}
+
 pub fn load_compiled_bc1(
     project_dir: Option<&std::path::Path>,
     recipe_name: &str,
     core: &mut ViewportCore,
     gpu: &GpuContext,
     water_color: [f32; 3],
-) -> Option<(u32, u32)> {
+) -> Option<LoadedBc1> {
     let project_dir = project_dir?;
     let pkg = bar_engine::PackageDir::open(project_dir).ok()?;
     let fp = pkg.read_fingerprint()?;
@@ -1592,6 +1604,7 @@ pub fn load_compiled_bc1(
     // Upload the compiled heightmap as the terrain mesh so the BC1 texture
     // has geometry to project onto. Without this the renderer just outputs
     // its clear color.
+    let mut loaded_hm: Option<bar_data::Heightmap> = None;
     if let Some(hm) = bar_engine::read_compiled_heightmap(&pkg) {
         let (w, h) = (fp.map_x, fp.map_y);
         let pw = (w as f32).max(1.0);
@@ -1652,9 +1665,13 @@ pub fn load_compiled_bc1(
             h = hm.height(),
             "Preview BC1: uploaded terrain mesh from compiled heightmap"
         );
+        loaded_hm = Some(hm);
     } else {
         tracing::warn!("Preview BC1: no compiled heightmap.bin -- terrain mesh not loaded");
     }
 
-    Some((tex_w, tex_h))
+    Some(LoadedBc1 {
+        tex_dims: (tex_w, tex_h),
+        heightmap: loaded_hm,
+    })
 }
