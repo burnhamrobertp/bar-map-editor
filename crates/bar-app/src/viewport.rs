@@ -228,7 +228,7 @@ fn load_map_detail_texture(
     };
     if let Some(renderer) = core.terrain_renderer.as_mut() {
         renderer.update_detail_texture(&gpu.device, &gpu.queue, &rgba, w, h);
-        tracing::info!(file = detail_filename, w, h, "Detail texture uploaded");
+        tracing::info!(file = detail_filename, w, h, "Detail texture loaded");
     }
 }
 
@@ -286,7 +286,7 @@ pub fn sync_sky_reflect_mod(
     };
     if let Some(renderer) = core.terrain_renderer.as_mut() {
         renderer.update_sky_reflect_mod(&gpu.device, &gpu.queue, &rgba, w, h);
-        tracing::info!(file = filename, w, h, "skyReflectModTex uploaded");
+        tracing::info!(file = filename, w, h, "skyReflectModTex loaded");
     }
     core.sky_reflect_mod_loaded_for = key;
 }
@@ -343,7 +343,7 @@ pub fn sync_specular_tex(
     };
     if let Some(renderer) = core.terrain_renderer.as_mut() {
         renderer.update_specular_tex(&gpu.device, &gpu.queue, &rgba, w, h);
-        tracing::info!(file = filename, w, h, "specularTex uploaded");
+        tracing::info!(file = filename, w, h, "specularTex loaded");
     }
     core.specular_tex_loaded_for = key;
 }
@@ -455,7 +455,7 @@ pub fn sync_splat_textures(
 
     if let Some(renderer) = core.terrain_renderer.as_mut() {
         renderer.update_splat_textures(&gpu.device, &gpu.queue, arr);
-        tracing::info!("Splat detail textures uploaded (with mip chains)");
+        tracing::info!("Splat detail textures loaded (with mip chains)");
     }
     core.splat_loaded_for = key;
 }
@@ -1534,7 +1534,7 @@ pub fn load_map_skybox(
             file = skybox_filename,
             w = cubemap.width,
             h = cubemap.height,
-            "Skybox cubemap uploaded"
+            "Skybox cubemap loaded"
         );
     }
 }
@@ -1598,7 +1598,7 @@ pub fn load_compiled_bc1(
     tracing::info!(
         tiles_x,
         tiles_y,
-        "Preview BC1: uploaded native-resolution texture"
+        "Preview BC1: native-resolution texture loaded"
     );
 
     // Upload the compiled heightmap as the terrain mesh so the BC1 texture
@@ -1663,7 +1663,7 @@ pub fn load_compiled_bc1(
         tracing::info!(
             w = hm.width(),
             h = hm.height(),
-            "Preview BC1: uploaded terrain mesh from compiled heightmap"
+            "Preview BC1: terrain mesh loaded from compiled heightmap"
         );
         loaded_hm = Some(hm);
     } else {
