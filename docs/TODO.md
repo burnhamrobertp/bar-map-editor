@@ -31,7 +31,6 @@ Items below are paused while the Sculpt3D / 3D-painting subsystem is being recon
 
 ## History / Undo-Redo
 
-- **Log undo/redo actions as debug.** Each undo or redo should emit a `tracing::debug!` line describing the action being reversed (which node, which param, etc.) AND when undo history is truncated because the user made a new change after undoing several steps, log the entries being dropped. Helps trace user actions when debugging reproducer reports.
 - **Drag-to-move a placed feature should be undoable.** Placement and delete now push undo entries; whenever click-again-to-move lands (see Features section), it also needs to call `app.push_undo("Move feature")` before mutating the dragged feature's coordinates.
 
 ## UX / UI

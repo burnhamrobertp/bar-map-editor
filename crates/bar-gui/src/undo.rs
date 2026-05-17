@@ -106,6 +106,16 @@ impl UndoHistory {
     pub fn redo_depth(&self) -> usize {
         self.redo_stack.len()
     }
+    /// Descriptions of the entries currently on the redo stack, most
+    /// recently pushed last. Used by `BarEditorApp::push_undo` to log
+    /// what redo-future is being discarded when the user makes a new
+    /// change after undoing several steps.
+    pub fn redo_descriptions(&self) -> Vec<&str> {
+        self.redo_stack
+            .iter()
+            .map(|s| s.description.as_str())
+            .collect()
+    }
     pub fn clear(&mut self) {
         self.undo_stack.clear();
         self.redo_stack.clear();
@@ -175,9 +185,41 @@ impl BarEditorApp {
     /// viewport) can record undoable actions without reaching into
     /// the editor's internal state.
     pub fn push_undo(&mut self, description: &str) {
+        // Capture redo state BEFORE the push so we can log what
+        // future the user just invalidated by making a new change
+        // (push clears the redo stack).
+        let discarded_redo: Vec<String> = self
+            .history
+            .redo_descriptions()
+            .into_iter()
+            .map(String::from)
+            .collect();
+        let depth_before = self.history.undo_depth();
+
         let snap = self.snapshot(description);
         self.history.push(snap);
         self.project.is_dirty = true;
+
+        if !discarded_redo.is_empty() {
+            tracing::debug!(
+                action = description,
+                discarded = ?discarded_redo,
+                "undo: new mutation cleared redo stack"
+            );
+        }
+        // If the undo stack was already at capacity, the oldest
+        // entry just rolled off. depth_before == max_history (effectively)
+        // when push didn't grow the stack.
+        let depth_after = self.history.undo_depth();
+        if depth_after <= depth_before {
+            tracing::debug!(
+                action = description,
+                depth = depth_after,
+                "undo: oldest history entry evicted (max_history reached)"
+            );
+        } else {
+            tracing::debug!(action = description, depth = depth_after, "undo: pushed");
+        }
     }
 
     /// Push an undo entry that also remembers the pre-mutation contents
@@ -252,11 +294,19 @@ impl BarEditorApp {
     /// paths the popped snapshot tracks) so redo can recover.
     pub fn undo(&mut self) {
         let Some(prev) = self.history.peek_undo() else {
+            tracing::debug!("undo: stack empty, nothing to revert");
             return;
         };
+        let description = prev.description.clone();
         let paint_paths: Vec<PathBuf> = prev.painted_assets.keys().cloned().collect();
         let current = self.snapshot_with_painted("current", paint_paths);
         if let Some(prev) = self.history.undo(current) {
+            tracing::debug!(
+                action = description,
+                undo_depth = self.history.undo_depth(),
+                redo_depth = self.history.redo_depth(),
+                "undo: reverting"
+            );
             self.restore_snapshot(prev);
         }
     }
@@ -265,11 +315,19 @@ impl BarEditorApp {
     /// the same paint paths the redo target tracks.
     pub fn redo(&mut self) {
         let Some(next) = self.history.peek_redo() else {
+            tracing::debug!("redo: stack empty, nothing to replay");
             return;
         };
+        let description = next.description.clone();
         let paint_paths: Vec<PathBuf> = next.painted_assets.keys().cloned().collect();
         let current = self.snapshot_with_painted("current", paint_paths);
         if let Some(next) = self.history.redo(current) {
+            tracing::debug!(
+                action = description,
+                undo_depth = self.history.undo_depth(),
+                redo_depth = self.history.redo_depth(),
+                "redo: replaying"
+            );
             self.restore_snapshot(next);
         }
     }
@@ -313,6 +371,19 @@ mod tests {
         let redone = history.redo(current2).unwrap();
         assert_eq!(redone.description, "Current");
         assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn redo_descriptions_reports_stack_top_last() {
+        let mut history = UndoHistory::new(50);
+        history.push(make_snapshot("A", 1));
+        history.push(make_snapshot("B", 2));
+        // Undo twice -> "B" then "A" land on redo stack (in that order).
+        history.undo(make_snapshot("C", 3)).unwrap();
+        history.undo(make_snapshot("D", 4)).unwrap();
+        let descs = history.redo_descriptions();
+        // Bottom of redo stack ("C") first, top ("D") last.
+        assert_eq!(descs, vec!["C", "D"]);
     }
 
     #[test]
