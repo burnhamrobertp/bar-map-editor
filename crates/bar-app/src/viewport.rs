@@ -1149,7 +1149,38 @@ fn handle_camera_input(
                     .unwrap_or(false);
                 let escape_upward = pre_below && post_pos.y > pre_pos.y;
                 if !escape_upward {
-                    core.camera = pre_camera;
+                    core.camera = pre_camera.clone();
+                    camera_changed = false;
+                }
+            }
+        }
+    }
+
+    if camera_changed {
+        // If the look-at target was pushed outside the map's XZ
+        // bounds (with a small overshoot so users can frame the
+        // edges from just outside), revert this frame's mutations.
+        // Constrains pan + target-snap; orbit / zoom don't move
+        // target XZ so they're unaffected. Clamping target rather
+        // than position keeps zoom-out-from-centre working: zoom
+        // grows the camera's distance from target, which moves
+        // position XZ outward, but target itself stays inside the
+        // map. Allow escape inward from a degenerate pre-oob state.
+        if let Some(renderer) = core.terrain_renderer.as_ref() {
+            const TARGET_OOB_OVERSHOOT_FACTOR: f32 = 1.1;
+            let (_, x_extent, z_extent) = renderer.mesh_extents();
+            let bound_x = x_extent * TARGET_OOB_OVERSHOOT_FACTOR;
+            let bound_z = z_extent * TARGET_OOB_OVERSHOOT_FACTOR;
+            let post_t = core.camera.target;
+            let post_oob = post_t.x.abs() > bound_x || post_t.z.abs() > bound_z;
+            if post_oob {
+                let pre_t = pre_camera.target;
+                let pre_oob = pre_t.x.abs() > bound_x || pre_t.z.abs() > bound_z;
+                let pre_dist = pre_t.x.abs().max(pre_t.z.abs());
+                let post_dist = post_t.x.abs().max(post_t.z.abs());
+                let escape_inward = pre_oob && post_dist < pre_dist;
+                if !escape_inward {
+                    core.camera = pre_camera.clone();
                     camera_changed = false;
                 }
             }

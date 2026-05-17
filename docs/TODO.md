@@ -46,7 +46,6 @@ Items below are paused while the Sculpt3D / 3D-painting subsystem is being recon
 ## Preview view
 
 - **Implement non-map "surrounding terrain".** In-engine, the map sits inside a larger landscape that fills the horizon -- the visible terrain extends well past the map boundary so the world doesn't end abruptly at a cliff. BME's preview viewport currently renders only the map itself, with no surrounding context, which makes the boundary look like a void. Need to generate or fake a surrounding skirt -- the engine approach is a flat extension with the edge heightmap row/column extruded outward, textured with the map's edge splat/detail tile.
-- **Prevent camera from going out-of-bounds.** Match in-engine behaviour: the camera should stay within (or just slightly past) the map's XZ bounds rather than allowing arbitrary travel into the surrounding-terrain region. Clamp camera world XZ to the map rect (allow a small overshoot so users can see edges from outside). Coordinate with the surrounding-terrain item -- once the skirt exists, the clamp boundary may be the skirt extent rather than the map proper.
 
 ## Rendering: terrain / shaders
 
