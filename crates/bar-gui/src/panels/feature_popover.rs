@@ -20,6 +20,9 @@ use crate::t;
 /// Map-extent inputs needed to project a feature's elmo-space
 /// position into render space. Caller derives these from the active
 /// project / frame.
+const POPOVER_WIDTH: f32 = 230.0;
+const TYPE_COMBO_WIDTH: f32 = 150.0;
+
 pub struct PopoverDims {
     pub map_w: u32,
     pub map_h: u32,
@@ -48,6 +51,7 @@ pub fn draw(ctx: &egui::Context, app: &mut BarEditorApp, screen_anchor: egui::Po
     egui::Area::new(egui::Id::new("feature_popover"))
         .fixed_pos(popover_pos)
         .order(egui::Order::Foreground)
+        .constrain(true)
         .show(ctx, |ui| {
             egui::Frame::new()
                 .fill(egui::Color32::from_rgba_unmultiplied(20, 22, 30, 235))
@@ -58,7 +62,7 @@ pub fn draw(ctx: &egui::Context, app: &mut BarEditorApp, screen_anchor: egui::Po
                 .corner_radius(6.0)
                 .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
-                    ui.set_max_width(180.0);
+                    ui.set_width(POPOVER_WIDTH);
                     draw_body(ui, app, idx, &feature);
                 });
         });
@@ -70,25 +74,27 @@ fn draw_body(
     idx: usize,
     feature: &bar_project::recipe::PlacedFeature,
 ) {
-    // Header row: trash button on the right; the body's first row
-    // (Type) carries the feature name so we don't need a separate
-    // title.
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-        let trash_size = egui::vec2(18.0, 18.0);
-        let (rect, resp) = ui.allocate_exact_size(trash_size, egui::Sense::click());
-        let color = if resp.hovered() {
-            egui::Color32::from_rgb(255, 110, 110)
-        } else {
-            egui::Color32::from_rgb(210, 80, 80)
-        };
-        icons::paint_trash_icon(ui.painter(), rect, color);
-        let resp = resp.on_hover_text(t!("editor.common.delete"));
-        if resp.clicked() {
-            app.push_undo("Delete feature");
-            app.map.features.remove(idx);
-            app.map.selected_feature_idx = None;
-            app.map.features_placement_dirty = true;
-        }
+    // Header row: trash button right-aligned in a single horizontal
+    // strip. The body's first row (Type) carries the feature name so
+    // we don't need a separate title.
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let trash_size = egui::vec2(18.0, 18.0);
+            let (rect, resp) = ui.allocate_exact_size(trash_size, egui::Sense::click());
+            let color = if resp.hovered() {
+                egui::Color32::from_rgb(255, 110, 110)
+            } else {
+                egui::Color32::from_rgb(210, 80, 80)
+            };
+            icons::paint_trash_icon(ui.painter(), rect, color);
+            let resp = resp.on_hover_text(t!("editor.common.delete"));
+            if resp.clicked() {
+                app.push_undo("Delete feature");
+                app.map.features.remove(idx);
+                app.map.selected_feature_idx = None;
+                app.map.features_placement_dirty = true;
+            }
+        });
     });
 
     egui::Grid::new("feature_popover_info_grid")
@@ -100,7 +106,7 @@ fn draw_body(
             let prev_type = current_type.clone();
             let palette = app.feature_palette_names.clone();
             egui::ComboBox::from_id_salt("feature_popover_type_combo")
-                .width(ui.available_width())
+                .width(TYPE_COMBO_WIDTH)
                 .selected_text(&current_type)
                 .show_ui(ui, |ui| {
                     for name in &palette {
