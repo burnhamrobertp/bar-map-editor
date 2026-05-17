@@ -591,3 +591,26 @@ pub fn paint_trash_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::
         stroke,
     );
 }
+
+/// Info icon: a circle containing a lowercase `i` (dot + stem).
+/// Sized to read at ~16 px square.
+pub fn paint_info_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let center = rect.center();
+    let radius = (rect.width().min(rect.height()) * 0.5 - 1.0).max(2.0);
+    let ring = egui::Stroke::new(1.4, color);
+    painter.circle_stroke(center, radius, ring);
+
+    let dot_r = (radius * 0.16).max(1.0);
+    let dot_y = center.y - radius * 0.42;
+    painter.circle_filled(center + egui::vec2(0.0, dot_y - center.y), dot_r, color);
+
+    let stem_top = center.y - radius * 0.14;
+    let stem_bot = center.y + radius * 0.48;
+    painter.line_segment(
+        [
+            egui::pos2(center.x, stem_top),
+            egui::pos2(center.x, stem_bot),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+}

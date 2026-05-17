@@ -58,7 +58,7 @@ pub fn draw(ctx: &egui::Context, app: &mut BarEditorApp, screen_anchor: egui::Po
                 .corner_radius(6.0)
                 .inner_margin(egui::Margin::same(8))
                 .show(ui, |ui| {
-                    ui.set_min_width(220.0);
+                    ui.set_max_width(180.0);
                     draw_body(ui, app, idx, &feature);
                 });
         });
@@ -70,34 +70,51 @@ fn draw_body(
     idx: usize,
     feature: &bar_project::recipe::PlacedFeature,
 ) {
-    // Top row: feature type label on the left, trash button on the right.
-    ui.horizontal(|ui| {
-        ui.strong(&feature.feature_type);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let trash_size = egui::vec2(20.0, 20.0);
-            let (rect, resp) = ui.allocate_exact_size(trash_size, egui::Sense::click());
-            let color = if resp.hovered() {
-                egui::Color32::from_rgb(255, 110, 110)
-            } else {
-                egui::Color32::from_rgb(210, 80, 80)
-            };
-            icons::paint_trash_icon(ui.painter(), rect, color);
-            let resp = resp.on_hover_text(t!("editor.feature_popover.delete_hover"));
-            if resp.clicked() {
-                app.push_undo("Delete feature");
-                app.map.features.remove(idx);
-                app.map.selected_feature_idx = None;
-                app.map.features_placement_dirty = true;
-            }
-        });
+    // Header row: trash button on the right; the body's first row
+    // (Type) carries the feature name so we don't need a separate
+    // title.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        let trash_size = egui::vec2(18.0, 18.0);
+        let (rect, resp) = ui.allocate_exact_size(trash_size, egui::Sense::click());
+        let color = if resp.hovered() {
+            egui::Color32::from_rgb(255, 110, 110)
+        } else {
+            egui::Color32::from_rgb(210, 80, 80)
+        };
+        icons::paint_trash_icon(ui.painter(), rect, color);
+        let resp = resp.on_hover_text(t!("editor.common.delete"));
+        if resp.clicked() {
+            app.push_undo("Delete feature");
+            app.map.features.remove(idx);
+            app.map.selected_feature_idx = None;
+            app.map.features_placement_dirty = true;
+        }
     });
-
-    ui.add_space(4.0);
 
     egui::Grid::new("feature_popover_info_grid")
         .num_columns(2)
         .spacing([8.0, 2.0])
         .show(ui, |ui| {
+            ui.weak(t!("editor.feature_popover.field.type"));
+            let mut current_type = feature.feature_type.clone();
+            let prev_type = current_type.clone();
+            let palette = app.feature_palette_names.clone();
+            egui::ComboBox::from_id_salt("feature_popover_type_combo")
+                .width(ui.available_width())
+                .selected_text(&current_type)
+                .show_ui(ui, |ui| {
+                    for name in &palette {
+                        ui.selectable_value(&mut current_type, name.clone(), name);
+                    }
+                });
+            if current_type != prev_type {
+                app.push_undo("Change feature type");
+                if let Some(f) = app.map.features.get_mut(idx) {
+                    f.feature_type = current_type;
+                }
+                app.map.features_placement_dirty = true;
+            }
+            ui.end_row();
             ui.weak(t!("editor.feature_popover.field.position"));
             ui.label(format!(
                 "{:.1}, {:.1}, {:.1}",
@@ -123,8 +140,17 @@ fn draw_body(
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         ui.strong(t!("editor.feature_popover.feature_lights.title"));
-        ui.label(t!("editor.feature_popover.feature_lights.info_icon"))
-            .on_hover_text(t!("editor.feature_popover.feature_lights.info_tooltip"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let icon_size = egui::vec2(16.0, 16.0);
+            let (rect, resp) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
+            let color = if resp.hovered() {
+                egui::Color32::from_rgb(220, 220, 240)
+            } else {
+                egui::Color32::from_rgb(160, 160, 180)
+            };
+            icons::paint_info_icon(ui.painter(), rect, color);
+            resp.on_hover_text(t!("editor.feature_popover.feature_lights.info_tooltip"));
+        });
     });
     ui.add_space(4.0);
 

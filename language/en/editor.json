@@ -6,6 +6,9 @@
       "version": "Version %{v}",
       "tagline_about": "Standalone map editor for Beyond All Reason."
     },
+    "common": {
+      "delete": "Delete"
+    },
     "project": {
       "load_failed": "Load failed: %{error}",
       "loaded": "Loaded: %{name}",
@@ -130,8 +133,8 @@
       "title": "Importing map"
     },
     "feature_popover": {
-      "delete_hover": "Remove this feature (Del)",
       "field": {
+        "type": "Type",
         "position": "Position",
         "angle": "Angle",
         "angle_unit": "deg"
@@ -139,7 +142,6 @@
       "feature_lights": {
         "title": "Feature Lights",
         "info_tooltip": "Coloured markers above the feature show where BAR will attach point lights at runtime. BME doesn't render the actual glow.",
-        "info_icon": "ⓘ",
         "light_n": "Light %{n}",
         "field": {
           "colour": "Colour",
