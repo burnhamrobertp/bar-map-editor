@@ -1513,6 +1513,75 @@ pub fn build_feature_instances(
         unknowns.push(inst);
     }
 
+    // Emit per-feature light markers. BAR's deferred-rendering widget
+    // attaches point lights to certain feature defs (most visible:
+    // `pilha_crystal_*`). BME doesn't run the widget but renders a
+    // small coloured marker at each light's position so map authors
+    // can see where lights will appear in-engine. Markers reuse the
+    // placeholder-cube pipeline -- same instance struct, smaller
+    // scale, light-coloured tint.
+    //
+    // Second pass so markers fire for both real-model features (the
+    // crystals, which the loop above `continue`s past once their
+    // instance is pushed into `groups`) and placeholder features.
+    // Heightmap sampling matches the first pass exactly so the
+    // marker base sits on the same ry the feature does.
+    const MARKER_SIZE_ELMOS: f32 = 8.0;
+    let marker_scale = MARKER_SIZE_ELMOS * elmo_scale;
+    for f in features.iter() {
+        let lower = f.feature_type.to_lowercase();
+        let lights = bar_render::lights_for_feature_def(&lower);
+        if lights.is_empty() {
+            continue;
+        }
+        let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
+        let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+        let h_render = if let Some(hm) = heightmap {
+            let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
+            let hz = (f.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
+            let max_x = hm.width().saturating_sub(1);
+            let max_z = hm.height().saturating_sub(1);
+            let x0 = (hx.floor() as u32).min(max_x);
+            let z0 = (hz.floor() as u32).min(max_z);
+            let x1 = (x0 + 1).min(max_x);
+            let z1 = (z0 + 1).min(max_z);
+            let fx = hx - hx.floor();
+            let fz = hz - hz.floor();
+            let h00 = hm.get(x0, z0).unwrap_or(0.0);
+            let h10 = hm.get(x1, z0).unwrap_or(0.0);
+            let h01 = hm.get(x0, z1).unwrap_or(0.0);
+            let h11 = hm.get(x1, z1).unwrap_or(0.0);
+            let h0 = h00 * (1.0 - fx) + h10 * fx;
+            let h1 = h01 * (1.0 - fx) + h11 * fx;
+            (h0 * (1.0 - fz) + h1 * fz) * hs
+        } else {
+            hs * 0.5
+        };
+        let ry = if f.y.abs() < 0.01 {
+            h_render
+        } else {
+            ((f.y - dims.min_h) / height_range) * hs
+        };
+        for light in lights {
+            let lx_render = rx + light.offset[0] * elmo_scale;
+            let ly_render = ry + light.offset[1] * elmo_scale;
+            let lz_render = rz + light.offset[2] * elmo_scale;
+            let transform = Mat4::from_scale_rotation_translation(
+                Vec3::splat(marker_scale),
+                Quat::IDENTITY,
+                Vec3::new(lx_render, ly_render, lz_render),
+            );
+            let cols = transform.to_cols_array_2d();
+            unknowns.push(FeatureInstance {
+                col0: cols[0],
+                col1: cols[1],
+                col2: cols[2],
+                col3: cols[3],
+                tint: [light.color[0], light.color[1], light.color[2], 1.0],
+            });
+        }
+    }
+
     (groups, unknowns)
 }
 

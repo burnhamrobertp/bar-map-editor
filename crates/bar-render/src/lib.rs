@@ -4,6 +4,7 @@
 //! Handles terrain mesh generation, camera controls, and display modes.
 
 pub mod camera;
+pub mod feature_lights;
 pub mod features;
 pub mod picking;
 pub mod renderer;
@@ -11,6 +12,7 @@ pub mod shadow;
 pub mod terrain;
 
 pub use camera::Camera;
+pub use feature_lights::{lights_for_feature_def, FeatureLightConfig};
 pub use features::{FeatureInstance, FeatureRenderer, FeatureTexture};
 pub use picking::{pick_terrain, terrain_y_at_world_xz, PickResult};
 pub use renderer::{PreviewFrame, SmfLighting, TerrainRenderer, TerrainUpdateParams};
