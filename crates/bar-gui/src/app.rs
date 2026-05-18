@@ -261,6 +261,11 @@ pub struct BarEditorApp {
     /// Feature type currently selected in the feature palette for placement.
     /// When Some, clicking on the 3D terrain places a feature of this type.
     pub selected_feature_type: Option<String>,
+    /// Spring heading the next placed feature will be created with. Set by
+    /// the rotate gesture (Ctrl+scroll / horizontal scroll) while the user
+    /// is in placement mode. Persists across placements so the user can
+    /// drop a row of identically-oriented features without re-rotating.
+    pub pending_placement_angle: f32,
 }
 
 impl Default for BarEditorApp {
@@ -297,6 +302,7 @@ impl Default for BarEditorApp {
             supports_bc: false,
             feature_palette_names: Vec::new(),
             selected_feature_type: None,
+            pending_placement_angle: 0.0,
         }
     }
 }

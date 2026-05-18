@@ -1053,7 +1053,7 @@ fn handle_camera_input(
                                     x: spring_x,
                                     y: 0.0,
                                     z: spring_z,
-                                    angle: 0.0,
+                                    angle: app.pending_placement_angle,
                                     taken_damage: 0,
                                 });
                                 app.map.features_placement_dirty = true;
@@ -1205,9 +1205,42 @@ fn handle_camera_input(
     }
 
     if response.hovered() {
-        let scroll = ctx.input(|i| i.smooth_scroll_delta.y);
-        if scroll.abs() > 0.1 {
-            let factor = (-scroll * 0.0015).clamp(-0.5, 0.5);
+        // Rotation gesture: Ctrl + vertical scroll or any horizontal
+        // scroll rotates the active feature -- either the selected
+        // placed feature, or the pending-placement angle when the
+        // user has a feature type queued for placing. Spring's heading
+        // unit (`-32768..32767`, full circle = 65536) is what
+        // `PlacedFeature::angle` stores and what `build_feature_instances`
+        // converts to radians via `* pi / 32768`.
+        let (scroll_y, scroll_x, ctrl) = ctx.input(|i| {
+            (
+                i.smooth_scroll_delta.y,
+                i.smooth_scroll_delta.x,
+                i.modifiers.ctrl,
+            )
+        });
+        let rotate_active = app.paint.brush.tool == bar_gui::BrushTool::Pointer
+            && app.active_layout() != bar_gui::Layout::Preview;
+        let rotation_scroll = if ctrl { scroll_y } else { 0.0 } + scroll_x;
+        if rotate_active && rotation_scroll.abs() > 0.1 {
+            // 32 heading units per scroll-line keeps a full revolution
+            // at roughly 30 scroll lines -- coarse enough to feel
+            // responsive, fine enough to land on cardinal angles by
+            // eye. Negate so wheel-up reads as clockwise (intuitive).
+            let delta_heading = -rotation_scroll * 32.0;
+            if let Some(idx) = app.map.selected_feature_idx {
+                if let Some(f) = app.map.features.get_mut(idx) {
+                    f.angle = wrap_heading(f.angle + delta_heading);
+                    app.map.features_placement_dirty = true;
+                }
+            } else if app.selected_feature_type.is_some() {
+                app.pending_placement_angle =
+                    wrap_heading(app.pending_placement_angle + delta_heading);
+            }
+            // Eat the scroll: don't fall through to zoom even if the
+            // user happened to scroll vertically with Ctrl held.
+        } else if scroll_y.abs() > 0.1 {
+            let factor = (-scroll_y * 0.0015).clamp(-0.5, 0.5);
             // Zoom-to-cursor: before applying the distance change, nudge the
             // camera target toward the world point under the cursor by the
             // same proportion as the zoom step. Geometrically, the camera
@@ -1490,6 +1523,20 @@ pub struct FeatureMapDims {
     pub h: u32,
     pub min_h: f32,
     pub max_h: f32,
+}
+
+/// Constrain a Spring heading to its `(-32768, 32767]` representable range
+/// by wrapping around the full-circle period (65536 units). Lets rotation
+/// gestures accumulate freely without overflow or visible discontinuity.
+pub fn wrap_heading(h: f32) -> f32 {
+    const PERIOD: f32 = 65536.0;
+    let mut v = h % PERIOD;
+    if v > 32767.0 {
+        v -= PERIOD;
+    } else if v < -32768.0 {
+        v += PERIOD;
+    }
+    v
 }
 
 pub fn build_feature_instances(
