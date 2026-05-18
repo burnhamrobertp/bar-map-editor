@@ -266,6 +266,13 @@ pub struct BarEditorApp {
     /// is in placement mode. Persists across placements so the user can
     /// drop a row of identically-oriented features without re-rotating.
     pub pending_placement_angle: f32,
+    /// Translucent ghost of the to-be-placed feature, anchored at the
+    /// cursor's terrain projection. Set by viewport input each frame
+    /// while placement mode is active and the cursor is over the
+    /// terrain; cleared otherwise. Drawn alongside committed features
+    /// at reduced alpha so the user can preview position + rotation
+    /// before the click commits.
+    pub placement_ghost: Option<bar_project::recipe::PlacedFeature>,
 }
 
 impl Default for BarEditorApp {
@@ -303,6 +310,7 @@ impl Default for BarEditorApp {
             feature_palette_names: Vec::new(),
             selected_feature_type: None,
             pending_placement_angle: 0.0,
+            placement_ghost: None,
         }
     }
 }

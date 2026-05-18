@@ -1404,6 +1404,46 @@ fn handle_camera_input(
             );
         }
     }
+
+    // Placement ghost: when a feature type is queued for placement and
+    // the cursor projects onto the terrain, surface a translucent
+    // preview at that point. Cleared on any condition that suppresses
+    // placement (UI hover, Preview layout, non-Pointer tool, cursor
+    // off-map). Pure state write; the renderer consumes it on the
+    // next feature-instance rebuild.
+    app.placement_ghost = (|| -> Option<bar_project::recipe::PlacedFeature> {
+        if app.paint.brush.tool != bar_gui::BrushTool::Pointer {
+            return None;
+        }
+        if app.active_layout() == bar_gui::Layout::Preview {
+            return None;
+        }
+        let feature_type = app.selected_feature_type.as_ref()?;
+        let uv = cursor_uv?;
+        let hm = app.paint.heightmap.as_ref()?;
+        let renderer = core.terrain_renderer.as_ref()?;
+        let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+        let pick = pick_terrain(
+            &core.camera,
+            aspect,
+            uv,
+            hm,
+            x_extent,
+            z_extent,
+            height_scale,
+        )?;
+        let (map_w, map_h) = app.map.dimensions();
+        let spring_x = (pick.world.x / x_extent + 1.0) * 0.5 * map_w.max(1) as f32 * 8.0;
+        let spring_z = (pick.world.z / z_extent + 1.0) * 0.5 * map_h.max(1) as f32 * 8.0;
+        Some(bar_project::recipe::PlacedFeature {
+            feature_type: feature_type.clone(),
+            x: spring_x,
+            y: 0.0,
+            z: spring_z,
+            angle: app.pending_placement_angle,
+            taken_damage: 0,
+        })
+    })();
 }
 
 fn apply_sculpt_dab_at_cursor(
@@ -1596,6 +1636,7 @@ pub fn build_feature_instances(
     heightmap: Option<&bar_data::Heightmap>,
     loaded_model_names: &std::collections::HashSet<String>,
     selected_idx: Option<usize>,
+    ghost: Option<&PlacedFeature>,
 ) -> (
     std::collections::HashMap<String, Vec<FeatureInstance>>,
     Vec<FeatureInstance>,
@@ -1728,6 +1769,91 @@ pub fn build_feature_instances(
             }
         };
         unknowns.push(inst);
+    }
+
+    // Placement ghost: translucent preview at the cursor's terrain
+    // projection. Uses the same instance pipeline as committed
+    // features so it picks up the real model + lighting; tint alpha
+    // is reduced so it reads as "preview, not committed". Loaded
+    // models keep a white RGB (texture passes through with alpha
+    // scaled); placeholders use the same green/orange palette as
+    // committed unknowns but with the ghost alpha.
+    if let Some(g) = ghost {
+        let lower = g.feature_type.to_lowercase();
+        let rx = (g.x / (pw * 8.0) - 0.5) * 2.0 * xe;
+        let rz = (g.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+        let h_render = if let Some(hm) = heightmap {
+            let hx = (g.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
+            let hz = (g.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
+            let max_x = hm.width().saturating_sub(1);
+            let max_z = hm.height().saturating_sub(1);
+            let x0 = (hx.floor() as u32).min(max_x);
+            let z0 = (hz.floor() as u32).min(max_z);
+            let x1 = (x0 + 1).min(max_x);
+            let z1 = (z0 + 1).min(max_z);
+            let fx = hx - hx.floor();
+            let fz = hz - hz.floor();
+            let h00 = hm.get(x0, z0).unwrap_or(0.0);
+            let h10 = hm.get(x1, z0).unwrap_or(0.0);
+            let h01 = hm.get(x0, z1).unwrap_or(0.0);
+            let h11 = hm.get(x1, z1).unwrap_or(0.0);
+            let h0 = h00 * (1.0 - fx) + h10 * fx;
+            let h1 = h01 * (1.0 - fx) + h11 * fx;
+            (h0 * (1.0 - fz) + h1 * fz) * hs
+        } else {
+            hs * 0.5
+        };
+        let ry = if g.y.abs() < 0.01 {
+            h_render
+        } else {
+            ((g.y - dims.min_h) / height_range) * hs
+        };
+        let rot = Quat::from_rotation_y(-g.angle * std::f32::consts::PI / 32768.0);
+        const GHOST_ALPHA: f32 = 0.5;
+        if loaded_model_names.contains(&lower) {
+            let transform = Mat4::from_scale_rotation_translation(
+                Vec3::splat(elmo_scale),
+                rot,
+                Vec3::new(rx, ry, rz),
+            );
+            let cols = transform.to_cols_array_2d();
+            groups.entry(lower).or_default().push(FeatureInstance {
+                col0: cols[0],
+                col1: cols[1],
+                col2: cols[2],
+                col3: cols[3],
+                tint: [1.0, 1.0, 1.0, GHOST_ALPHA],
+            });
+        } else {
+            let (fp_x, fp_z) = catalog
+                .and_then(|cat| cat.features.get(&lower))
+                .map(|def| (def.footprint_x.max(1) as f32, def.footprint_z.max(1) as f32))
+                .unwrap_or((default_footprint, default_footprint));
+            let sx = fp_x / pm;
+            let sz = fp_z / pm;
+            let sy = sx.max(sz);
+            let transform = Mat4::from_scale_rotation_translation(
+                Vec3::new(sx, sy, sz),
+                rot,
+                Vec3::new(rx, ry, rz),
+            );
+            let cols = transform.to_cols_array_2d();
+            let known = catalog
+                .map(|c| c.is_known(&g.feature_type))
+                .unwrap_or(false);
+            let tint = if known {
+                [0.2, 0.9, 0.2, GHOST_ALPHA]
+            } else {
+                [1.0, 0.5, 0.0, GHOST_ALPHA]
+            };
+            unknowns.push(FeatureInstance {
+                col0: cols[0],
+                col1: cols[1],
+                col2: cols[2],
+                col3: cols[3],
+                tint,
+            });
+        }
     }
 
     // Emit per-feature light markers for the SELECTED feature only.

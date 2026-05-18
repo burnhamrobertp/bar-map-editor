@@ -73,6 +73,10 @@ pub struct LayoutManager {
     /// instance buffer but don't change the type-set, so they only
     /// need an instance-buffer rebuild -- not a model reload.
     last_selected_feature: Option<usize>,
+    /// Whether `app.placement_ghost` was `Some` last frame. Combined
+    /// with this frame's state to detect ghost appear / disappear /
+    /// continuing-visible -- all of which need an instance rebuild.
+    last_ghost_visible: bool,
 }
 
 impl LayoutManager {
@@ -82,6 +86,7 @@ impl LayoutManager {
             preview: None,
             next_session_id: 0,
             last_selected_feature: None,
+            last_ghost_visible: false,
         }
     }
 
@@ -126,6 +131,21 @@ impl LayoutManager {
         // `features_placement_dirty`, which kicks the model loader.
         if app.map.selected_feature_idx != self.last_selected_feature {
             self.last_selected_feature = app.map.selected_feature_idx;
+            if let Some(ref mut s) = self.sculpt3d {
+                s.eval.features_dirty = true;
+            }
+            if let Some(ref mut s) = self.preview {
+                s.features_dirty = true;
+            }
+        }
+        // Placement-ghost: rebuild every frame the ghost is visible so
+        // the preview tracks the cursor, plus once more on the frame
+        // it disappears (so the stale instance is removed from the
+        // buffer). One extra rebuild per idle frame in placement mode
+        // is cheap; not rebuilding produces visible cursor lag.
+        let ghost_visible = app.placement_ghost.is_some();
+        if ghost_visible || self.last_ghost_visible {
+            self.last_ghost_visible = ghost_visible;
             if let Some(ref mut s) = self.sculpt3d {
                 s.eval.features_dirty = true;
             }
@@ -251,6 +271,7 @@ impl LayoutManager {
                     app.paint.heightmap.as_ref(),
                     &loaded,
                     app.map.selected_feature_idx,
+                    app.placement_ghost.as_ref(),
                 );
                 renderer.update_feature_instances(&gpu.device, &groups, &unknowns);
                 slot.eval.features_dirty = false;
@@ -407,6 +428,7 @@ impl LayoutManager {
                     app.paint.heightmap.as_ref(),
                     &loaded,
                     app.map.selected_feature_idx,
+                    app.placement_ghost.as_ref(),
                 );
                 renderer.update_feature_instances(&gpu.device, &groups, &unknowns);
                 slot.features_dirty = false;
