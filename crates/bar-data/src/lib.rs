@@ -19,6 +19,7 @@ pub use skybox::{
     SkyboxError,
 };
 pub use smt::{
-    assemble_bc1_linear, compress_image_dxt1, decode_dxt1_block, decode_tile_dxt1,
-    generate_minimap_dxt1, read_smt, read_smt_raw, write_smt, DXT1_TILE_BYTES, MINIMAP_SIZE,
+    assemble_bc1_linear, compress_image_dxt1, decode_dxt1_block, decode_smf_minimap_base,
+    decode_tile_dxt1, generate_minimap_dxt1, read_smt, read_smt_raw, write_smt, DXT1_TILE_BYTES,
+    MINIMAP_BASE_DXT1_BYTES, MINIMAP_SIZE,
 };

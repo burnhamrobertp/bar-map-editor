@@ -36,5 +36,5 @@ pub use recipe::{
     OutputConfig, Recipe, RecipeConnection, RecipeNode, ResourcesSettings, WaterSettings,
     RECIPE_SCHEMA_VERSION,
 };
-pub use scan::{scan_to_project, PendingAsset, PendingRawFile, WorkDirScan};
+pub use scan::{scan_to_project, PendingAsset, PendingRawFile, WorkDirScan, SMF_MINIMAP_SIDE_CAR};
 pub use validation::{has_errors, validate_project, Finding, Severity};

@@ -464,42 +464,63 @@ pub fn sync_specular_tex(
 
 /// Schedule a background load of the map-edge-extension grass-shading
 /// texture (mapinfo `resources.grassShadingTex`, engine
-/// `MAP_BASE_GRASS_TEX`). Decode runs off-thread; upload happens in
-/// `poll_pending_texture_loads`.
+/// `MAP_BASE_GRASS_TEX`). When `filename` is empty the loader falls back
+/// to the SMF-embedded minimap sidecar
+/// ([`bar_project::SMF_MINIMAP_SIDE_CAR`]) -- matching the engine's
+/// fallback path (`CSMFReadMap::CreateGrassTex`). Decode runs off-thread;
+/// upload happens in `poll_pending_texture_loads`.
 pub fn sync_grass_shading_tex(
     project_dir: Option<&std::path::Path>,
     filename: &str,
     core: &mut ViewportCore,
-    gpu: &GpuContext,
+    _gpu: &GpuContext,
 ) {
-    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    // Distinguish "user-provided custom texture" from "fall back to
+    // SMF-embedded minimap" so the dedupe key reflects the actual file
+    // about to be loaded. The minimap sidecar lives directly under the
+    // project dir; user-supplied textures live under `passthrough/`.
+    let effective_filename = if filename.is_empty() {
+        bar_project::SMF_MINIMAP_SIDE_CAR.to_string()
+    } else {
+        filename.to_string()
+    };
+    let key = project_dir.map(|p| (p.to_path_buf(), effective_filename.clone()));
     if core.grass_shading_tex_loaded_for == key || core.grass_shading_tex_loading_for == key {
-        return;
-    }
-    if filename.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
-            renderer.clear_grass_shading_tex(&gpu.device, &gpu.queue);
-        }
-        core.grass_shading_tex_loaded_for = key;
         return;
     }
     let Some(project_dir) = project_dir else {
         return;
     };
-    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    let key_pair = (project_dir.to_path_buf(), effective_filename);
     core.grass_shading_tex_loading_for = Some(key_pair.clone());
     let tx = core.texture_load_tx.clone();
+    let from_minimap = filename.is_empty();
     std::thread::spawn(move || {
-        let (project_dir, filename) = key_pair.clone();
-        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
-            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let (project_dir, effective_filename) = key_pair.clone();
+        let path = if from_minimap {
+            // Minimap sidecar can live either at the project root (after
+            // save) or at the work dir root (before save). Both layouts
+            // hand us the same path here because `asset_dir` resolves to
+            // whichever one is active.
+            let candidate = project_dir.join(&effective_filename);
+            candidate.is_file().then_some(candidate)
+        } else {
+            find_file_in_dir(&project_dir.join("passthrough"), &effective_filename)
+                .or_else(|| find_file_in_dir(&project_dir, &effective_filename))
+        };
         let data = match path {
             Some(p) => load_2d_image(&p).or_else(|| {
-                tracing::warn!(file = %filename, "Failed to decode grassShadingTex");
+                tracing::warn!(file = %effective_filename, "Failed to decode grassShadingTex");
                 None
             }),
             None => {
-                tracing::warn!(file = %filename, "grassShadingTex not found in project");
+                if from_minimap {
+                    tracing::debug!(
+                        "SMF minimap sidecar not found; grassShadingTex falls back to playable albedo"
+                    );
+                } else {
+                    tracing::warn!(file = %effective_filename, "grassShadingTex not found in project");
+                }
                 None
             }
         };

@@ -42,6 +42,17 @@ impl BarEditorApp {
                     }
                 }
             }
+            // Copy the SMF-embedded minimap sidecar (written during sd7
+            // extract) into the .barproj so the map-edge-extension
+            // fallback keeps working after reload, when the work dir is
+            // no longer reachable.
+            let minimap_src = src_dir.join(bar_project::SMF_MINIMAP_SIDE_CAR);
+            if minimap_src.is_file() {
+                let minimap_dest = path.join(bar_project::SMF_MINIMAP_SIDE_CAR);
+                if let Err(e) = std::fs::copy(&minimap_src, &minimap_dest) {
+                    self.log_error(format!("Failed to copy SMF minimap sidecar: {e}"));
+                }
+            }
         }
         let project = self.build_project(&path);
         match project.save(&path) {

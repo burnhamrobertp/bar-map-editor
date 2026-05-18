@@ -15,7 +15,7 @@ use anyhow::{Context, Result};
 use bar_data::smt::TILE_SIZE;
 use directories::ProjectDirs;
 
-pub use bar_project::WorkDirScan;
+pub use bar_project::{WorkDirScan, SMF_MINIMAP_SIDE_CAR};
 
 /// Root of all extracted SD7 work directories. Falls back to the OS temp dir
 /// if a per-user cache directory cannot be resolved.
@@ -192,6 +192,31 @@ fn scan_work_dir(
             (Some(tg), Some((hw, hh)), Some(hr))
         })
         .unwrap_or((None, None, None));
+
+    // Decode the SMF-embedded minimap once at extract time and write it
+    // to a fixed sidecar in the work dir. The runtime grass-shading-tex
+    // fallback loads this PNG when `mapinfo.resources.grassShadingTex` is
+    // unset -- matching the engine's `MAP_BASE_GRASS_TEX` semantics
+    // (custom override OR minimap). Persistence copies the file into the
+    // .barproj on save so the fallback keeps working after reload.
+    if let Some(ref smf) = smf_data {
+        if !smf.minimap_dxt1.is_empty() {
+            if let Some((rgba, w, h)) = bar_data::decode_smf_minimap_base(&smf.minimap_dxt1) {
+                let dest = work_dir.join(SMF_MINIMAP_SIDE_CAR);
+                let png_buf = image::RgbaImage::from_raw(w, h, rgba);
+                match png_buf {
+                    Some(img) => {
+                        if let Err(e) = img.save(&dest) {
+                            tracing::warn!(error = %e, dest = %dest.display(), "Failed to write SMF minimap sidecar");
+                        }
+                    }
+                    None => tracing::warn!("SMF minimap RGBA buffer size mismatch"),
+                }
+            } else {
+                tracing::warn!("SMF minimap DXT1 chunk too small to decode");
+            }
+        }
+    }
 
     let mapinfo_lua: Option<String> = std::fs::read_to_string(work_dir.join("mapinfo.lua")).ok();
     let mapinfo_override = mapinfo_lua

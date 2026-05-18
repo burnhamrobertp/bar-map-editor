@@ -457,6 +457,39 @@ pub fn compress_image_dxt1(rgba8: &[u8], width: u32, height: u32) -> Vec<u8> {
 /// Spring minimap size: 9 mipmap levels of DXT1 1024×1024.
 pub const MINIMAP_SIZE: usize = 699048;
 
+/// Bytes for the base (1024x1024) DXT1 level of the SMF-embedded minimap.
+/// 1024/4 = 256 blocks per side, 8 bytes per BC1 block.
+pub const MINIMAP_BASE_DXT1_BYTES: usize = 256 * 256 * 8;
+
+/// Decode the base 1024x1024 mip of an SMF-embedded DXT1 minimap into
+/// 1024x1024 RGBA8. Returns `None` when `dxt1_bytes` doesn't carry at
+/// least the base mip ([`MINIMAP_BASE_DXT1_BYTES`]); upper mips are
+/// ignored because the GPU regenerates them at upload time.
+pub fn decode_smf_minimap_base(dxt1_bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    if dxt1_bytes.len() < MINIMAP_BASE_DXT1_BYTES {
+        return None;
+    }
+    const SIDE: usize = 1024;
+    const BLOCKS_PER_SIDE: usize = SIDE / 4;
+    let mut rgba = vec![0u8; SIDE * SIDE * 4];
+    for by in 0..BLOCKS_PER_SIDE {
+        for bx in 0..BLOCKS_PER_SIDE {
+            let src = (by * BLOCKS_PER_SIDE + bx) * 8;
+            let block: [u8; 8] = dxt1_bytes[src..src + 8].try_into().ok()?;
+            let pixels = decode_dxt1_block(&block);
+            for dy in 0..4usize {
+                for dx in 0..4usize {
+                    let x = bx * 4 + dx;
+                    let y = by * 4 + dy;
+                    let dst = (y * SIDE + x) * 4;
+                    rgba[dst..dst + 4].copy_from_slice(&pixels[dy * 4 + dx]);
+                }
+            }
+        }
+    }
+    Some((rgba, SIDE as u32, SIDE as u32))
+}
+
 /// Generate a Spring-compatible minimap (DXT1, 9 mipmap levels, 699048 bytes).
 /// Input: 1024×1024 RGBA8 image data.
 pub fn generate_minimap_dxt1(rgba8_1024: &[u8]) -> Vec<u8> {

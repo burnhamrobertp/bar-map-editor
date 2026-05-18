@@ -94,9 +94,17 @@ struct CameraUniform {
     // z = advanced splat detail enabled (0/1).
     // w = splat detail diffuse-alpha enabled (0/1).
     splat_params: [f32; 4],
+    // Distance fog parameters sourced from mapinfo `atmosphere.fogStart`
+    // / `atmosphere.fogEnd`. Engine precomputes `fraction * far_plane`
+    // host-side (see `rts/Rendering/UniformConstants.cpp:231`) and
+    // hands the shaders absolute distances; we do the same so the
+    // map-edge-extension shader can mix toward `sky_color` over the
+    // map-authored range without needing to know the camera state.
+    // x = fog_start_dist, y = fog_end_dist, zw = reserved.
+    fog_dists: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CameraUniform>() == 496);
+const _: () = assert!(std::mem::size_of::<CameraUniform>() == 512);
 
 /// Clip-plane value that passes every fragment. Used by the main pass.
 const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -221,6 +229,14 @@ pub struct SmfLighting {
     /// (2 * extent_render)). Set by the host so the splat shader can
     /// convert render-XZ -> elmo-XZ before applying per-channel scales.
     pub elmo_per_render_xz: [f32; 2],
+    /// Distance-fog start/end as fractions of the camera far-plane,
+    /// sourced from mapinfo `atmosphere.fogStart` / `atmosphere.fogEnd`.
+    /// Engine path multiplies these by the camera far-plane host-side
+    /// (`rts/Rendering/UniformConstants.cpp:231`) to produce absolute
+    /// distances every fog-aware shader reads. Defaults match engine
+    /// (`MapInfo.cpp`: 0.1 / 1.0).
+    pub atmosphere_fog_start: f32,
+    pub atmosphere_fog_end: f32,
 }
 
 /// Helper: clone `f.smf_lighting` with renderer-runtime flags overridden.
@@ -313,6 +329,8 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             // Same: host computes this from map dimensions and sets
             // it via update_heightmap / sync_to_frame.
             elmo_per_render_xz: [1.0, 1.0],
+            atmosphere_fog_start: ms.atmosphere.fog_start,
+            atmosphere_fog_end: ms.atmosphere.fog_end,
         }
     }
 }
@@ -363,6 +381,8 @@ impl Default for SmfLighting {
             advanced_splat_enabled: false,
             splat_detail_diffuse_alpha: false,
             elmo_per_render_xz: [1.0, 1.0],
+            atmosphere_fog_start: 0.1,
+            atmosphere_fog_end: 1.0,
         }
     }
 }
@@ -473,6 +493,7 @@ impl SmfLighting {
                     0.0
                 },
             ],
+            atmosphere_fog: [self.atmosphere_fog_start, self.atmosphere_fog_end],
         }
     }
 }
@@ -494,6 +515,10 @@ struct SmfUniformSlots {
     skybox_params: [f32; 4],
     splat_tex_scales: [f32; 4],
     splat_tex_mults: [f32; 4],
+    /// Atmosphere distance-fog fractions packed for shader consumption.
+    /// xy hold the start/end fractions; the host multiplies by camera
+    /// far-plane to fill `CameraUniform::fog_dists`.
+    atmosphere_fog: [f32; 2],
     splat_params: [f32; 4],
 }
 
@@ -1494,6 +1519,10 @@ impl TerrainRenderer {
             splat_tex_scales: smf.splat_tex_scales,
             splat_tex_mults: smf.splat_tex_mults,
             splat_params: smf.splat_params,
+            // Placeholder camera far-plane scaling for the initial empty
+            // uniform; `render_internal` recomputes per-frame from the
+            // live camera.
+            fog_dists: [smf.atmosphere_fog[0], smf.atmosphere_fog[1], 0.0, 0.0],
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -3648,6 +3677,14 @@ impl TerrainRenderer {
             splat_tex_scales: smf.splat_tex_scales,
             splat_tex_mults: smf.splat_tex_mults,
             splat_params: smf.splat_params,
+            // Engine matches BAR's `UniformConstants` build: multiply
+            // the mapinfo fractions by the camera far-plane host-side.
+            fog_dists: [
+                smf.atmosphere_fog[0] * camera.far,
+                smf.atmosphere_fog[1] * camera.far,
+                0.0,
+                0.0,
+            ],
         };
 
         // ── Pass 0: shadow map ──────────────────────────────────────────────

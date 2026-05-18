@@ -385,6 +385,33 @@ impl SmfMap {
             }
         }
 
+        // Read the DXT1-compressed minimap chunk. The engine writes a
+        // fixed-size payload of 9 mip levels starting from 1024x1024 (see
+        // `crate::smt::MINIMAP_SIZE`); read all of it so the chain is
+        // preserved for callers that want filtered downsamples, but a
+        // partial read is non-fatal (some older SMF files truncate after
+        // mip 0).
+        let mut minimap_dxt1 = Vec::new();
+        if header.minimap_ptr > 0 {
+            let mm_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(header.minimap_ptr as u64))?;
+                let mut buf = vec![0u8; crate::smt::MINIMAP_SIZE];
+                let mut read_total = 0usize;
+                while read_total < buf.len() {
+                    match reader.read(&mut buf[read_total..])? {
+                        0 => break,
+                        n => read_total += n,
+                    }
+                }
+                buf.truncate(read_total);
+                minimap_dxt1 = buf;
+                Ok(())
+            })();
+            if let Err(e) = mm_result {
+                tracing::warn!(error = %e, "SMF minimap section unreadable; minimap skipped");
+            }
+        }
+
         Ok(Self {
             header,
             heightmap,
@@ -392,7 +419,7 @@ impl SmfMap {
             typemap,
             smt_filename,
             tile_indices,
-            minimap_dxt1: Vec::new(),
+            minimap_dxt1,
             features,
         })
     }

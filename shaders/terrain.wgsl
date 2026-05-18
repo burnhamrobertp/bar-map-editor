@@ -88,6 +88,11 @@ struct CameraUniform {
     /// dimensions). z = advanced splat detail enabled (0/1). w =
     /// splat-detail diffuse-alpha enabled (0/1).
     splat_params: vec4<f32>,
+    /// Distance-fog parameters precomputed host-side from mapinfo
+    /// `atmosphere.fogStart` * `camera.far` and `atmosphere.fogEnd` *
+    /// `camera.far` -- engine-faithful (`UniformConstants.cpp:231`).
+    /// xy = start_dist, end_dist (render-space distances); zw reserved.
+    fog_dists: vec4<f32>,
 }
 
 // ── Debug toggles ──────────────────────────────────────────────────────
@@ -472,7 +477,55 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         } else {
             albedo = vec3<f32>(0.35, 0.32, 0.28);
         }
+
+        // Mirror axes: which side of the playable area this fragment is
+        // in. Drives both the normal-component flips below and the
+        // curvature falloff further down.
+        let west  = in.world_position.x < -camera.x_extent;
+        let east  = in.world_position.x >  camera.x_extent;
+        let north = in.world_position.z < -camera.z_extent;
+        let south = in.world_position.z >  camera.z_extent;
+        let apply_x = west || east;
+        let apply_z = north || south;
+
+        // Sample the same pre-baked playable-area normal map at the
+        // mirrored UV (engine widget samples `$ssmf_normals`). Reconstruct
+        // Y from the unit-length constraint, then flip X / Z components
+        // for axes the geometry is mirrored across so lighting stays
+        // consistent with the playable surface across the seam.
+        var ext_normal: vec3<f32>;
+        {
+            let nxz = textureSample(normal_map_tex, water_normal_sam, playable_uv).rg;
+            let xz_len_sq = dot(nxz, nxz);
+            if (xz_len_sq < 0.999) {
+                let ny = sqrt(1.0 - xz_len_sq);
+                ext_normal = vec3<f32>(nxz.x, ny, nxz.y);
+            } else {
+                ext_normal = vec3<f32>(0.0, 1.0, 0.0);
+            }
+            if (apply_x) { ext_normal.x = -ext_normal.x; }
+            if (apply_z) { ext_normal.z = -ext_normal.z; }
+            ext_normal = normalize(ext_normal);
+        }
+
+        // Lambert + ambient -- engine's `smf_ground_shade` without spec /
+        // shadow / sky-reflection / detail. The extension never reaches
+        // far enough into the playable lighting pipeline to need those.
+        let ext_sun_dir = normalize(camera.sun_dir_exp.xyz);
+        let ext_shade = smf_ground_shade(
+            in.world_position,
+            ext_normal,
+            ext_sun_dir,
+            camera.ground_ambient.xyz,
+            camera.ground_diffuse.xyz,
+            1.0,
+        );
+        let lit_albedo = albedo * ext_shade;
+
         // Luminance darken in YCbCr. Engine widget uses brightness = 0.3.
+        // Applied AFTER lighting so the dimming stays perceptually
+        // uniform across slope shading rather than only attenuating the
+        // base texture.
         let RGB2YCBCR = mat3x3<f32>(
             0.2126, -0.114572, 0.5,
             0.7152, -0.385428, -0.454153,
@@ -483,7 +536,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             0.0, -0.187324,   1.8556,
             1.5748, -0.468124, -5.55112e-17,
         );
-        var ycbcr = RGB2YCBCR * albedo;
+        var ycbcr = RGB2YCBCR * lit_albedo;
         ycbcr.x = clamp(ycbcr.x * 0.3, 0.0, 1.0);
         let darkened = YCBCR2RGB * ycbcr;
 
@@ -493,12 +546,6 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // in render space). Each active axis contributes a quadratic
         // attenuation -- so corner quadrants drop off fastest, edge
         // quadrants more gradually.
-        let west  = in.world_position.x < -camera.x_extent;
-        let east  = in.world_position.x >  camera.x_extent;
-        let north = in.world_position.z < -camera.z_extent;
-        let south = in.world_position.z >  camera.z_extent;
-        let apply_x = west || east;
-        let apply_z = north || south;
         let ref_x = select(0.0, select(camera.x_extent, -camera.x_extent, west), apply_x);
         let ref_z = select(0.0, select(camera.z_extent, -camera.z_extent, north), apply_z);
         var curv_acc = 0.0;
@@ -521,9 +568,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         // kicks in just past the playable edge regardless of map
         // size.
         let view_dist = length(camera.camera_pos - in.world_position);
+        // Engine path (`UniformConstants.cpp:231`): mapinfo `atmosphere.fogStart`
+        // / `atmosphere.fogEnd` scaled by camera far-plane host-side. Falls
+        // back to `extent_radius`-scaled defaults if the uniform is unset.
         let extent_radius = max(camera.x_extent, camera.z_extent);
-        let fog_start = 3.0 * extent_radius;
-        let fog_end = 7.0 * extent_radius;
+        let fog_start = select(3.0 * extent_radius, camera.fog_dists.x, camera.fog_dists.y > 0.0);
+        let fog_end = select(7.0 * extent_radius, camera.fog_dists.y, camera.fog_dists.y > 0.0);
         let fog_factor = clamp(
             (fog_end - view_dist) / max(fog_end - fog_start, 1e-4),
             0.0,

@@ -10,6 +10,14 @@ use std::path::PathBuf;
 
 use bar_graph::{NodeType, ParamValue};
 
+/// Fixed sidecar filename for the SMF-embedded minimap. The extract step
+/// decodes the embedded DXT1 minimap to RGBA8 and writes a PNG with this
+/// name into the work directory; persistence copies it into the .barproj
+/// on save. Loaded by `sync_grass_shading_tex` as the engine-faithful
+/// fallback for the `MAP_BASE_GRASS_TEX` map-edge sampler when
+/// `mapinfo.resources.grassShadingTex` is unset.
+pub const SMF_MINIMAP_SIDE_CAR: &str = "_bme_smf_minimap.png";
+
 use crate::package::{AssetHeader, AssetId, AssetKind};
 use crate::project::{EditorLayout, NodeSize, Position, Project};
 use crate::recipe::{
