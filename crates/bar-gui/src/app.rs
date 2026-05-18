@@ -277,6 +277,15 @@ pub struct BarEditorApp {
     /// the Sculpt3D / Preview viewports. Session-only state -- not
     /// persisted across project loads.
     pub viewport_debug: ViewportDebug,
+    /// Egui textures for rendered S3O thumbnails, keyed by lowercase
+    /// feature type name. Populated by bar-app's runner when it
+    /// drains `feature_thumb_requests`.
+    pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureId>,
+    /// Lowercase feature type names whose thumbnail the palette wants
+    /// rendered. Bar-app's runner reads + clears entries it has either
+    /// fulfilled or marked unrenderable; the palette re-adds entries
+    /// for missing types each frame so a slow load keeps trying.
+    pub feature_thumb_requests: std::collections::HashSet<String>,
 }
 
 /// Per-session viewport debug toggles. Surfaced via a small gear menu
@@ -326,6 +335,8 @@ impl Default for BarEditorApp {
             pending_placement_angle: 0.0,
             placement_ghost: None,
             viewport_debug: ViewportDebug::default(),
+            feature_thumb_cache: std::collections::HashMap::new(),
+            feature_thumb_requests: std::collections::HashSet::new(),
         }
     }
 }

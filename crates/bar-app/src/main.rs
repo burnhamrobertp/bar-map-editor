@@ -162,6 +162,7 @@ fn main() -> Result<()> {
                 map_work_dir: None,
                 model_rx: None,
                 last_selected_feature_type: None,
+                feature_thumbs: None,
                 log_rx,
             }))
         }),

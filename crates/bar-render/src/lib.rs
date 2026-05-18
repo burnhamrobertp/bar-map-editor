@@ -10,6 +10,7 @@ pub mod picking;
 pub mod renderer;
 pub mod shadow;
 pub mod terrain;
+pub mod thumbnail;
 
 pub use camera::Camera;
 pub use feature_lights::{lights_for_feature_def, FeatureLightConfig};
@@ -19,3 +20,4 @@ pub use picking::{
 };
 pub use renderer::{PreviewFrame, SmfLighting, TerrainRenderer, TerrainUpdateParams};
 pub use terrain::TerrainVertex;
+pub use thumbnail::FeatureThumbnailRenderer;

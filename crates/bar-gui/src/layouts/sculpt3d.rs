@@ -225,35 +225,95 @@ fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ui.add_space(4.0);
     }
 
+    // Two-wide virtualised grid: feature types can number in the
+    // hundreds for a full BAR catalog, and rendering every cell every
+    // frame -- with a thumbnail texture each -- would chew through
+    // texture bandwidth. `ScrollArea::show_rows` only invokes the
+    // closure for currently-visible rows.
+    const ROW_HEIGHT: f32 = 96.0;
+    const COLS: usize = 2;
+    let names = app.feature_palette_names.clone();
+    let num_rows = names.len().div_ceil(COLS);
     egui::ScrollArea::vertical()
         .id_salt("feature_palette_scroll")
         .auto_shrink([false, false])
-        .show(ui, |ui| {
-            let names = app.feature_palette_names.clone();
+        .show_rows(ui, ROW_HEIGHT, num_rows, |ui, row_range| {
             let spacing = ui.spacing().item_spacing.x;
-            let item_w = ((ui.available_width() - spacing) / 2.0).max(50.0);
-            // Two-wide grid so the user can scan the palette visually.
-            // Long names truncate with ellipsis; full text is shown on
-            // hover via the response's hover tooltip.
-            for chunk in names.chunks(2) {
+            let item_w = ((ui.available_width() - spacing) / COLS as f32).max(50.0);
+            for row in row_range {
                 ui.horizontal(|ui| {
-                    for name in chunk {
-                        let selected = app.selected_feature_type.as_deref() == Some(name.as_str());
-                        let label = egui::SelectableLabel::new(
-                            selected,
-                            egui::RichText::new(name).strong().small(),
-                        );
-                        let resp = ui
-                            .add_sized([item_w, 28.0], label)
-                            .on_hover_text(name.as_str());
-                        if resp.clicked() {
-                            app.selected_feature_type =
-                                if selected { None } else { Some(name.clone()) };
-                        }
+                    for col in 0..COLS {
+                        let idx = row * COLS + col;
+                        let Some(name) = names.get(idx) else { break };
+                        draw_feature_cell(ui, app, name, item_w, ROW_HEIGHT - 4.0);
                     }
                 });
             }
         });
+}
+
+/// One cell of the feature palette grid. Renders the S3O thumbnail at
+/// the top + the feature name below; falls back to a placeholder
+/// rectangle when the thumbnail isn't ready yet. Records a
+/// thumbnail-render request so bar-app's per-frame poll picks it up.
+fn draw_feature_cell(
+    ui: &mut egui::Ui,
+    app: &mut BarEditorApp,
+    name: &str,
+    width: f32,
+    height: f32,
+) {
+    let selected = app.selected_feature_type.as_deref() == Some(name);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let resp = resp.on_hover_text(name);
+
+    let fill = if selected {
+        egui::Color32::from_rgba_unmultiplied(70, 90, 130, 230)
+    } else if resp.hovered() {
+        egui::Color32::from_rgba_unmultiplied(40, 44, 52, 230)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(28, 30, 36, 200)
+    };
+    ui.painter().rect_filled(rect, 4.0, fill);
+
+    let thumb_size = (height - 22.0).max(16.0);
+    let thumb_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.center().x - thumb_size * 0.5, rect.top() + 2.0),
+        egui::vec2(thumb_size, thumb_size),
+    );
+    let thumb_id = name.to_lowercase();
+    if let Some(tex_id) = app.feature_thumb_cache.get(&thumb_id).copied() {
+        ui.painter().image(
+            tex_id,
+            thumb_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        ui.painter().rect_filled(
+            thumb_rect,
+            3.0,
+            egui::Color32::from_rgba_unmultiplied(50, 55, 65, 200),
+        );
+        app.feature_thumb_requests.insert(thumb_id);
+    }
+
+    let font = egui::FontId::proportional(11.0);
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.bottom() - 11.0),
+        egui::Align2::CENTER_CENTER,
+        name,
+        font,
+        egui::Color32::from_rgba_unmultiplied(230, 230, 240, 240),
+    );
+
+    if resp.clicked() {
+        app.selected_feature_type = if selected {
+            None
+        } else {
+            Some(name.to_string())
+        };
+    }
 }
 
 fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
