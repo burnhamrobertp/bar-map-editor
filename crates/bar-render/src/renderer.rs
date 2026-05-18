@@ -2302,28 +2302,37 @@ impl TerrainRenderer {
         // heightmap at each vertex's encoded playable UV for Y.
         if include_edge_extension {
             let ext_base = verts.len() as u32;
-            // Tessellate to match BAR's `map_edge_extension2` widget:
-            // one vertex per `gridSize = 32` elmos along each axis
-            // (`luaui/Widgets/map_edge_extension2.lua:32`). At our
-            // hardcoded 32-vertex grid each quadrant samples the
-            // playable heightmap 4-8x more coarsely than the engine,
-            // which read as the extension being "downsampled" relative
-            // to in-game where the extension matches the playable
-            // surface's heightmap fidelity.
-            const ENGINE_EXTENSION_CELL_ELMOS: f32 = 32.0;
+            // Engine reference: BAR's `map_edge_extension2` widget
+            // tessellates the extension at `gridSize = 32` elmos per
+            // cell (`luaui/Widgets/map_edge_extension2.lua:32`), and
+            // BAR's playable mesh has `SQUARE_SIZE = 8` elmos per cell
+            // (`rts/Sim/Misc/GlobalConstants.h:24`). So the engine's
+            // extension:playable density ratio is 1:4.
+            //
+            // BME's playable mesh is finer than BAR engine: `grid_n`
+            // tracks the heightmap's native sample count (up to 2048),
+            // so on a 4096-elmo map at native resolution the playable
+            // cell is 2 elmos. Tessellating the extension at the
+            // engine's literal 32-elmo cell preserves engine fidelity
+            // in absolute terms but produces a visible 16:1 stepping
+            // at the playable boundary relative to BME's finer
+            // surface -- particularly on rough / mountainous terrain.
+            //
+            // Preserve the engine's 4:1 ratio against BME's actual
+            // playable density instead. Floor at 8 elmos (engine
+            // playable rate) -- going finer than that tessellates
+            // beyond what the heightmap can resolve.
             let world_x_elmos = 2.0 * x_extent * elmo_per_render_xz[0];
             let world_z_elmos = 2.0 * z_extent * elmo_per_render_xz[1];
-            let cells_x = (world_x_elmos / ENGINE_EXTENSION_CELL_ELMOS)
-                .round()
-                .max(2.0) as u32;
-            let cells_z = (world_z_elmos / ENGINE_EXTENSION_CELL_ELMOS)
-                .round()
-                .max(2.0) as u32;
-            // `generate_map_edge_extension` takes a single grid count;
-            // pick the higher axis so non-square maps don't lose detail
-            // on the longer side. +1 because the grid is vertex-indexed,
-            // not cell-indexed.
-            let ext_n = (cells_x.max(cells_z) + 1).min(257);
+            let world_max_elmos = world_x_elmos.max(world_z_elmos);
+            let playable_cell_elmos = world_max_elmos / grid_n.max(1) as f32;
+            let ext_cell_elmos = (playable_cell_elmos * 4.0).max(8.0);
+            let cells_x = (world_x_elmos / ext_cell_elmos).round().max(2.0) as u32;
+            let cells_z = (world_z_elmos / ext_cell_elmos).round().max(2.0) as u32;
+            // Cap at 1025 vertices per axis = ~1M verts per quadrant,
+            // ~8M total for the eight-quadrant extension. Prevents
+            // pathologically dense meshes on tiny playable-cell sizes.
+            let ext_n = (cells_x.max(cells_z) + 1).min(1025);
             let (ext_v, ext_i) = generate_map_edge_extension(x_extent, z_extent, ext_n);
             idxs.extend(ext_i.iter().map(|i| i + ext_base));
             verts.extend(ext_v);
