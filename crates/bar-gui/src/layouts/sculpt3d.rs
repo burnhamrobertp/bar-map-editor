@@ -282,9 +282,9 @@ fn draw_feature_cell(
         egui::vec2(thumb_size, thumb_size),
     );
     let thumb_id = name.to_lowercase();
-    if let Some(tex_id) = app.feature_thumb_cache.get(&thumb_id).copied() {
+    if let Some(handle) = app.feature_thumb_cache.get(&thumb_id) {
         ui.painter().image(
-            tex_id,
+            handle.id(),
             thumb_rect,
             egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
             egui::Color32::WHITE,

@@ -277,10 +277,13 @@ pub struct BarEditorApp {
     /// the Sculpt3D / Preview viewports. Session-only state -- not
     /// persisted across project loads.
     pub viewport_debug: ViewportDebug,
-    /// Egui textures for rendered S3O thumbnails, keyed by lowercase
-    /// feature type name. Populated by bar-app's runner when it
-    /// drains `feature_thumb_requests`.
-    pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureId>,
+    /// Egui texture handles for rendered S3O thumbnails, keyed by
+    /// lowercase feature type name. Populated by bar-app's runner
+    /// when it drains `feature_thumb_requests`. Storing the handle
+    /// (rather than just the `TextureId`) ties the GPU texture's
+    /// lifetime to the cache entry -- dropping it via `remove` frees
+    /// the egui side automatically.
+    pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureHandle>,
     /// Lowercase feature type names whose thumbnail the palette wants
     /// rendered. Bar-app's runner reads + clears entries it has
     /// fulfilled; the palette only inserts when a name is in neither

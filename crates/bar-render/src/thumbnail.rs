@@ -1,28 +1,18 @@
 //! Offscreen renderer for S3O thumbnails shown in the feature palette.
 //!
-//! Each thumbnail is a single S3O model rendered with a fixed three-
-//! quarter-view camera + simple Lambert lighting into a 96x96
-//! Rgba8UnormSrgb texture. The texture is kept alive inside the
-//! renderer so the egui `TextureId` registered against it stays valid
-//! across frames.
+//! Renders one S3O model at a fixed three-quarter-view camera with
+//! simple Lambert + ambient lighting into a 128x128 Rgba8UnormSrgb
+//! target, then reads the pixels back to CPU. The caller hands the
+//! bytes to egui (`ctx.load_texture`) and optionally writes them to a
+//! persistent on-disk cache so subsequent app launches skip the
+//! render entirely.
 //!
-//! This is a deliberately small pipeline: it doesn't share the main
-//! viewport's CameraUniform, shadow map, or splat resources. Trade-off
-//! is one extra pipeline / shader; benefit is the thumbnails don't
-//! drag the full viewport rendering state into the palette path.
-//!
-//! Caller flow (bar-app):
-//! ```text
-//! tn.load_mesh(...) ;            // when an S3O lands from the model loader
-//! tn.render(name) -> Some(view); // produces / refreshes the offscreen texture
-//! // register `view` as an egui TextureId; cache on app.feature_thumb_cache
-//! ```
-//!
-//! Re-rendering a thumbnail re-uses the existing offscreen texture, so
-//! the egui side keeps the same `TextureId` and doesn't need to be
-//! re-registered.
+//! `THUMB_SIZE` is 128: `128 * 4 = 512` bytes/row, satisfying wgpu's
+//! `COPY_BYTES_PER_ROW_ALIGNMENT = 256`. Without that alignment the
+//! texture-to-buffer copy needs a padded staging layout.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use bar_data::S3oVertex;
 use glam::{Mat4, Vec3};
@@ -30,11 +20,12 @@ use wgpu::util::DeviceExt;
 
 use crate::features::FeatureTexture;
 
-const THUMB_SIZE: u32 = 96;
+pub const THUMB_SIZE: u32 = 128;
 
-/// GPU resources for one thumbnail entry: source mesh + its own
-/// offscreen render target. The offscreen texture is the resource the
-/// caller registers with egui.
+/// CPU resources for one feature type: mesh buffers + per-feature
+/// bind group. The render target is allocated transiently per
+/// `render_to_rgba` call, so there's no GPU memory held per cached
+/// feature -- only the source mesh, which is small.
 struct ThumbnailEntry {
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -42,15 +33,6 @@ struct ThumbnailEntry {
     bind_group: wgpu::BindGroup,
     aabb_min: Vec3,
     aabb_max: Vec3,
-    /// Backing texture for the offscreen target. Held so the texture
-    /// view stays valid for as long as the entry lives. Not accessed
-    /// directly after construction.
-    #[allow(dead_code)]
-    target: wgpu::Texture,
-    target_view: wgpu::TextureView,
-    /// Set once after the first render so subsequent renders reuse the
-    /// existing target instead of dirtying it again every frame.
-    rendered: bool,
 }
 
 #[repr(C)]
@@ -66,19 +48,13 @@ pub struct FeatureThumbnailRenderer {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
-    /// Fallback white texture used when an S3O has no usable diffuse.
-    /// Held so the underlying texture (which the per-entry bind group
-    /// references) stays alive.
-    #[allow(dead_code)]
-    default_diffuse_view: wgpu::TextureView,
-    /// Per-feature uniform buffer (reused; one for the whole renderer
-    /// since we render thumbnails serially).
+    /// Per-feature uniform buffer (reused; renders are serialised).
     uniform_buffer: wgpu::Buffer,
     entries: HashMap<String, ThumbnailEntry>,
 }
 
 impl FeatureThumbnailRenderer {
-    pub fn new(device: &wgpu::Device, queue: &wgpu::Queue) -> Self {
+    pub fn new(device: &wgpu::Device) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("feature_thumbnail.wgsl"),
             source: wgpu::ShaderSource::Wgsl(
@@ -188,47 +164,6 @@ impl FeatureThumbnailRenderer {
             ..Default::default()
         });
 
-        // 1x1 white default for models with no diffuse texture.
-        let default_diffuse = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("feature_thumbnail_default_white"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &default_diffuse,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            &[255u8; 4],
-            wgpu::TexelCopyBufferLayout {
-                offset: 0,
-                bytes_per_row: Some(4),
-                rows_per_image: Some(1),
-            },
-            wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-        );
-        let default_diffuse_view =
-            default_diffuse.create_view(&wgpu::TextureViewDescriptor::default());
-        // Leak the default texture into the renderer by holding only its
-        // view -- the underlying texture is kept alive by the device's
-        // resource tracking via the bind groups that reference it.
-        std::mem::forget(default_diffuse);
-
         let uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("feature_thumbnail_uniform"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -240,21 +175,19 @@ impl FeatureThumbnailRenderer {
             pipeline,
             bind_group_layout,
             sampler,
-            default_diffuse_view,
             uniform_buffer,
             entries: HashMap::new(),
         }
     }
 
-    /// True when a thumbnail entry for this feature type has already been
-    /// uploaded (mesh + texture + per-feature bind group).
+    /// True when a thumbnail entry for this feature type has been
+    /// uploaded already.
     pub fn has(&self, feature_type: &str) -> bool {
         self.entries.contains_key(&feature_type.to_lowercase())
     }
 
-    /// Upload mesh + optional diffuse texture for a feature type. Allocates
-    /// the offscreen render target the first time we see this name;
-    /// subsequent calls overwrite the existing entry.
+    /// Upload mesh + optional diffuse for a feature type. Replaces any
+    /// existing entry of the same name.
     pub fn load_mesh(
         &mut self,
         device: &wgpu::Device,
@@ -267,9 +200,9 @@ impl FeatureThumbnailRenderer {
             return;
         }
 
-        // Shift Y so the visible base sits at model Y = 0 -- matches the
-        // shift the main feature renderer applies. Keeps the camera-
-        // framing math below simple (object centre at AABB midpoint).
+        // Shift Y so the visible base sits at model Y = 0 -- matches
+        // the main feature renderer's anchor shift; keeps the
+        // bounding-box centring sane.
         let shift_y = mesh.aabb_min[1].max(0.0);
         let vertices: Vec<S3oVertex> = if shift_y > 0.0 {
             mesh.vertices
@@ -294,15 +227,9 @@ impl FeatureThumbnailRenderer {
             usage: wgpu::BufferUsages::INDEX,
         });
 
-        let diffuse_view = if let Some(t) = tex1 {
-            upload_diffuse(device, queue, name, t)
-        } else {
-            // Bind groups need a real view; reuse the default white
-            // via a freshly-created view of the same texture would
-            // require holding the texture -- which we've std::mem::forget'd.
-            // Workaround: create a per-entry white texture so the
-            // bind group has a unique owned view.
-            create_fallback_white(device, queue)
+        let diffuse_view = match tex1 {
+            Some(t) => upload_diffuse(device, queue, name, t),
+            None => upload_fallback_white(device, queue),
         };
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -324,24 +251,6 @@ impl FeatureThumbnailRenderer {
             ],
         });
 
-        // Offscreen render target (kept alive in the entry so the egui
-        // TextureId registered against the view stays valid).
-        let target = device.create_texture(&wgpu::TextureDescriptor {
-            label: Some(&format!("thumb_target_{name}")),
-            size: wgpu::Extent3d {
-                width: THUMB_SIZE,
-                height: THUMB_SIZE,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
-        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
-
         let aabb_min = Vec3::from_array([
             mesh.aabb_min[0],
             mesh.aabb_min[1] - shift_y,
@@ -362,26 +271,40 @@ impl FeatureThumbnailRenderer {
                 bind_group,
                 aabb_min,
                 aabb_max,
-                target,
-                target_view,
-                rendered: false,
             },
         );
     }
 
-    /// Render (or re-render) the thumbnail for this feature type. Returns
-    /// the offscreen texture view for the caller to register with egui.
-    /// Returns `None` when no mesh has been uploaded for this name yet.
-    pub fn render(
+    /// Render the thumbnail for this feature type, copy the pixels
+    /// back to CPU, and return them as RGBA8 (THUMB_SIZE x THUMB_SIZE).
+    /// Returns `None` if no mesh has been uploaded for this name yet.
+    /// This call blocks until the GPU readback completes -- thumbnails
+    /// are small (64KiB at THUMB_SIZE = 128) so the wait is sub-frame.
+    pub fn render_to_rgba(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         feature_type: &str,
-    ) -> Option<&wgpu::TextureView> {
+    ) -> Option<Vec<u8>> {
         let key = feature_type.to_lowercase();
-        let entry = self.entries.get_mut(&key)?;
+        let entry = self.entries.get(&key)?;
 
-        // Per-entry depth buffer is small; create on each render.
+        let target = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("feature_thumbnail_target"),
+            size: wgpu::Extent3d {
+                width: THUMB_SIZE,
+                height: THUMB_SIZE,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let target_view = target.create_view(&wgpu::TextureViewDescriptor::default());
+
         let depth = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("feature_thumbnail_depth"),
             size: wgpu::Extent3d {
@@ -398,7 +321,16 @@ impl FeatureThumbnailRenderer {
         });
         let depth_view = depth.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Frame the AABB: look at its centre from a three-quarter view.
+        let bytes_per_row = THUMB_SIZE * 4;
+        assert!(bytes_per_row.is_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT));
+        let staging = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("feature_thumbnail_staging"),
+            size: (bytes_per_row * THUMB_SIZE) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        // Frame the AABB from a three-quarter view.
         let centre = (entry.aabb_min + entry.aabb_max) * 0.5;
         let extent = (entry.aabb_max - entry.aabb_min).length().max(1e-3);
         let dist = extent * 1.2;
@@ -428,7 +360,7 @@ impl FeatureThumbnailRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("feature_thumbnail_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &entry.target_view,
+                    view: &target_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -457,22 +389,47 @@ impl FeatureThumbnailRenderer {
             pass.set_index_buffer(entry.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..entry.num_indices, 0, 0..1);
         }
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &target,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(THUMB_SIZE),
+                },
+            },
+            wgpu::Extent3d {
+                width: THUMB_SIZE,
+                height: THUMB_SIZE,
+                depth_or_array_layers: 1,
+            },
+        );
         queue.submit(Some(encoder.finish()));
-        entry.rendered = true;
-        Some(&entry.target_view)
+
+        // Map + block until the readback completes. Uses a shared flag
+        // because `map_async` invokes the callback from the wgpu
+        // device poll thread.
+        let mapped = Arc::new(Mutex::new(None));
+        let mapped_clone = Arc::clone(&mapped);
+        staging
+            .slice(..)
+            .map_async(wgpu::MapMode::Read, move |result| {
+                *mapped_clone.lock().unwrap() = Some(result);
+            });
+        let _ = device.poll(wgpu::MaintainBase::Wait);
+        let result = mapped.lock().unwrap().take()?;
+        result.ok()?;
+        let data = staging.slice(..).get_mapped_range().to_vec();
+        Some(data)
     }
 
-    /// True if a thumbnail has already been rendered for this feature
-    /// type (used to skip re-rendering on every frame).
-    pub fn is_rendered(&self, feature_type: &str) -> bool {
-        self.entries
-            .get(&feature_type.to_lowercase())
-            .map(|e| e.rendered)
-            .unwrap_or(false)
-    }
-
-    /// Drop all thumbnails. Called on project reset so a new map's
-    /// catalog starts with a fresh cache.
+    /// Drop all uploaded thumbnail meshes. Called on project reset.
     pub fn clear(&mut self) {
         self.entries.clear();
     }
@@ -522,7 +479,7 @@ fn upload_diffuse(
     view
 }
 
-fn create_fallback_white(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
+fn upload_fallback_white(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::TextureView {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some("thumb_fallback_white"),
         size: wgpu::Extent3d {

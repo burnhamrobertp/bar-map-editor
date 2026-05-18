@@ -1,5 +1,6 @@
 mod app_log_layer;
 mod bar_install;
+mod feature_thumb_cache;
 mod layout_manager;
 mod runner;
 mod viewport;

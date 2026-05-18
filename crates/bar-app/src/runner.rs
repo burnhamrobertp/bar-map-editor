@@ -513,7 +513,7 @@ impl eframe::App for AppRunner {
                             // thumbnail renderer so the palette can
                             // produce a preview without re-loading.
                             let thumbs = self.feature_thumbs.get_or_insert_with(|| {
-                                bar_render::FeatureThumbnailRenderer::new(&gpu.device, &gpu.queue)
+                                bar_render::FeatureThumbnailRenderer::new(&gpu.device)
                             });
                             let tex1_borrow =
                                 loaded.tex1.as_ref().map(|t| bar_render::FeatureTexture {
@@ -672,12 +672,16 @@ impl eframe::App for AppRunner {
 
 impl AppRunner {
     /// Drain one entry from `app.feature_thumb_requests` and try to
-    /// render its thumbnail. If the mesh isn't loaded yet, move the
-    /// name into `feature_thumb_pending` and kick the model loader
-    /// (which also enumerates the pending set, so the S3O comes in via
-    /// the existing rx-polling path). When that mesh arrives, the
-    /// polling block clears the pending entry, the palette re-fires
-    /// the request, and this method renders it on a later frame.
+    /// land its thumbnail in `feature_thumb_cache`. Three paths:
+    /// 1. On-disk PNG cache hit: decode + upload as egui texture, done.
+    ///    Avoids the GPU render entirely on subsequent app launches.
+    /// 2. Mesh loaded but no disk cache: render to RGBA via wgpu,
+    ///    upload as egui texture, persist to disk for next launch.
+    /// 3. Mesh not loaded: mark pending + kick the model loader
+    ///    (which enumerates `feature_thumb_pending` when building
+    ///    its work queue). The rx-polling block clears pending when
+    ///    the mesh arrives; the palette re-fires the request and
+    ///    path 2 picks it up.
     fn process_one_thumbnail_request(&mut self, ctx: &egui::Context) {
         let Some(name) = self.app.feature_thumb_requests.iter().next().cloned() else {
             return;
@@ -688,32 +692,47 @@ impl AppRunner {
             return;
         }
 
-        let (gpu, render_state) = match (&self.gpu_context, &self.render_state) {
-            (Some(g), Some(r)) => (g, r),
-            _ => return,
+        // 1. Disk cache hit -- skip GPU entirely.
+        if let Some((rgba, w, h)) = crate::feature_thumb_cache::read(&name) {
+            let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
+            let handle = ctx.load_texture(
+                format!("feature_thumb_{name}"),
+                image,
+                egui::TextureOptions::LINEAR,
+            );
+            self.app.feature_thumb_cache.insert(name, handle);
+            return;
+        }
+
+        let gpu = match &self.gpu_context {
+            Some(g) => g,
+            None => return,
         };
-        let thumbs = self.feature_thumbs.get_or_insert_with(|| {
-            bar_render::FeatureThumbnailRenderer::new(&gpu.device, &gpu.queue)
-        });
+        let thumbs = self
+            .feature_thumbs
+            .get_or_insert_with(|| bar_render::FeatureThumbnailRenderer::new(&gpu.device));
 
         if !thumbs.has(&name) {
-            // Mesh not loaded yet -- mark pending so the palette stops
-            // re-requesting, and kick the loader (which now enumerates
-            // pending so the S3O actually gets loaded).
+            // 3. Mesh missing. Mark pending + ensure a loader is
+            //    running for it.
             self.app.feature_thumb_pending.insert(name);
             self.spawn_model_loader(ctx);
             return;
         }
 
-        let Some(view) = thumbs.render(&gpu.device, &gpu.queue, &name) else {
+        // 2. Render fresh, persist, register.
+        let Some(rgba) = thumbs.render_to_rgba(&gpu.device, &gpu.queue, &name) else {
             return;
         };
-        let tex_id = render_state.renderer.write().register_native_texture(
-            &gpu.device,
-            view,
-            wgpu::FilterMode::Linear,
+        let size = bar_render::thumbnail::THUMB_SIZE;
+        crate::feature_thumb_cache::write(&name, &rgba, size, size);
+        let image = egui::ColorImage::from_rgba_unmultiplied([size as usize, size as usize], &rgba);
+        let handle = ctx.load_texture(
+            format!("feature_thumb_{name}"),
+            image,
+            egui::TextureOptions::LINEAR,
         );
-        self.app.feature_thumb_cache.insert(name, tex_id);
+        self.app.feature_thumb_cache.insert(name, handle);
     }
 
     /// Spawn the background S3O model loader for all feature types in the current
