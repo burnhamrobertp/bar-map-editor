@@ -227,14 +227,31 @@ fn draw_features_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 
     egui::ScrollArea::vertical()
         .id_salt("feature_palette_scroll")
-        .max_height(200.0)
+        .auto_shrink([false, false])
         .show(ui, |ui| {
             let names = app.feature_palette_names.clone();
-            for name in &names {
-                let selected = app.selected_feature_type.as_deref() == Some(name.as_str());
-                if ui.selectable_label(selected, name).clicked() {
-                    app.selected_feature_type = if selected { None } else { Some(name.clone()) };
-                }
+            let spacing = ui.spacing().item_spacing.x;
+            let item_w = ((ui.available_width() - spacing) / 2.0).max(50.0);
+            // Two-wide grid so the user can scan the palette visually.
+            // Long names truncate with ellipsis; full text is shown on
+            // hover via the response's hover tooltip.
+            for chunk in names.chunks(2) {
+                ui.horizontal(|ui| {
+                    for name in chunk {
+                        let selected = app.selected_feature_type.as_deref() == Some(name.as_str());
+                        let label = egui::SelectableLabel::new(
+                            selected,
+                            egui::RichText::new(name).strong().small(),
+                        );
+                        let resp = ui
+                            .add_sized([item_w, 28.0], label)
+                            .on_hover_text(name.as_str());
+                        if resp.clicked() {
+                            app.selected_feature_type =
+                                if selected { None } else { Some(name.clone()) };
+                        }
+                    }
+                });
             }
         });
 }

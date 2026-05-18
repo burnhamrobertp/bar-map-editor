@@ -66,7 +66,7 @@ See `docs/feature-rendering-plan.md`. M1/M2/M3 are complete.
 
 ### Editor UI
 
-- **"Add Features" panel should fill available vertical space and show previews.** Currently the panel is a compact list. Expand it to take the available space in the sidebar / palette area, and render each feature entry with a small visual preview (S3O thumbnail or rendered placeholder) in a **2-wide grid layout** so the user can scan available features visually rather than by name alone. Lives in the features panel (most likely `crates/bar-gui/src/panels/palette.rs` or `crates/bar-gui/src/layouts/sculpt3d.rs` -- check current home of the feature picker).
+- **S3O thumbnail previews in the Add Features palette.** The 2-wide grid layout + vertical fill landed (`crates/bar-gui/src/layouts/sculpt3d.rs::draw_features_panel`); each cell currently shows just the feature type name. Render a small S3O thumbnail per feature (one-shot offscreen pass per type, cached as an egui texture) so the palette is scannable visually rather than by name alone. Thumb dims ~64x64 with the feature name underneath. Re-render on catalog change.
 - **"Features" action bar entry for managing map-bundled features.** Add a new top-level action bar button that opens a management view for the custom features included in this map's data (the `features/`
   + `objects3d/` + `unittextures/` subtrees copied into the `.barproj` on save). Should let the user list what's bundled, inspect each entry, and add / remove entries. Goes alongside the existing Compile / Bundle / Test-in-BAR / Edit-Map-Info buttons in `crates/bar-gui/src/layouts/shell.rs::TopBottomPanel::top("action_bar")`.
 
