@@ -497,17 +497,23 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         let curv_alpha = clamp(1.0 + 6.0 * (curv_acc + 0.18), 0.0, 1.0);
 
-        // Edge fog -- linear falloff in camera view-space distance,
-        // blended toward the atmosphere's sky colour. Replaces the
-        // engine widget's "mix toward fogColor by fogFactor" line:
-        // view distance for fragments far from the camera approaches
-        // the sky colour, hiding the bend.
-        let view_pos = camera.view_proj * vec4<f32>(in.world_position, 1.0);
-        // Use clip-space depth as a cheap monotonic distance proxy;
-        // an actual view-space length needs the view matrix split
-        // out of view_proj (which we don't carry separately).
-        let depth01 = clamp(view_pos.z / max(view_pos.w, 1e-4), 0.0, 1.0);
-        let fog_factor = clamp(1.0 - depth01 * 1.2, 0.0, 1.0);
+        // Edge fog -- linear falloff in camera-to-fragment world
+        // distance, blended toward the atmosphere's sky colour.
+        // Replaces the engine widget's "mix toward fogColor by
+        // fogFactor" line; fragments far from the camera approach
+        // the sky colour, hiding the curvature bend's seam at the
+        // horizon. Start/end are scaled by `x_extent` so the fog
+        // kicks in just past the playable edge regardless of map
+        // size.
+        let view_dist = length(camera.camera_pos - in.world_position);
+        let extent_radius = max(camera.x_extent, camera.z_extent);
+        let fog_start = 3.0 * extent_radius;
+        let fog_end = 7.0 * extent_radius;
+        let fog_factor = clamp(
+            (fog_end - view_dist) / max(fog_end - fog_start, 1e-4),
+            0.0,
+            1.0,
+        );
         let horizon_color = camera.sky_color_density.rgb;
         let after_fog = mix(horizon_color, darkened, fog_factor);
 
