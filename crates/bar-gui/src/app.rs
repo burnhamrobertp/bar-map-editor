@@ -282,10 +282,18 @@ pub struct BarEditorApp {
     /// drains `feature_thumb_requests`.
     pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureId>,
     /// Lowercase feature type names whose thumbnail the palette wants
-    /// rendered. Bar-app's runner reads + clears entries it has either
-    /// fulfilled or marked unrenderable; the palette re-adds entries
-    /// for missing types each frame so a slow load keeps trying.
+    /// rendered. Bar-app's runner reads + clears entries it has
+    /// fulfilled; the palette only inserts when a name is in neither
+    /// `feature_thumb_cache` nor `feature_thumb_pending`, so the set
+    /// converges rather than churning every frame.
     pub feature_thumb_requests: std::collections::HashSet<String>,
+    /// Names the runner has kicked an S3O load for but hasn't yet
+    /// uploaded a mesh + rendered a thumbnail. Used as a gate so the
+    /// palette doesn't re-request every frame while a load is in
+    /// flight. Cleared by the runner when the mesh arrives (so the
+    /// palette re-fires the request and the thumbnail renders) or
+    /// when the load fails terminally.
+    pub feature_thumb_pending: std::collections::HashSet<String>,
 }
 
 /// Per-session viewport debug toggles. Surfaced via a small gear menu
@@ -337,6 +345,7 @@ impl Default for BarEditorApp {
             viewport_debug: ViewportDebug::default(),
             feature_thumb_cache: std::collections::HashMap::new(),
             feature_thumb_requests: std::collections::HashSet::new(),
+            feature_thumb_pending: std::collections::HashSet::new(),
         }
     }
 }

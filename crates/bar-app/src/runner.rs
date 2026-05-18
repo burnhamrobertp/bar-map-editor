@@ -81,9 +81,6 @@ pub struct AppRunner {
     /// Renders S3O thumbnails for the feature-palette grid. Holds GPU
     /// resources (mesh buffers + offscreen render targets) so the egui
     /// TextureIds registered against them stay valid across frames.
-    /// Currently unused -- the request-processing path is disabled
-    /// while perf / display issues are being investigated (see TODO).
-    #[allow(dead_code)]
     pub feature_thumbs: Option<bar_render::FeatureThumbnailRenderer>,
     /// Receives forwarded tracing events from the AppLogLayer for display in the BME log.
     pub log_rx: mpsc::Receiver<(Level, String)>,
@@ -512,6 +509,30 @@ impl eframe::App for AppRunner {
                                 loaded.tex1.as_ref(),
                                 loaded.tex2.as_ref(),
                             );
+                            // Share the mesh + diffuse with the
+                            // thumbnail renderer so the palette can
+                            // produce a preview without re-loading.
+                            let thumbs = self.feature_thumbs.get_or_insert_with(|| {
+                                bar_render::FeatureThumbnailRenderer::new(&gpu.device, &gpu.queue)
+                            });
+                            let tex1_borrow =
+                                loaded.tex1.as_ref().map(|t| bar_render::FeatureTexture {
+                                    width: t.width,
+                                    height: t.height,
+                                    rgba: t.rgba.as_slice(),
+                                });
+                            thumbs.load_mesh(
+                                &gpu.device,
+                                &gpu.queue,
+                                &loaded.name,
+                                &loaded.mesh,
+                                tex1_borrow.as_ref(),
+                            );
+                            // Mesh just arrived; clear the pending
+                            // gate so the palette will re-request this
+                            // name and the runner will render it on
+                            // the next frame.
+                            self.app.feature_thumb_pending.remove(&loaded.name);
                             any_model_loaded = true;
                         }
                     }
@@ -629,11 +650,11 @@ impl eframe::App for AppRunner {
             }
         }
 
-        // Thumbnail-request processing is wired but disabled while the
-        // render path is being debugged -- see TODO. The infrastructure
-        // (renderer, channel-style cache + request set) stays in place
-        // so re-enabling is a small change once the underlying issue
-        // is understood.
+        // Drain one palette thumbnail request per frame. Producing
+        // multiple in a single frame would chunk the GPU work
+        // visibly; one per frame still streams in quickly while the
+        // palette is scrolling.
+        self.process_one_thumbnail_request(ctx);
 
         // Delegate layout rendering to the layout manager.
         let layout = self.app.active_layout();
@@ -650,6 +671,51 @@ impl eframe::App for AppRunner {
 }
 
 impl AppRunner {
+    /// Drain one entry from `app.feature_thumb_requests` and try to
+    /// render its thumbnail. If the mesh isn't loaded yet, move the
+    /// name into `feature_thumb_pending` and kick the model loader
+    /// (which also enumerates the pending set, so the S3O comes in via
+    /// the existing rx-polling path). When that mesh arrives, the
+    /// polling block clears the pending entry, the palette re-fires
+    /// the request, and this method renders it on a later frame.
+    fn process_one_thumbnail_request(&mut self, ctx: &egui::Context) {
+        let Some(name) = self.app.feature_thumb_requests.iter().next().cloned() else {
+            return;
+        };
+        self.app.feature_thumb_requests.remove(&name);
+
+        if self.app.feature_thumb_cache.contains_key(&name) {
+            return;
+        }
+
+        let (gpu, render_state) = match (&self.gpu_context, &self.render_state) {
+            (Some(g), Some(r)) => (g, r),
+            _ => return,
+        };
+        let thumbs = self.feature_thumbs.get_or_insert_with(|| {
+            bar_render::FeatureThumbnailRenderer::new(&gpu.device, &gpu.queue)
+        });
+
+        if !thumbs.has(&name) {
+            // Mesh not loaded yet -- mark pending so the palette stops
+            // re-requesting, and kick the loader (which now enumerates
+            // pending so the S3O actually gets loaded).
+            self.app.feature_thumb_pending.insert(name);
+            self.spawn_model_loader(ctx);
+            return;
+        }
+
+        let Some(view) = thumbs.render(&gpu.device, &gpu.queue, &name) else {
+            return;
+        };
+        let tex_id = render_state.renderer.write().register_native_texture(
+            &gpu.device,
+            view,
+            wgpu::FilterMode::Linear,
+        );
+        self.app.feature_thumb_cache.insert(name, tex_id);
+    }
+
     /// Spawn the background S3O model loader for all feature types in the current
     /// map that have a catalog entry with a non-empty object field.
     /// No-op if the catalog is not loaded, the archive path is unknown, or
@@ -675,6 +741,10 @@ impl AppRunner {
         if let Some(ref pending) = self.app.selected_feature_type {
             unique_types.insert(pending.to_lowercase());
         }
+        // Palette types whose thumbnails are queued -- ensures the
+        // S3O for any visible-row feature gets loaded even if the
+        // user hasn't placed one yet. Already-lowercased.
+        unique_types.extend(self.app.feature_thumb_pending.iter().cloned());
         let to_load: Vec<(String, String)> = unique_types
             .iter()
             .filter(|name| !self.layout_manager.has_feature_model(name))
