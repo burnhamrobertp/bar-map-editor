@@ -2302,7 +2302,29 @@ impl TerrainRenderer {
         // heightmap at each vertex's encoded playable UV for Y.
         if include_edge_extension {
             let ext_base = verts.len() as u32;
-            let (ext_v, ext_i) = generate_map_edge_extension(x_extent, z_extent, 32);
+            // Tessellate to match BAR's `map_edge_extension2` widget:
+            // one vertex per `gridSize = 32` elmos along each axis
+            // (`luaui/Widgets/map_edge_extension2.lua:32`). At our
+            // hardcoded 32-vertex grid each quadrant samples the
+            // playable heightmap 4-8x more coarsely than the engine,
+            // which read as the extension being "downsampled" relative
+            // to in-game where the extension matches the playable
+            // surface's heightmap fidelity.
+            const ENGINE_EXTENSION_CELL_ELMOS: f32 = 32.0;
+            let world_x_elmos = 2.0 * x_extent * elmo_per_render_xz[0];
+            let world_z_elmos = 2.0 * z_extent * elmo_per_render_xz[1];
+            let cells_x = (world_x_elmos / ENGINE_EXTENSION_CELL_ELMOS)
+                .round()
+                .max(2.0) as u32;
+            let cells_z = (world_z_elmos / ENGINE_EXTENSION_CELL_ELMOS)
+                .round()
+                .max(2.0) as u32;
+            // `generate_map_edge_extension` takes a single grid count;
+            // pick the higher axis so non-square maps don't lose detail
+            // on the longer side. +1 because the grid is vertex-indexed,
+            // not cell-indexed.
+            let ext_n = (cells_x.max(cells_z) + 1).min(257);
+            let (ext_v, ext_i) = generate_map_edge_extension(x_extent, z_extent, ext_n);
             idxs.extend(ext_i.iter().map(|i| i + ext_base));
             verts.extend(ext_v);
         }
