@@ -99,6 +99,19 @@ pub fn live_smf_lighting(app: &bar_gui::BarEditorApp) -> bar_render::SmfLighting
 // ── Per-slot state types ──────────────────────────────────────────────────────
 
 /// Rendering state shared by Sculpt3D and Preview slots.
+/// Tracks an in-progress drag-to-move gesture on a placed feature. Set
+/// when the user presses primary mouse over the already-selected feature
+/// and the drag threshold is crossed; cleared on release. The offsets
+/// capture the difference between the press point's terrain pick and the
+/// feature's recorded XZ so the feature follows the cursor naturally
+/// (the press point doesn't have to be the feature's exact base).
+#[derive(Clone, Copy)]
+pub struct FeatureDragState {
+    pub feature_idx: usize,
+    pub offset_x: f32,
+    pub offset_z: f32,
+}
+
 pub struct ViewportCore {
     pub camera: Camera,
     pub terrain_renderer: Option<TerrainRenderer>,
@@ -108,6 +121,7 @@ pub struct ViewportCore {
     pub last_water_color: [f32; 3],
     pub session_id: u64,
     pub started_at: Instant,
+    pub feature_drag: Option<FeatureDragState>,
     /// Tracks the `(project_dir, skybox_filename)` the renderer's cubemap
     /// was last loaded for. We re-attempt the upload whenever either side
     /// of this tuple changes -- not gated on compilation, so the skybox
@@ -143,6 +157,7 @@ impl ViewportCore {
             last_water_color: [0.0, 0.4, 0.6],
             session_id,
             started_at: Instant::now(),
+            feature_drag: None,
             skybox_loaded_for: None,
             detail_loaded_for: None,
             splat_loaded_for: None,
@@ -944,6 +959,69 @@ fn handle_camera_input(
     if app.paint.brush.tool == bar_gui::BrushTool::Pointer
         && app.active_layout() != bar_gui::Layout::Preview
     {
+        // Start a drag-to-move gesture when the press lands on the
+        // currently-selected feature. The check runs at drag-start
+        // time so a click that doesn't move (`clicked_by` below)
+        // still goes through the selection path.
+        if response.drag_started_by(egui::PointerButton::Primary)
+            && feature_type.is_none()
+            && !sculpt_active
+        {
+            if let (Some(uv), Some(sel_idx)) = (cursor_uv, app.map.selected_feature_idx) {
+                if let Some(renderer) = core.terrain_renderer.as_ref() {
+                    let pickable = build_pickable_features(
+                        &app.map.features,
+                        &FeatureMapDims {
+                            w: app.map.width,
+                            h: app.map.height,
+                            min_h: app.map.min_height,
+                            max_h: app.map.max_height,
+                        },
+                        app.paint.heightmap.as_ref(),
+                        renderer,
+                    );
+                    let hit = bar_render::pick_feature(&core.camera, aspect, uv, &pickable);
+                    if hit == Some(sel_idx) {
+                        // Capture press-point offset so the feature follows
+                        // the cursor rather than snapping its base to the
+                        // cursor projection on each frame.
+                        if let Some(hm) = app.paint.heightmap.as_ref() {
+                            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                            if let Some(pick) = pick_terrain(
+                                &core.camera,
+                                aspect,
+                                uv,
+                                hm,
+                                x_extent,
+                                z_extent,
+                                height_scale,
+                            ) {
+                                let (map_w, map_h) = app.map.dimensions();
+                                let press_spring_x = (pick.world.x / x_extent + 1.0)
+                                    * 0.5
+                                    * map_w.max(1) as f32
+                                    * 8.0;
+                                let press_spring_z = (pick.world.z / z_extent + 1.0)
+                                    * 0.5
+                                    * map_h.max(1) as f32
+                                    * 8.0;
+                                if let Some((fx, fz)) =
+                                    app.map.features.get(sel_idx).map(|f| (f.x, f.z))
+                                {
+                                    app.push_undo("Move feature");
+                                    core.feature_drag = Some(FeatureDragState {
+                                        feature_idx: sel_idx,
+                                        offset_x: fx - press_spring_x,
+                                        offset_z: fz - press_spring_z,
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         if response.clicked_by(egui::PointerButton::Primary) {
             if let Some(ref feature_type) = feature_type {
                 // Placement mode: place a new feature at the terrain pick position.
@@ -1051,18 +1129,57 @@ fn handle_camera_input(
     if response.dragged_by(egui::PointerButton::Primary) {
         if sculpt_active {
             apply_sculpt_dab_at_cursor(core, gpu_context, response, ctx, app);
+        } else if let Some(drag) = core.feature_drag {
+            // Translate the dragged feature: cursor-projected terrain XZ
+            // plus the press-time offset.
+            if let (Some(uv), Some(hm), Some(renderer)) = (
+                cursor_uv,
+                app.paint.heightmap.as_ref(),
+                core.terrain_renderer.as_ref(),
+            ) {
+                let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                if let Some(pick) = pick_terrain(
+                    &core.camera,
+                    aspect,
+                    uv,
+                    hm,
+                    x_extent,
+                    z_extent,
+                    height_scale,
+                ) {
+                    let (map_w, map_h) = app.map.dimensions();
+                    let cursor_spring_x =
+                        (pick.world.x / x_extent + 1.0) * 0.5 * map_w.max(1) as f32 * 8.0;
+                    let cursor_spring_z =
+                        (pick.world.z / z_extent + 1.0) * 0.5 * map_h.max(1) as f32 * 8.0;
+                    let new_x =
+                        (cursor_spring_x + drag.offset_x).clamp(0.0, map_w.max(1) as f32 * 8.0);
+                    let new_z =
+                        (cursor_spring_z + drag.offset_z).clamp(0.0, map_h.max(1) as f32 * 8.0);
+                    if let Some(f) = app.map.features.get_mut(drag.feature_idx) {
+                        f.x = new_x;
+                        f.z = new_z;
+                        // y stays at the persisted value or 0 (re-snap
+                        // to heightmap handled by the instance builder).
+                        app.map.features_placement_dirty = true;
+                    }
+                }
+            }
         } else if feature_type.is_none() {
             let delta = drag_delta_after_start(egui::PointerButton::Primary);
             core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
             camera_changed = true;
         }
     }
-    if sculpt_active && response.drag_stopped_by(egui::PointerButton::Primary) {
-        if let Some(kind) = app.paint.selected_fc_layer {
-            app.end_brush_stroke_on_fc_layer(kind);
-        } else {
-            app.end_brush_stroke();
+    if response.drag_stopped_by(egui::PointerButton::Primary) {
+        if sculpt_active {
+            if let Some(kind) = app.paint.selected_fc_layer {
+                app.end_brush_stroke_on_fc_layer(kind);
+            } else {
+                app.end_brush_stroke();
+            }
         }
+        core.feature_drag = None;
     }
 
     if response.dragged_by(egui::PointerButton::Secondary) {
