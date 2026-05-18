@@ -72,7 +72,6 @@ See `docs/feature-rendering-plan.md`. M1/M2/M3 are complete.
 
 ### M4 rendering polish
 
-- Hover tooltip showing feature type name (requires pixel picking integration -- non-trivial).
 - LOD: suppress features below a screen-size threshold when zoomed out.
 - Features in the reflection / refraction passes. Refraction-pass feature rendering is partially in (so underwater features show through water); reflection-pass is not. Verify and finish.
 - **Geovent feature rendering.** Geovents (geothermal vents -- maps designate them as metal-spot-like features that grant continuous energy) currently render as the placeholder yellow cube rather than the engine's animated geovent geometry/effect. Engine renders them as procedural circle of vertices with steam/heat-haze effect, not as an S3O model. Needs a dedicated geovent visualisation path (likely a billboard or screen-space ring + heat shimmer) since there's no S3O to load.

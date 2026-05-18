@@ -926,6 +926,54 @@ fn draw_viewport_body(
                 bar_gui::panels::feature_popover::draw(ctx, app, anchor);
             }
         }
+
+        // Hover tooltip: show the feature type name when the cursor is
+        // over a feature in selection mode. Suppressed during placement
+        // (the ghost preview makes the type obvious) and while sculpt
+        // tools are active. Cheap -- reuses the same ray-OBB test the
+        // click path uses.
+        let cursor_uv = response.hover_pos().map(|p| {
+            let r = response.rect;
+            (
+                (p.x - r.left()) / r.width().max(1.0),
+                (p.y - r.top()) / r.height().max(1.0),
+            )
+        });
+        let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
+        let show_hover_tooltip = response.hovered()
+            && app.paint.brush.tool == bar_gui::BrushTool::Pointer
+            && !app.sculpt_input_active()
+            && app.active_layout() != bar_gui::Layout::Preview
+            && app.selected_feature_type.is_none()
+            && core.feature_drag.is_none();
+        if show_hover_tooltip {
+            if let (Some(uv), Some(renderer)) = (cursor_uv, core.terrain_renderer.as_ref()) {
+                let pickable = build_pickable_features(
+                    &app.map.features,
+                    &FeatureMapDims {
+                        w: app.map.width,
+                        h: app.map.height,
+                        min_h: app.map.min_height,
+                        max_h: app.map.max_height,
+                    },
+                    app.paint.heightmap.as_ref(),
+                    renderer,
+                );
+                if let Some(idx) = bar_render::pick_feature(&core.camera, aspect, uv, &pickable) {
+                    if let Some(f) = app.map.features.get(idx) {
+                        let name = f.feature_type.clone();
+                        egui::show_tooltip_at_pointer(
+                            ctx,
+                            ui.layer_id(),
+                            egui::Id::new("feature_hover_tooltip"),
+                            |ui| {
+                                ui.label(name);
+                            },
+                        );
+                    }
+                }
+            }
+        }
     } else {
         // No frame yet -- show a loading message with the target resolution.
         let target = if res.low_pending {
