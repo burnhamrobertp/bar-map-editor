@@ -688,30 +688,51 @@ impl AppRunner {
             .set_status(format!("Loading {} feature models...", to_load.len()));
         let (tx, rx) = mpsc::channel::<LoadedModel>();
         self.model_rx = Some(rx);
-        let archive = archive.clone();
-        let work_dir = self.map_work_dir.clone();
-        // Sibling .sdz/.sd7 archives alongside a .sdd stub hold the real game content.
-        let sibling_archives = bar_engine::sibling_zip_archives(&archive);
-        // Cached SD7 work dirs from prior imports. Used as a fallback for
-        // textures missing from the project_dir (e.g. .barproj saved before
-        // the unittextures copy fix landed).
-        let work_dir_cache = list_cached_work_dirs();
-        // data_dir is two levels up from BAR.sdd (games/ -> data/) for pool reading.
-        let pool_data_dir = archive
-            .parent()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf());
-        let ctx_clone = ctx.clone();
-        std::thread::spawn(move || {
-            let mut loaded = 0usize;
-            for (name, path) in to_load {
-                let asset_sources = AssetSources {
-                    archive: &archive,
-                    siblings: &sibling_archives,
-                    work_dir: work_dir.as_deref(),
-                    work_dir_cache: &work_dir_cache,
-                    pool_data_dir: pool_data_dir.as_deref(),
+
+        // Asset sources are read-only across the workers, so wrap once
+        // in an Arc and let each worker clone the Arc rather than the
+        // underlying PathBufs / Vecs.
+        let sources = {
+            let archive = archive.clone();
+            let sibling_archives = bar_engine::sibling_zip_archives(&archive);
+            // Cached SD7 work dirs from prior imports -- fallback for
+            // textures missing from the project_dir.
+            let work_dir_cache = list_cached_work_dirs();
+            // data_dir is two levels up from BAR.sdd (games/ -> data/).
+            let pool_data_dir = archive
+                .parent()
+                .and_then(|p| p.parent())
+                .map(|p| p.to_path_buf());
+            Arc::new(OwnedAssetSources {
+                archive,
+                siblings: sibling_archives,
+                work_dir: self.map_work_dir.clone(),
+                work_dir_cache,
+                pool_data_dir,
+            })
+        };
+
+        // Shared work queue + bounded worker pool. Workers pull one
+        // task at a time so a slow load doesn't starve the others, and
+        // overall concurrency is capped at `available_parallelism()` so
+        // peak memory pressure from concurrent texture decoding stays
+        // bounded.
+        let queue = Arc::new(std::sync::Mutex::new(to_load));
+        let queue_len = queue.lock().unwrap().len();
+        let num_workers = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .min(queue_len);
+        for _ in 0..num_workers {
+            let tx = tx.clone();
+            let sources = Arc::clone(&sources);
+            let queue = Arc::clone(&queue);
+            let ctx_clone = ctx.clone();
+            std::thread::spawn(move || loop {
+                let Some((name, path)) = queue.lock().unwrap().pop() else {
+                    break;
                 };
+                let asset_sources = sources.as_borrowed();
                 let Some(mesh) = load_s3o_from_sources(&name, &path, &asset_sources) else {
                     tracing::warn!(
                         feature = %name,
@@ -730,9 +751,8 @@ impl AppRunner {
                 } else {
                     load_texture_from_sources(&name, "tex2", &mesh.texture2, &asset_sources)
                 };
-                loaded += 1;
                 let msg = LoadedModel {
-                    name: name.clone(),
+                    name,
                     mesh,
                     tex1,
                     tex2,
@@ -741,9 +761,11 @@ impl AppRunner {
                     break;
                 }
                 ctx_clone.request_repaint();
-            }
-            tracing::info!(loaded, "S3O model loading complete");
-        });
+            });
+        }
+        // Drop the parent sender so once all workers exit, the receiver
+        // observes `Disconnected` and the main thread clears `model_rx`.
+        drop(tx);
     }
 
     fn start_test_in_bar(&mut self, ctx: &egui::Context) {
@@ -839,6 +861,29 @@ impl AppRunner {
 }
 
 // ── Asset loading helpers ─────────────────────────────────────────────────────
+
+/// Owned counterpart to `AssetSources`. Used to share asset roots across
+/// parallel model-loading workers via `Arc<OwnedAssetSources>`; each
+/// worker reborrows into `AssetSources<'_>` on entry.
+struct OwnedAssetSources {
+    archive: std::path::PathBuf,
+    siblings: Vec<std::path::PathBuf>,
+    work_dir: Option<std::path::PathBuf>,
+    work_dir_cache: Vec<std::path::PathBuf>,
+    pool_data_dir: Option<std::path::PathBuf>,
+}
+
+impl OwnedAssetSources {
+    fn as_borrowed(&self) -> AssetSources<'_> {
+        AssetSources {
+            archive: &self.archive,
+            siblings: &self.siblings,
+            work_dir: self.work_dir.as_deref(),
+            work_dir_cache: &self.work_dir_cache,
+            pool_data_dir: self.pool_data_dir.as_deref(),
+        }
+    }
+}
 
 /// Bundle of asset sources searched when looking up a model or texture.
 /// All paths use forward slashes (archive-internal convention); on-disk
