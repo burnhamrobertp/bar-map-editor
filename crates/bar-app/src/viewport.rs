@@ -1582,14 +1582,17 @@ fn handle_camera_input(
             // centre. Skipped when the cursor isn't over the terrain (no
             // pick), preserving the prior "zoom toward target" feel offscreen.
             //
-            // Only applied when zooming IN (factor > 0). On zoom out the
-            // analogous nudge would push the target AWAY from the cursor
-            // pick, which feels disorienting: the user is trying to back
-            // out to see more context, not have the framing pulled away
-            // from whatever they were looking at. Zoom-out instead
-            // preserves the current target -- the camera distance grows
-            // around the existing pivot.
-            if factor > 0.0 {
+            // Only applied when zooming IN. `factor = -scroll * 0.0015`
+            // so scroll-up (zoom in) produces a NEGATIVE factor:
+            // `camera.zoom` does `distance *= (1 + factor)`, and a
+            // negative factor shrinks the orbit distance. On zoom out
+            // the analogous nudge would push the target AWAY from the
+            // cursor pick, which feels disorienting: the user is
+            // trying to back out to see more context, not have the
+            // framing pulled away from whatever they were looking at.
+            // Zoom-out instead preserves the current target -- the
+            // camera distance grows around the existing pivot.
+            if factor < 0.0 {
                 if let (Some(uv), Some(hm), Some(renderer)) = (
                     cursor_uv,
                     app.paint.heightmap.as_ref(),
