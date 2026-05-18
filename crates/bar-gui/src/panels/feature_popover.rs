@@ -128,9 +128,12 @@ fn draw_body(
             ));
             ui.end_row();
             ui.weak(t!("editor.feature_popover.field.angle"));
+            // `feature.angle` is stored in Spring heading units (full
+            // circle = 65536). The UI displays degrees.
+            let angle_deg = feature.angle * 360.0 / 65536.0;
             ui.label(format!(
                 "{:.1} {}",
-                feature.angle,
+                angle_deg,
                 t!("editor.feature_popover.field.angle_unit")
             ));
             ui.end_row();

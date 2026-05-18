@@ -1212,22 +1212,50 @@ fn handle_camera_input(
         // unit (`-32768..32767`, full circle = 65536) is what
         // `PlacedFeature::angle` stores and what `build_feature_instances`
         // converts to radians via `* pi / 32768`.
-        let (scroll_y, scroll_x, ctrl) = ctx.input(|i| {
-            (
-                i.smooth_scroll_delta.y,
-                i.smooth_scroll_delta.x,
-                i.modifiers.ctrl,
-            )
+        //
+        // We read raw `MouseWheel` events instead of `smooth_scroll_delta`
+        // because egui rewrites Ctrl+wheel into Zoom events: it drops out
+        // of the regular scroll delta entirely. Iterating events lets us
+        // see both ctrl-modified vertical wheel AND horizontal wheel
+        // with their original modifier state.
+        let (rotation_lines, zoom_scroll_pixels) = ctx.input(|i| {
+            let mut rot = 0.0;
+            let mut zoom = 0.0;
+            for event in &i.events {
+                if let egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                } = event
+                {
+                    // Normalise to lines so the rotation step feels
+                    // consistent across touchpads (Point) and wheel
+                    // mice (Line).
+                    let lines_per_unit = match unit {
+                        egui::MouseWheelUnit::Line => 1.0,
+                        egui::MouseWheelUnit::Point => 1.0 / 50.0,
+                        egui::MouseWheelUnit::Page => 10.0,
+                    };
+                    let lines = *delta * lines_per_unit;
+                    rot += lines.x;
+                    if modifiers.ctrl {
+                        rot += lines.y;
+                    } else {
+                        // Feed the existing zoom path in its original
+                        // smooth_scroll_delta-ish units (~50 px per line).
+                        zoom += lines.y * 50.0;
+                    }
+                }
+            }
+            (rot, zoom)
         });
         let rotate_active = app.paint.brush.tool == bar_gui::BrushTool::Pointer
             && app.active_layout() != bar_gui::Layout::Preview;
-        let rotation_scroll = if ctrl { scroll_y } else { 0.0 } + scroll_x;
-        if rotate_active && rotation_scroll.abs() > 0.1 {
-            // 32 heading units per scroll-line keeps a full revolution
-            // at roughly 30 scroll lines -- coarse enough to feel
-            // responsive, fine enough to land on cardinal angles by
-            // eye. Negate so wheel-up reads as clockwise (intuitive).
-            let delta_heading = -rotation_scroll * 32.0;
+        if rotate_active && rotation_lines.abs() > 0.01 {
+            // 2048 heading units per scroll-line = 11.25 deg/line;
+            // a full revolution is ~32 lines. Negated so wheel-up
+            // reads as clockwise (intuitive).
+            let delta_heading = -rotation_lines * 2048.0;
             if let Some(idx) = app.map.selected_feature_idx {
                 if let Some(f) = app.map.features.get_mut(idx) {
                     f.angle = wrap_heading(f.angle + delta_heading);
@@ -1239,8 +1267,8 @@ fn handle_camera_input(
             }
             // Eat the scroll: don't fall through to zoom even if the
             // user happened to scroll vertically with Ctrl held.
-        } else if scroll_y.abs() > 0.1 {
-            let factor = (-scroll_y * 0.0015).clamp(-0.5, 0.5);
+        } else if zoom_scroll_pixels.abs() > 0.1 {
+            let factor = (-zoom_scroll_pixels * 0.0015).clamp(-0.5, 0.5);
             // Zoom-to-cursor: before applying the distance change, nudge the
             // camera target toward the world point under the cursor by the
             // same proportion as the zoom step. Geometrically, the camera
