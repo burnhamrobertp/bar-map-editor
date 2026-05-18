@@ -888,6 +888,7 @@ fn draw_viewport_body(
         if res.low_pending || res.high_pending {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
+        draw_viewport_debug_overlay(ui, &response.rect, &core.camera, app);
 
         handle_camera_input(core, gpu_context, render_state, &response, ctx, app);
 
@@ -1057,6 +1058,87 @@ fn draw_resolution_badge(ui: &mut egui::Ui, viewport_rect: &egui::Rect, res: &Re
     // a static label.
     if res.high_pending {
         bar_gui::layouts::preview::draw_animated_border(ui, badge_rect);
+    }
+}
+
+/// Draw the bottom-left gear button + any active debug overlays
+/// (camera readout etc.). Clicking the gear opens a small menu of
+/// toggles stored on `app.viewport_debug`. The gear stays out of the
+/// way until clicked; when toggles are active their overlays draw
+/// over the viewport image.
+fn draw_viewport_debug_overlay(
+    ui: &mut egui::Ui,
+    viewport_rect: &egui::Rect,
+    camera: &bar_render::Camera,
+    app: &mut bar_gui::BarEditorApp,
+) {
+    let gear_size = egui::vec2(20.0, 20.0);
+    let gear_pos = viewport_rect.left_bottom() + egui::vec2(8.0, -gear_size.y - 8.0);
+    let gear_rect = egui::Rect::from_min_size(gear_pos, gear_size);
+
+    let response = ui.interact(
+        gear_rect,
+        egui::Id::new("viewport_debug_gear"),
+        egui::Sense::click(),
+    );
+    let gear_color = if response.hovered() {
+        egui::Color32::from_rgba_unmultiplied(220, 220, 240, 230)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(160, 160, 180, 200)
+    };
+    ui.painter().rect_filled(
+        gear_rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160),
+    );
+    ui.painter().text(
+        gear_rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "*",
+        egui::FontId::monospace(14.0),
+        gear_color,
+    );
+
+    let popup_id = egui::Id::new("viewport_debug_menu");
+    if response.clicked() {
+        ui.memory_mut(|m| m.toggle_popup(popup_id));
+    }
+    egui::popup::popup_below_widget(
+        ui,
+        popup_id,
+        &response,
+        egui::PopupCloseBehavior::CloseOnClickOutside,
+        |ui| {
+            ui.set_min_width(180.0);
+            ui.checkbox(
+                &mut app.viewport_debug.show_camera_readout,
+                "Camera readout",
+            );
+        },
+    );
+
+    if app.viewport_debug.show_camera_readout {
+        let pos = camera.position();
+        let label = format!(
+            "cam pos  {:>8.3} {:>8.3} {:>8.3}\n     az  {:>7.2} deg\n     el  {:>7.2} deg\n     d   {:>8.3}",
+            pos.x,
+            pos.y,
+            pos.z,
+            camera.azimuth.to_degrees(),
+            camera.elevation.to_degrees(),
+            camera.distance,
+        );
+        let font = egui::FontId::monospace(11.0);
+        let text_color = egui::Color32::from_rgba_unmultiplied(200, 220, 200, 230);
+        let galley = ui.painter().layout_no_wrap(label, font, text_color);
+        let padding = egui::vec2(6.0, 4.0);
+        let size = galley.size() + padding * 2.0;
+        // Anchor above the gear so the two don't overlap.
+        let pos = egui::pos2(viewport_rect.left() + 8.0, gear_pos.y - size.y - 6.0);
+        let bg = egui::Rect::from_min_size(pos, size);
+        ui.painter()
+            .rect_filled(bg, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 160));
+        ui.painter().galley(pos + padding, galley, text_color);
     }
 }
 

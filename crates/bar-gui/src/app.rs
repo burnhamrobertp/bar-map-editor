@@ -273,6 +273,20 @@ pub struct BarEditorApp {
     /// at reduced alpha so the user can preview position + rotation
     /// before the click commits.
     pub placement_ghost: Option<bar_project::recipe::PlacedFeature>,
+    /// Viewport debug overlay toggles, exposed via the gear button in
+    /// the Sculpt3D / Preview viewports. Session-only state -- not
+    /// persisted across project loads.
+    pub viewport_debug: ViewportDebug,
+}
+
+/// Per-session viewport debug toggles. Surfaced via a small gear menu
+/// in the Sculpt3D / Preview viewports.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ViewportDebug {
+    /// When true, render a corner overlay with the camera's world-space
+    /// position + orientation. Useful when reproducing rendering bugs
+    /// against specific viewpoints.
+    pub show_camera_readout: bool,
 }
 
 impl Default for BarEditorApp {
@@ -311,6 +325,7 @@ impl Default for BarEditorApp {
             selected_feature_type: None,
             pending_placement_angle: 0.0,
             placement_ghost: None,
+            viewport_debug: ViewportDebug::default(),
         }
     }
 }
