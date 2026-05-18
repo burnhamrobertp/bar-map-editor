@@ -6,7 +6,115 @@
 
 use crate::Camera;
 use bar_data::Heightmap;
-use glam::{Vec3, Vec4};
+use glam::{Mat4, Vec3, Vec4};
+
+/// A single feature instance the picker can test the cursor ray against.
+/// `transform` maps the AABB out of model space into world space (the same
+/// matrix used to draw the instance). Caller assembles one of these per
+/// placed feature.
+#[derive(Clone, Copy)]
+pub struct PickableFeature {
+    pub transform: Mat4,
+    pub aabb_min: Vec3,
+    pub aabb_max: Vec3,
+}
+
+/// Cast a ray from the cursor and return the index of the closest feature
+/// whose oriented bounding box the ray hits, or `None` if it misses every
+/// feature. Order of `features` is preserved -- the returned index is into
+/// that slice.
+pub fn pick_feature(
+    camera: &Camera,
+    aspect_ratio: f32,
+    cursor_uv: (f32, f32),
+    features: &[PickableFeature],
+) -> Option<usize> {
+    let (origin, dir) = camera_ray(camera, aspect_ratio, cursor_uv)?;
+
+    let mut best: Option<(usize, f32)> = None;
+    for (idx, feat) in features.iter().enumerate() {
+        // Transform the ray into the feature's model space. In model space
+        // the AABB is axis-aligned, which makes the slab test trivial and
+        // independent of the feature's rotation / scale.
+        let inv = feat.transform.inverse();
+        let local_origin = inv.transform_point3(origin);
+        let local_dir = inv.transform_vector3(dir);
+        let Some(t) = ray_aabb_t_min(local_origin, local_dir, feat.aabb_min, feat.aabb_max) else {
+            continue;
+        };
+        // Re-project the model-space hit `t` to world space distance so we
+        // can compare hits across features with different scales.
+        let world_hit = feat
+            .transform
+            .transform_point3(local_origin + local_dir * t);
+        let world_t = (world_hit - origin).dot(dir);
+        if world_t < 0.0 {
+            continue;
+        }
+        match best {
+            Some((_, bt)) if world_t >= bt => {}
+            _ => best = Some((idx, world_t)),
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// Unproject the cursor at the near and far planes to produce a world-space
+/// ray (origin, normalised direction). Returns `None` if the camera matrix
+/// is degenerate.
+pub fn camera_ray(
+    camera: &Camera,
+    aspect_ratio: f32,
+    cursor_uv: (f32, f32),
+) -> Option<(Vec3, Vec3)> {
+    let inv_vp = camera.view_projection(aspect_ratio).inverse();
+    let ndc_x = cursor_uv.0 * 2.0 - 1.0;
+    let ndc_y = 1.0 - cursor_uv.1 * 2.0;
+    let near_h = inv_vp * Vec4::new(ndc_x, ndc_y, 0.0, 1.0);
+    let far_h = inv_vp * Vec4::new(ndc_x, ndc_y, 1.0, 1.0);
+    if near_h.w.abs() < 1e-8 || far_h.w.abs() < 1e-8 {
+        return None;
+    }
+    let near = near_h.truncate() / near_h.w;
+    let far = far_h.truncate() / far_h.w;
+    let dir = (far - near).normalize_or_zero();
+    if dir == Vec3::ZERO {
+        return None;
+    }
+    Some((near, dir))
+}
+
+/// Slab-method ray-AABB intersection. Returns the entry-side `t` along the
+/// ray when there is a hit, or `None` on miss. Handles rays starting inside
+/// the box by returning `t = 0`.
+fn ray_aabb_t_min(origin: Vec3, dir: Vec3, aabb_min: Vec3, aabb_max: Vec3) -> Option<f32> {
+    let mut t_min = f32::NEG_INFINITY;
+    let mut t_max = f32::INFINITY;
+    for axis in 0..3 {
+        let o = origin[axis];
+        let d = dir[axis];
+        let lo = aabb_min[axis];
+        let hi = aabb_max[axis];
+        if d.abs() < 1e-8 {
+            if o < lo || o > hi {
+                return None;
+            }
+        } else {
+            let t1 = (lo - o) / d;
+            let t2 = (hi - o) / d;
+            let (ta, tb) = if t1 < t2 { (t1, t2) } else { (t2, t1) };
+            t_min = t_min.max(ta);
+            t_max = t_max.min(tb);
+            if t_min > t_max {
+                return None;
+            }
+        }
+    }
+    if t_max < 0.0 {
+        return None;
+    }
+    Some(t_min.max(0.0))
+}
 
 /// Result of a successful pick.
 #[derive(Debug, Clone, Copy)]

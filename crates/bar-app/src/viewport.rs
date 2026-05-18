@@ -984,54 +984,26 @@ fn handle_camera_input(
                     }
                 }
             } else {
-                // Selection mode: pick the nearest feature.
+                // Selection mode: cast the cursor ray against each feature's
+                // oriented bounding box and select the closest hit. The hit
+                // test runs against the actual rendered geometry's bounds,
+                // not the terrain under the cursor, so clicks on the visible
+                // body of a tall feature select reliably at any camera angle.
                 if let Some(uv) = cursor_uv {
-                    if let Some(hm) = app.paint.heightmap.as_ref() {
-                        if let Some(renderer) = core.terrain_renderer.as_ref() {
-                            let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
-                            if let Some(pick) = pick_terrain(
-                                &core.camera,
-                                aspect,
-                                uv,
-                                hm,
-                                x_extent,
-                                z_extent,
-                                height_scale,
-                            ) {
-                                let (map_w, map_h) = app.map.dimensions();
-                                let pw = (map_w as f32 - 1.0).max(1.0);
-                                let ph = (map_h as f32 - 1.0).max(1.0);
-                                let sx = (pick.world.x / x_extent + 1.0) * 0.5 * pw * 8.0;
-                                let sz = (pick.world.z / z_extent + 1.0) * 0.5 * ph * 8.0;
-                                // Tightened from 200 elmos: a typical feature
-                                // footprint is 8-16 elmos (1-2 heightmap pixels),
-                                // and 200 made selection pick anything within
-                                // ~12 features of the click. 24 elmos lets the
-                                // user click within 1-1.5 feature widths -- close
-                                // to "must land on the feature" while still
-                                // forgiving of a couple-pixel cursor jitter.
-                                // True per-feature footprint thresholds would
-                                // need the catalog plumbed through to this fn.
-                                let threshold = 24.0_f32;
-                                let best = app
-                                    .map
-                                    .features
-                                    .iter()
-                                    .enumerate()
-                                    .filter_map(|(i, f)| {
-                                        let dx = f.x - sx;
-                                        let dz = f.z - sz;
-                                        let d = dx * dx + dz * dz;
-                                        if d < threshold * threshold {
-                                            Some((i, d))
-                                        } else {
-                                            None
-                                        }
-                                    })
-                                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-                                app.map.selected_feature_idx = best.map(|(i, _)| i);
-                            }
-                        }
+                    if let Some(renderer) = core.terrain_renderer.as_ref() {
+                        let pickable = build_pickable_features(
+                            &app.map.features,
+                            &FeatureMapDims {
+                                w: app.map.width,
+                                h: app.map.height,
+                                min_h: app.map.min_height,
+                                max_h: app.map.max_height,
+                            },
+                            app.paint.heightmap.as_ref(),
+                            renderer,
+                        );
+                        app.map.selected_feature_idx =
+                            bar_render::pick_feature(&core.camera, aspect, uv, &pickable);
                     }
                 }
             }
@@ -1616,6 +1588,98 @@ pub fn build_feature_instances(
     }
 
     (groups, unknowns)
+}
+
+/// Build the per-feature `PickableFeature` entries the cursor picker tests
+/// the camera ray against. Each entry carries the same world transform the
+/// renderer uses to draw the feature, plus the model-space AABB:
+/// - real S3O models: AABB queried from the feature renderer (the anchor-
+///   shifted AABB stored when the mesh was uploaded);
+/// - features without a loaded mesh: the unit placeholder cube AABB at the
+///   default 2-elmo footprint, matching what `build_feature_instances`
+///   draws when the catalog lookup misses.
+///
+/// Returned slice is index-aligned with `features`, so the picker can
+/// return an index directly back to the caller.
+pub fn build_pickable_features(
+    features: &[PlacedFeature],
+    dims: &FeatureMapDims,
+    heightmap: Option<&bar_data::Heightmap>,
+    renderer: &bar_render::TerrainRenderer,
+) -> Vec<bar_render::PickableFeature> {
+    use glam::{Mat4, Quat, Vec3};
+
+    let pw = (dims.w as f32 - 1.0).max(1.0);
+    let ph = (dims.h as f32 - 1.0).max(1.0);
+    let pm = pw.max(ph);
+    let height_range = (dims.max_h - dims.min_h).abs().max(1.0);
+    let hs = (height_range / (pm * 8.0)).max(0.005);
+    let elmo_scale = (1.0 / (pm * 8.0)).max(1e-6_f32);
+    // Same fallback footprint `build_feature_instances` uses for catalog-
+    // miss placeholders. Picker bounds match the rendered cube.
+    let default_footprint = 2.0_f32;
+    let placeholder_aabb_min = Vec3::new(-0.5, 0.0, -0.5);
+    let placeholder_aabb_max = Vec3::new(0.5, 1.0, 0.5);
+
+    let feat_renderer = renderer.feature_renderer();
+
+    features
+        .iter()
+        .map(|f| {
+            let lower = f.feature_type.to_lowercase();
+            let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * (0.5 * pw / pm).min(0.5);
+            let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * (0.5 * ph / pm).min(0.5);
+            let h_render = if let Some(hm) = heightmap {
+                let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0) * (hm.width().saturating_sub(1)) as f32;
+                let hz =
+                    (f.z / (ph * 8.0)).clamp(0.0, 1.0) * (hm.height().saturating_sub(1)) as f32;
+                let max_x = hm.width().saturating_sub(1);
+                let max_z = hm.height().saturating_sub(1);
+                let x0 = (hx.floor() as u32).min(max_x);
+                let z0 = (hz.floor() as u32).min(max_z);
+                let x1 = (x0 + 1).min(max_x);
+                let z1 = (z0 + 1).min(max_z);
+                let fx = hx - hx.floor();
+                let fz = hz - hz.floor();
+                let h00 = hm.get(x0, z0).unwrap_or(0.0);
+                let h10 = hm.get(x1, z0).unwrap_or(0.0);
+                let h01 = hm.get(x0, z1).unwrap_or(0.0);
+                let h11 = hm.get(x1, z1).unwrap_or(0.0);
+                let h0 = h00 * (1.0 - fx) + h10 * fx;
+                let h1 = h01 * (1.0 - fx) + h11 * fx;
+                (h0 * (1.0 - fz) + h1 * fz) * hs
+            } else {
+                hs * 0.5
+            };
+            let ry = if f.y.abs() < 0.01 {
+                h_render
+            } else {
+                ((f.y - dims.min_h) / height_range) * hs
+            };
+            let rot = Quat::from_rotation_y(-f.angle * std::f32::consts::PI / 32768.0);
+
+            let (aabb_min, aabb_max, scale) =
+                if let Some((mn, mx)) = feat_renderer.and_then(|fr| fr.mesh_aabb(&lower)) {
+                    (mn, mx, Vec3::splat(elmo_scale))
+                } else {
+                    let sx = default_footprint / pm;
+                    let sz = default_footprint / pm;
+                    let sy = sx.max(sz);
+                    (
+                        placeholder_aabb_min,
+                        placeholder_aabb_max,
+                        Vec3::new(sx, sy, sz),
+                    )
+                };
+            let transform =
+                Mat4::from_scale_rotation_translation(scale, rot, Vec3::new(rx, ry, rz));
+            bar_render::PickableFeature {
+                transform,
+                aabb_min,
+                aabb_max,
+            }
+        })
+        .collect()
 }
 
 // ── BC1 texture loading ───────────────────────────────────────────────────────

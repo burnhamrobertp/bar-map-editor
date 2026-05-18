@@ -183,6 +183,11 @@ struct FeatureMesh {
     /// fallback white). Surfaced only for logging.
     #[allow(dead_code)]
     has_texture: bool,
+    /// Model-space AABB after the same anchor shift applied to vertices on
+    /// load (`shift_y = max(0, aabb_min.y)`). Stored so cursor picking can
+    /// test the cursor ray against each instance's oriented bounding box.
+    aabb_min: [f32; 3],
+    aabb_max: [f32; 3],
 }
 
 // ── FeatureRenderer ───────────────────────────────────────────────────────────
@@ -698,6 +703,16 @@ impl FeatureRenderer {
                 instance_count: 0,
                 texture_bind_group: bg,
                 has_texture: has_tex1,
+                aabb_min: [
+                    mesh.aabb_min[0],
+                    mesh.aabb_min[1] - shift_y,
+                    mesh.aabb_min[2],
+                ],
+                aabb_max: [
+                    mesh.aabb_max[0],
+                    mesh.aabb_max[1] - shift_y,
+                    mesh.aabb_max[2],
+                ],
             },
         );
     }
@@ -705,6 +720,14 @@ impl FeatureRenderer {
     /// True if a real S3O model has been loaded for this feature type.
     pub fn has_model(&self, feature_type: &str) -> bool {
         self.meshes.contains_key(&feature_type.to_lowercase())
+    }
+
+    /// Model-space AABB (after the anchor-shift applied at load time) for a
+    /// loaded feature type. Returns `None` if no model has been loaded for
+    /// this name.
+    pub fn mesh_aabb(&self, feature_type: &str) -> Option<(glam::Vec3, glam::Vec3)> {
+        let m = self.meshes.get(&feature_type.to_lowercase())?;
+        Some((glam::Vec3::from(m.aabb_min), glam::Vec3::from(m.aabb_max)))
     }
 
     /// Names of all feature types with loaded S3O models.
