@@ -373,6 +373,32 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return shade_water(in.world_position, eye_dir, scr_uv, in.clip_position.z);
     }
 
+    // Map-border ring branch. Geometry sits beyond the playable area
+    // at render-space Y = 0; we sample the albedo at the edge-clamped
+    // playable UV so the map's outermost texel stretches outward to
+    // the horizon. Phase 1 stand-in -- a future commit can swap to a
+    // dedicated `grassShadingTex` / minimap-fallback texture. Simple
+    // sun + ambient lighting (no splat / spec / sky reflection) is
+    // good enough at the distance border fragments are seen from.
+    if (in.uv.y > 2.5) {
+        let map_uv = vec2<f32>(
+            (in.world_position.x / (2.0 * camera.x_extent)) + 0.5,
+            (in.world_position.z / (2.0 * camera.z_extent)) + 0.5,
+        );
+        let clamped_uv = clamp(map_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+        var albedo: vec3<f32>;
+        if (camera.has_texture != 0u) {
+            albedo = textureSample(albedo_tex, albedo_sam, clamped_uv).rgb;
+        } else {
+            albedo = vec3<f32>(0.35, 0.32, 0.28);
+        }
+        let sun = normalize(camera.sun_dir_exp.xyz);
+        let lambert = max(sun.y, 0.0);
+        let lit = camera.ground_ambient.rgb + camera.ground_diffuse.rgb * lambert;
+        let border_color = albedo * lit;
+        return vec4<f32>(apply_custom_fog(border_color, in.world_position), 1.0);
+    }
+
     let sun_dir = normalize(camera.sun_dir_exp.xyz);
     // `normal` is a `var` rather than `let` so the splat-detail-normal
     // block below can perturb it before we compute lighting. Engine

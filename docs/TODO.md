@@ -32,7 +32,7 @@ Items below are paused while the 3D-painting / brush subsystem is being reconsid
 
 ## Preview view
 
-- **Implement non-map "surrounding terrain".** In-engine, the map sits inside a larger landscape that fills the horizon -- the visible terrain extends well past the map boundary so the world doesn't end abruptly at a cliff. BME's preview viewport currently renders only the map itself, with no surrounding context, which makes the boundary look like a void. Need to generate or fake a surrounding skirt -- the engine approach is a flat extension with the edge heightmap row/column extruded outward, textured with the map's edge splat/detail tile.
+- **Map-border ring: use the dedicated `grassShadingTex` texture.** Phase 1 of the surrounding-terrain skirt landed -- the geometry exists (`crates/bar-render/src/terrain.rs::generate_map_border_skirt`) and the shader currently samples the albedo with edge-clamped UVs so the outermost map texel stretches outward to the horizon. For engine parity the texture sampled should be the map's `smf.grassShadingTex` when set, falling back to the SMF-embedded minimap when unset. Touches: `bar_project::apply_mapinfo_overrides` (parse `smf.grassShadingTex` into `MapSettings`), a new `sync_map_border_tex` in `crates/bar-app/src/viewport.rs` (off-thread loader pattern like the existing texture syncs), a new binding in the terrain shader group, and the fragment-shader branch in `shaders/terrain.wgsl` (currently sampling `albedo_tex` with `clamped_uv` -- swap to the dedicated border texture sampled by world XZ for tileable behaviour).
 
 ## Rendering: terrain / shaders
 
