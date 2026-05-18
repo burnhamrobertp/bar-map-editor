@@ -94,7 +94,6 @@ return {
 | `minimapTex` | embedded in SMF | External override |
 | `metalmapTex` | embedded in SMF | External override |
 | `typemapTex` | embedded in SMF | External override |
-| `grassmapTex` | unset | Engine field; BAR doesn't use the engine grass renderer. BAR's grass system is driven by `custom.grassDistTGA` instead. |
 | `grassShadingTex` | minimap texture | Controls the texture drawn beyond playable map borders when the player picks the "textured" map-border style. Default (the minimap) continues the landscape seamlessly; override to customise the off-map image. (Engine field was originally for grass-blade tinting but BAR doesn't render engine grass, so this is its only practical effect.) |
 
 ---

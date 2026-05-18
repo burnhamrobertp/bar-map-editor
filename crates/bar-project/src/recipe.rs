@@ -321,6 +321,15 @@ pub struct ResourcesSettings {
     /// why maps like Ascendancy (`groundSpecularColor = {0.5, 0.5, 0.5}`)
     /// were producing sun-side hotspots across the whole map.
     pub specular_tex: String,
+    /// Texture sampled by BAR's `map_edge_extension2` LuaUI widget to
+    /// fill the area outside the playable map (mapinfo `grassShadingTex`).
+    /// Engine declares this as the `MAP_BASE_GRASS_TEX` and falls back
+    /// to the SMF-embedded minimap when unset. Maps like Onyx Cauldron
+    /// set this to a custom rocky texture so the "off-map" region
+    /// reads as cliffs / ocean rather than a mirror of the playable
+    /// area. Independent of the engine grass renderer (BAR doesn't
+    /// use that drawer).
+    pub grass_shading_tex: String,
 }
 
 /// Lighting configuration for mapinfo.lua.

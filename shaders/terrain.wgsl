@@ -56,7 +56,9 @@ struct CameraUniform {
     /// of the engine's core SMF/BumpWater shaders, but applied here as a
     /// final post-pass so previews match in-game appearance.
     custom_fog_color_atten: vec4<f32>,
-    /// x = enabled (0/1), y = ceiling height in elmos, zw = unused.
+    /// x = custom-fog enabled (0/1), y = ceiling height in elmos,
+    /// z = grass_shading_tex available (extension branch swaps to
+    /// `grass_shading_tex` instead of `albedo_tex`), w = unused.
     custom_fog_params: vec4<f32>,
     /// Procedural-sky inputs from mapinfo `atmosphere = { ... }`.
     /// `sun_color.rgb` -> sun disc tint; `sky_color_density.rgb` -> base
@@ -171,6 +173,12 @@ const DBG_VISUALIZE_SPLAT_DETAIL: bool = false;
 /// this, every lit fragment got the global spec strength (which Ascendancy
 /// authors as 0.5) and the entire sun-facing terrain went hot white.
 @group(1) @binding(13) var specular_tex: texture_2d<f32>;
+
+/// Map-edge extension texture (mapinfo `grassShadingTex`). Sampled by
+/// the extension shader branch when `custom_fog_params.z > 0.5`; falls
+/// back to the playable albedo otherwise. Defaults to a 1x1 grey;
+/// real content lands via `update_grass_shading_tex`.
+@group(1) @binding(14) var grass_shading_tex: texture_2d<f32>;
 
 /// Planar-reflection texture -- rendered in a pre-pass with the camera mirrored
 /// through the water plane. Sampled in the water fragment branch.
@@ -451,8 +459,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // 4.0 + playable_v.)
     if (in.uv.y > 3.5) {
         let playable_uv = vec2<f32>(in.uv.x, in.uv.y - 4.0);
+        // Engine `MAP_BASE_GRASS_TEX` semantics: sample `grass_shading_tex`
+        // when the map sets one, otherwise fall back to the playable
+        // albedo (engine's minimap-fallback approximation). `custom_fog_params.z`
+        // is repurposed as the gate -- belongs in a dedicated extension
+        // uniform eventually.
         var albedo: vec3<f32>;
-        if (camera.has_texture != 0u) {
+        if (camera.custom_fog_params.z > 0.5) {
+            albedo = textureSample(grass_shading_tex, albedo_sam, playable_uv).rgb;
+        } else if (camera.has_texture != 0u) {
             albedo = textureSample(albedo_tex, albedo_sam, playable_uv).rgb;
         } else {
             albedo = vec3<f32>(0.35, 0.32, 0.28);

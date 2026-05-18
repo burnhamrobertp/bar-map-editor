@@ -177,6 +177,9 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
         if let Some(s) = parse_mapinfo_string(&body, "specularTex") {
             settings.resources.specular_tex = s;
         }
+        if let Some(s) = parse_mapinfo_string(&body, "grassShadingTex") {
+            settings.resources.grass_shading_tex = s;
+        }
     }
     // `splats = { texScales = {...}, texMults = {...} }`. Note this is
     // a SIBLING of `resources`, not nested inside it.

@@ -190,6 +190,10 @@ pub struct SmfLighting {
     /// `specularTex` look right in-engine but show whole-surface spec
     /// blowout in our editor before this path is wired.
     pub specular_tex_enabled: bool,
+    /// True when a `grassShadingTex` has been uploaded. Gates the
+    /// map-edge extension shader between sampling the dedicated
+    /// border texture vs falling back to the playable albedo.
+    pub grass_shading_tex_enabled: bool,
     /// 1.0 when the legacy `detailTex` should apply to the playable
     /// area, 0.0 when it shouldn't. Engine-side, `detailTex` is only
     /// applied to the playable area by `SMFFragProg` when the map is
@@ -223,18 +227,21 @@ pub struct SmfLighting {
 /// MapSettings doesn't know which assets the renderer has actually
 /// uploaded -- so the per-frame uniform reads upload state from the
 /// renderer instead. Same pattern as the skybox flag.
+#[allow(clippy::too_many_arguments)]
 fn bar_render_smf_with_runtime_overrides(
     mut smf: SmfLighting,
     skybox_enabled: bool,
     advanced_splat_enabled: bool,
     sky_reflect_mod_enabled: bool,
     specular_tex_enabled: bool,
+    grass_shading_tex_enabled: bool,
     elmo_per_render_xz: [f32; 2],
 ) -> SmfLighting {
     smf.skybox_enabled = skybox_enabled;
     smf.advanced_splat_enabled = advanced_splat_enabled;
     smf.sky_reflect_mod_enabled = sky_reflect_mod_enabled;
     smf.specular_tex_enabled = specular_tex_enabled;
+    smf.grass_shading_tex_enabled = grass_shading_tex_enabled;
     smf.elmo_per_render_xz = elmo_per_render_xz;
     smf
 }
@@ -287,6 +294,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             skybox_enabled: false,
             sky_reflect_mod_enabled: false,
             specular_tex_enabled: false,
+            grass_shading_tex_enabled: false,
             // Apply legacy detailTex only when the map has no splat
             // distribution texture -- matches engine routing of
             // detailTex to the playable area only in that case.
@@ -348,6 +356,7 @@ impl Default for SmfLighting {
             skybox_enabled: false,
             sky_reflect_mod_enabled: false,
             specular_tex_enabled: false,
+            grass_shading_tex_enabled: false,
             detail_strength: 1.0,
             splat_tex_scales: [1.0, 1.0, 1.0, 1.0],
             splat_tex_mults: [1.0, 1.0, 1.0, 1.0],
@@ -405,7 +414,16 @@ impl SmfLighting {
             custom_fog_params: [
                 if self.custom_fog_enabled { 1.0 } else { 0.0 },
                 self.custom_fog_height_elmos,
-                0.0,
+                // Repurposed: gates the map-edge extension between
+                // sampling `grassShadingTex` (when set) and falling
+                // back to the playable albedo (when unset). Belongs
+                // in a future dedicated `extension_params` uniform;
+                // packed here for now to avoid touching the layout.
+                if self.grass_shading_tex_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
                 0.0,
             ],
             sun_color: [self.sun_color[0], self.sun_color[1], self.sun_color[2], 1.0],
@@ -607,6 +625,13 @@ pub struct TerrainRenderer {
     /// global `ground_specular` / spec exponent are used instead.
     specular_tex_texture: wgpu::Texture,
     specular_tex_enabled: bool,
+    /// `grassShadingTex` upload state. 1x1 grey default; replaced by
+    /// `update_grass_shading_tex` when the map specifies one. Gates
+    /// the extension shader's texture choice via
+    /// `grass_shading_tex_enabled` -- when off, the extension samples
+    /// the playable albedo instead.
+    grass_shading_tex_texture: wgpu::Texture,
+    grass_shading_tex_enabled: bool,
     has_albedo: bool,
     // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) + water params (b4) ──────
     water_planes_bind_group_layout: wgpu::BindGroupLayout,
@@ -1164,6 +1189,25 @@ impl TerrainRenderer {
                         },
                         count: None,
                     },
+                    // Map-edge extension texture (mapinfo
+                    // `grassShadingTex`). Sampled by the extension
+                    // branch of the terrain shader to texture the area
+                    // outside the playable map -- maps that set this
+                    // (e.g. Onyx Cauldron) get custom rocks/etc. for
+                    // the off-map region; maps that don't fall back to
+                    // the playable albedo. Defaults to 1x1 grey so the
+                    // shader's `grass_shading_enabled` flag controls
+                    // path selection rather than texture lookup.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1681,6 +1725,30 @@ impl TerrainRenderer {
             &specular_tex_default_data,
         );
 
+        // 1x1 mid-grey default for grassShadingTex -- only sampled
+        // when `grass_shading_tex_enabled` is true, so the contents
+        // are inert in the default case.
+        let grass_shading_tex_default_data: [u8; 4] = [127, 127, 127, 255];
+        let grass_shading_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("grass_shading_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &grass_shading_tex_default_data,
+        );
+
         let texture_bind_group = {
             let av = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let mv = metalmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1693,6 +1761,8 @@ impl TerrainRenderer {
             let sdv = splat_distr_default.create_view(&wgpu::TextureViewDescriptor::default());
             let srmv = sky_reflect_mod_default.create_view(&wgpu::TextureViewDescriptor::default());
             let specv = specular_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let gstv =
+                grass_shading_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture_bind_group"),
                 layout: &texture_bind_group_layout,
@@ -1752,6 +1822,10 @@ impl TerrainRenderer {
                     wgpu::BindGroupEntry {
                         binding: 13,
                         resource: wgpu::BindingResource::TextureView(&specv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 14,
+                        resource: wgpu::BindingResource::TextureView(&gstv),
                     },
                 ],
             })
@@ -2097,6 +2171,8 @@ impl TerrainRenderer {
             sky_reflect_mod_enabled: false,
             specular_tex_texture: specular_tex_default,
             specular_tex_enabled: false,
+            grass_shading_tex_texture: grass_shading_tex_default,
+            grass_shading_tex_enabled: false,
             has_albedo: false,
             water_planes_bind_group_layout,
             reflection_sampler,
@@ -2800,6 +2876,9 @@ impl TerrainRenderer {
         let specv = self
             .specular_tex_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let gstv = self
+            .grass_shading_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("texture_bind_group"),
             layout: &self.texture_bind_group_layout,
@@ -2859,6 +2938,10 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 13,
                     resource: wgpu::BindingResource::TextureView(&specv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&gstv),
                 },
             ],
         });
@@ -2986,6 +3069,69 @@ impl TerrainRenderer {
             &zero,
         );
         self.specular_tex_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the grassShadingTex 2D texture. Sets
+    /// `grass_shading_tex_enabled` on so the next frame's extension
+    /// shader path samples this texture (BAR's `map_edge_extension2`
+    /// widget's `$grass` lookup) instead of falling back to the
+    /// playable albedo.
+    pub fn update_grass_shading_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.grass_shading_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("grass_shading_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.grass_shading_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset grassShadingTex to the 1x1 grey default; extension shader
+    /// path will fall back to sampling the playable albedo.
+    pub fn clear_grass_shading_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let grey: [u8; 4] = [127, 127, 127, 255];
+        self.grass_shading_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("grass_shading_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &grey,
+        );
+        self.grass_shading_tex_enabled = false;
         self.rebuild_material_bind_group(device);
     }
 
@@ -3360,6 +3506,7 @@ impl TerrainRenderer {
             self.advanced_splat_enabled,
             self.sky_reflect_mod_enabled,
             self.specular_tex_enabled,
+            self.grass_shading_tex_enabled,
             self.elmo_per_render_xz,
         );
         self.x_extent = f.x_extent;
