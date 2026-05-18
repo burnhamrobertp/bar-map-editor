@@ -1888,12 +1888,10 @@ pub fn build_feature_instances(
             ((f.y - dims.min_h) / height_range) * hs
         };
 
-        // SMF stores rotation as a float in the engine "heading" range
-        // [-32768, 32767] (full circle = 65536 units). Recoil casts to int16
-        // and computes angle_radians = heading * pi / 32768. Reproduce that
-        // here. Note: bar-engine's own pipeline currently writes radians
-        // through this same field; that's a separate bug, but for any feature
-        // loaded from a real BAR map the value is heading-encoded.
+        // `PlacedFeature.angle` is in Spring heading units (full circle =
+        // 65536); convert to radians for the rotation matrix. SMF read
+        // and FeaturePlacer-set.lua read both normalise to this unit at
+        // the import boundary; SMF write reverses the conversion.
         let rot = Quat::from_rotation_y(-f.angle * std::f32::consts::PI / 32768.0);
 
         let inst = if loaded_model_names.contains(&lower) {

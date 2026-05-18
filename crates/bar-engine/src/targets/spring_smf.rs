@@ -336,7 +336,11 @@ impl SpringSmfCodec {
                 x: f.x,
                 y: f.y,
                 z: f.z,
-                angle: f.angle,
+                // PlacedFeature.angle is in Spring heading units
+                // (full circle = 65536); the SMF binary expects
+                // `MapFeatureStruct.rotation` in radians. Convert at
+                // the export boundary.
+                angle: f.angle * std::f32::consts::PI / 32768.0,
                 taken_damage: f.taken_damage,
             })
             .collect();

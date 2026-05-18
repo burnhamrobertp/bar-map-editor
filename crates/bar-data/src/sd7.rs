@@ -49,7 +49,11 @@ pub struct SmfFeaturePlacement {
     /// World Y position (engine snaps to terrain; typically 0 at import).
     pub y: f32,
     pub z: f32,
-    /// Rotation angle in degrees (Spring convention).
+    /// Y-axis rotation in radians, matching what Spring writes into the
+    /// `MapFeatureStruct.rotation` field. Callers that need Spring's
+    /// engine "heading" units (`-32768..32767`, full circle = 65536) or
+    /// degrees convert at the BME boundary -- this struct stays faithful
+    /// to the SMF binary format.
     pub angle: f32,
     pub taken_damage: i16,
 }

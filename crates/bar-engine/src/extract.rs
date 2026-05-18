@@ -303,7 +303,14 @@ fn scan_work_dir(
                     x: f.x,
                     y: f.y,
                     z: f.z,
-                    angle: f.angle,
+                    // SMF stores `MapFeatureStruct.rotation` in radians;
+                    // BME's `PlacedFeature.angle` is in Spring heading
+                    // units (full circle = 65536). Convert at the
+                    // import boundary so the rest of the codebase
+                    // (`build_feature_instances`, popover degree
+                    // display, rotation gesture, etc.) sees a single
+                    // consistent unit.
+                    angle: f.angle * 32768.0 / std::f32::consts::PI,
                     taken_damage: f.taken_damage,
                 })
                 .collect()
@@ -537,13 +544,15 @@ fn parse_feature_placer_set(content: &str) -> Vec<bar_project::recipe::PlacedFea
         let rot = extract_lua_number(line, "rot");
 
         if let (Some(name), Some(x), Some(z)) = (name, x, z) {
-            let angle_deg = rot.unwrap_or(0.0) * 180.0 / 32768.0;
+            // The FeaturePlacer gadget stores `rot` in Spring heading
+            // units (full circle = 65536); `PlacedFeature.angle` uses
+            // the same convention, so no conversion is needed here.
             features.push(bar_project::recipe::PlacedFeature {
                 feature_type: name,
                 x,
                 y: 0.0,
                 z,
-                angle: angle_deg,
+                angle: rot.unwrap_or(0.0),
                 taken_damage: 0,
             });
         }
