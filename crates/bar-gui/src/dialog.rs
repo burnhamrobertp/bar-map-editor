@@ -9,7 +9,7 @@
 use std::time::Instant;
 
 use crate::editor::PendingPropsOpen;
-use crate::log::{LogBuffer, LogLevel};
+use crate::log::{LogBuffer, LogLevel, LogLevelVisibility};
 
 /// Outcome of the "delete group" confirmation modal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,8 +119,10 @@ pub struct DialogState {
     pub(crate) pending_action: Option<PendingAction>,
     /// True when the log window is visible.
     pub(crate) show_log: bool,
-    /// Level filter for the log window (None = show all).
-    pub(crate) log_level_filter: Option<LogLevel>,
+    /// Per-level visibility toggles for the log window. Each level is
+    /// independently shown or hidden; default is "show all". The button
+    /// row in `panels::log` flips the matching entry on click.
+    pub(crate) log_levels_visible: LogLevelVisibility,
     /// Text search filter for the log window.
     pub(crate) log_search: String,
     /// Level of the most recent status_message (drives footer color).

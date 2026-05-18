@@ -23,6 +23,48 @@ impl LogLevel {
     }
 }
 
+/// Per-level visibility used by the log-panel filter row. Each entry is
+/// independently toggleable; default is "show all" so a fresh session
+/// shows every event the layer forwards.
+#[derive(Clone, Copy, Debug)]
+pub struct LogLevelVisibility {
+    pub info: bool,
+    pub debug: bool,
+    pub warning: bool,
+    pub error: bool,
+}
+
+impl LogLevelVisibility {
+    pub fn is_visible(&self, level: LogLevel) -> bool {
+        match level {
+            LogLevel::Info => self.info,
+            LogLevel::Debug => self.debug,
+            LogLevel::Warning => self.warning,
+            LogLevel::Error => self.error,
+        }
+    }
+
+    pub fn set(&mut self, level: LogLevel, visible: bool) {
+        match level {
+            LogLevel::Info => self.info = visible,
+            LogLevel::Debug => self.debug = visible,
+            LogLevel::Warning => self.warning = visible,
+            LogLevel::Error => self.error = visible,
+        }
+    }
+}
+
+impl Default for LogLevelVisibility {
+    fn default() -> Self {
+        Self {
+            info: true,
+            debug: true,
+            warning: true,
+            error: true,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub(crate) struct LogEntry {
     pub(crate) level: LogLevel,

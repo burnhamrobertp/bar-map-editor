@@ -78,7 +78,6 @@ See `docs/feature-rendering-plan.md`. M1/M2/M3 are complete.
 
 ## Logging
 
-- **Fix log filtering controls.** The log panel's filter controls aren't doing what users expect -- the levels / target filters aren't applying correctly. Audit `crates/bar-app/src/app_log_layer.rs` and whatever GUI surface exposes the filter UI; likely either the filter predicate is wrong or the UI state isn't propagating to the layer.
 - **Standardize info vs debug usage.** Far too many tracing calls are landing at `info` level when they're really debug-level diagnostics. Audit the codebase and demote the bulk of them; reserve `info` for events a user would actually want to see during normal operation (load complete, save complete, errors recovered). Also consider adding a dedicated **Status** log type (or a separate channel) for foreground operations the user is actively tracking, so they don't compete with diagnostic info in the same stream.
 
 ## Project / workflow

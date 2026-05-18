@@ -35,22 +35,26 @@ impl BarEditorApp {
                     }
                     ui.weak(format!("({} entries)", self.dialog.log_buffer.len()));
                     ui.separator();
-                    // Level filter toggles.
+                    // Per-level visibility toggles. Each button reads
+                    // its current state from `log_levels_visible` and
+                    // flips that level on click; multiple levels can
+                    // be on / off independently.
                     for (label, level) in [
                         ("INF", LogLevel::Info),
                         ("WRN", LogLevel::Warning),
                         ("ERR", LogLevel::Error),
                         ("DBG", LogLevel::Debug),
                     ] {
-                        let active = self.dialog.log_level_filter == Some(level);
+                        let visible = self.dialog.log_levels_visible.is_visible(level);
                         let btn = egui::Button::new(
                             egui::RichText::new(label)
                                 .monospace()
                                 .color(level_color(level)),
                         )
-                        .selected(active);
+                        .selected(visible);
                         if ui.add(btn).clicked() {
-                            self.dialog.log_level_filter = if active { None } else { Some(level) };
+                            self.dialog.log_levels_visible.set(level, !visible);
+                            self.dialog.log_buffer.mark_needs_scroll();
                         }
                     }
                     ui.separator();
@@ -73,16 +77,14 @@ impl BarEditorApp {
                 ui.separator();
 
                 let needs_scroll = self.dialog.log_buffer.take_needs_scroll();
-                let level_filter = self.dialog.log_level_filter;
+                let levels_visible = self.dialog.log_levels_visible;
                 let search_lower = self.dialog.log_search.to_lowercase();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
                         for entry in self.dialog.log_buffer.entries() {
-                            if let Some(f) = level_filter {
-                                if entry.level != f {
-                                    continue;
-                                }
+                            if !levels_visible.is_visible(entry.level) {
+                                continue;
                             }
                             if !search_lower.is_empty()
                                 && !entry.message.to_lowercase().contains(&search_lower)
