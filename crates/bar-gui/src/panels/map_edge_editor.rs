@@ -59,8 +59,9 @@ impl PreviewCache {
 
 /// Walk the project's known asset locations for the picker filename.
 /// Mirrors the order `sync_grass_shading_tex` uses at the renderer side
-/// (passthrough/ first, then project root) so the preview is sourced
-/// from the same file the renderer will sample.
+/// (passthrough/ first, then project root, both via case-insensitive
+/// recursive walk) so the preview is sourced from the same file the
+/// renderer samples.
 fn resolve_grass_shading_path(
     project_dir: &std::path::Path,
     filename: &str,
@@ -69,11 +70,8 @@ fn resolve_grass_shading_path(
         let minimap = project_dir.join(bar_project::SMF_MINIMAP_SIDE_CAR);
         return minimap.is_file().then_some(minimap);
     }
-    let candidates = [
-        project_dir.join("passthrough").join(filename),
-        project_dir.join(filename),
-    ];
-    candidates.into_iter().find(|p| p.is_file())
+    bar_project::find_file_in_dir(&project_dir.join("passthrough"), filename)
+        .or_else(|| bar_project::find_file_in_dir(project_dir, filename))
 }
 
 /// Decode the preview image to RGBA8 + dimensions for egui upload.

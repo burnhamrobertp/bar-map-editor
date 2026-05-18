@@ -1596,7 +1596,13 @@ impl TerrainRenderer {
             address_mode_v: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            // Linear mip interpolation so the map-edge extension's
+            // mirrored sampling reads cleanly at oblique angles without
+            // sparkle. Other consumers (playable albedo) already had
+            // chain-aware mip selection in their textures; this sampler
+            // is shared, so flipping to Linear lifts quality everywhere
+            // without a behavioural change for the playable area.
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
 
@@ -3114,25 +3120,52 @@ impl TerrainRenderer {
         width: u32,
         height: u32,
     ) {
-        self.grass_shading_tex_texture = device.create_texture_with_data(
-            queue,
-            &wgpu::TextureDescriptor {
-                label: Some("grass_shading_tex"),
-                size: wgpu::Extent3d {
-                    width,
-                    height,
+        // Generate a full mip chain CPU-side and upload every level. The
+        // map-edge extension samples at oblique angles and across wide
+        // spatial ranges (each mirror quadrant covers the same
+        // playable-UV [0, 1] as the playable area, but at the screen-
+        // space frequency the geometry demands), so the GPU needs
+        // filtered downsamples to avoid sparkle / aliasing that reads
+        // as "low quality". Without mips the sampler is stuck at the
+        // base level no matter the derivative.
+        let chain = ensure_full_mip_chain(vec![(rgba.to_vec(), width, height)]);
+        let mip_count = chain.len() as u32;
+        let tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("grass_shading_tex"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: mip_count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (level, (rgba, w, h)) in chain.into_iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: level as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(w * 4),
+                    rows_per_image: Some(h),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: h,
                     depth_or_array_layers: 1,
                 },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            },
-            wgpu::util::TextureDataOrder::LayerMajor,
-            rgba,
-        );
+            );
+        }
+        self.grass_shading_tex_texture = tex;
         self.grass_shading_tex_enabled = true;
         self.rebuild_material_bind_group(device);
     }

@@ -10,6 +10,7 @@ use std::time::Instant;
 use bar_compute::GpuContext;
 use bar_engine::recipe::PlacedFeature;
 use bar_graph::NodeExecutor;
+use bar_project::find_file_in_dir;
 use bar_render::{pick_terrain, Camera, FeatureInstance, TerrainRenderer, TerrainUpdateParams};
 use eframe::egui;
 
@@ -2302,41 +2303,6 @@ pub fn build_pickable_features(
 }
 
 // ── BC1 texture loading ───────────────────────────────────────────────────────
-
-/// Load the compiled native-resolution BC1 texture into the viewport renderer.
-/// Returns `true` on success.
-/// Load the compiled BC1 texture into the Preview slot's terrain renderer.
-/// Returns the native texture dimensions `(w, h)` on success, `None` on failure.
-/// Walk `dir` recursively for a file whose basename matches `name`
-/// (case-insensitive). Used to resolve mapinfo's bare filename
-/// references (skybox, eventually detail textures) into actual disk
-/// paths inside the `.barproj/passthrough/` tree.
-fn find_file_in_dir(dir: &std::path::Path, name: &str) -> Option<std::path::PathBuf> {
-    if !dir.is_dir() {
-        return None;
-    }
-    let needle = name.to_ascii_lowercase();
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .map(|n| n.to_ascii_lowercase() == needle)
-                .unwrap_or(false)
-            {
-                return Some(path);
-            }
-        }
-    }
-    None
-}
 
 /// Result of loading the compiled BC1 albedo + heightmap into the
 /// Preview layout's renderer. `heightmap` is returned separately so
