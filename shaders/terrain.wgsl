@@ -187,6 +187,17 @@ const DBG_VISUALIZE_SPLAT_DETAIL: bool = false;
 /// water.wgsl at bindings 0/1). Format: R32Float, non-filterable -- use textureLoad.
 @group(3) @binding(2) var heightmap_tex: texture_2d<f32>;
 
+/// Pre-baked per-fragment surface normal map. Engine parity with
+/// `SMFFragProg.glsl::GetFragmentNormal`: stores world-space (X, Z) of
+/// the unit normal in an Rg8Snorm texture and lets the fragment shader
+/// reconstruct Y = sqrt(1 - X*X - Z*Z). Sampling with the (filtering)
+/// `water_normal_sam` at group 3 binding 1 gives smooth lighting on
+/// slopes -- noticeably crisper than the per-vertex normal that was
+/// interpolated across triangles. Generated CPU-side in
+/// `renderer.rs::build_normal_map_bytes` whenever the heightmap or
+/// height_scale changes.
+@group(3) @binding(3) var normal_map_tex: texture_2d<f32>;
+
 /// Shadow map -- see `crates/bar-render/src/shadow.rs`. Group 4 is unused by
 /// the reflection/refraction pre-passes (they bind a dummy receiver group so
 /// the pipeline layout matches).
@@ -366,7 +377,24 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // `normal` is a `var` rather than `let` so the splat-detail-normal
     // block below can perturb it before we compute lighting. Engine
     // order: normal perturbation -> lighting (`SMFFragProg.glsl::main`).
-    var normal = normalize(in.normal);
+    //
+    // Surface normal is sampled from the pre-baked normal map keyed off
+    // the heightmap (engine path: `SMFFragProg.glsl::GetFragmentNormal`).
+    // Stored as Rg8Snorm holding world-space (X, Z); Y reconstructs
+    // from the unit-length constraint. Falls back to the interpolated
+    // per-vertex normal when XZ has length >= 1 (only happens near
+    // wrap-around values produced by snorm rounding at the extremes).
+    var normal: vec3<f32>;
+    {
+        let nxz = textureSample(normal_map_tex, water_normal_sam, in.uv).rg;
+        let xz_len_sq = dot(nxz, nxz);
+        if (xz_len_sq < 0.999) {
+            let ny = sqrt(1.0 - xz_len_sq);
+            normal = normalize(vec3<f32>(nxz.x, ny, nxz.y));
+        } else {
+            normal = normalize(in.normal);
+        }
+    }
     let view_dir = normalize(camera.camera_pos - in.world_position);
     let shadow_coeff = sample_shadow(in.world_position);
 

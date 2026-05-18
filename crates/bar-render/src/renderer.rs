@@ -625,6 +625,10 @@ pub struct TerrainRenderer {
     heightmap_bind_group_layout: wgpu::BindGroupLayout,
     heightmap_bind_group: wgpu::BindGroup,
     heightmap_texture: wgpu::Texture,
+    /// Per-fragment surface normal map keyed off `heightmap_texture`.
+    /// Stores world-space (X, Z) of the unit normal; Y reconstructed
+    /// in the shader. Re-baked whenever `update_heightmap` runs.
+    normal_map_texture: wgpu::Texture,
     // ── Geometry ────────────────────────────────────────────────────────────
     vertex_buffer: Option<wgpu::Buffer>,
     index_buffer: Option<wgpu::Buffer>,
@@ -774,6 +778,73 @@ fn make_default_r32float(
         wgpu::util::TextureDataOrder::LayerMajor,
         &data,
     )
+}
+
+/// Default 1x1 normal map encoding a flat upward-pointing surface
+/// normal (0, 1, 0). Stored as (X, Z) = (0, 0) in Rg8Snorm; the
+/// shader reconstructs Y = sqrt(1 - 0 - 0) = 1.
+fn make_default_normal_map(device: &wgpu::Device, queue: &wgpu::Queue) -> wgpu::Texture {
+    device.create_texture_with_data(
+        queue,
+        &wgpu::TextureDescriptor {
+            label: Some("normal_map_default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rg8Snorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        },
+        wgpu::util::TextureDataOrder::LayerMajor,
+        &[0u8, 0u8],
+    )
+}
+
+/// CPU-generate a per-texel surface normal map from a heightmap. Output
+/// is two-channel signed bytes packing world-space (X, Z) of the unit
+/// normal; the fragment shader reconstructs Y. Uses the same central-
+/// difference math the vertex shader previously did, baked once per
+/// heightmap upload so fragment shading reads off a texture lookup
+/// instead of an interpolated per-vertex normal.
+fn build_normal_map_bytes(
+    hm: &Heightmap,
+    height_scale: f32,
+    x_extent: f32,
+    z_extent: f32,
+) -> Vec<i8> {
+    let w = hm.width().max(1);
+    let h = hm.height().max(1);
+    let world_dx = (2.0 * x_extent) / w as f32;
+    let world_dz = (2.0 * z_extent) / h as f32;
+    let mut out = Vec::with_capacity((w * h * 2) as usize);
+    for z in 0..h {
+        for x in 0..w {
+            let xp = (x + 1).min(w - 1);
+            let xn = x.saturating_sub(1);
+            let zp = (z + 1).min(h - 1);
+            let zn = z.saturating_sub(1);
+            let h_xp = hm.get(xp, z).unwrap_or(0.0);
+            let h_xn = hm.get(xn, z).unwrap_or(0.0);
+            let h_zp = hm.get(x, zp).unwrap_or(0.0);
+            let h_zn = hm.get(x, zn).unwrap_or(0.0);
+            let dy_dx = (h_xp - h_xn) * height_scale / (2.0 * world_dx);
+            let dy_dz = (h_zp - h_zn) * height_scale / (2.0 * world_dz);
+            let nx = -dy_dx;
+            let ny = 1.0;
+            let nz = -dy_dz;
+            let inv_len = 1.0 / (nx * nx + ny * ny + nz * nz).sqrt();
+            let nx_u = nx * inv_len;
+            let nz_u = nz * inv_len;
+            out.push((nx_u * 127.0).clamp(-127.0, 127.0) as i8);
+            out.push((nz_u * 127.0).clamp(-127.0, 127.0) as i8);
+        }
+    }
+    out
 }
 
 /// Ensure a mip chain runs all the way down to 1x1, synthesising any
@@ -1192,6 +1263,19 @@ impl TerrainRenderer {
                         visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Texture {
                             sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Pre-baked surface normal map (Rg8Snorm). Sampled by
+                    // fs_main for engine-parity per-fragment shading;
+                    // reuses the group-1 filtering sampler.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 3,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
@@ -1857,10 +1941,14 @@ impl TerrainRenderer {
         );
         let water_normal_view =
             water_normal_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        // Default 1x1 heightmap (zero height) until update_heightmap is called.
-        // Group 3 bind group combines water_normal (0,1) and heightmap (2).
+        // Default 1x1 heightmap (zero height) + default flat normal map
+        // until update_heightmap is called. Group 3 bind group combines
+        // water_normal (0,1), heightmap (2), and normal_map (3).
         let heightmap_texture = make_default_r32float(device, queue, "heightmap_default", 0.0);
         let heightmap_view = heightmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let normal_map_texture = make_default_normal_map(device, queue);
+        let normal_map_view =
+            normal_map_texture.create_view(&wgpu::TextureViewDescriptor::default());
         let heightmap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("group3_bind_group"),
             layout: &heightmap_bind_group_layout,
@@ -1876,6 +1964,10 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&heightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&normal_map_view),
                 },
             ],
         });
@@ -2013,6 +2105,7 @@ impl TerrainRenderer {
             heightmap_bind_group_layout,
             heightmap_bind_group,
             heightmap_texture,
+            normal_map_texture,
             vertex_buffer: None,
             index_buffer: None,
             num_indices: 0,
@@ -2118,6 +2211,13 @@ impl TerrainRenderer {
             .flat_map(|y| (0..hm_w).map(move |x| hm.get(x, y).unwrap_or(0.0)))
             .collect();
 
+        // Pre-bake the per-fragment surface normal map. Depends on the
+        // heightmap content AND on height_scale + extents, so it has
+        // to be regenerated on every `update_heightmap` call (not just
+        // when dims change).
+        let normal_bytes = build_normal_map_bytes(hm, height_scale, x_extent, z_extent);
+        let normal_bytes_u8: &[u8] = bytemuck::cast_slice(&normal_bytes);
+
         let old_size = (
             self.heightmap_texture.width(),
             self.heightmap_texture.height(),
@@ -2143,8 +2243,27 @@ impl TerrainRenderer {
                     depth_or_array_layers: 1,
                 },
             );
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.normal_map_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                normal_bytes_u8,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(hm_w * 2),
+                    rows_per_image: Some(hm_h),
+                },
+                wgpu::Extent3d {
+                    width: hm_w,
+                    height: hm_h,
+                    depth_or_array_layers: 1,
+                },
+            );
         } else {
-            // Dimensions changed: recreate texture and bind group.
+            // Dimensions changed: recreate both textures and the bind group.
             let tex = device.create_texture_with_data(
                 queue,
                 &wgpu::TextureDescriptor {
@@ -2165,6 +2284,26 @@ impl TerrainRenderer {
                 bytemuck::cast_slice(&data),
             );
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let nm_tex = device.create_texture_with_data(
+                queue,
+                &wgpu::TextureDescriptor {
+                    label: Some("normal_map_tex"),
+                    size: wgpu::Extent3d {
+                        width: hm_w,
+                        height: hm_h,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rg8Snorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                },
+                wgpu::util::TextureDataOrder::LayerMajor,
+                normal_bytes_u8,
+            );
+            let nm_view = nm_tex.create_view(&wgpu::TextureViewDescriptor::default());
             self.heightmap_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("group3_bind_group"),
                 layout: &self.heightmap_bind_group_layout,
@@ -2181,6 +2320,10 @@ impl TerrainRenderer {
                         binding: 2,
                         resource: wgpu::BindingResource::TextureView(&view),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&nm_view),
+                    },
                 ],
             });
             // Shadow caster needs its own bind group pointing at the same view.
@@ -2194,6 +2337,7 @@ impl TerrainRenderer {
                     }],
                 });
             self.heightmap_texture = tex;
+            self.normal_map_texture = nm_tex;
         }
     }
 
