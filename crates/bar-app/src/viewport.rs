@@ -1581,23 +1581,33 @@ fn handle_camera_input(
             // cursor across the zoom, instead of drifting toward the screen
             // centre. Skipped when the cursor isn't over the terrain (no
             // pick), preserving the prior "zoom toward target" feel offscreen.
-            if let (Some(uv), Some(hm), Some(renderer)) = (
-                cursor_uv,
-                app.paint.heightmap.as_ref(),
-                core.terrain_renderer.as_ref(),
-            ) {
-                let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
-                if let Some(pick) = pick_terrain(
-                    &core.camera,
-                    aspect,
-                    uv,
-                    hm,
-                    x_extent,
-                    z_extent,
-                    height_scale,
+            //
+            // Only applied when zooming IN (factor > 0). On zoom out the
+            // analogous nudge would push the target AWAY from the cursor
+            // pick, which feels disorienting: the user is trying to back
+            // out to see more context, not have the framing pulled away
+            // from whatever they were looking at. Zoom-out instead
+            // preserves the current target -- the camera distance grows
+            // around the existing pivot.
+            if factor > 0.0 {
+                if let (Some(uv), Some(hm), Some(renderer)) = (
+                    cursor_uv,
+                    app.paint.heightmap.as_ref(),
+                    core.terrain_renderer.as_ref(),
                 ) {
-                    let to_pick = pick.world - core.camera.target;
-                    core.camera.target += to_pick * (-factor);
+                    let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+                    if let Some(pick) = pick_terrain(
+                        &core.camera,
+                        aspect,
+                        uv,
+                        hm,
+                        x_extent,
+                        z_extent,
+                        height_scale,
+                    ) {
+                        let to_pick = pick.world - core.camera.target;
+                        core.camera.target += to_pick * (-factor);
+                    }
                 }
             }
             core.camera.zoom(factor);
