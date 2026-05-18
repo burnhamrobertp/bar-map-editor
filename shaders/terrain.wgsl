@@ -373,30 +373,50 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return shade_water(in.world_position, eye_dir, scr_uv, in.clip_position.z);
     }
 
-    // Map-border ring branch. Geometry sits beyond the playable area
-    // at render-space Y = 0; we sample the albedo at the edge-clamped
-    // playable UV so the map's outermost texel stretches outward to
-    // the horizon. Phase 1 stand-in -- a future commit can swap to a
-    // dedicated `grassShadingTex` / minimap-fallback texture. Simple
-    // sun + ambient lighting (no splat / spec / sky reflection) is
-    // good enough at the distance border fragments are seen from.
-    if (in.uv.y > 2.5) {
+    // Map-edge skirt branch -- engine port of `SMFBorderFragProg.glsl`.
+    // Vertical walls hang from each map edge down to the bottom cap;
+    // they sample the albedo at the edge-clamped UV (matching the
+    // engine's per-tile clamped sample) and apply the same darkening
+    // `diffuseMult = 110/255`. Recoil also blends the skirt with a
+    // vertex-color alpha that fades to 0 at the bottom -- without
+    // alpha blending in the terrain pipeline we approximate that by
+    // discarding fragments below the heightmap-derived "top" of the
+    // skirt scaled to a fade threshold, so the visible band reads as
+    // the engine's translucent veil at the edge.
+    if (in.uv.y > 1.5) {
         let map_uv = vec2<f32>(
             (in.world_position.x / (2.0 * camera.x_extent)) + 0.5,
             (in.world_position.z / (2.0 * camera.z_extent)) + 0.5,
         );
-        let clamped_uv = clamp(map_uv, vec2<f32>(0.0), vec2<f32>(1.0));
+        let clamped_uv = clamp(map_uv, vec2<f32>(0.01), vec2<f32>(0.99));
         var albedo: vec3<f32>;
         if (camera.has_texture != 0u) {
             albedo = textureSample(albedo_tex, albedo_sam, clamped_uv).rgb;
         } else {
             albedo = vec3<f32>(0.35, 0.32, 0.28);
         }
-        let sun = normalize(camera.sun_dir_exp.xyz);
-        let lambert = max(sun.y, 0.0);
-        let lit = camera.ground_ambient.rgb + camera.ground_diffuse.rgb * lambert;
-        let border_color = albedo * lit;
-        return vec4<f32>(apply_custom_fog(border_color, in.world_position), 1.0);
+        // Top of the skirt at this XZ = sampled heightmap value at the
+        // clamped UV (the playable edge, in render-space units).
+        let dim_f = vec2<f32>(textureDimensions(heightmap_tex));
+        let tc = clamp(
+            vec2<i32>(clamped_uv * dim_f),
+            vec2<i32>(0),
+            vec2<i32>(dim_f - vec2<f32>(1.0)),
+        );
+        let top_h = textureLoad(heightmap_tex, tc, 0).r;
+        let top_y = top_h * camera.height_scale;
+        // Fade alpha from 1 at the top of the skirt to 0 at the
+        // bottom cap (engine vertex-color alpha gradient).
+        let v_alpha = clamp(in.world_position.y / max(top_y, 1e-4), 0.0, 1.0);
+        // Engine `diffuseMult.a = 0.4`; combined alpha with the
+        // gradient gives `v_alpha * 0.4`. Discard threshold approximates
+        // alpha blending in an opaque pipeline.
+        let final_alpha = v_alpha * 0.4;
+        if (final_alpha < 0.08) {
+            discard;
+        }
+        let darkened = albedo * (110.0 / 255.0);
+        return vec4<f32>(apply_custom_fog(darkened, in.world_position), 1.0);
     }
 
     let sun_dir = normalize(camera.sun_dir_exp.xyz);

@@ -2,12 +2,10 @@
 ///
 /// UV encoding for special geometry types:
 /// - Regular terrain: uv in [0,1]x[0,1] -- vertex shader samples heightmap GPU-side for Y.
-/// - Skirt / bottom cap: uv.y = 2.0 -- world-space position passed through directly.
+/// - Edge skirt / bottom cap: uv.y = 2.0 -- world-space position passed through; the
+///   fragment shader shades these with the engine's `SMFBorderFragProg.glsl` path
+///   (edge-clamped albedo sample, multiplied by `diffuseMult = 110/255`).
 /// - Water / lava plane: uv.x = -1.0 -- world-space position passed through directly.
-/// - Map-border ring: uv.y = 3.0 -- world-space position passed through directly,
-///   fragment shader samples the border texture (grassShadingTex or minimap fallback)
-///   keyed off world XZ. Used to fill the horizon beyond the playable area so the map
-///   doesn't end in a void.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TerrainVertex {
@@ -229,86 +227,6 @@ pub fn generate_terrain_skirts_and_cap(
     indices.push(base);
     indices.push(base + 3);
     indices.push(base + 2);
-
-    (vertices, indices)
-}
-
-/// Map-border skirt: a flat ring of geometry extending from the
-/// playable map's edge outward to `skirt_factor * x_extent` (and the
-/// analogous Z bound). Fills the horizon beyond the playable area so
-/// the map doesn't render with a void where the surrounding terrain
-/// should be.
-///
-/// Geometry is at world Y = `border_y` (typically the map's `min_height`
-/// scaled into render space). Eight triangles total -- four edge
-/// strips plus four corner quads -- enough to enclose the map without
-/// overlapping its visible footprint. uv.y = 3.0 is the sentinel the
-/// shader uses to switch into the border-texture sampling path; uv.x
-/// is unused (the shader keys off world XZ instead).
-pub fn generate_map_border_skirt(
-    x_extent: f32,
-    z_extent: f32,
-    skirt_factor: f32,
-    border_y: f32,
-) -> (Vec<TerrainVertex>, Vec<u32>) {
-    let outer_x = x_extent * skirt_factor;
-    let outer_z = z_extent * skirt_factor;
-
-    // Eight ring vertices (4 inner-edge + 4 outer-edge corners). The
-    // strips are built as two-quad rectangles between consecutive
-    // corner pairs; with 4 outer corners we get 4 such rectangles and
-    // 4 single-quad corners.
-    //
-    // Outer ring (CCW from upper-left, looking down +Y):
-    //   (-outer, -outer)  (+outer, -outer)
-    //   (-outer, +outer)  (+outer, +outer)
-    // Inner ring (the playable bounds):
-    //   (-x_extent, -z_extent), etc.
-    let mut vertices = Vec::with_capacity(8);
-    let mut indices = Vec::new();
-    let normal = [0.0, 1.0, 0.0];
-
-    // Push 8 vertices: 4 inner (0..3), 4 outer (4..7), each in the
-    // order [NW, NE, SE, SW] -- so inner[0] matches outer[0], etc.
-    let inner = [
-        (-x_extent, -z_extent),
-        (x_extent, -z_extent),
-        (x_extent, z_extent),
-        (-x_extent, z_extent),
-    ];
-    let outer = [
-        (-outer_x, -outer_z),
-        (outer_x, -outer_z),
-        (outer_x, outer_z),
-        (-outer_x, outer_z),
-    ];
-    for &(px, pz) in inner.iter().chain(outer.iter()) {
-        vertices.push(TerrainVertex {
-            position: [px, border_y, pz],
-            normal,
-            uv: [0.0, 3.0],
-        });
-    }
-
-    // Four trapezoidal strips connecting inner[i] -> inner[i+1] and
-    // outer[i] -> outer[i+1]. Each strip is two triangles. Winding is
-    // CCW when viewed from above (+Y looking down) so the top face is
-    // visible from the camera.
-    for i in 0..4 {
-        let j = (i + 1) % 4;
-        let inner_a = i as u32;
-        let inner_b = j as u32;
-        let outer_a = 4 + i as u32;
-        let outer_b = 4 + j as u32;
-        // Triangle 1: outer_a, outer_b, inner_a
-        indices.push(outer_a);
-        indices.push(outer_b);
-        indices.push(inner_a);
-        // Triangle 2: outer_b, inner_b, inner_a
-        indices.push(outer_b);
-        indices.push(inner_b);
-        indices.push(inner_a);
-    }
 
     (vertices, indices)
 }

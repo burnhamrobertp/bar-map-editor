@@ -4,8 +4,7 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
 use crate::terrain::{
-    generate_flat_grid, generate_map_border_skirt, generate_terrain_skirts_and_cap,
-    generate_water_plane, TerrainVertex,
+    generate_flat_grid, generate_terrain_skirts_and_cap, generate_water_plane, TerrainVertex,
 };
 use bar_data::{ColorBuffer, Heightmap};
 
@@ -2170,8 +2169,7 @@ impl TerrainRenderer {
         self.height_range_elmos = height_range_elmos;
         self.elmo_per_render_xz = elmo_per_render_xz;
 
-        // Build mesh: flat grid + edge skirts/cap + horizon-filling
-        // map-border ring + optional water plane.
+        // Build mesh: flat grid + edge skirts/cap + optional water plane.
         let (mut verts, mut idxs) = generate_flat_grid(grid_n);
 
         let skirt_base = verts.len() as u32;
@@ -2179,16 +2177,6 @@ impl TerrainRenderer {
             generate_terrain_skirts_and_cap(hm, height_scale, x_extent, z_extent, grid_n);
         idxs.extend(skirt_i.iter().map(|i| i + skirt_base));
         verts.extend(skirt_v);
-
-        // Map-border ring: extends the visible ground out to the
-        // horizon so the playable area doesn't end in a void. Sits
-        // at render-space Y = 0 (= heightmap min). The factor of 4
-        // gives a ring four map-widths across; further is wasted
-        // pixels at typical FOVs.
-        let border_base = verts.len() as u32;
-        let (border_v, border_i) = generate_map_border_skirt(x_extent, z_extent, 4.0, 0.0);
-        idxs.extend(border_i.iter().map(|i| i + border_base));
-        verts.extend(border_v);
 
         let water_base = verts.len() as u32;
         // Record where the water sub-range starts BEFORE pushing water indices

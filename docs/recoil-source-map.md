@@ -14,6 +14,7 @@ This is the in-repo copy of the R1 finding from the v0.2 plan. It identifies the
 |---|---|
 | Terrain (SMF renderer) | `SMFFragProg.glsl`, `SMFVertProg.glsl` |
 | Terrain shading lookup | `SMFShadingTextureFragProg.glsl`, `SMFShadingTextureVertProg.glsl` |
+| Map-edge border skirt | `SMFBorderVertProg.glsl`, `SMFBorderFragProg.glsl` |
 | Water | `BumpWaterFS.glsl`, `BumpWaterVS.glsl` |
 | Sky | `ModernSkyFS.glsl`, `ModernSkyVS.glsl` |
 | Minimap (reference for the 2D inspector) | `MiniMapFragProg.glsl`, `MiniMapVertProg.glsl` |
@@ -25,7 +26,6 @@ The full vendored set is at `vendor/recoil/shaders/GLSL/`.
 | Concern | Why not |
 |---|---|
 | `BumpWaterCoastBlur*` | Coastline blur is a quality-of-life detail — defer until water is matching at all and we want polish. |
-| `SMFBorderFragProg.glsl` / `SMFBorderVertProg.glsl` | Map-edge "world border" rendering — not visible in the the preview camera framing; defer. |
 | `Grass*Prog.glsl` | bar-editor doesn't render grass yet. If we do, this is the obvious starting point. |
 | `ProjFX*Prog.glsl`, `Icons*VS.glsl`, `Shapes*Prog.glsl` | Engine UI / projectile / icon rendering — not part of map preview. |
 | `Shadow*Prog.glsl` | Real-time shadow casting in the preview is out of v0.2 scope. The terrain shader's lighting model approximates this when shadows are off. |
