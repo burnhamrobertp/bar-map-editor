@@ -50,7 +50,6 @@ return {
 | `maps/<name>.smf` | Heightmap + embedded minimap / metalmap / typemap (required) |
 | `maps/<name>.smt` | Texture tile pool referenced by SMF (required) |
 | `maps/minimap.bmp` or `.dds` | One of several possible minimap-override paths -- exact resolution rules unverified, see TODO |
-| `mapoptions.lua` | Lobby-exposed map options |
 | `mapconfig/*.lua` | Auxiliary scripts loaded by gadgets (feature placement, startboxes, etc.) |
 | `LuaGaia/*` | Map's neutral-player Lua state |
 | `LuaRules/*` | Map-specific gameplay rules |
@@ -267,31 +266,6 @@ Per-channel reverb / filter params. Rarely customised.
 
 ---
 
-## `mapoptions.lua`
-
-Lobby-exposed map options.
-
-**Status uncertain.** The schema is well-defined and maps ship the file, but the lobby- and game-side consumers that would actually surface these options to players appear to be unimplemented in BAR. Treat as not-yet-wired-up unless re-verified; see TODO for a follow-up.
-
-```lua
-return {
-    {
-        key    = 'Dry',
-        name   = 'Dry',
-        desc   = 'Lowers water level',
-        type   = 'number',           -- bool | number | string | list
-        def    = 0,
-        min    = 0, max = 1, step = 1,
-        -- maxlen = 32,              -- string only
-        -- items  = { ... },         -- list only
-    },
-}
-```
-
-Recognised entry fields: `key`, `name`, `desc`, `type`, `def`, `min`, `max`, `step`, `maxlen`, `items`.
-
----
-
 ## `mapconfig/`
 
 Auxiliary game-Lua scripts. All optional; specific gadgets `VFS.Include` the files they need.
@@ -301,7 +275,6 @@ Auxiliary game-Lua scripts. All optional; specific gadgets `VFS.Include` the fil
 | `mapconfig/featureplacer/config.lua` | Feature-placer params |
 | `mapconfig/featureplacer/set.lua` | Feature placement data (positions, types) |
 | `mapconfig/featureplacer/featureplacement_set.lua` | Alternate placement-set file |
-| `mapconfig/mapinfo/0_apply_options.lua` | Modifies mapinfo at parse based on mapoptions choices |
 | `mapconfig/map_startboxes.lua` | Startbox polygons (see Startboxes) |
 | `mapconfig/map_metal_layout.lua` | Custom metal-spot layout |
 
@@ -381,5 +354,5 @@ return {
 3. Never write `teams[i].startPos.y` -- the engine recomputes Y from the heightmap on load.
 4. Cosmetic fields (`description`, `author`, `version`) are metadata, not load-critical.
 5. `maphelper/mapinfo.lua` -- emit a one-line `return VFS.Include("mapinfo.lua")` stub or skip the file entirely. The engine probes the helper path first but falls through to root.
-6. Game-Lua content (`mapoptions.lua`, `mapconfig/`, `LuaGaia/`, `LuaRules/`, `features/`, `libs/`) should be preserved verbatim by tools that don't intend to author gameplay logic.
+6. Game-Lua content (`mapconfig/`, `LuaGaia/`, `LuaRules/`, `features/`, `libs/`) should be preserved verbatim by tools that don't intend to author gameplay logic.
 7. Strip build artefacts and unused asset variants at export.
