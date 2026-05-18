@@ -49,7 +49,7 @@ return {
 | `mapinfo.lua` | Engine-parsed map config (required) |
 | `maps/<name>.smf` | Heightmap + embedded minimap / metalmap / typemap (required) |
 | `maps/<name>.smt` | Texture tile pool referenced by SMF (required) |
-| `maps/minimap.bmp` or `.dds` | Overrides the SMF-embedded minimap |
+| `maps/minimap.bmp` or `.dds` | One of several possible minimap-override paths -- exact resolution rules unverified, see TODO |
 | `mapoptions.lua` | Lobby-exposed map options |
 | `mapconfig/*.lua` | Auxiliary scripts loaded by gadgets (feature placement, startboxes, etc.) |
 | `LuaGaia/*` | Map's neutral-player Lua state |
@@ -95,7 +95,7 @@ return {
 | `minimapTex` | embedded in SMF | External override |
 | `metalmapTex` | embedded in SMF | External override |
 | `typemapTex` | embedded in SMF | External override |
-| `grassmapTex` | unset | No grass rendering if absent |
+| `grassmapTex` | unset | Engine field; BAR doesn't use the engine grass renderer. BAR's grass system is driven by `custom.grassDistTGA` instead. |
 
 ---
 
@@ -137,7 +137,7 @@ return {
 
 | Field | Default | Notes |
 |---|---|---|
-| `damage` | `0.0` | |
+| `damage` | `0.0` | Per-second HP damage to units in the water plane. `> 0` makes the water surface behave as lava. |
 | `absorb` | `{0, 0, 0}` | Per-channel absorption coefficient |
 | `baseColor` | `{0, 0, 0}` | Deep-water tint |
 | `minColor` | `{0, 0, 0}` | Floor of underwater colour |
@@ -166,6 +166,8 @@ The 4 detail-normal textures themselves are referenced from `resources`.
 ---
 
 ## `mapinfo.lua → grass`
+
+**Not consumed by BAR.** These are Recoil engine grass-renderer fields. BAR ships its own grass system that ignores this entire block; see `custom.grassDistTGA` for the path BAR actually uses. Fields listed only so import code can recognise and skip them.
 
 | Field | Default |
 |---|---|
@@ -225,7 +227,7 @@ Movement modifiers per terrain-type ID (the typemap encodes a u8 per pixel refer
 | Field | Default |
 |---|---|
 | `name` | `"Default"` |
-| `hardness` | `1.0` |
+| `hardness` | `1.0` (multiplier applied to top-level `maphardness`, not a replacement) |
 | `receiveTracks` | `true` |
 | `moveSpeeds.tank` / `.kbot` / `.hover` / `.ship` | `1.0` each |
 
@@ -247,6 +249,18 @@ custom = {
 
 ---
 
+## `mapinfo.lua → custom.grassDistTGA`
+
+Path (relative to the map archive) of the grass distribution texture BAR's custom grass renderer samples to decide where blades grow. This is the replacement for the engine's `smf.grassmapTex` field, which BAR's grass system ignores. Set this if the map has grass; leave unset for grassless maps.
+
+```lua
+custom = {
+    grassDistTGA = "maps/mymap_grass.tga",
+}
+```
+
+---
+
 ## `mapinfo.lua → sound`
 
 Per-channel reverb / filter params. Rarely customised.
@@ -256,6 +270,8 @@ Per-channel reverb / filter params. Rarely customised.
 ## `mapoptions.lua`
 
 Lobby-exposed map options.
+
+**Status uncertain.** The schema is well-defined and maps ship the file, but the lobby- and game-side consumers that would actually surface these options to players appear to be unimplemented in BAR. Treat as not-yet-wired-up unless re-verified; see TODO for a follow-up.
 
 ```lua
 return {
