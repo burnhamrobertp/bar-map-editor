@@ -1599,15 +1599,38 @@ fn handle_camera_input(
                     core.terrain_renderer.as_ref(),
                 ) {
                     let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
-                    if let Some(pick) = pick_terrain(
-                        &core.camera,
-                        aspect,
-                        uv,
-                        hm,
-                        x_extent,
-                        z_extent,
-                        height_scale,
-                    ) {
+                    // Walk the line from cursor toward screen centre and
+                    // take the first pick that hits the playable area.
+                    // When the cursor is over the sky / extension /
+                    // water the direct pick fails, but the user is
+                    // still gesturing toward the on-screen content
+                    // closest to the cursor -- so we use the boundary
+                    // hit between cursor and centre as the zoom-toward
+                    // point. 16 samples is more than enough resolution
+                    // for the closest playable fragment on a 2D
+                    // viewport; finer granularity costs more pick
+                    // marches per scroll frame without changing the
+                    // perceived focus.
+                    let centre = (0.5_f32, 0.5_f32);
+                    let mut hit = None;
+                    const STEPS: u32 = 16;
+                    for i in 0..=STEPS {
+                        let t = i as f32 / STEPS as f32;
+                        let probe = (uv.0 + (centre.0 - uv.0) * t, uv.1 + (centre.1 - uv.1) * t);
+                        if let Some(pick) = pick_terrain(
+                            &core.camera,
+                            aspect,
+                            probe,
+                            hm,
+                            x_extent,
+                            z_extent,
+                            height_scale,
+                        ) {
+                            hit = Some(pick);
+                            break;
+                        }
+                    }
+                    if let Some(pick) = hit {
                         let to_pick = pick.world - core.camera.target;
                         core.camera.target += to_pick * (-factor);
                     }
