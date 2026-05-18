@@ -281,22 +281,16 @@ fn draw_feature_cell(
         egui::pos2(rect.center().x - thumb_size * 0.5, rect.top() + 2.0),
         egui::vec2(thumb_size, thumb_size),
     );
-    let thumb_id = name.to_lowercase();
-    if let Some(tex_id) = app.feature_thumb_cache.get(&thumb_id).copied() {
-        ui.painter().image(
-            tex_id,
-            thumb_rect,
-            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-            egui::Color32::WHITE,
-        );
-    } else {
-        ui.painter().rect_filled(
-            thumb_rect,
-            3.0,
-            egui::Color32::from_rgba_unmultiplied(50, 55, 65, 200),
-        );
-        app.feature_thumb_requests.insert(thumb_id);
-    }
+    // Thumbnail rendering is wired up via `app.feature_thumb_cache` +
+    // `app.feature_thumb_requests` but disabled while perf / display
+    // issues are being investigated -- see the TODO entry. Until that
+    // settles, draw a placeholder square so the cell still has a
+    // visual slot for the upcoming thumb.
+    ui.painter().rect_filled(
+        thumb_rect,
+        3.0,
+        egui::Color32::from_rgba_unmultiplied(50, 55, 65, 200),
+    );
 
     let font = egui::FontId::proportional(11.0);
     ui.painter().text(
