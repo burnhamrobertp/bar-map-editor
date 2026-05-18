@@ -116,6 +116,10 @@ pub const BTN_SPAWNS_NORMAL: Color32 = Color32::from_rgb(75, 100, 125);
 pub const BTN_SPAWNS_HOVER: Color32 = Color32::from_rgb(95, 120, 150);
 pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
 
+pub const BTN_MAPEDGE_NORMAL: Color32 = Color32::from_rgb(105, 95, 65);
+pub const BTN_MAPEDGE_HOVER: Color32 = Color32::from_rgb(130, 115, 80);
+pub const BTN_MAPEDGE_PRESS: Color32 = Color32::from_rgb(85, 75, 50);
+
 pub const BTN_COMPILE_NORMAL: Color32 = Color32::from_rgb(38, 95, 115);
 pub const BTN_COMPILE_HOVER: Color32 = Color32::from_rgb(52, 118, 140);
 pub const BTN_COMPILE_PRESS: Color32 = Color32::from_rgb(28, 75, 90);

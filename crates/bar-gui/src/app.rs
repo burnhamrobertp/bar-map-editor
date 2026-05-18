@@ -10,7 +10,7 @@ use crate::undo::UndoHistory;
 // finding them after they moved to panels/icons.rs.
 pub(crate) use crate::panels::icons::{
     draw_io_icon, paint_bar_icon, paint_compile_icon, paint_export_icon, paint_inspector_icon,
-    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
+    paint_map_edge_icon, paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.
@@ -242,6 +242,9 @@ pub struct BarEditorApp {
     pub dialog: DialogState,
     pub validation: crate::editor::ValidationState,
     pub props: crate::editor::PropsPanelState,
+    /// Per-session state for the Map Edge action-bar panel (preview
+    /// texture cache so flipping the modal doesn't re-decode the file).
+    pub map_edge: crate::panels::map_edge_editor::MapEdgePanelState,
     pub paint: PaintSession,
     /// In-flight drag from the node palette (set when pointer starts
     /// dragging an item, cleared on pointer release).
@@ -335,6 +338,7 @@ impl Default for BarEditorApp {
             dialog: DialogState::default(),
             validation: crate::editor::ValidationState::default(),
             props: crate::editor::PropsPanelState::default(),
+            map_edge: crate::panels::map_edge_editor::MapEdgePanelState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
             palette_filter: String::new(),

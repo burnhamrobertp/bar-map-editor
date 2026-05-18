@@ -12,9 +12,9 @@ use std::time::Instant;
 
 use crate::app::{
     paint_bar_icon, paint_compile_icon, paint_export_icon, paint_inspector_icon,
-    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon, BarEditorApp, ConfirmAction,
-    ConfirmDialog, ExportStatus, GroupDeleteChoice, InspectorMode, Layout, MapInfoTab,
-    PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_map_edge_icon, paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
+    BarEditorApp, ConfirmAction, ConfirmDialog, ExportStatus, GroupDeleteChoice, InspectorMode,
+    Layout, MapInfoTab, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::panels::log::level_color;
 use crate::panels::tokens;
@@ -804,6 +804,10 @@ impl BarEditorApp {
             self.draw_mapinfo_editor_window(ctx);
         }
 
+        if self.dialog.show_map_edge_editor {
+            crate::panels::map_edge_editor::draw(self, ctx);
+        }
+
         crate::panels::validation::draw_details(self, ctx);
 
         // Action bar -- only shown inside a project.
@@ -1158,6 +1162,34 @@ impl BarEditorApp {
                     let mi_resp = mi_resp.on_hover_text(t!("editor.toolbar.map_settings"));
                     if mi_resp.clicked() {
                         self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
+                    }
+
+                    // Map Edge — dedicated panel for the mirrored map-edge
+                    // extension. Holds the `grassShadingTex` picker /
+                    // preview today; future map-edge knobs (curvature
+                    // bend, atmosphere fog tuning) land in the same
+                    // panel rather than crowding the main Map Settings
+                    // modal.
+                    ui.add_space(4.0);
+                    let (me_rect, me_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(me_rect) {
+                        let bg = if me_resp.is_pointer_button_down_on() {
+                            tokens::BTN_MAPEDGE_PRESS
+                        } else if me_resp.hovered() {
+                            tokens::BTN_MAPEDGE_HOVER
+                        } else {
+                            tokens::BTN_MAPEDGE_NORMAL
+                        };
+                        let painter = ui.painter_at(me_rect);
+                        painter.rect_filled(me_rect, 5.0, bg);
+                        paint_map_edge_icon(&painter, me_rect, egui::Color32::WHITE);
+                    }
+                    let me_resp = me_resp.on_hover_text(
+                        "Map Edge -- configure the mirrored area surrounding the playable map (grassShadingTex preview / picker)",
+                    );
+                    if me_resp.clicked() {
+                        self.dialog.show_map_edge_editor = !self.dialog.show_map_edge_editor;
                     }
 
                     // Startboxes — opens the 2D inspector at Spawns mode so

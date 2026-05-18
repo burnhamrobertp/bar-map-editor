@@ -74,6 +74,8 @@ impl BarEditorApp {
         // to open with no dialogs up.
         self.dialog.show_inspector = false;
         self.dialog.show_mapinfo_editor = false;
+        self.dialog.show_map_edge_editor = false;
+        self.map_edge = crate::panels::map_edge_editor::MapEdgePanelState::default();
         self.dialog.confirm_dialog = None;
         self.dialog.pending_action = None;
         self.selection.pending_group_delete = None;
@@ -1086,6 +1088,7 @@ mod session_reset_tests {
         app.validation.filter = ValidationFilter::Error;
         app.dialog.show_inspector = true;
         app.dialog.show_mapinfo_editor = true;
+        app.dialog.show_map_edge_editor = true;
         app.validation.mapinfo_tab = MapInfoTab::Atmosphere;
         app.dialog.toast = Some(("hi".into(), Instant::now()));
         app.dialog.status_message = Some("from previous project".into());
@@ -1113,6 +1116,7 @@ mod session_reset_tests {
         assert!(matches!(app.validation.filter, ValidationFilter::All));
         assert!(!app.dialog.show_inspector);
         assert!(!app.dialog.show_mapinfo_editor);
+        assert!(!app.dialog.show_map_edge_editor);
         assert!(matches!(app.validation.mapinfo_tab, MapInfoTab::Identity));
         assert!(app.dialog.toast.is_none());
         assert!(app.dialog.status_message.is_none());

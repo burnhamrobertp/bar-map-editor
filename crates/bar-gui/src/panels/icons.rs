@@ -136,6 +136,69 @@ pub(crate) fn paint_mapinfo_form_icon(
     painter.circle_stroke(egui::pos2(cx, cy), hub_r, egui::Stroke::new(1.6, color));
 }
 
+/// Dashed outer rectangle wrapping a solid inner square. Reads as
+/// "playable area surrounded by the map-edge extension"; used for the
+/// Map Edge action-bar button.
+pub(crate) fn paint_map_edge_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let outer_half = 8.5_f32;
+    let inner_half = 4.0_f32;
+    let stroke = egui::Stroke::new(1.4, color);
+
+    // Outer dashed frame: four dashes per side, drawn as short line
+    // segments rather than a single stroke so it reads as "extends
+    // beyond" rather than a solid border.
+    let dash_count = 4usize;
+    let dash_len = (outer_half * 2.0) / (dash_count as f32 * 2.0 - 1.0);
+    for i in 0..dash_count {
+        let t0 = i as f32 * 2.0 * dash_len;
+        let t1 = t0 + dash_len;
+        // Top edge.
+        painter.line_segment(
+            [
+                egui::pos2(cx - outer_half + t0, cy - outer_half),
+                egui::pos2(cx - outer_half + t1, cy - outer_half),
+            ],
+            stroke,
+        );
+        // Bottom edge.
+        painter.line_segment(
+            [
+                egui::pos2(cx - outer_half + t0, cy + outer_half),
+                egui::pos2(cx - outer_half + t1, cy + outer_half),
+            ],
+            stroke,
+        );
+        // Left edge.
+        painter.line_segment(
+            [
+                egui::pos2(cx - outer_half, cy - outer_half + t0),
+                egui::pos2(cx - outer_half, cy - outer_half + t1),
+            ],
+            stroke,
+        );
+        // Right edge.
+        painter.line_segment(
+            [
+                egui::pos2(cx + outer_half, cy - outer_half + t0),
+                egui::pos2(cx + outer_half, cy - outer_half + t1),
+            ],
+            stroke,
+        );
+    }
+
+    // Inner solid square: the playable area.
+    painter.rect_filled(
+        egui::Rect::from_min_max(
+            egui::pos2(cx - inner_half, cy - inner_half),
+            egui::pos2(cx + inner_half, cy + inner_half),
+        ),
+        1.0,
+        color,
+    );
+}
+
 /// Outer rectangle + two corner filled squares, representing a 2-team map.
 pub(crate) fn paint_startbox_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let cx = rect.center().x;

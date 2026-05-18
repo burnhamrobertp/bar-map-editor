@@ -20,6 +20,7 @@ pub mod feature_popover;
 pub mod icons;
 pub mod inspector;
 pub mod log;
+pub mod map_edge_editor;
 pub mod mapinfo_editor;
 pub mod palette;
 pub mod properties;

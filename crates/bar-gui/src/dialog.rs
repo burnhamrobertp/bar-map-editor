@@ -95,6 +95,11 @@ pub struct DialogState {
     pub show_validation_panel: bool,
     pub show_inspector: bool,
     pub show_mapinfo_editor: bool,
+    /// Open state for the dedicated Map Edge panel (action-bar button
+    /// with the dashed-frame icon). Houses the `grassShadingTex`
+    /// picker / preview today; future map-edge knobs (curvature bend,
+    /// atmosphere fog tuning) will land in the same panel.
+    pub show_map_edge_editor: bool,
     /// True while the map-info editor modal is in an active session.
     /// Used by `panels::mapinfo_editor::draw` to detect the
     /// closed-to-open transition so it can capture a pre-edit
