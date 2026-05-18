@@ -16,9 +16,10 @@ use bar_graph::NodeExecutor;
 use eframe::egui;
 
 use crate::viewport::{
-    build_feature_instances, draw_preview_placeholder, draw_preview_viewport, draw_sculpt_viewport,
-    eval_preview, live_smf_lighting, load_compiled_bc1, update_viewport_texture, EvalState,
-    FeatureMapDims, OwnedFrame, PreviewResult, ResolutionStatus, ViewportCore,
+    apply_compiled_bc1, build_feature_instances, draw_preview_placeholder, draw_preview_viewport,
+    draw_sculpt_viewport, eval_preview, live_smf_lighting, read_compiled_bc1_off_thread,
+    update_viewport_texture, EvalState, FeatureMapDims, OwnedFrame, PreviewResult,
+    ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -44,6 +45,12 @@ pub struct PreviewSlot {
     pub bc1_loaded: bool,
     /// Native texture dims of the loaded BC1 texture (set on successful load).
     pub bc1_tex_dims: Option<(u32, u32)>,
+    /// Set while a background BC1 read is in flight. Gates spawning a
+    /// second worker for the same load.
+    pub bc1_loading: bool,
+    /// Channel for the in-flight BC1 worker's result. `None` when no
+    /// load is in flight.
+    pub bc1_load_rx: Option<std::sync::mpsc::Receiver<Option<crate::viewport::Bc1LoadResult>>>,
     /// Feature instances need rebuild.
     pub features_dirty: bool,
     /// Heightmap revision at last feature rebuild.
@@ -56,6 +63,8 @@ impl PreviewSlot {
             core: ViewportCore::new(gpu_context, session_id),
             bc1_loaded: false,
             bc1_tex_dims: None,
+            bc1_loading: false,
+            bc1_load_rx: None,
             features_dirty: true,
             last_hm_rev: u64::MAX,
         }
@@ -472,44 +481,57 @@ impl LayoutManager {
             None
         };
 
-        // Load BC1 texture once per compile (synchronous).
-        if !slot.bc1_loaded {
-            let project_dir = app.project.path.clone();
-            let recipe_name = app.recipe_for_export().name;
-            let water_color_init = app.smf_lighting().water_base;
-            if let Some(ref gpu) = gpu_context {
-                if let Some(loaded) = load_compiled_bc1(
-                    project_dir.as_deref(),
-                    &recipe_name,
-                    &mut slot.core,
-                    gpu,
-                    water_color_init,
-                ) {
+        // BC1 load: spawn a worker on first entry (or after recompile via
+        // `invalidate_bc1`) that does the SMT/index/heightmap read on a
+        // background thread. The main thread polls the receiver each
+        // frame and performs the GPU uploads + heightmap install when
+        // the worker's result arrives. Keeps the layout-switch frame
+        // responsive even on large maps where the BC1 assembly + tile
+        // pool read can take a noticeable amount of CPU time.
+        if !slot.bc1_loaded && !slot.bc1_loading {
+            if let Some(project_dir) = app.project.path.clone() {
+                let recipe_name = app.recipe_for_export().name;
+                let (tx, rx) = std::sync::mpsc::channel();
+                let ctx_clone = ctx.clone();
+                slot.bc1_loading = true;
+                slot.bc1_load_rx = Some(rx);
+                std::thread::spawn(move || {
+                    let result = read_compiled_bc1_off_thread(&project_dir, &recipe_name);
+                    let _ = tx.send(result);
+                    ctx_clone.request_repaint();
+                });
+            } else {
+                // No project path -- nothing to load. Mark loaded so we
+                // don't keep retrying every frame.
+                slot.bc1_loaded = true;
+            }
+        }
+        if let Some(rx) = slot.bc1_load_rx.as_ref() {
+            if let Ok(maybe_result) = rx.try_recv() {
+                slot.bc1_load_rx = None;
+                slot.bc1_loading = false;
+                slot.bc1_loaded = true;
+                if let (Some(result), Some(ref gpu)) = (maybe_result, gpu_context) {
+                    let water_color = app.smf_lighting().water_base;
+                    let loaded = apply_compiled_bc1(result, &mut slot.core, gpu, water_color);
                     slot.bc1_tex_dims = Some(loaded.tex_dims);
                     // Install the compiled heightmap into `app.paint.heightmap`
                     // if nothing has populated it yet (typical when the user
-                    // jumps straight to Preview without visiting Sculpt3D /
-                    // an eval-spawning layout first). Without this, terrain
-                    // picking -- zoom-to-cursor, orbit snap, feature
-                    // placement / rendering -- silently no-ops in Preview
-                    // because `pick_terrain` needs `paint.heightmap` to
-                    // project screen rays onto the surface. If something
-                    // else already populated a higher-res heightmap, prefer
-                    // it (Preview's compiled mesh is at most 2048 grid_n,
-                    // Sculpt3D eval can produce up to 8192).
+                    // jumps straight to Preview without visiting Sculpt3D
+                    // first). Without this, terrain picking silently
+                    // no-ops in Preview because it reads `paint.heightmap`.
+                    // If a higher-res Sculpt3D eval already populated one,
+                    // prefer it (Preview compiles at most 2048 grid_n;
+                    // Sculpt3D eval goes to 8192).
                     if app.paint.heightmap.is_none() {
                         if let Some(hm) = loaded.heightmap {
                             app.set_inspector_heightmap(hm);
-                            // Feature instances depend on the heightmap; ask
-                            // the next pass to rebuild them now that one
-                            // exists.
                             slot.features_dirty = true;
                         }
                     }
                     app.set_status("Preview: native-resolution BC1 texture loaded");
                 }
             }
-            slot.bc1_loaded = true;
         }
 
         // Animation + initial render. Drive the render even when there is no
@@ -639,9 +661,13 @@ impl LayoutManager {
     }
 
     /// Invalidate the Preview slot's BC1 texture so it reloads on next entry.
+    /// Also drops any in-flight load so a fresh worker is spawned for the
+    /// new compile output.
     pub fn invalidate_bc1(&mut self) {
         if let Some(ref mut slot) = self.preview {
             slot.bc1_loaded = false;
+            slot.bc1_loading = false;
+            slot.bc1_load_rx = None;
         }
     }
 }

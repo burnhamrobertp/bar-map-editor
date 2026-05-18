@@ -2176,14 +2176,39 @@ pub struct LoadedBc1 {
     pub heightmap: Option<bar_data::Heightmap>,
 }
 
-pub fn load_compiled_bc1(
-    project_dir: Option<&std::path::Path>,
+/// Output of the off-thread compiled-BC1 read. All file IO, BC1 assembly,
+/// and heightmap decoding happen on the worker; the main thread takes
+/// this struct and performs only the GPU uploads + state install in
+/// `apply_compiled_bc1`.
+pub struct Bc1LoadResult {
+    pub tex_w: u32,
+    pub tex_h: u32,
+    pub bc1_bytes: Vec<u8>,
+    /// Heightmap and the derived render-space parameters. `None` when
+    /// the compiled package has no heightmap.bin -- the BC1 texture
+    /// still uploads, but no terrain mesh is built.
+    pub height: Option<Bc1HeightLoad>,
+}
+
+pub struct Bc1HeightLoad {
+    pub heightmap: bar_data::Heightmap,
+    pub height_scale: f32,
+    pub x_extent: f32,
+    pub z_extent: f32,
+    pub water_y: f32,
+    pub height_range: f32,
+    pub elmo_per_render_xz: [f32; 2],
+    pub grid_n: u32,
+}
+
+/// Read the compiled SMT + tile index + heightmap from the package on a
+/// worker thread. Pure CPU; safe to call off the GUI thread. Returns
+/// `None` if the package is missing required files or the fingerprint
+/// is degenerate.
+pub fn read_compiled_bc1_off_thread(
+    project_dir: &std::path::Path,
     recipe_name: &str,
-    core: &mut ViewportCore,
-    gpu: &GpuContext,
-    water_color: [f32; 3],
-) -> Option<LoadedBc1> {
-    let project_dir = project_dir?;
+) -> Option<Bc1LoadResult> {
     let pkg = bar_engine::PackageDir::open(project_dir).ok()?;
     let fp = pkg.read_fingerprint()?;
 
@@ -2205,7 +2230,6 @@ pub fn load_compiled_bc1(
 
     let smt_path = pkg.compiled_smt_path(recipe_name);
     let idx_path = pkg.compiled_tile_index_path();
-
     let tile_pool = std::fs::File::open(&smt_path)
         .and_then(|mut f| bar_data::read_smt_raw(&mut f).map_err(std::io::Error::other))
         .map_err(|e| tracing::warn!(err = %e, "Preview BC1: failed to read compiled SMT"))
@@ -2216,87 +2240,113 @@ pub fn load_compiled_bc1(
         .chunks_exact(4)
         .map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]]))
         .collect();
+    let bc1_bytes = bar_data::assemble_bc1_linear(&tile_pool, &tile_indices, tiles_x, tiles_y);
 
-    let bc1 = bar_data::assemble_bc1_linear(&tile_pool, &tile_indices, tiles_x, tiles_y);
-    let renderer = core.terrain_renderer.as_mut()?;
-    renderer.upload_bc1_texture(&gpu.device, &gpu.queue, &bc1, tex_w, tex_h);
-    tracing::info!(
-        tiles_x,
-        tiles_y,
-        "Preview BC1: native-resolution texture loaded"
-    );
-
-    // Upload the compiled heightmap as the terrain mesh so the BC1 texture
-    // has geometry to project onto. Without this the renderer just outputs
-    // its clear color.
-    let mut loaded_hm: Option<bar_data::Heightmap> = None;
-    if let Some(hm) = bar_engine::read_compiled_heightmap(&pkg) {
-        let (w, h) = (fp.map_x, fp.map_y);
-        let pw = (w as f32).max(1.0);
-        let ph = (h as f32).max(1.0);
+    // Heightmap is optional -- the BC1 texture is still useful without it
+    // (the renderer just outputs its clear color until eval populates a
+    // mesh from the graph).
+    let height = bar_engine::read_compiled_heightmap(&pkg).map(|hm| {
+        let pw = (fp.map_x as f32).max(1.0);
+        let ph = (fp.map_y as f32).max(1.0);
         let pm = pw.max(ph);
         let x_extent = (0.5 * pw / pm).min(0.5);
         let z_extent = (0.5 * ph / pm).min(0.5);
-        // Use the world-space height range from the recipe (recorded in the
-        // fingerprint at compile time). The heightmap.bin values are
-        // normalized [0,1], so we must not derive the scale from them.
-        let min_h = fp.min_height;
-        let max_h = fp.max_height;
-        let height_range = (max_h - min_h).abs().max(1.0);
+        let height_range = (fp.max_height - fp.min_height).abs().max(1.0);
         let height_scale = (height_range / (pm * 8.0)).max(0.005);
-        let water_y = if min_h < 0.0 {
-            (-min_h / height_range) * height_scale
+        let water_y = if fp.min_height < 0.0 {
+            (-fp.min_height / height_range) * height_scale
         } else {
             -1.0
         };
-        // Elmo XZ conversion: render-XZ is [-extent, extent], world is
-        // [-pw*4, pw*4] elmos (heightmap pixels are 8 elmos apart).
         let elmo_per_render_xz = [pw * 4.0 / x_extent.max(1e-4), ph * 4.0 / z_extent.max(1e-4)];
         let grid_n = hm.width().max(hm.height()).min(2048);
-        // `water_color` here is the map-authored `water.basecolor` passed in
-        // by the caller; the Preview pipeline reads it from `app.smf_lighting()`
-        // at the BC1-load site so editing the Water tab affects this layout
-        // too (the bind-group reupload still relies on the layout being
-        // re-entered or a recompile triggering reload).
-        renderer.update_heightmap(
-            &gpu.device,
-            &gpu.queue,
-            &hm,
-            TerrainUpdateParams {
-                height_scale,
-                x_extent,
-                z_extent,
-                water_y,
-                water_color,
-                grid_n,
-                height_range_elmos: height_range,
-                elmo_per_render_xz,
-            },
-        );
-        core.current_frame = Some(OwnedFrame {
+        Bc1HeightLoad {
+            heightmap: hm,
             height_scale,
-            height_range_elmos: height_range,
-            elmo_per_render_xz,
             x_extent,
             z_extent,
             water_y,
-            water_color,
-            quality_high: true,
-            tex_w,
-            tex_h,
-        });
-        tracing::info!(
-            w = hm.width(),
-            h = hm.height(),
-            "Preview BC1: terrain mesh loaded from compiled heightmap"
+            height_range,
+            elmo_per_render_xz,
+            grid_n,
+        }
+    });
+
+    Some(Bc1LoadResult {
+        tex_w,
+        tex_h,
+        bc1_bytes,
+        height,
+    })
+}
+
+/// Install a worker-produced BC1 load result into the renderer. Performs
+/// only GPU uploads + `core.current_frame` install; the caller is
+/// responsible for updating slot flags (`bc1_loaded`, `bc1_tex_dims`,
+/// etc.) and propagating the heightmap to `app.paint.heightmap`.
+pub fn apply_compiled_bc1(
+    result: Bc1LoadResult,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+    water_color: [f32; 3],
+) -> LoadedBc1 {
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        renderer.upload_bc1_texture(
+            &gpu.device,
+            &gpu.queue,
+            &result.bc1_bytes,
+            result.tex_w,
+            result.tex_h,
         );
-        loaded_hm = Some(hm);
+        tracing::info!(
+            tex_w = result.tex_w,
+            tex_h = result.tex_h,
+            "Preview BC1: native-resolution texture loaded"
+        );
+    }
+    let mut loaded_hm: Option<bar_data::Heightmap> = None;
+    if let Some(h) = result.height {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.update_heightmap(
+                &gpu.device,
+                &gpu.queue,
+                &h.heightmap,
+                TerrainUpdateParams {
+                    height_scale: h.height_scale,
+                    x_extent: h.x_extent,
+                    z_extent: h.z_extent,
+                    water_y: h.water_y,
+                    water_color,
+                    grid_n: h.grid_n,
+                    height_range_elmos: h.height_range,
+                    elmo_per_render_xz: h.elmo_per_render_xz,
+                },
+            );
+            core.current_frame = Some(OwnedFrame {
+                height_scale: h.height_scale,
+                height_range_elmos: h.height_range,
+                elmo_per_render_xz: h.elmo_per_render_xz,
+                x_extent: h.x_extent,
+                z_extent: h.z_extent,
+                water_y: h.water_y,
+                water_color,
+                quality_high: true,
+                tex_w: result.tex_w,
+                tex_h: result.tex_h,
+            });
+            tracing::info!(
+                w = h.heightmap.width(),
+                h = h.heightmap.height(),
+                "Preview BC1: terrain mesh loaded from compiled heightmap"
+            );
+        }
+        loaded_hm = Some(h.heightmap);
     } else {
         tracing::warn!("Preview BC1: no compiled heightmap.bin -- terrain mesh not loaded");
     }
 
-    Some(LoadedBc1 {
-        tex_dims: (tex_w, tex_h),
+    LoadedBc1 {
+        tex_dims: (result.tex_w, result.tex_h),
         heightmap: loaded_hm,
-    })
+    }
 }
