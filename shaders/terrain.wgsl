@@ -617,6 +617,22 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     var color: vec3<f32>;
     if (camera.has_texture != 0u && in.uv.y <= 1.5) {
         color = textureSample(albedo_tex, albedo_sam, in.uv).rgb;
+    } else if (camera.has_texture != 0u && in.uv.y > 1.5 && in.uv.y < 3.5) {
+        // Skirt / cap face (uv.y == 2.0). Engine path:
+        // `SMFBorderFragProg.glsl:17-18` samples the playable diffuse at
+        // the world-XZ UV clamped to [0, 1] with a small `UV_BORDER_LEEWAY`
+        // (1e-2), then darkens by `diffuseMult = 110/255` (~0.43). That
+        // keeps the visible cliff face between the playable mesh and
+        // the extension mesh visually consistent with the surrounding
+        // terrain -- without this branch the fragment falls to the
+        // procedural `height_color` ramp and renders bright tan
+        // regardless of what the actual playable albedo looks like.
+        let edge_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            in.world_position.z / (2.0 * camera.z_extent) + 0.5,
+        );
+        let clamped = clamp(edge_uv, vec2<f32>(1e-2), vec2<f32>(1.0 - 1e-2));
+        color = textureSample(albedo_tex, albedo_sam, clamped).rgb * (110.0 / 255.0);
     } else {
         let normalized_height = in.world_position.y / max(camera.height_scale, 0.0001);
         color = height_color(normalized_height);
