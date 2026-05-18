@@ -2400,6 +2400,10 @@ pub fn apply_compiled_bc1(
                     grid_n: h.grid_n,
                     height_range_elmos: h.height_range,
                     elmo_per_render_xz: h.elmo_per_render_xz,
+                    // Preview view -- surround the map with the
+                    // mirrored edge extension so the playable area
+                    // doesn't end in a void.
+                    include_edge_extension: true,
                 },
             );
             core.current_frame = Some(OwnedFrame {

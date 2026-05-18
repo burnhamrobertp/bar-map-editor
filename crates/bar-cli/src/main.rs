@@ -636,6 +636,7 @@ fn cmd_preview(
             grid_n: mesh_lod,
             height_range_elmos,
             elmo_per_render_xz,
+            include_edge_extension: false,
         },
     );
     if let Some(ref tex) = texture {

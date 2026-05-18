@@ -271,6 +271,29 @@ struct VertexOutput {
 fn vs_main(in: VertexInput) -> VertexOutput {
     var out: VertexOutput;
 
+    // Mirrored map-edge extension: vertex `position.xz` is in world
+    // space in the mirror quadrant, but `position.y == 0` -- the VS
+    // samples the heightmap at the encoded playable UV to give the
+    // mirrored terrain the same shape as the playable area. UV is
+    // packed as (playable_u, 4.0 + playable_v).
+    if in.uv.y > 3.5 {
+        let playable_uv = vec2<f32>(in.uv.x, in.uv.y - 4.0);
+        let dim_f = vec2<f32>(textureDimensions(heightmap_tex));
+        let tc = clamp(
+            vec2<i32>(playable_uv * dim_f),
+            vec2<i32>(0),
+            vec2<i32>(dim_f - vec2<f32>(1.0)),
+        );
+        let h = textureLoad(heightmap_tex, tc, 0).r;
+        let world_y = h * camera.height_scale;
+        let world_pos = vec3<f32>(in.position.x, world_y, in.position.z);
+        out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
+        out.world_position = world_pos;
+        out.normal = vec3<f32>(0.0, 1.0, 0.0);
+        out.uv = in.uv;
+        return out;
+    }
+
     // Skirt / bottom cap: world-space position, pass through directly.
     if in.uv.y > 1.5 {
         out.clip_position = camera.view_proj * vec4<f32>(in.position, 1.0);
@@ -373,49 +396,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return shade_water(in.world_position, eye_dir, scr_uv, in.clip_position.z);
     }
 
-    // Map-edge skirt branch -- engine port of `SMFBorderFragProg.glsl`.
-    // Vertical walls hang from each map edge down to the bottom cap;
-    // they sample the albedo at the edge-clamped UV (matching the
-    // engine's per-tile clamped sample) and apply the same darkening
-    // `diffuseMult = 110/255`. Recoil also blends the skirt with a
-    // vertex-color alpha that fades to 0 at the bottom -- without
-    // alpha blending in the terrain pipeline we approximate that by
-    // discarding fragments below the heightmap-derived "top" of the
-    // skirt scaled to a fade threshold, so the visible band reads as
-    // the engine's translucent veil at the edge.
-    if (in.uv.y > 1.5) {
-        let map_uv = vec2<f32>(
-            (in.world_position.x / (2.0 * camera.x_extent)) + 0.5,
-            (in.world_position.z / (2.0 * camera.z_extent)) + 0.5,
-        );
-        let clamped_uv = clamp(map_uv, vec2<f32>(0.01), vec2<f32>(0.99));
+    // Mirrored map-edge extension branch -- port of BAR's
+    // `luaui/Widgets/map_edge_extension2.lua`. Geometry sits in 8
+    // quadrants surrounding the playable area; each vertex carries a
+    // playable-area UV in `[0, 1]` even though its world XZ is in the
+    // mirror quadrant. Sampling the albedo at that playable UV gives
+    // a mirrored copy of the map's surface. The widget further dims
+    // the luminance (preserving chroma via a YCbCr round-trip) and
+    // optionally fades with linear fog at the outer edge.
+    //
+    // Sentinel: uv.y in [4.0, 5.0] encodes the playable UV.x in
+    // `uv.x - 4.0` when in this range -- avoids collision with the
+    // existing skirt (uv.y = 2.0) and water (uv.x = -1.0) ranges.
+    // (Vertex playable UV is packed into uv.x = playable_u, uv.y =
+    // 4.0 + playable_v.)
+    if (in.uv.y > 3.5) {
+        let playable_uv = vec2<f32>(in.uv.x, in.uv.y - 4.0);
         var albedo: vec3<f32>;
         if (camera.has_texture != 0u) {
-            albedo = textureSample(albedo_tex, albedo_sam, clamped_uv).rgb;
+            albedo = textureSample(albedo_tex, albedo_sam, playable_uv).rgb;
         } else {
             albedo = vec3<f32>(0.35, 0.32, 0.28);
         }
-        // Top of the skirt at this XZ = sampled heightmap value at the
-        // clamped UV (the playable edge, in render-space units).
-        let dim_f = vec2<f32>(textureDimensions(heightmap_tex));
-        let tc = clamp(
-            vec2<i32>(clamped_uv * dim_f),
-            vec2<i32>(0),
-            vec2<i32>(dim_f - vec2<f32>(1.0)),
+        // Luminance darken in YCbCr. Engine widget uses brightness = 0.3.
+        let RGB2YCBCR = mat3x3<f32>(
+            0.2126, -0.114572, 0.5,
+            0.7152, -0.385428, -0.454153,
+            0.0722,  0.5,      -0.0458471,
         );
-        let top_h = textureLoad(heightmap_tex, tc, 0).r;
-        let top_y = top_h * camera.height_scale;
-        // Fade alpha from 1 at the top of the skirt to 0 at the
-        // bottom cap (engine vertex-color alpha gradient).
-        let v_alpha = clamp(in.world_position.y / max(top_y, 1e-4), 0.0, 1.0);
-        // Engine `diffuseMult.a = 0.4`; combined alpha with the
-        // gradient gives `v_alpha * 0.4`. Discard threshold approximates
-        // alpha blending in an opaque pipeline.
-        let final_alpha = v_alpha * 0.4;
-        if (final_alpha < 0.08) {
-            discard;
-        }
-        let darkened = albedo * (110.0 / 255.0);
+        let YCBCR2RGB = mat3x3<f32>(
+            1.0,  1.0,        1.0,
+            0.0, -0.187324,   1.8556,
+            1.5748, -0.468124, -5.55112e-17,
+        );
+        var ycbcr = RGB2YCBCR * albedo;
+        ycbcr.x = clamp(ycbcr.x * 0.3, 0.0, 1.0);
+        let darkened = YCBCR2RGB * ycbcr;
         return vec4<f32>(apply_custom_fog(darkened, in.world_position), 1.0);
     }
 

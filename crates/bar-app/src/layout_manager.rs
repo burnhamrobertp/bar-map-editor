@@ -767,6 +767,8 @@ fn apply_preview_result(
                         grid_n,
                         height_range_elmos: result.height_range_elmos,
                         elmo_per_render_xz: result.elmo_per_render_xz,
+                        // Sculpt3D edit view -- no surrounding mirror.
+                        include_edge_extension: false,
                     },
                 );
                 if let Some(ref tex) = result.texture {

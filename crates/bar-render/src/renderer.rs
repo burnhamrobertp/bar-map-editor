@@ -4,7 +4,8 @@ use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
 use crate::terrain::{
-    generate_flat_grid, generate_terrain_skirts_and_cap, generate_water_plane, TerrainVertex,
+    generate_flat_grid, generate_map_edge_extension, generate_terrain_skirts_and_cap,
+    generate_water_plane, TerrainVertex,
 };
 use bar_data::{ColorBuffer, Heightmap};
 
@@ -32,6 +33,12 @@ pub struct TerrainUpdateParams {
     /// in elmo units, matching `vertexWorldPos.xzxz * splatTexScales`
     /// upstream.
     pub elmo_per_render_xz: [f32; 2],
+    /// Append the mirrored map-edge extension mesh (port of BAR's
+    /// `map_edge_extension2.lua` widget). Preview layout sets `true`
+    /// so the playable area appears surrounded by a darkened mirror
+    /// of itself reaching toward the horizon; Sculpt3D sets `false`
+    /// to keep the edit view focused on the playable area.
+    pub include_edge_extension: bool,
 }
 
 #[repr(C)]
@@ -2159,6 +2166,7 @@ impl TerrainRenderer {
             grid_n,
             height_range_elmos,
             elmo_per_render_xz,
+            include_edge_extension,
         } = params;
         self.height_scale = height_scale;
         self.x_extent = x_extent;
@@ -2177,6 +2185,16 @@ impl TerrainRenderer {
             generate_terrain_skirts_and_cap(hm, height_scale, x_extent, z_extent, grid_n);
         idxs.extend(skirt_i.iter().map(|i| i + skirt_base));
         verts.extend(skirt_v);
+
+        // Optional mirrored map-edge extension -- Preview-only. Built
+        // from the same dimensions; vertex shader samples the
+        // heightmap at each vertex's encoded playable UV for Y.
+        if include_edge_extension {
+            let ext_base = verts.len() as u32;
+            let (ext_v, ext_i) = generate_map_edge_extension(x_extent, z_extent, 32);
+            idxs.extend(ext_i.iter().map(|i| i + ext_base));
+            verts.extend(ext_v);
+        }
 
         let water_base = verts.len() as u32;
         // Record where the water sub-range starts BEFORE pushing water indices
