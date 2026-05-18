@@ -276,6 +276,16 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     // samples the heightmap at the encoded playable UV to give the
     // mirrored terrain the same shape as the playable area. UV is
     // packed as (playable_u, 4.0 + playable_v).
+    //
+    // After sampling Y, the engine widget bends the mirror downward
+    // with the square of distance (in elmos) from the playable
+    // corner/edge-midpoint nearest the quadrant -- the "earth
+    // curvature" effect. We replicate that here in render space by
+    // converting `curvatureBend = 150 elmos` and the squared distance
+    // into our coordinates via `splat_params.xy` (= elmos/render-XZ)
+    // and `height_range_elmos`. Reference point lives in render
+    // space on the corner of the playable boundary -- inferred from
+    // the vertex's world XZ position.
     if in.uv.y > 3.5 {
         let playable_uv = vec2<f32>(in.uv.x, in.uv.y - 4.0);
         let dim_f = vec2<f32>(textureDimensions(heightmap_tex));
@@ -285,7 +295,36 @@ fn vs_main(in: VertexInput) -> VertexOutput {
             vec2<i32>(dim_f - vec2<f32>(1.0)),
         );
         let h = textureLoad(heightmap_tex, tc, 0).r;
-        let world_y = h * camera.height_scale;
+        var world_y = h * camera.height_scale;
+
+        // Curvature: detect mirror axes from the vertex's world XZ
+        // relative to the playable bounds, then bend Y by the engine
+        // formula in elmo space.
+        let west  = in.position.x < -camera.x_extent;
+        let east  = in.position.x >  camera.x_extent;
+        let north = in.position.z < -camera.z_extent;
+        let south = in.position.z >  camera.z_extent;
+        let apply_x = west || east;
+        let apply_z = north || south;
+        let ref_x = select(0.0, select(camera.x_extent, -camera.x_extent, west), apply_x);
+        let ref_z = select(0.0, select(camera.z_extent, -camera.z_extent, north), apply_z);
+        let elmo_per_render = camera.splat_params.xy;
+        let curvature_bend_elmos = 150.0;
+        var bend_elmos = 0.0;
+        if (apply_x) {
+            let dx_elmos = (in.position.x - ref_x) * elmo_per_render.x;
+            let q = dx_elmos / curvature_bend_elmos;
+            bend_elmos = bend_elmos + q * q;
+        }
+        if (apply_z) {
+            let dz_elmos = (in.position.z - ref_z) * elmo_per_render.y;
+            let q = dz_elmos / curvature_bend_elmos;
+            bend_elmos = bend_elmos + q * q;
+        }
+        let bend_render = bend_elmos * camera.height_scale
+            / max(camera.height_range_elmos, 1.0);
+        world_y = world_y - bend_render;
+
         let world_pos = vec3<f32>(in.position.x, world_y, in.position.z);
         out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
         out.world_position = world_pos;
@@ -432,7 +471,51 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         var ycbcr = RGB2YCBCR * albedo;
         ycbcr.x = clamp(ycbcr.x * 0.3, 0.0, 1.0);
         let darkened = YCBCR2RGB * ycbcr;
-        return vec4<f32>(apply_custom_fog(darkened, in.world_position), 1.0);
+
+        // Curvature alpha falloff. Engine formula:
+        //   alpha = 1 + 6*(sum_axes(-((world - ref) / mapSize)^2) + 0.18)
+        // Distances are normalised by playable map size (= 2 * extent
+        // in render space). Each active axis contributes a quadratic
+        // attenuation -- so corner quadrants drop off fastest, edge
+        // quadrants more gradually.
+        let west  = in.world_position.x < -camera.x_extent;
+        let east  = in.world_position.x >  camera.x_extent;
+        let north = in.world_position.z < -camera.z_extent;
+        let south = in.world_position.z >  camera.z_extent;
+        let apply_x = west || east;
+        let apply_z = north || south;
+        let ref_x = select(0.0, select(camera.x_extent, -camera.x_extent, west), apply_x);
+        let ref_z = select(0.0, select(camera.z_extent, -camera.z_extent, north), apply_z);
+        var curv_acc = 0.0;
+        if (apply_x) {
+            let dn = (in.world_position.x - ref_x) / (2.0 * camera.x_extent);
+            curv_acc = curv_acc - dn * dn;
+        }
+        if (apply_z) {
+            let dn = (in.world_position.z - ref_z) / (2.0 * camera.z_extent);
+            curv_acc = curv_acc - dn * dn;
+        }
+        let curv_alpha = clamp(1.0 + 6.0 * (curv_acc + 0.18), 0.0, 1.0);
+
+        // Edge fog -- linear falloff in camera view-space distance,
+        // blended toward the atmosphere's sky colour. Replaces the
+        // engine widget's "mix toward fogColor by fogFactor" line:
+        // view distance for fragments far from the camera approaches
+        // the sky colour, hiding the bend.
+        let view_pos = camera.view_proj * vec4<f32>(in.world_position, 1.0);
+        // Use clip-space depth as a cheap monotonic distance proxy;
+        // an actual view-space length needs the view matrix split
+        // out of view_proj (which we don't carry separately).
+        let depth01 = clamp(view_pos.z / max(view_pos.w, 1e-4), 0.0, 1.0);
+        let fog_factor = clamp(1.0 - depth01 * 1.2, 0.0, 1.0);
+        let horizon_color = camera.sky_color_density.rgb;
+        let after_fog = mix(horizon_color, darkened, fog_factor);
+
+        // Curvature alpha modulates visibility; in an opaque pipeline
+        // we mix toward the horizon colour so the mirror appears to
+        // dissolve into the sky rather than punching through to it.
+        let composited = mix(horizon_color, after_fog, curv_alpha);
+        return vec4<f32>(apply_custom_fog(composited, in.world_position), 1.0);
     }
 
     let sun_dir = normalize(camera.sun_dir_exp.xyz);
