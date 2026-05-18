@@ -128,6 +128,19 @@ fn water_shallow_scale(world_pos: vec3<f32>) -> f32 {
         world_pos.x / (2.0 * camera.x_extent) + 0.5,
         world_pos.z / (2.0 * camera.z_extent) + 0.5,
     );
+    // Off-playable water (extended plane covering the map-edge extension):
+    // there's no playable heightmap to derive depth from, but the visible
+    // surface should read as "open sea" -- engine BumpWater renders fully
+    // reflective + Fresnel-mixed water there. Clamping `hm_uv` into [0, 1]
+    // (as `textureLoad` would do with edge-clamp) borrows whatever
+    // elevation happens to live at the closest playable edge, which on
+    // mountainous maps reads as "shallow water on a cliff" -- collapses
+    // shallow_scale toward 0 and kills the reflection on the entire
+    // extended plane except a thin strip directly outside a deep-water
+    // edge. Treat off-playable fragments as deep water instead.
+    if any(hm_uv < vec2<f32>(0.0)) || any(hm_uv > vec2<f32>(1.0)) {
+        return 1.0;
+    }
     let dim = vec2<i32>(textureDimensions(heightmap_tex));
     let dim_f = vec2<f32>(dim);
     let tc = clamp(vec2<i32>(hm_uv * dim_f), vec2<i32>(0), dim - vec2<i32>(1));
