@@ -161,6 +161,7 @@ fn main() -> Result<()> {
                 catalog_archive_path: None,
                 map_work_dir: None,
                 model_rx: None,
+                last_selected_feature_type: None,
                 log_rx,
             }))
         }),

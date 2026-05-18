@@ -72,6 +72,12 @@ pub struct AppRunner {
     /// The texture, when present, is `(width, height, rgba8 bytes)` ready for
     /// direct GPU upload as `Rgba8UnormSrgb`.
     pub model_rx: Option<mpsc::Receiver<LoadedModel>>,
+    /// Tracks the last seen value of `app.selected_feature_type` so the
+    /// model loader can fire when the user queues a new placement type
+    /// for which no model is yet loaded. Without this, the ghost
+    /// preview falls back to a placeholder cube until the user clicks
+    /// to place at least one of that type.
+    pub last_selected_feature_type: Option<String>,
     /// Receives forwarded tracing events from the AppLogLayer for display in the BME log.
     pub log_rx: mpsc::Receiver<(Level, String)>,
 }
@@ -606,6 +612,15 @@ impl eframe::App for AppRunner {
         if self.app.map.features_placement_dirty {
             self.spawn_model_loader(ctx);
         }
+        // Same trigger for queuing a placement type from the palette:
+        // the ghost preview needs the actual model loaded before the
+        // user has committed any feature of that type.
+        if self.app.selected_feature_type != self.last_selected_feature_type {
+            self.last_selected_feature_type = self.app.selected_feature_type.clone();
+            if self.last_selected_feature_type.is_some() {
+                self.spawn_model_loader(ctx);
+            }
+        }
 
         // Delegate layout rendering to the layout manager.
         let layout = self.app.active_layout();
@@ -634,13 +649,19 @@ impl AppRunner {
             (Some(c), Some(a)) => (c, a),
             _ => return,
         };
-        let unique_types: std::collections::HashSet<String> = self
+        let mut unique_types: std::collections::HashSet<String> = self
             .app
             .map
             .features
             .iter()
             .map(|f| f.feature_type.to_lowercase())
             .collect();
+        // The palette-queued type (driving the ghost preview) may not
+        // be present in `app.map.features` yet -- include it so the
+        // ghost renders with the real model on the first hover.
+        if let Some(ref pending) = self.app.selected_feature_type {
+            unique_types.insert(pending.to_lowercase());
+        }
         let to_load: Vec<(String, String)> = unique_types
             .iter()
             .filter(|name| !self.layout_manager.has_feature_model(name))
