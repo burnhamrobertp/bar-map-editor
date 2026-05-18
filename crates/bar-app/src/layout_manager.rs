@@ -199,6 +199,9 @@ impl LayoutManager {
         // explicitly saved -- pending_map_data_dir is where the DDS
         // actually lives at that moment.
         if let Some(ref gpu) = gpu_context {
+            // Upload any textures that completed background decoding
+            // since the last frame.
+            crate::viewport::poll_pending_texture_loads(&mut slot.core, gpu);
             let asset_dir = app
                 .project
                 .path
@@ -371,6 +374,7 @@ impl LayoutManager {
         // `pending_map_data_dir` -- it's where assets live after a
         // fresh SD7 import but before the user has saved.
         if let Some(ref gpu) = gpu_context {
+            crate::viewport::poll_pending_texture_loads(&mut slot.core, gpu);
             let asset_dir = app
                 .project
                 .path

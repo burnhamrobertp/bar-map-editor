@@ -144,6 +144,56 @@ pub struct ViewportCore {
     pub sky_reflect_mod_loaded_for: Option<(std::path::PathBuf, String)>,
     /// Same idea as `skybox_loaded_for` for the per-pixel specular texture.
     pub specular_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Key currently being decoded on a background thread for each of the
+    /// async-loaded texture slots. Set by the sync function when it spawns
+    /// a worker; cleared on `poll_pending_texture_loads` once the result
+    /// arrives. Used to dedupe: the same key won't fire two concurrent
+    /// loads while one is still in flight.
+    pub skybox_loading_for: Option<(std::path::PathBuf, String)>,
+    pub detail_loading_for: Option<(std::path::PathBuf, String)>,
+    pub splat_loading_for: Option<(std::path::PathBuf, [String; 5])>,
+    pub sky_reflect_mod_loading_for: Option<(std::path::PathBuf, String)>,
+    pub specular_tex_loading_for: Option<(std::path::PathBuf, String)>,
+    /// Background-decoded texture payloads ready to be uploaded on the
+    /// main thread. Drained by `poll_pending_texture_loads` each frame.
+    pub texture_load_tx: mpsc::Sender<TextureLoadResult>,
+    pub texture_load_rx: mpsc::Receiver<TextureLoadResult>,
+}
+
+/// Single mip level: `(rgba_bytes, width, height)`.
+pub type Mip = (Vec<u8>, u32, u32);
+/// Mip pyramid for one 2D texture.
+pub type MipChain = Vec<Mip>;
+/// Splat textures arrive as four detail-normal channels + one
+/// distribution texture, each with its own pre-baked mip pyramid.
+pub type SplatChains = [MipChain; 5];
+
+/// Texture payloads produced by background workers spawned in the sync
+/// functions. Carries the key the load was scheduled for so the receiver
+/// can mark the slot loaded; `data` is `None` for failures (file not
+/// found / decode failed). Setting `loaded_for = key` on failure
+/// suppresses retry storms.
+pub enum TextureLoadResult {
+    Skybox {
+        key: (std::path::PathBuf, String),
+        data: Option<bar_data::Cubemap>,
+    },
+    Detail {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
+    Splat {
+        key: (std::path::PathBuf, [String; 5]),
+        data: Option<SplatChains>,
+    },
+    SkyReflectMod {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
+    SpecularTex {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
 }
 
 impl ViewportCore {
@@ -154,6 +204,7 @@ impl ViewportCore {
             r.resize(&ctx.device, 512, 512);
             r
         });
+        let (texture_load_tx, texture_load_rx) = mpsc::channel();
         Self {
             camera: Camera::default(),
             terrain_renderer,
@@ -170,6 +221,13 @@ impl ViewportCore {
             splat_loaded_for: None,
             sky_reflect_mod_loaded_for: None,
             specular_tex_loaded_for: None,
+            skybox_loading_for: None,
+            detail_loading_for: None,
+            splat_loading_for: None,
+            sky_reflect_mod_loading_for: None,
+            specular_tex_loading_for: None,
+            texture_load_tx,
+            texture_load_rx,
         }
     }
 }
@@ -212,54 +270,81 @@ fn load_2d_image(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
     Some((rgba.into_raw(), w, h))
 }
 
-/// Load and upload the map-authored detail texture (mapinfo
-/// `resources.detailTex`). Mirrors the skybox loader -- recursive
-/// case-insensitive search in `passthrough/`, then the project root.
-fn load_map_detail_texture(
-    project_dir: Option<&std::path::Path>,
-    detail_filename: &str,
-    core: &mut ViewportCore,
-    gpu: &GpuContext,
-) {
-    let Some(project_dir) = project_dir else {
-        return;
-    };
-    // `project_dir` is the saved .barproj (textures packed under
-    // `passthrough/`) OR the SD7 work_dir before save (textures still in
-    // their archive-relative layout, typically `maps/<file>`). Try the
-    // saved layout first; fall back to a recursive walk of the whole
-    // project_dir so the work_dir layout is also covered. Without the
-    // root fallback the renderer doesn't see splat/detail textures until
-    // the user saves -- save copies them into `passthrough/` -- which
-    // matches the symptom: "textures show up only after save+reimport".
-    let path = find_file_in_dir(&project_dir.join("passthrough"), detail_filename)
-        .or_else(|| find_file_in_dir(project_dir, detail_filename));
-    let Some(path) = path else {
-        tracing::warn!(
-            file = detail_filename,
-            "Detail texture not found in project; using default"
-        );
-        return;
-    };
-    let Some((rgba, w, h)) = load_2d_image(&path) else {
-        tracing::warn!(
-            file = detail_filename,
-            "Failed to decode detail texture; using default"
-        );
-        return;
-    };
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
-        renderer.update_detail_texture(&gpu.device, &gpu.queue, &rgba, w, h);
-        tracing::info!(file = detail_filename, w, h, "Detail texture loaded");
+/// Drain any texture-load results that arrived from background workers
+/// and upload them to the GPU. Call once per frame from the layout
+/// manager before the sync_* calls. On failure the slot is still
+/// marked `loaded_for = key` so we don't retry until the key changes.
+pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
+    while let Ok(result) = core.texture_load_rx.try_recv() {
+        match result {
+            TextureLoadResult::Skybox { key, data } => {
+                core.skybox_loading_for = None;
+                core.skybox_loaded_for = Some(key);
+                if let (Some(cm), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
+                    renderer.update_skybox(&gpu.device, &gpu.queue, &cm);
+                    tracing::info!(w = cm.width, h = cm.height, "Skybox cubemap loaded");
+                }
+            }
+            TextureLoadResult::Detail { key, data } => {
+                core.detail_loading_for = None;
+                core.detail_loaded_for = Some(key);
+                if let (Some((rgba, w, h)), Some(renderer)) = (data, core.terrain_renderer.as_mut())
+                {
+                    renderer.update_detail_texture(&gpu.device, &gpu.queue, &rgba, w, h);
+                    tracing::info!(w, h, "Detail texture loaded");
+                }
+            }
+            TextureLoadResult::Splat { key, data } => {
+                core.splat_loading_for = None;
+                core.splat_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some(arr), Some(renderer)) => {
+                        renderer.update_splat_textures(&gpu.device, &gpu.queue, arr);
+                        tracing::info!("Splat detail textures loaded (with mip chains)");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_splat_textures(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+            TextureLoadResult::SkyReflectMod { key, data } => {
+                core.sky_reflect_mod_loading_for = None;
+                core.sky_reflect_mod_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_sky_reflect_mod(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::info!(w, h, "skyReflectModTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+            TextureLoadResult::SpecularTex { key, data } => {
+                core.specular_tex_loading_for = None;
+                core.specular_tex_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_specular_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::info!(w, h, "specularTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_specular_tex(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+        }
     }
 }
 
-/// Load and upload the map-authored sky reflection mask texture
-/// (mapinfo `resources.skyReflectModTex`). Same resolution path as
-/// the other terrain assets -- recursive case-insensitive walk in
-/// `passthrough/`, decode via `load_2d_image`, upload. Quietly no-ops
-/// when missing; the shader's mix factor stays zero and the SMF sky
-/// reflection effect is off for the map.
+/// Schedule a background load of the map-authored sky reflection mask
+/// texture (mapinfo `resources.skyReflectModTex`). The decode runs off-
+/// thread; `poll_pending_texture_loads` performs the GPU upload when
+/// the worker finishes. Idempotent: returns immediately if the key is
+/// already loaded or has a load in flight.
 pub fn sync_sky_reflect_mod(
     project_dir: Option<&std::path::Path>,
     filename: &str,
@@ -267,7 +352,7 @@ pub fn sync_sky_reflect_mod(
     gpu: &GpuContext,
 ) {
     let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
-    if core.sky_reflect_mod_loaded_for == key {
+    if core.sky_reflect_mod_loaded_for == key || core.sky_reflect_mod_loading_for == key {
         return;
     }
     if filename.is_empty() {
@@ -280,45 +365,34 @@ pub fn sync_sky_reflect_mod(
     let Some(project_dir) = project_dir else {
         return;
     };
-    // Saved-layout (passthrough/) then full-project-recursive fallback
-    // -- see `load_map_detail_texture` for the rationale.
-    let path = find_file_in_dir(&project_dir.join("passthrough"), filename)
-        .or_else(|| find_file_in_dir(project_dir, filename));
-    let Some(path) = path else {
-        tracing::warn!(
-            file = filename,
-            "skyReflectModTex not found in project; sky reflection disabled"
-        );
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
-            renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
-        }
-        core.sky_reflect_mod_loaded_for = key;
-        return;
-    };
-    let Some((rgba, w, h)) = load_2d_image(&path) else {
-        tracing::warn!(
-            file = filename,
-            "Failed to decode skyReflectModTex; sky reflection disabled"
-        );
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
-            renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
-        }
-        core.sky_reflect_mod_loaded_for = key;
-        return;
-    };
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
-        renderer.update_sky_reflect_mod(&gpu.device, &gpu.queue, &rgba, w, h);
-        tracing::info!(file = filename, w, h, "skyReflectModTex loaded");
-    }
-    core.sky_reflect_mod_loaded_for = key;
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.sky_reflect_mod_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode skyReflectModTex");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "skyReflectModTex not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::SkyReflectMod {
+            key: key_pair,
+            data,
+        });
+    });
 }
 
-/// Load and upload the map-authored specular texture (mapinfo
-/// `resources.specularTex`). Engine path: `SMF_SPECULAR_LIGHTING`. When
-/// uploaded, the terrain fragment shader samples per-pixel specular
-/// colour + exponent instead of using the global `groundSpecularColor`
-/// uniform -- which is what stops maps like Ascendancy (with a non-zero
-/// global spec colour) from washing out the entire sun-facing terrain.
+/// Schedule a background load of the map-authored specular texture
+/// (mapinfo `resources.specularTex`, engine path
+/// `SMF_SPECULAR_LIGHTING`). Decode runs off-thread; upload happens in
+/// `poll_pending_texture_loads`.
 pub fn sync_specular_tex(
     project_dir: Option<&std::path::Path>,
     filename: &str,
@@ -326,7 +400,7 @@ pub fn sync_specular_tex(
     gpu: &GpuContext,
 ) {
     let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
-    if core.specular_tex_loaded_for == key {
+    if core.specular_tex_loaded_for == key || core.specular_tex_loading_for == key {
         return;
     }
     if filename.is_empty() {
@@ -339,35 +413,28 @@ pub fn sync_specular_tex(
     let Some(project_dir) = project_dir else {
         return;
     };
-    let path = find_file_in_dir(&project_dir.join("passthrough"), filename)
-        .or_else(|| find_file_in_dir(project_dir, filename));
-    let Some(path) = path else {
-        tracing::warn!(
-            file = filename,
-            "specularTex not found in project; per-pixel specular disabled"
-        );
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
-            renderer.clear_specular_tex(&gpu.device, &gpu.queue);
-        }
-        core.specular_tex_loaded_for = key;
-        return;
-    };
-    let Some((rgba, w, h)) = load_2d_image(&path) else {
-        tracing::warn!(
-            file = filename,
-            "Failed to decode specularTex; per-pixel specular disabled"
-        );
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
-            renderer.clear_specular_tex(&gpu.device, &gpu.queue);
-        }
-        core.specular_tex_loaded_for = key;
-        return;
-    };
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
-        renderer.update_specular_tex(&gpu.device, &gpu.queue, &rgba, w, h);
-        tracing::info!(file = filename, w, h, "specularTex loaded");
-    }
-    core.specular_tex_loaded_for = key;
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.specular_tex_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode specularTex");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "specularTex not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::SpecularTex {
+            key: key_pair,
+            data,
+        });
+    });
 }
 
 /// Ensure the renderer's splat-detail textures match the current
@@ -392,25 +459,13 @@ pub fn sync_splat_textures(
         settings.splat_distr_tex.clone(),
     ];
     let key = project_dir.map(|p| (p.to_path_buf(), names.clone()));
-    if core.splat_loaded_for == key {
+    if core.splat_loaded_for == key || core.splat_loading_for == key {
         return;
     }
     let Some(project_dir) = project_dir else {
         return;
     };
 
-    // The distribution texture is required -- without it there's no
-    // per-pixel cofactor and the splat path has no meaning. If it's
-    // empty / missing / fails to decode we disable the whole path.
-    //
-    // The 4 detail-normals are each independently optional. Maps may
-    // reference fewer than 4 channels, and shipped archives sometimes
-    // reference a file they don't actually contain (Ascendency's
-    // mapinfo lists `Ice_1k_dnts.tga` as channel 4 but the .sd7 doesn't
-    // ship it). The engine tolerates per-channel misses by treating
-    // that channel as zero-contribution; we match by substituting a
-    // 1x1 mid-grey mip chain which yields 0 after the shader's
-    // `*2-1` decode.
     let distr_name = &names[4];
     if distr_name.is_empty() {
         if let Some(renderer) = core.terrain_renderer.as_mut() {
@@ -420,66 +475,67 @@ pub fn sync_splat_textures(
         return;
     }
 
-    let resolve_and_decode = |name: &str| -> Option<Vec<(Vec<u8>, u32, u32)>> {
-        if name.is_empty() {
-            return None;
-        }
-        // Saved-layout (passthrough/) then full-project-recursive
-        // fallback. See `load_map_detail_texture` for why the unsaved
-        // SD7 work_dir path also needs to be searchable here.
-        let path = find_file_in_dir(&project_dir.join("passthrough"), name)
-            .or_else(|| find_file_in_dir(project_dir, name))?;
-        // For DDS sources this returns the file's pre-baked mip pyramid;
-        // for non-DDS sources we get a single base mip.
-        load_2d_image_with_mips(&path)
-    };
-
-    let distr = match resolve_and_decode(distr_name) {
-        Some(m) => m,
-        None => {
-            tracing::warn!(
-                file = %distr_name,
-                "Splat distribution texture missing or failed to decode; advanced splat disabled"
-            );
-            if let Some(renderer) = core.terrain_renderer.as_mut() {
-                renderer.clear_splat_textures(&gpu.device, &gpu.queue);
+    let key_pair = (project_dir.to_path_buf(), names);
+    core.splat_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, names) = key_pair.clone();
+        let resolve_and_decode = |name: &str| -> Option<Vec<(Vec<u8>, u32, u32)>> {
+            if name.is_empty() {
+                return None;
             }
-            core.splat_loaded_for = key;
-            return;
-        }
-    };
+            let path = find_file_in_dir(&project_dir.join("passthrough"), name)
+                .or_else(|| find_file_in_dir(&project_dir, name))?;
+            load_2d_image_with_mips(&path)
+        };
 
-    type MipChain = Vec<(Vec<u8>, u32, u32)>;
-    let default_mip = || -> MipChain { vec![(vec![127u8, 127, 127, 127], 1, 1)] };
-
-    let mut dn: [Option<MipChain>; 4] = [None, None, None, None];
-    for (i, name) in names[..4].iter().enumerate() {
-        match resolve_and_decode(name) {
-            Some(m) => dn[i] = Some(m),
-            None if name.is_empty() => {}
+        // Distribution texture is required; without it the whole splat
+        // path is disabled. The 4 detail-normals are independently
+        // optional -- missing ones get a 1x1 mid-grey mip so the
+        // shader's `*2-1` decode produces zero contribution.
+        let distr = match resolve_and_decode(&names[4]) {
+            Some(m) => m,
             None => {
                 tracing::warn!(
-                    file = %name,
-                    slot = i + 1,
-                    "Splat-detail texture missing; channel will be inactive"
+                    file = %names[4],
+                    "Splat distribution texture missing or failed to decode; advanced splat disabled"
                 );
+                let _ = tx.send(TextureLoadResult::Splat {
+                    key: key_pair,
+                    data: None,
+                });
+                return;
+            }
+        };
+
+        type MipChain = Vec<(Vec<u8>, u32, u32)>;
+        let default_mip = || -> MipChain { vec![(vec![127u8, 127, 127, 127], 1, 1)] };
+        let mut dn: [Option<MipChain>; 4] = [None, None, None, None];
+        for (i, name) in names[..4].iter().enumerate() {
+            match resolve_and_decode(name) {
+                Some(m) => dn[i] = Some(m),
+                None if name.is_empty() => {}
+                None => {
+                    tracing::warn!(
+                        file = %name,
+                        slot = i + 1,
+                        "Splat-detail texture missing; channel will be inactive"
+                    );
+                }
             }
         }
-    }
-
-    let arr: [Vec<(Vec<u8>, u32, u32)>; 5] = [
-        dn[0].take().unwrap_or_else(default_mip),
-        dn[1].take().unwrap_or_else(default_mip),
-        dn[2].take().unwrap_or_else(default_mip),
-        dn[3].take().unwrap_or_else(default_mip),
-        distr,
-    ];
-
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
-        renderer.update_splat_textures(&gpu.device, &gpu.queue, arr);
-        tracing::info!("Splat detail textures loaded (with mip chains)");
-    }
-    core.splat_loaded_for = key;
+        let arr: [MipChain; 5] = [
+            dn[0].take().unwrap_or_else(default_mip),
+            dn[1].take().unwrap_or_else(default_mip),
+            dn[2].take().unwrap_or_else(default_mip),
+            dn[3].take().unwrap_or_else(default_mip),
+            distr,
+        ];
+        let _ = tx.send(TextureLoadResult::Splat {
+            key: key_pair,
+            data: Some(arr),
+        });
+    });
 }
 
 /// Decode a 2D image file and return ALL mip levels as `(rgba, w, h)`.
@@ -522,7 +578,7 @@ pub fn sync_detail_texture(
     gpu: &GpuContext,
 ) {
     let key = project_dir.map(|p| (p.to_path_buf(), detail_filename.to_string()));
-    if core.detail_loaded_for == key {
+    if core.detail_loaded_for == key || core.detail_loading_for == key {
         return;
     }
     if detail_filename.is_empty() {
@@ -534,8 +590,31 @@ pub fn sync_detail_texture(
         core.detail_loaded_for = key;
         return;
     }
-    load_map_detail_texture(project_dir, detail_filename, core, gpu);
-    core.detail_loaded_for = key;
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), detail_filename.to_string());
+    core.detail_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode detail texture");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "Detail texture not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::Detail {
+            key: key_pair,
+            data,
+        });
+    });
 }
 
 /// Ensure the renderer's cubemap matches the current project's
@@ -550,7 +629,7 @@ pub fn sync_skybox(
     gpu: &GpuContext,
 ) {
     let key = project_dir.map(|p| (p.to_path_buf(), skybox_filename.to_string()));
-    if core.skybox_loaded_for == key {
+    if core.skybox_loaded_for == key || core.skybox_loading_for == key {
         return;
     }
     if skybox_filename.is_empty() {
@@ -562,8 +641,34 @@ pub fn sync_skybox(
         core.skybox_loaded_for = key;
         return;
     }
-    load_map_skybox(project_dir, skybox_filename, core, gpu);
-    core.skybox_loaded_for = key;
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), skybox_filename.to_string());
+    core.skybox_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => match bar_data::load_dds_cubemap(&p) {
+                Ok(c) => Some(c),
+                Err(e) => {
+                    tracing::warn!(file = %filename, err = %e, "Failed to decode skybox DDS");
+                    None
+                }
+            },
+            None => {
+                tracing::warn!(file = %filename, "Skybox DDS not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::Skybox {
+            key: key_pair,
+            data,
+        });
+    });
 }
 
 /// Progressive eval scheduling state for the Sculpt3D slot.
@@ -2057,61 +2162,6 @@ fn find_file_in_dir(dir: &std::path::Path, name: &str) -> Option<std::path::Path
         }
     }
     None
-}
-
-/// Look for the map-authored skybox DDS file and, if found, upload it
-/// as a cubemap to the renderer. The mapinfo `atmosphere.skyBox` field
-/// is just a filename like `"cleardesert.dds"`; we resolve it against
-/// likely locations under the .barproj (passthrough/, or as a direct
-/// child for legacy maps). Quietly no-ops when the file isn't there
-/// -- the shader will keep using procedural ModernSky in that case.
-pub fn load_map_skybox(
-    project_dir: Option<&std::path::Path>,
-    skybox_filename: &str,
-    core: &mut ViewportCore,
-    gpu: &bar_compute::GpuContext,
-) {
-    let Some(project_dir) = project_dir else {
-        return;
-    };
-    // Mapinfo's `skyBox = "..."` is just a filename; in the engine's VFS
-    // that resolves recursively across the archive. Our `.barproj` puts
-    // archive contents under `passthrough/`, and maps drop their skybox
-    // in different subdirs (Aurelia: `passthrough/maps/cleardesert.dds`,
-    // others: at `passthrough/` root, etc.). So we walk the passthrough
-    // tree looking for a case-insensitive filename match, then fall back
-    // to a full project_dir walk -- catches the SD7 work_dir layout
-    // (textures at `<work_dir>/maps/<file>`) that's in play between
-    // import and first save. See `load_map_detail_texture`.
-    let path = find_file_in_dir(&project_dir.join("passthrough"), skybox_filename)
-        .or_else(|| find_file_in_dir(project_dir, skybox_filename));
-    let Some(path) = path else {
-        tracing::warn!(
-            file = skybox_filename,
-            "Skybox DDS not found in project; using procedural sky"
-        );
-        return;
-    };
-    let cubemap = match bar_data::load_dds_cubemap(&path) {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!(
-                file = skybox_filename,
-                err = %e,
-                "Failed to decode skybox DDS; using procedural sky"
-            );
-            return;
-        }
-    };
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
-        renderer.update_skybox(&gpu.device, &gpu.queue, &cubemap);
-        tracing::info!(
-            file = skybox_filename,
-            w = cubemap.width,
-            h = cubemap.height,
-            "Skybox cubemap loaded"
-        );
-    }
 }
 
 /// Result of loading the compiled BC1 albedo + heightmap into the
