@@ -122,6 +122,12 @@ pub struct ViewportCore {
     pub session_id: u64,
     pub started_at: Instant,
     pub feature_drag: Option<FeatureDragState>,
+    /// Timestamp of the most recent rotation-gesture mutation. Used to
+    /// coalesce a continuous wheel-rotation flurry into a single undo
+    /// entry: the first event after a quiet gap (>= `ROTATE_GESTURE_GAP`)
+    /// snapshots state, subsequent events within the window mutate
+    /// without pushing.
+    pub last_rotate_at: Option<Instant>,
     /// Tracks the `(project_dir, skybox_filename)` the renderer's cubemap
     /// was last loaded for. We re-attempt the upload whenever either side
     /// of this tuple changes -- not gated on compilation, so the skybox
@@ -158,6 +164,7 @@ impl ViewportCore {
             session_id,
             started_at: Instant::now(),
             feature_drag: None,
+            last_rotate_at: None,
             skybox_loaded_for: None,
             detail_loaded_for: None,
             splat_loaded_for: None,
@@ -1257,11 +1264,26 @@ fn handle_camera_input(
             // reads as clockwise (intuitive).
             let delta_heading = -rotation_lines * 2048.0;
             if let Some(idx) = app.map.selected_feature_idx {
+                // Coalesce a continuous wheel-spin into one undo step;
+                // start a fresh entry after a quiet gap.
+                const ROTATE_GESTURE_GAP: std::time::Duration =
+                    std::time::Duration::from_millis(500);
+                let now = std::time::Instant::now();
+                let new_gesture = core
+                    .last_rotate_at
+                    .map(|t| now.duration_since(t) >= ROTATE_GESTURE_GAP)
+                    .unwrap_or(true);
+                if new_gesture {
+                    app.push_undo("Rotate feature");
+                }
+                core.last_rotate_at = Some(now);
                 if let Some(f) = app.map.features.get_mut(idx) {
                     f.angle = wrap_heading(f.angle + delta_heading);
                     app.map.features_placement_dirty = true;
                 }
             } else if app.selected_feature_type.is_some() {
+                // Pending-placement angle is session-only state; it
+                // isn't snapshotted by undo. No push_undo here.
                 app.pending_placement_angle =
                     wrap_heading(app.pending_placement_angle + delta_heading);
             }
