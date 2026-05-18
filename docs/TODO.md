@@ -25,14 +25,6 @@ Items below are paused while the 3D-painting / brush subsystem is being reconsid
 - **Replace tool-palette text buttons with icons.** The brush-tool selector in the sculpt layout (`crates/bar-gui/src/layouts/sculpt3d.rs` -- Pointer / Raise / Lower / Smooth / Flatten etc.) uses text labels. Standard editor convention is icons in a compact toolbar. Pick / draw / source SVG-or-raster icons per tool (raise = up-arrow, lower = down-arrow, smooth = blur-circle, flatten = horizontal-line, pointer = arrow cursor, paint = bucket). Add tooltip on hover for tool name + shortcut. Lives in the same place that currently renders the text buttons.
 - Plan doc: `docs/3d-painting-plan.md` (the broader subsystem plan these items belong to).
 
-## Crashes
-
-- **Switching to Sculpt3D or Preview can hang if the layout was never rendered this session.** Opening a project and then immediately switching to Sculpt3D or Preview without going through any layout that has spawned an eval first appears to lock the UI thread. Suspected cause: the layout-init path spawns the initial eval synchronously (graph clone + executor walk happen on the GUI thread) instead of dispatching to the background eval thread the way subsequent updates do, and on a moderately-sized graph that blocks for long enough to look like a hang. Confirm with a sample-profile from the first switch; fix is to route the first-time eval through `spawn_eval_passes` the same as every subsequent one. Lives in `crates/bar-app/src/layout_manager.rs::update_sculpt3d` / `update_preview`.
-
-## History / Undo-Redo
-
-- **Drag-to-move a placed feature should be undoable.** Placement and delete now push undo entries; whenever click-again-to-move lands (see Features section), it also needs to call `app.push_undo("Move feature")` before mutating the dragged feature's coordinates.
-
 ## UX / UI
 
 - **Action-bar grouping: centered group label variant deferred.** The separator + reorder version of the build-group layout shipped, but the original UX question was "separator OR centered group label above each group (action bar gets taller)". The label variant wasn't prototyped; revisit if the separator alone doesn't read clearly.
@@ -85,9 +77,6 @@ See `docs/feature-rendering-plan.md`. M1/M2/M3 are complete.
 - Features in the reflection / refraction passes. Refraction-pass feature rendering is partially in (so underwater features show through water); reflection-pass is not. Verify and finish.
 - Async progressive model loading instead of blocking until all models are ready.
 - **Geovent feature rendering.** Geovents (geothermal vents -- maps designate them as metal-spot-like features that grant continuous energy) currently render as the placeholder yellow cube rather than the engine's animated geovent geometry/effect. Engine renders them as procedural circle of vertices with steam/heat-haze effect, not as an S3O model. Needs a dedicated geovent visualisation path (likely a billboard or screen-space ring + heat shimmer) since there's no S3O to load.
-- **Click-again-to-move on a selected feature.** Once a feature is selected, clicking on it a second time should engage a drag-to-move gesture (release re-anchors the position). Today the second click is treated as a fresh selection, so there's no way to nudge a placed feature without using the inspector. Lives in the feature-picking branch of `crates/bar-app/src/viewport.rs::handle_camera_input` (selection vs drag-translate). The motion should be in the XZ plane projected onto the heightmap (snap to surface). Should record an undo entry on release.
-- **Preview a soon-to-be-placed feature at the cursor location.** When the user has a feature type selected from the palette and is hovering the viewport, render a ghost preview of that feature attached to the cursor projection on the heightmap. Today the placement only becomes visible after the click commits. Should follow the cursor with the same snap-to-surface logic the placed feature uses; rendered with ~50% alpha or a desaturated tint so it reads as "preview, not committed". Suppress the ghost when the cursor is over UI / out of the viewport. Lives in `crates/bar-app/src/viewport.rs` feature-placement hover path.
-- **Rotate features (placed and pending).** A placed feature should expose a rotation gesture (mouse-wheel scroll while hovering it, or a rotation handle in the inspector), and a soon-to-be-placed feature should rotate in step with the ghost preview before commit (same gesture). Engine rotation is in Spring heading units (`-32768..32767`, half-circle per `32768`); store as `i32` on `PlacedFeature::angle`. Commit on release / placement; record an undo entry. Hooks into the same feature-picking branch as the click-again-to-move TODO above.
 
 ## Logging
 
