@@ -4,6 +4,7 @@
 //! Handles terrain mesh generation, camera controls, and display modes.
 
 pub mod camera;
+pub mod color;
 pub mod feature_lights;
 pub mod features;
 pub mod picking;

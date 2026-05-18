@@ -936,10 +936,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // it too warm because the rust-coloured texture dominates.
     lit_color = apply_custom_fog(lit_color, in.world_position);
 
-    // Atmospheric fog removed: it was custom (exponential distance haze
-    // toward the sky colour) and isn't part of Recoil's pipeline, so it
-    // would make the preview diverge from in-game appearance. If/when we
-    // want fog, port Recoil's MapSettings-driven fog instead.
+    // Engine distance fog (`SMFFragProg.glsl:437`): final per-fragment mix
+    // toward atmospheric `fogColor`. Same fog_dists / fog_color uniforms
+    // the water shader uses. For maps where the fog distance is
+    // unreachable in the visible scene (Onyx at our render scale) this
+    // saturates to 1.0 and the stage is a no-op.
+    if camera.fog_dists.y > 0.0 {
+        let view_dist = length(camera.camera_pos - in.world_position);
+        let fog_factor = clamp(
+            (camera.fog_dists.y - view_dist)
+                / max(camera.fog_dists.y - camera.fog_dists.x, 1e-4),
+            0.0,
+            1.0,
+        );
+        lit_color = mix(camera.fog_color.rgb, lit_color, fog_factor);
+    }
 
     // Brush cursor ring: 1-px AA outline, no disc fill.
     if (camera.brush_cursor.w > 0.5) {

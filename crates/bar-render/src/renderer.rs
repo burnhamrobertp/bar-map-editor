@@ -9,6 +9,58 @@ use crate::terrain::{
 };
 use bar_data::{ColorBuffer, Heightmap};
 
+// ── Texture-format conventions ────────────────────────────────────────────
+//
+// Maps each map-authored texture role to the wgpu format it must use. The
+// distinction between sRGB and linear formats is load-bearing: sRGB
+// formats trigger automatic gamma decode on sample, which is correct for
+// COLOUR textures (BAR mapinfo authors values in perceptual sRGB) but
+// destroys data textures (normal maps, weight masks) whose channels are
+// numerical not perceptual.
+//
+// Engine reference: BAR runs with `GL_FRAMEBUFFER_SRGB` disabled
+// (`bar-recoil/.../GL/State.h:185`), so its samplers don't gamma-decode
+// anything -- every texture, colour or data, reaches BAR's shader as
+// `byte/255` directly. In BME we use an sRGB framebuffer (correct), so
+// we have to pick the format per-texture: sRGB format for things BAR
+// would have authored as perceptual colour, linear for things BAR would
+// have used as direct numerical inputs.
+//
+// Changing any of these requires checking the engine shader's sample
+// pattern -- look for `* 2 - 1` decode (data, needs linear) or direct
+// `* multiplier` use (data, needs linear). Mix factors are data;
+// per-pixel diffuse / albedo / shading textures are colour.
+
+/// Colour textures (sampled as perceptual sRGB by BAR; we use sRGB so
+/// the GPU gamma-decodes back to linear before the shader sees them).
+/// Marker constant; the inline texture-creation sites still spell
+/// `Rgba8UnormSrgb` for now. Pinned by the format-convention test.
+#[allow(dead_code)]
+const COLOUR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+
+/// Splat detail-normal textures: RGB carries tangent-space normal
+/// coordinates decoded via `(sample * 2 - 1)` in `SMFFragProg.glsl:183`;
+/// A carries detail strength. Pure data.
+const SPLAT_DETAIL_NORMAL_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Splat distribution texture: per-channel material weights, sampled
+/// and multiplied directly with `splatTexMults` in
+/// `SMFFragProg.glsl:168`. Pure data. (Same wgpu format as
+/// detail-normal -- the closure that builds both uses the
+/// detail-normal constant since they coincide.)
+#[allow(dead_code)]
+const SPLAT_DISTR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Sky-reflection mod texture: per-channel mix factor for
+/// `mix(diffuse, reflect, reflectMod)` in `SMFFragProg.glsl:348`.
+/// Pure data (interpolation weight).
+const SKY_REFLECT_MOD_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// Per-pixel specular texture: RGB used as `specCol.rgb * specularPow`,
+/// A used as `exp = A * 16` (`SMFFragProg.glsl:413,419`). Engine treats
+/// both as direct face-value data; we follow suit.
+const SPECULAR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
 /// Parameters for a full heightmap replacement. Passed to
 /// [`TerrainRenderer::update_heightmap`] to avoid a clippy `too_many_arguments`
 /// violation.
@@ -286,17 +338,23 @@ impl From<&bar_project::MapSettings> for SmfLighting {
         let w = &ms.water;
         Self {
             sun_dir: l.sun_dir,
-            ground_ambient: l.ground_ambient,
-            ground_diffuse: l.ground_diffuse,
-            ground_specular: l.ground_specular,
+            // RGB colour triples are stored in mapinfo as sRGB / perceptual
+            // (matches BAR's accidental double-gamma pipeline). Decode to
+            // linear here so shader math is correct and the
+            // sRGB-encoding framebuffer produces the same bytes BAR's
+            // non-sRGB framebuffer does. Scalars / directions are
+            // unaffected.
+            ground_ambient: crate::color::srgb_to_linear_rgb(l.ground_ambient),
+            ground_diffuse: crate::color::srgb_to_linear_rgb(l.ground_diffuse),
+            ground_specular: crate::color::srgb_to_linear_rgb(l.ground_specular),
             specular_exponent: l.spec_exponent,
-            water_absorb: w.absorb,
-            water_base: w.base_color,
-            water_min: w.min_color,
-            water_surface_color: w.surface_color,
+            water_absorb: crate::color::srgb_to_linear_rgb(w.absorb),
+            water_base: crate::color::srgb_to_linear_rgb(w.base_color),
+            water_min: crate::color::srgb_to_linear_rgb(w.min_color),
+            water_surface_color: crate::color::srgb_to_linear_rgb(w.surface_color),
             water_surface_alpha: w.surface_alpha,
-            water_diffuse_color: w.diffuse_color,
-            water_specular_color: w.specular_color,
+            water_diffuse_color: crate::color::srgb_to_linear_rgb(w.diffuse_color),
+            water_specular_color: crate::color::srgb_to_linear_rgb(w.specular_color),
             water_ambient_factor: w.ambient_factor,
             water_diffuse_factor: w.diffuse_factor,
             water_specular_factor: w.specular_factor,
@@ -307,14 +365,14 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             water_reflection_distortion: w.reflection_distortion,
             water_perlin_amplitude: w.perlin_amplitude,
             custom_fog_enabled: ms.custom_fog.enabled,
-            custom_fog_color: ms.custom_fog.color,
+            custom_fog_color: crate::color::srgb_to_linear_rgb(ms.custom_fog.color),
             custom_fog_height_elmos: ms.custom_fog.height_elmos,
             custom_fog_atten: ms.custom_fog.atten,
-            sun_color: ms.atmosphere.sun_color,
-            sky_color: ms.atmosphere.sky_color,
+            sun_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.sun_color),
+            sky_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.sky_color),
             sky_dir: ms.atmosphere.sky_dir,
             cloud_density: ms.atmosphere.cloud_density,
-            cloud_color: ms.atmosphere.cloud_color,
+            cloud_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.cloud_color),
             // MapSettings doesn't carry runtime upload state; the
             // renderer overrides this flag in `sync_to_frame` based
             // on whether a real cubemap is uploaded.
@@ -342,7 +400,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             elmo_per_render_xz: [1.0, 1.0],
             atmosphere_fog_start: ms.atmosphere.fog_start,
             atmosphere_fog_end: ms.atmosphere.fog_end,
-            atmosphere_fog_color: ms.atmosphere.fog_color,
+            atmosphere_fog_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.fog_color),
         }
     }
 }
@@ -1718,7 +1776,9 @@ impl TerrainRenderer {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    // Distribution texture also goes through this closure;
+                    // both formats happen to be the same (linear data).
+                    format: SPLAT_DETAIL_NORMAL_TEX_FORMAT,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 },
@@ -1748,7 +1808,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: SKY_REFLECT_MOD_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1774,7 +1834,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: SPECULAR_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3066,7 +3126,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: SKY_REFLECT_MOD_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3093,7 +3153,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: SKY_REFLECT_MOD_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3129,7 +3189,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: SPECULAR_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3157,7 +3217,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: SPECULAR_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3290,7 +3350,10 @@ impl TerrainRenderer {
                 mip_level_count: mip_count,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                // Both splat detail-normal and splat distribution feed
+                // through this closure; their formats happen to be
+                // identical (linear data, see module-level constants).
+                format: SPLAT_DETAIL_NORMAL_TEX_FORMAT,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             });
@@ -3348,7 +3411,7 @@ impl TerrainRenderer {
                     mip_level_count: 1,
                     sample_count: 1,
                     dimension: wgpu::TextureDimension::D2,
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: SPLAT_DETAIL_NORMAL_TEX_FORMAT,
                     usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                     view_formats: &[],
                 },
@@ -3888,10 +3951,18 @@ impl TerrainRenderer {
                             view: reflection_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
+                                // Reflection clear colour matches engine
+                                // `BumpWater.cpp:1018`: `glClearColor(sky->fogColor)`.
+                                // Pixels with no reflected content
+                                // (above-water sky regions with no skybox
+                                // cubemap, beyond-terrain pixels) fill with
+                                // atmospheric fog colour. The prior
+                                // hardcoded pale blue was the source of
+                                // bright reflections on dark-themed maps.
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: 0.55,
-                                    g: 0.7,
-                                    b: 0.85,
+                                    r: self.smf_lighting.atmosphere_fog_color[0] as f64,
+                                    g: self.smf_lighting.atmosphere_fog_color[1] as f64,
+                                    b: self.smf_lighting.atmosphere_fog_color[2] as f64,
                                     a: 1.0,
                                 }),
                                 store: wgpu::StoreOp::Store,
@@ -3948,10 +4019,27 @@ impl TerrainRenderer {
                     // keep world.y >= water_y (above-water half-space)
                     [0.0, 1.0, 0.0, -wy]
                 };
+                // Engine `BumpWater.cpp:1000-1001` shifts the sun lighting
+                // for the refraction pass: diffuse *= (0.5, 0.7, 0.9),
+                // ambient *= (0.6, 0.8, 1.0). Tints underwater terrain
+                // cooler/bluer to read as "seen through water". Without
+                // this the refraction texture has the same lighting as
+                // the above-water render, which on a lit-warm map makes
+                // the underwater terrain look incongruously warm.
+                let mut tinted_diffuse = base_uniform.ground_diffuse;
+                tinted_diffuse[0] *= 0.5;
+                tinted_diffuse[1] *= 0.7;
+                tinted_diffuse[2] *= 0.9;
+                let mut tinted_ambient = base_uniform.ground_ambient;
+                tinted_ambient[0] *= 0.6;
+                tinted_ambient[1] *= 0.8;
+                tinted_ambient[2] *= 1.0;
                 let refr_uniform = CameraUniform {
                     skip_water: 1.0,
                     clip_plane,
                     brush_cursor: [0.0, 0.0, 0.0, 0.0],
+                    ground_diffuse: tinted_diffuse,
+                    ground_ambient: tinted_ambient,
                     ..base_uniform
                 };
                 queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&refr_uniform));
@@ -3966,18 +4054,22 @@ impl TerrainRenderer {
                             view: refraction_view,
                             resolve_target: None,
                             ops: wgpu::Operations {
-                                // Refraction clear colour: derive each frame
-                                // from the live `water_base` channel of
-                                // SmfLighting (= mapinfo.lua's `water.basecolor`),
-                                // not the cached `self.water_color` channel.
-                                // This is what keeps the Preview and Sculpt3D
-                                // layouts in lockstep when a map author edits
-                                // the Water tab -- both pull from the same
-                                // live source.
+                                // Refraction clear colour matches engine
+                                // `BumpWater.cpp:988`: `glClearColor(sky->fogColor)`.
+                                // Pixels with no underwater terrain rendered
+                                // (open ocean beyond the playable mesh, the
+                                // extension area, etc.) fill with the
+                                // atmospheric fog colour from mapinfo.
+                                // Previously we used `water_base * 0.5`,
+                                // which is a brighter cyan than `fogColor`
+                                // on most maps -- and the difference is
+                                // dramatic on dark-themed maps where the
+                                // engine intentionally chose a near-black
+                                // fogColor.
                                 load: wgpu::LoadOp::Clear(wgpu::Color {
-                                    r: self.smf_lighting.water_base[0] as f64 * 0.5,
-                                    g: self.smf_lighting.water_base[1] as f64 * 0.5,
-                                    b: self.smf_lighting.water_base[2] as f64 * 0.5,
+                                    r: self.smf_lighting.atmosphere_fog_color[0] as f64,
+                                    g: self.smf_lighting.atmosphere_fog_color[1] as f64,
+                                    b: self.smf_lighting.atmosphere_fog_color[2] as f64,
                                     a: 1.0,
                                 }),
                                 store: wgpu::StoreOp::Store,
@@ -4347,5 +4439,130 @@ mod tests {
             "minimap shader failed to parse: {:?}",
             module.err()
         );
+    }
+
+    // ── Texture-format convention tests ────────────────────────────────
+    //
+    // Each map-authored texture is either a COLOUR (perceptual sRGB by
+    // BAR convention) or DATA (numerical values BAR samples at face
+    // value). Picking the wrong wgpu format silently corrupts the
+    // texture content: sRGB format gamma-decodes data channels;
+    // non-sRGB format on a colour texture skips the decode we rely on
+    // for linear math. These tests pin the convention so an accidental
+    // change to one of the named constants surfaces immediately.
+
+    #[test]
+    fn colour_textures_use_srgb_format() {
+        // Colour textures must use the sRGB variant so that author-
+        // perceptual values (sky/cloud albedo, grass texture, etc.)
+        // are auto-decoded to linear before shader math.
+        assert_eq!(
+            super::COLOUR_TEX_FORMAT,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            "colour textures must use sRGB so authored perceptual \
+             values decode correctly for linear shader math"
+        );
+    }
+
+    #[test]
+    fn splat_detail_normal_uses_linear_format() {
+        // Splat detail-normals carry tangent-space normal coordinates
+        // (RGB) and detail strength (A). `SMFFragProg.glsl:183` decodes
+        // them via `(sample * 2 - 1)`. sRGB decode would corrupt the
+        // [-1, 1] range; must be linear.
+        assert_eq!(
+            super::SPLAT_DETAIL_NORMAL_TEX_FORMAT,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "splat detail-normal channels are normal-coordinate data, \
+             not colour -- sRGB sampling would shift byte 128 from 0.5 \
+             to ~0.22 and turn 'no perturbation' into -0.56"
+        );
+    }
+
+    #[test]
+    fn splat_distribution_uses_linear_format() {
+        // Splat distribution channels are direct material weights
+        // sampled and multiplied with `splatTexMults` per channel
+        // (`SMFFragProg.glsl:168`). Mid-range weights would shrink to
+        // ~44% of authored if sRGB-decoded.
+        assert_eq!(
+            super::SPLAT_DISTR_TEX_FORMAT,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "splat distribution weights are data, not colour"
+        );
+    }
+
+    #[test]
+    fn sky_reflect_mod_uses_linear_format() {
+        // Per-channel mix factor for `mix(diffuse, reflect, reflectMod)`
+        // (`SMFFragProg.glsl:348`). Mix weights are interpolation data.
+        assert_eq!(
+            super::SKY_REFLECT_MOD_TEX_FORMAT,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "sky-reflection mod channels are mix factors, not colour"
+        );
+    }
+
+    #[test]
+    fn splat_input_formats_coincide() {
+        // The `make_splat_default` / `update_splat_textures::make`
+        // closures build both detail-normal and distribution textures
+        // through a single format choice. If these constants diverge
+        // the closures need to grow a format parameter.
+        assert_eq!(
+            super::SPLAT_DETAIL_NORMAL_TEX_FORMAT,
+            super::SPLAT_DISTR_TEX_FORMAT,
+            "splat detail-normal and distribution share a closure -- their formats must match"
+        );
+    }
+
+    #[test]
+    fn specular_tex_uses_linear_format() {
+        // RGB used as `specCol.rgb * specularPow`, A used as
+        // `exp = A * 16` (`SMFFragProg.glsl:413,419`). Both channels
+        // are face-value data; engine reads them direct (no
+        // `GL_FRAMEBUFFER_SRGB`), so we match by using a linear format.
+        assert_eq!(
+            super::SPECULAR_TEX_FORMAT,
+            wgpu::TextureFormat::Rgba8Unorm,
+            "specular RGB is a face-value multiplier and A is the \
+             exponent encoding; both must be sampled in linear domain"
+        );
+    }
+
+    #[test]
+    fn smf_lighting_decodes_authored_colour_to_linear() {
+        // End-to-end check that `SmfLighting::from(&MapSettings)` runs
+        // the sRGB->linear conversion on every authored colour triple.
+        // Onyx Cauldron's `fog_color = [0.11, 0.13, 0.15]` is the
+        // canonical reference: perceptual 0.11 should decode to
+        // linear ~0.0114 (well below the byte-rounding precision
+        // needed to land at byte 28 after re-encoding for the
+        // sRGB framebuffer).
+        let mut ms = bar_project::MapSettings::default();
+        ms.atmosphere.fog_color = [0.11, 0.13, 0.15];
+        ms.atmosphere.sun_color = [1.0, 0.92, 0.78];
+        ms.lighting.ground_ambient = [0.56, 0.55, 0.55];
+        ms.water.base_color = [0.5, 0.68, 0.68];
+
+        let smf = super::SmfLighting::from(&ms);
+
+        for (label, authored, decoded) in [
+            ("fog_color[0]", 0.11, smf.atmosphere_fog_color[0]),
+            ("fog_color[1]", 0.13, smf.atmosphere_fog_color[1]),
+            ("fog_color[2]", 0.15, smf.atmosphere_fog_color[2]),
+            ("sun_color[0]", 1.0, smf.sun_color[0]),
+            ("sun_color[1]", 0.92, smf.sun_color[1]),
+            ("sun_color[2]", 0.78, smf.sun_color[2]),
+            ("ground_ambient[0]", 0.56, smf.ground_ambient[0]),
+            ("water_base[0]", 0.5, smf.water_base[0]),
+            ("water_base[1]", 0.68, smf.water_base[1]),
+        ] {
+            let expected = crate::color::srgb_to_linear(authored);
+            assert!(
+                (decoded - expected).abs() < 1e-5,
+                "{label}: authored {authored} -> decoded {decoded}, expected linear {expected}"
+            );
+        }
     }
 }

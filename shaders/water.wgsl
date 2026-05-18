@@ -128,6 +128,20 @@ fn water_shallow_scale(world_pos: vec3<f32>) -> f32 {
         world_pos.x / (2.0 * camera.x_extent) + 0.5,
         world_pos.z / (2.0 * camera.z_extent) + 0.5,
     );
+    // Off-playable water (extended plane covering the map-edge extension):
+    // there's no playable heightmap to derive depth from, so let
+    // `textureLoad`'s clamp-to-edge sampling produce stale-edge values
+    // would make `shallow_scale` collapse toward 0 on mountainous-edge
+    // maps (the BumpWater surface vanishes, water becomes pure
+    // refraction-clear-colour). Engine reads depth from the actual
+    // depth buffer (`opt_depth` path) which DOES register the visible
+    // mirrored extension terrain at those screen pixels, producing
+    // `shallowScale > 0` and a full BumpWater appearance there. Until
+    // we port the depth-buffer path, treat off-playable fragments as
+    // deep open sea -- matches the engine result for visible content.
+    if any(hm_uv < vec2<f32>(0.0)) || any(hm_uv > vec2<f32>(1.0)) {
+        return 1.0;
+    }
     let dim = vec2<i32>(textureDimensions(heightmap_tex));
     let dim_f = vec2<f32>(dim);
     let tc = clamp(vec2<i32>(hm_uv * dim_f), vec2<i32>(0), dim - vec2<i32>(1));
@@ -280,5 +294,24 @@ fn shade_water(
     // texture, so it composes into the result via the refraction path.
     // Applying it again on the surface composite double-darkens / over-
     // tints the result into milky-cloudy territory.
+
+    // Engine distance fog (`BumpWaterFS.glsl:350-352`): final per-fragment
+    // mix toward atmospheric `fogColor`. Fog distances come from mapinfo
+    // `atmosphere.fogStart/fogEnd * camera.far` packed into
+    // `camera.fog_dists.xy`. For maps with closer fog onsets this darkens
+    // distant water; for maps where the fog distance is unreachable in
+    // the visible scene (Onyx Cauldron at our render scale), fog_factor
+    // saturates to 1.0 and the stage is a no-op.
+    if camera.fog_dists.y > 0.0 {
+        let view_dist = length(camera.camera_pos - world_pos);
+        let fog_factor = clamp(
+            (camera.fog_dists.y - view_dist)
+                / max(camera.fog_dists.y - camera.fog_dists.x, 1e-4),
+            0.0,
+            1.0,
+        );
+        col = mix(camera.fog_color.rgb, col, fog_factor);
+    }
+
     return vec4<f32>(col, 1.0);
 }

@@ -183,7 +183,17 @@ fn color_rgb(ui: &mut egui::Ui, label: &str, value: &mut [f32; 3]) -> bool {
     ui.horizontal(|ui| {
         ui.label(label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.color_edit_button_rgb(value).changed() {
+            // Mapinfo colour triples are stored as sRGB-perceptual values
+            // (matches what BAR authors type in `mapinfo.lua` and what
+            // the engine's non-sRGB framebuffer ends up displaying).
+            // egui's `color_edit_button_rgb` expects LINEAR RGB and
+            // sRGB-encodes the swatch for display. Decode for the
+            // picker so the swatch matches the rendered colour;
+            // re-encode after edit so the recipe keeps perceptual
+            // values that round-trip cleanly.
+            let mut linear = bar_render::color::srgb_to_linear_rgb(*value);
+            if ui.color_edit_button_rgb(&mut linear).changed() {
+                *value = bar_render::color::linear_to_srgb_rgb(linear);
                 changed = true;
             }
         });
