@@ -93,6 +93,11 @@ struct CameraUniform {
     /// `camera.far` -- engine-faithful (`UniformConstants.cpp:231`).
     /// xy = start_dist, end_dist (render-space distances); zw reserved.
     fog_dists: vec4<f32>,
+    /// Mapinfo `atmosphere.fogColor`. Distinct from `sky_color_density`:
+    /// engine fog-aware shaders mix toward this tint, not the sky
+    /// colour. The map-edge extension widget uses it as the haze
+    /// target colour.
+    fog_color: vec4<f32>,
 }
 
 // ── Debug toggles ──────────────────────────────────────────────────────
@@ -508,24 +513,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             ext_normal = normalize(ext_normal);
         }
 
-        // Lambert + ambient -- engine's `smf_ground_shade` without spec /
-        // shadow / sky-reflection / detail. The extension never reaches
-        // far enough into the playable lighting pipeline to need those.
-        let ext_sun_dir = normalize(camera.sun_dir_exp.xyz);
-        let ext_shade = smf_ground_shade(
-            in.world_position,
-            ext_normal,
-            ext_sun_dir,
-            camera.ground_ambient.xyz,
-            camera.ground_diffuse.xyz,
-            1.0,
-        );
-        let lit_albedo = albedo * ext_shade;
-
-        // Luminance darken in YCbCr. Engine widget uses brightness = 0.3.
-        // Applied AFTER lighting so the dimming stays perceptually
-        // uniform across slope shading rather than only attenuating the
-        // base texture.
+        // Engine order (`map_edge_extension2.lua:366-388`): darken the
+        // raw albedo via YCbCr first (brightness = 0.3), then apply
+        // hemispheric lighting `albedo * (dot(N, sun) * 0.5 + 1.0)`.
+        // The hemispheric form ranges [0.5, 1.5] so back-facing slopes
+        // still get 50% brightness and front-facing up to 150% -- no
+        // pure black, no shadow term. Replaces my earlier port to
+        // `smf_ground_shade` which used the engine's full SMF
+        // `ambient + diffuse * clamp(N.L, 0, 1)` formula -- that's the
+        // playable-surface lighting, not the extension widget's.
         let RGB2YCBCR = mat3x3<f32>(
             0.2126, -0.114572, 0.5,
             0.7152, -0.385428, -0.454153,
@@ -536,9 +532,12 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             0.0, -0.187324,   1.8556,
             1.5748, -0.468124, -5.55112e-17,
         );
-        var ycbcr = RGB2YCBCR * lit_albedo;
+        var ycbcr = RGB2YCBCR * albedo;
         ycbcr.x = clamp(ycbcr.x * 0.3, 0.0, 1.0);
-        let darkened = YCBCR2RGB * ycbcr;
+        let darkened_albedo = YCBCR2RGB * ycbcr;
+        let ext_sun_dir = normalize(camera.sun_dir_exp.xyz);
+        let hemi = dot(ext_normal, ext_sun_dir) * 0.5 + 1.0;
+        let darkened = darkened_albedo * hemi;
 
         // Curvature alpha falloff. Engine formula:
         //   alpha = 1 + 6*(sum_axes(-((world - ref) / mapSize)^2) + 0.18)
@@ -579,13 +578,25 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             0.0,
             1.0,
         );
-        let horizon_color = camera.sky_color_density.rgb;
-        let after_fog = mix(horizon_color, darkened, fog_factor);
+        // Engine widget (`map_edge_extension2.lua:390`) mixes toward
+        // mapinfo `atmosphere.fogColor` for the fog step. This is the
+        // engine-wide `fogColor` uniform (`UniformConstants.cpp:227`),
+        // distinct from the sky tint. Using sky_color here as I did
+        // previously produced the pale-blue cast that didn't match
+        // in-game appearance -- engine fog and sky are independently
+        // authored colours and most maps make them different.
+        let fog_target = camera.fog_color.rgb;
+        let after_fog = mix(fog_target, darkened, fog_factor);
 
-        // Curvature alpha modulates visibility; in an opaque pipeline
-        // we mix toward the horizon colour so the mirror appears to
-        // dissolve into the sky rather than punching through to it.
-        let composited = mix(horizon_color, after_fog, curv_alpha);
+        // Curvature alpha would normally drive output alpha for the
+        // engine's transparent-blend pipeline (where the sky shows
+        // through behind the extension). In our opaque pipeline the
+        // closest approximation is to mix toward the sky colour at
+        // the curvature falloff -- procedural-sky maps get the
+        // authored sky tint; cubemap-skybox maps get an approximation
+        // that's not pixel-perfect but reads as "dissolves into sky".
+        let sky_tint = camera.sky_color_density.rgb;
+        let composited = mix(sky_tint, after_fog, curv_alpha);
         return vec4<f32>(apply_custom_fog(composited, in.world_position), 1.0);
     }
 

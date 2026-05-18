@@ -102,9 +102,13 @@ struct CameraUniform {
     // map-authored range without needing to know the camera state.
     // x = fog_start_dist, y = fog_end_dist, zw = reserved.
     fog_dists: [f32; 4],
+    // Mapinfo `atmosphere.fogColor` -- engine-equivalent of the
+    // `fogColor` uniform every fog-aware shader (sky / projectiles /
+    // map_edge_extension2 / etc.) reads. rgb = colour, w reserved.
+    fog_color: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CameraUniform>() == 512);
+const _: () = assert!(std::mem::size_of::<CameraUniform>() == 528);
 
 /// Clip-plane value that passes every fragment. Used by the main pass.
 const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -237,6 +241,13 @@ pub struct SmfLighting {
     /// (`MapInfo.cpp`: 0.1 / 1.0).
     pub atmosphere_fog_start: f32,
     pub atmosphere_fog_end: f32,
+    /// Mapinfo `atmosphere.fogColor`. Engine sources this from the
+    /// `ISky::fogColor` uniform (`UniformConstants.cpp:227`) and every
+    /// fog-aware shader mixes toward it -- including the map-edge
+    /// extension widget which uses it as the haze tint distinct from
+    /// the sky tint. Default `(0.7, 0.7, 0.8)` matches engine
+    /// `MapInfo.cpp`.
+    pub atmosphere_fog_color: [f32; 3],
 }
 
 /// Helper: clone `f.smf_lighting` with renderer-runtime flags overridden.
@@ -331,6 +342,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             elmo_per_render_xz: [1.0, 1.0],
             atmosphere_fog_start: ms.atmosphere.fog_start,
             atmosphere_fog_end: ms.atmosphere.fog_end,
+            atmosphere_fog_color: ms.atmosphere.fog_color,
         }
     }
 }
@@ -383,6 +395,7 @@ impl Default for SmfLighting {
             elmo_per_render_xz: [1.0, 1.0],
             atmosphere_fog_start: 0.1,
             atmosphere_fog_end: 1.0,
+            atmosphere_fog_color: [0.7, 0.7, 0.8],
         }
     }
 }
@@ -494,6 +507,12 @@ impl SmfLighting {
                 },
             ],
             atmosphere_fog: [self.atmosphere_fog_start, self.atmosphere_fog_end],
+            atmosphere_fog_color: [
+                self.atmosphere_fog_color[0],
+                self.atmosphere_fog_color[1],
+                self.atmosphere_fog_color[2],
+                1.0,
+            ],
         }
     }
 }
@@ -519,6 +538,8 @@ struct SmfUniformSlots {
     /// xy hold the start/end fractions; the host multiplies by camera
     /// far-plane to fill `CameraUniform::fog_dists`.
     atmosphere_fog: [f32; 2],
+    /// Mapinfo `atmosphere.fogColor` packed for `CameraUniform::fog_color`.
+    atmosphere_fog_color: [f32; 4],
     splat_params: [f32; 4],
 }
 
@@ -1523,6 +1544,7 @@ impl TerrainRenderer {
             // uniform; `render_internal` recomputes per-frame from the
             // live camera.
             fog_dists: [smf.atmosphere_fog[0], smf.atmosphere_fog[1], 0.0, 0.0],
+            fog_color: smf.atmosphere_fog_color,
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -3749,6 +3771,7 @@ impl TerrainRenderer {
                 0.0,
                 0.0,
             ],
+            fog_color: smf.atmosphere_fog_color,
         };
 
         // ── Pass 0: shadow map ──────────────────────────────────────────────
