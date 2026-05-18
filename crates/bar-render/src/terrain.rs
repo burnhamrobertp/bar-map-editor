@@ -349,21 +349,30 @@ pub fn generate_map_edge_extension(
 }
 
 /// Water / lava plane at world-Y = `water_y`.
+/// `span_multiplier` scales the plane's footprint relative to the
+/// playable extent -- pass `1.0` for a plane that fits the playable
+/// area exactly; pass `3.0` when the map-edge extension is enabled
+/// so the water surface continues out across the mirrored quadrants
+/// (matches engine BumpWater rendering, which covers the entire
+/// visible scene at sea level, not just the playable footprint).
 /// Returns empty vecs when `water_y < 0` (no water).
 pub fn generate_water_plane(
     x_extent: f32,
     z_extent: f32,
     water_y: f32,
+    span_multiplier: f32,
 ) -> (Vec<TerrainVertex>, Vec<u32>) {
     if water_y < 0.0 {
         return (Vec::new(), Vec::new());
     }
+    let span_x = x_extent * span_multiplier;
+    let span_z = z_extent * span_multiplier;
     let mut vertices = Vec::new();
     for &(px, pz) in &[
-        (-x_extent, -z_extent),
-        (x_extent, -z_extent),
-        (x_extent, z_extent),
-        (-x_extent, z_extent),
+        (-span_x, -span_z),
+        (span_x, -span_z),
+        (span_x, span_z),
+        (-span_x, span_z),
     ] {
         vertices.push(TerrainVertex {
             position: [px, water_y, pz],
@@ -430,18 +439,31 @@ mod tests {
 
     #[test]
     fn water_plane_absent_when_negative() {
-        let (verts, idxs) = generate_water_plane(0.5, 0.5, -1.0);
+        let (verts, idxs) = generate_water_plane(0.5, 0.5, -1.0, 1.0);
         assert!(verts.is_empty());
         assert!(idxs.is_empty());
     }
 
     #[test]
     fn water_plane_present_when_nonnegative() {
-        let (verts, idxs) = generate_water_plane(0.5, 0.5, 0.1);
+        let (verts, idxs) = generate_water_plane(0.5, 0.5, 0.1, 1.0);
         assert_eq!(verts.len(), 4);
         assert_eq!(idxs.len(), 6);
         for v in &verts {
             assert!((v.uv[0] - (-1.0)).abs() < 1e-4, "water uv.x must be -1");
         }
+    }
+
+    #[test]
+    fn water_plane_scales_with_span_multiplier() {
+        let (verts, _) = generate_water_plane(0.5, 0.5, 0.1, 3.0);
+        let max_x = verts
+            .iter()
+            .map(|v| v.position[0].abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            (max_x - 1.5).abs() < 1e-4,
+            "span 3.0 over extent 0.5 should reach |x| = 1.5, got {max_x}"
+        );
     }
 }

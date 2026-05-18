@@ -2366,7 +2366,15 @@ impl TerrainRenderer {
         // `[water_index_offset, num_indices)` for water as separate calls
         // with the feature pass between.
         self.water_index_offset = idxs.len() as u32;
-        let (water_v, water_i) = generate_water_plane(x_extent, z_extent, water_y);
+        // Water plane extends out to match the map-edge extension's
+        // [-3x, +3x] footprint when the extension is enabled --
+        // matches engine BumpWater rendering, where water at sea level
+        // covers the entire visible scene and obscures lower mirrored
+        // terrain plus reflects the upper skybox. Without this, the
+        // extension's lower regions show through to bare sky / fog
+        // and look unmoored relative to in-game appearance.
+        let water_span = if include_edge_extension { 3.0 } else { 1.0 };
+        let (water_v, water_i) = generate_water_plane(x_extent, z_extent, water_y, water_span);
         idxs.extend(water_i.iter().map(|i| i + water_base));
         verts.extend(water_v);
 
