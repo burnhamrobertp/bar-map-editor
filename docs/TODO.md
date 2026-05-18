@@ -76,7 +76,7 @@ See `docs/feature-rendering-plan.md`. M1/M2/M3 are complete.
 
 ## Logging
 
-- **Standardize info vs debug usage.** Far too many tracing calls are landing at `info` level when they're really debug-level diagnostics. Audit the codebase and demote the bulk of them; reserve `info` for events a user would actually want to see during normal operation (load complete, save complete, errors recovered). Also consider adding a dedicated **Status** log type (or a separate channel) for foreground operations the user is actively tracking, so they don't compete with diagnostic info in the same stream.
+- **Dedicated Status log channel (or separate stream) for foreground operations.** The info-level audit landed (about a 75% demotion), so the BME log panel's INF view is now focused on milestone events. Worth revisiting later: should there be a dedicated *Status* log type / channel for things the user is actively tracking (current bundle step, current export progress) so they read top-of-mind, rather than mixing with general info? Today both share the INF level.
 
 ## Project / workflow
 

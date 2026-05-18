@@ -205,7 +205,7 @@ fn try_direct_smt_copy(graph: &GraphEngine, dest: &Path) -> Result<Option<(u32, 
                 dest.display()
             )
         })?;
-        tracing::info!(
+        tracing::debug!(
             src = %asset_path,
             "Compile: direct block copy from ImportedTexture"
         );

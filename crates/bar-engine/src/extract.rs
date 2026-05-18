@@ -317,7 +317,7 @@ fn scan_work_dir(
     if set_lua.exists() {
         if let Ok(content) = std::fs::read_to_string(&set_lua) {
             let lua_features = parse_feature_placer_set(&content);
-            tracing::info!(count = lua_features.len(), "Parsed FeaturePlacer set.lua");
+            tracing::debug!(count = lua_features.len(), "Parsed FeaturePlacer set.lua");
             features.extend(lua_features);
         }
     }

@@ -287,7 +287,7 @@ impl eframe::App for AppRunner {
                         };
                         let map_x = w - 1;
                         let map_y = h - 1;
-                        tracing::info!(
+                        tracing::debug!(
                             map_x,
                             map_y,
                             "Bundle: evaluating graph at native resolution"
@@ -575,7 +575,7 @@ impl eframe::App for AppRunner {
                     if let Some(ref mut catalog) = self.feature_catalog {
                         let map_catalog = FeatureCatalog::from_dir(&work_dir);
                         if !map_catalog.is_empty() {
-                            tracing::info!(
+                            tracing::debug!(
                                 count = map_catalog.features.len(),
                                 "Merged map-level feature definitions"
                             );
@@ -1078,7 +1078,7 @@ fn load_s3o_from_sources(
     if let Some((source, data)) = sources.read(path) {
         match bar_data::parse_s3o(&data) {
             Ok(mesh) => {
-                tracing::info!(
+                tracing::debug!(
                     feature = %feature_name,
                     path = %path,
                     source,
@@ -1155,7 +1155,7 @@ fn load_texture_from_sources(
         if ext.as_deref() == Some("dds") {
             match bar_data::load_dds_2d_bytes(&bytes) {
                 Ok((rgba, w, h)) => {
-                    tracing::info!(
+                    tracing::debug!(
                         feature = %feature_name,
                         slot,
                         texture = %cand,
@@ -1200,7 +1200,7 @@ fn load_texture_from_sources(
             Ok(img) => {
                 let rgba = img.to_rgba8();
                 let (w, h) = rgba.dimensions();
-                tracing::info!(
+                tracing::debug!(
                     feature = %feature_name,
                     slot,
                     texture = %cand,

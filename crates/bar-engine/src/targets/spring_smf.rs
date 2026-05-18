@@ -221,7 +221,7 @@ impl ExportCodec for SpringSmfCodec {
                 &smf_path,
             )?;
             written.files.push(format!("maps/{}.smf", map_name));
-            tracing::info!("Wrote SMF: {}", smf_path.display());
+            tracing::debug!("Wrote SMF: {}", smf_path.display());
         }
 
         // Write SMT (texture tiles) — generate height-based fallback if none provided.
@@ -247,7 +247,7 @@ impl ExportCodec for SpringSmfCodec {
                                 smt_path.display()
                             )
                         })?;
-                        tracing::info!(
+                        tracing::debug!(
                             "Bundle: used compiled SMT (skipped re-encode): {}",
                             compiled_smt.display()
                         );
@@ -282,14 +282,14 @@ impl ExportCodec for SpringSmfCodec {
             }
         }
         written.files.push(format!("maps/{}.smt", map_name));
-        tracing::info!("Wrote SMT: {}", smt_path.display());
+        tracing::debug!("Wrote SMT: {}", smt_path.display());
 
         // Write metadata (mapinfo.lua)
         let mapinfo = self.generate_mapinfo(map_name, sq_x, sq_y, plan);
         let mapinfo_path = output_dir.join("mapinfo.lua");
         fs::write(&mapinfo_path, &mapinfo)?;
         written.files.push("mapinfo.lua".to_string());
-        tracing::info!("Wrote mapinfo: {}", mapinfo_path.display());
+        tracing::debug!("Wrote mapinfo: {}", mapinfo_path.display());
 
         // Write optional PNG layers for preview/debugging
         if let Some(ref normalmap) = layers.normalmap {

@@ -236,7 +236,7 @@ fn execute_single_bundler(
     // Clean up staging
     let _ = std::fs::remove_dir_all(&staging_dir);
 
-    tracing::info!(
+    tracing::debug!(
         "Bundler '{}': wrote {} to {}",
         node.label,
         packager.name(),

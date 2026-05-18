@@ -697,7 +697,7 @@ fn apply_preview_result(
         );
         return;
     }
-    tracing::info!(
+    tracing::debug!(
         pass = if result.is_low_res { "low" } else { "high" },
         has_hm = result.heightmap.is_some(),
         has_tex = result.texture.is_some(),
@@ -870,7 +870,7 @@ fn spawn_eval_passes(
         current_key != slot.eval.last_low_res_key && current_key != slot.eval.last_high_res_key;
 
     if needs_low_res && !slot.eval.low_res_pending {
-        tracing::info!(
+        tracing::debug!(
             hm = format!("{low_hm_w}x{low_hm_h}"),
             tex = format!("{low_tex_w}x{low_tex_h}"),
             "Eval: spawning low-res pass"
@@ -891,7 +891,7 @@ fn spawn_eval_passes(
                 low_tex_h,
             );
             let ms = t0.elapsed().as_millis();
-            tracing::info!(ms, "Eval: low-res pass complete");
+            tracing::debug!(ms, "Eval: low-res pass complete");
             let _ = tx.send(PreviewResult {
                 heightmap,
                 texture,
@@ -921,7 +921,7 @@ fn spawn_eval_passes(
 
     if needs_high_res && !slot.eval.low_res_pending && !slot.eval.high_res_pending && cooldown_done
     {
-        tracing::info!(
+        tracing::debug!(
             hm = format!("{w}x{h}"),
             tex = format!("{tex_w}x{tex_h}"),
             "Eval: spawning high-res pass"
@@ -935,7 +935,7 @@ fn spawn_eval_passes(
             let t0 = std::time::Instant::now();
             let (heightmap, texture) = eval_preview(&graph, exec.as_ref(), w, h, tex_w, tex_h);
             let ms = t0.elapsed().as_millis();
-            tracing::info!(ms, "Eval: high-res pass complete");
+            tracing::debug!(ms, "Eval: high-res pass complete");
             let _ = tx.send(PreviewResult {
                 heightmap,
                 texture,

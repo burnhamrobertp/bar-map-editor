@@ -48,7 +48,7 @@ pub fn export_smf(
         path,
     )?;
 
-    tracing::info!("Exported SMF to {}", path.display());
+    tracing::debug!("Exported SMF to {}", path.display());
     Ok(())
 }
 
@@ -123,7 +123,7 @@ pub fn export_heightmap_png(
 
     write_heightmap_png(&heightmap, path)?;
 
-    tracing::info!("Exported heightmap PNG to {}", path.display());
+    tracing::debug!("Exported heightmap PNG to {}", path.display());
     Ok(())
 }
 
@@ -173,7 +173,7 @@ pub fn export_smt(
     let result = write_smt(&mut writer, &texture)
         .with_context(|| format!("Failed to write SMT: {}", path.display()))?;
 
-    tracing::info!("Exported SMT to {}", path.display());
+    tracing::debug!("Exported SMT to {}", path.display());
     Ok(result)
 }
 
@@ -200,7 +200,7 @@ pub fn export_texture_png(
 
     write_color_png(&texture, path)?;
 
-    tracing::info!("Exported texture PNG to {}", path.display());
+    tracing::debug!("Exported texture PNG to {}", path.display());
     Ok(())
 }
 
@@ -228,7 +228,7 @@ pub fn export_normalmap_png(
 
     write_color_png(&normalmap, path)?;
 
-    tracing::info!("Exported normal map PNG to {}", path.display());
+    tracing::debug!("Exported normal map PNG to {}", path.display());
     Ok(())
 }
 
@@ -255,7 +255,7 @@ pub fn export_grassmap_png(
 
     write_heightmap_png(&grassmap, path)?;
 
-    tracing::info!("Exported grass map PNG to {}", path.display());
+    tracing::debug!("Exported grass map PNG to {}", path.display());
     Ok(())
 }
 
@@ -332,7 +332,7 @@ pub fn export_sd7_directory(
         height,
         &smf_path,
     )?;
-    tracing::info!("Wrote SMF: {}", smf_path.display());
+    tracing::debug!("Wrote SMF: {}", smf_path.display());
 
     // Write SMT into maps/ subdirectory (if we have a texture)
     if let Some(ref tex) = texture {
@@ -340,12 +340,12 @@ pub fn export_sd7_directory(
         let file = File::create(&smt_path)?;
         let mut writer = BufWriter::new(file);
         write_smt(&mut writer, tex)?;
-        tracing::info!("Wrote SMT: {}", smt_path.display());
+        tracing::debug!("Wrote SMT: {}", smt_path.display());
 
         // Write diffuse preview PNG (at root for debugging)
         let tex_png_path = output_dir.join(format!("{}_diffuse.png", map_name));
         write_color_png(tex, &tex_png_path)?;
-        tracing::info!("Wrote diffuse preview: {}", tex_png_path.display());
+        tracing::debug!("Wrote diffuse preview: {}", tex_png_path.display());
     }
 
     // Write heightmap PNG (at root for debugging)
@@ -356,14 +356,14 @@ pub fn export_sd7_directory(
     if let Some(ref nmap) = normalmap {
         let nm_path = output_dir.join(format!("{}_normals.png", map_name));
         write_color_png(nmap, &nm_path)?;
-        tracing::info!("Wrote normal map: {}", nm_path.display());
+        tracing::debug!("Wrote normal map: {}", nm_path.display());
     }
 
     // Write grass map (if present)
     if let Some(ref gmap) = grassmap {
         let gm_path = output_dir.join(format!("{}_grass.png", map_name));
         write_heightmap_png(gmap, &gm_path)?;
-        tracing::info!("Wrote grass map: {}", gm_path.display());
+        tracing::debug!("Wrote grass map: {}", gm_path.display());
     }
 
     // Write mapinfo.lua at root of archive
@@ -372,7 +372,7 @@ pub fn export_sd7_directory(
     let mapinfo = generate_mapinfo(map_name, map_x, map_y, settings);
     let mapinfo_path = output_dir.join("mapinfo.lua");
     fs::write(&mapinfo_path, mapinfo)?;
-    tracing::info!("Wrote mapinfo: {}", mapinfo_path.display());
+    tracing::debug!("Wrote mapinfo: {}", mapinfo_path.display());
 
     tracing::info!("SD7 directory export complete: {}", output_dir.display());
     Ok(())

@@ -282,7 +282,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                 core.skybox_loaded_for = Some(key);
                 if let (Some(cm), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
                     renderer.update_skybox(&gpu.device, &gpu.queue, &cm);
-                    tracing::info!(w = cm.width, h = cm.height, "Skybox cubemap loaded");
+                    tracing::debug!(w = cm.width, h = cm.height, "Skybox cubemap loaded");
                 }
             }
             TextureLoadResult::Detail { key, data } => {
@@ -291,7 +291,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                 if let (Some((rgba, w, h)), Some(renderer)) = (data, core.terrain_renderer.as_mut())
                 {
                     renderer.update_detail_texture(&gpu.device, &gpu.queue, &rgba, w, h);
-                    tracing::info!(w, h, "Detail texture loaded");
+                    tracing::debug!(w, h, "Detail texture loaded");
                 }
             }
             TextureLoadResult::Splat { key, data } => {
@@ -300,7 +300,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                 match (data, core.terrain_renderer.as_mut()) {
                     (Some(arr), Some(renderer)) => {
                         renderer.update_splat_textures(&gpu.device, &gpu.queue, arr);
-                        tracing::info!("Splat detail textures loaded (with mip chains)");
+                        tracing::debug!("Splat detail textures loaded (with mip chains)");
                     }
                     (None, Some(renderer)) => {
                         renderer.clear_splat_textures(&gpu.device, &gpu.queue);
@@ -314,7 +314,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                 match (data, core.terrain_renderer.as_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_sky_reflect_mod(&gpu.device, &gpu.queue, &rgba, w, h);
-                        tracing::info!(w, h, "skyReflectModTex loaded");
+                        tracing::debug!(w, h, "skyReflectModTex loaded");
                     }
                     (None, Some(renderer)) => {
                         renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
@@ -328,7 +328,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                 match (data, core.terrain_renderer.as_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_specular_tex(&gpu.device, &gpu.queue, &rgba, w, h);
-                        tracing::info!(w, h, "specularTex loaded");
+                        tracing::debug!(w, h, "specularTex loaded");
                     }
                     (None, Some(renderer)) => {
                         renderer.clear_specular_tex(&gpu.device, &gpu.queue);
@@ -2380,7 +2380,7 @@ pub fn apply_compiled_bc1(
             result.tex_w,
             result.tex_h,
         );
-        tracing::info!(
+        tracing::debug!(
             tex_w = result.tex_w,
             tex_h = result.tex_h,
             "Preview BC1: native-resolution texture loaded"
@@ -2416,7 +2416,7 @@ pub fn apply_compiled_bc1(
                 tex_w: result.tex_w,
                 tex_h: result.tex_h,
             });
-            tracing::info!(
+            tracing::debug!(
                 w = h.heightmap.width(),
                 h = h.heightmap.height(),
                 "Preview BC1: terrain mesh loaded from compiled heightmap"

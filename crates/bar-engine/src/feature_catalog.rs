@@ -198,7 +198,7 @@ fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureD
             feature_lua_count += 1;
             let md5_hex = md5.iter().map(|b| format!("{b:02x}")).collect::<String>();
             if !seen_md5.insert(md5_hex.clone()) {
-                tracing::info!(name, "feature lua already loaded (duplicate md5), skipping");
+                tracing::debug!(name, "feature lua already loaded (duplicate md5), skipping");
                 continue;
             }
 
@@ -219,7 +219,7 @@ fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureD
                 } else {
                     parse_feature_lua(&content, features);
                 }
-                tracing::info!(
+                tracing::debug!(
                     name,
                     added = features.len() - before,
                     total = features.len(),
@@ -229,7 +229,7 @@ fn load_from_rapid_pool(data_dir: &Path, features: &mut HashMap<String, FeatureD
                 tracing::warn!(name, "failed to decode feature lua as UTF-8");
             }
         }
-        tracing::info!(
+        tracing::debug!(
             sdp = %path.file_name().unwrap_or_default().to_string_lossy(),
             feature_lua_count,
             "SDP scanned"
@@ -292,7 +292,7 @@ pub fn scan_zip_for_features(archive: &Path, features: &mut HashMap<String, Feat
             }
         }
     }
-    tracing::info!(
+    tracing::debug!(
         archive = %archive.file_name().unwrap_or_default().to_string_lossy(),
         added = features.len() - before,
         total = features.len(),
@@ -354,7 +354,7 @@ pub fn read_file_from_rapid_pool(data_dir: &Path, path: &str) -> Option<Vec<u8>>
     let pool_file = pool_dir
         .join(&md5_hex[..2])
         .join(format!("{}.gz", &md5_hex[2..]));
-    tracing::info!(path, md5 = %md5_hex, pool = %pool_file.display(), "rapid pool lookup");
+    tracing::debug!(path, md5 = %md5_hex, pool = %pool_file.display(), "rapid pool lookup");
     let pool_bytes = std::fs::read(&pool_file).ok()?;
     let mut decoder = GzDecoder::new(pool_bytes.as_slice());
     let mut out = Vec::new();
@@ -362,7 +362,7 @@ pub fn read_file_from_rapid_pool(data_dir: &Path, path: &str) -> Option<Vec<u8>>
         tracing::warn!(path, md5 = %md5_hex, err = %e, "gzip decompress failed in rapid pool");
         return None;
     }
-    tracing::info!(path, md5 = %md5_hex, decompressed_bytes = out.len(), "rapid pool decompressed");
+    tracing::debug!(path, md5 = %md5_hex, decompressed_bytes = out.len(), "rapid pool decompressed");
     Some(out)
 }
 
