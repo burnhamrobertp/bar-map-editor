@@ -204,6 +204,12 @@ pub struct SmfLighting {
     pub ground_ambient: [f32; 3],
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
+    /// Per-map shadow strength. Engine modulates the shadow sample as
+    /// `shadow_coeff = mix(1.0, raw_shadow, density)` -- see
+    /// `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:371` -- so at density=0
+    /// shadows disappear entirely, at density=1 the raw sample passes
+    /// through. Default 0.8 (`MapInfo.cpp::ReadLight`).
+    pub ground_shadow_density: f32,
     pub specular_exponent: f32,
     // Water absorption colors (used by `smf_water_absorb` for underwater
     // ground shading -- not the water surface itself)
@@ -367,6 +373,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             ground_ambient: l.ground_ambient,
             ground_diffuse: l.ground_diffuse,
             ground_specular: l.ground_specular,
+            ground_shadow_density: l.ground_shadow_density.clamp(0.0, 1.0),
             specular_exponent: l.spec_exponent,
             water_absorb: w.absorb,
             water_base: w.base_color,
@@ -433,6 +440,7 @@ impl Default for SmfLighting {
             ground_ambient: [0.5, 0.5, 0.5],
             ground_diffuse: [0.5, 0.5, 0.5],
             ground_specular: [0.1, 0.1, 0.1],
+            ground_shadow_density: 0.8,
             // Engine default is 100.0 (MapInfo.cpp::ReadLight). Our 10.0
             // produced a much broader, dimmer spec lobe than engine on any
             // map that didn't override `specularExponent` in mapinfo.lua.
@@ -503,7 +511,11 @@ impl SmfLighting {
                 self.ground_specular[0],
                 self.ground_specular[1],
                 self.ground_specular[2],
-                0.0,
+                // `.w` carries mapinfo `lighting.groundShadowDensity`.
+                // Shader reads it at the shadow-coeff modulation site to
+                // mirror `SMFFragProg.glsl:371`: `shadow_coeff = mix(1,
+                // raw_shadow, density)`.
+                self.ground_shadow_density,
             ],
             water_absorb: [
                 self.water_absorb[0],

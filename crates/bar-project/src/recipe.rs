@@ -348,6 +348,13 @@ pub struct LightingSettings {
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
     pub spec_exponent: f32,
+    /// Per-map shadow strength (mapinfo `lighting.groundShadowDensity`).
+    /// Engine math: `shadow_coeff = mix(1.0, raw_shadow_sample, density)`
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:371`). Default 0.8 per
+    /// `MapInfo.cpp::ReadLight`, clamped to `[0, 1]`. At 0 the terrain
+    /// ignores the shadow map entirely; at 1 the raw shadow sample
+    /// passes through.
+    pub ground_shadow_density: f32,
 }
 
 /// Height-based "custom" fog (mapinfo's `custom.fog = { color, height, fogatten }`
@@ -398,6 +405,7 @@ impl Default for LightingSettings {
             // intentionally want a broad/dim lobe still override this in
             // mapinfo.lua.
             spec_exponent: 100.0,
+            ground_shadow_density: 0.8,
         }
     }
 }

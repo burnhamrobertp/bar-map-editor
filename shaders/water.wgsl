@@ -258,7 +258,12 @@ fn shade_water(
         * pow(max(dot(reflect_dir, eye_dir), 0.0), water_params.specular_color_power.w)
         * water_params.factors.y
         * shallow_scale;
-    let shadow = sample_shadow(world_pos);
+    // Engine `BumpWater.cpp:453` bakes `groundShadowDensity` into a
+    // `#define shadowDensity` constant, then the BumpWater fragment
+    // shader gates the shadow contribution by it. We mirror by
+    // modulating the raw sample against `ground_specular.w` (the
+    // density slot from `SmfLighting`).
+    let shadow = mix(1.0, sample_shadow(world_pos), camera.ground_specular.w);
     col = col + shadow * spec_intensity * water_params.specular_color_power.rgb;
 
     // --- 5. Reflection (Fresnel-mixed last) ------------------------------

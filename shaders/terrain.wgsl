@@ -664,7 +664,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     let view_dir = normalize(camera.camera_pos - in.world_position);
-    let shadow_coeff = sample_shadow(in.world_position);
+    // Per-map shadow strength modulation (mapinfo `lighting.groundShadowDensity`).
+    // `SMFFragProg.glsl:371`: shadow_coeff = mix(1.0, raw, density). The
+    // density is packed into `ground_specular.w` (see `SmfLighting::to_uniform_slots`).
+    let shadow_coeff = mix(1.0, sample_shadow(in.world_position), camera.ground_specular.w);
 
     var color: vec3<f32>;
     if (camera.has_texture != 0u && in.uv.y <= 1.5) {

@@ -114,6 +114,11 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     if let Some(v) = parse_mapinfo_number(lua, "specularExponent") {
         lighting.spec_exponent = v;
     }
+    // Per-map shadow strength. Engine: `lightTable.GetFloat("groundShadowDensity",
+    // 0.8f)` then `std::clamp(..., 0, 1)` (`bar-recoil/rts/Map/MapInfo.cpp:214,223`).
+    if let Some(v) = parse_mapinfo_number(lua, "groundShadowDensity") {
+        lighting.ground_shadow_density = v.clamp(0.0, 1.0);
+    }
 
     // Atmosphere table (procedural sky + standard distance fog inputs).
     let atm = &mut settings.atmosphere;
@@ -754,6 +759,31 @@ sunDir = { -0.64, 0.66, -0.57 },
         assert_eq!(settings.lighting.sun_dir, [-0.64, 0.66, -0.57]);
         // 3-element sunDir leaves intensity at its default 1.0.
         assert!((settings.lighting.sun_intensity - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn ground_shadow_density_parses_and_clamps() {
+        // Engine reads then clamps to [0, 1] (`MapInfo.cpp:214, 223`).
+        let lua = "groundShadowDensity = 0.65,";
+        let mut s = MapSettings::default();
+        apply_mapinfo_overrides(lua, &mut s);
+        assert!((s.lighting.ground_shadow_density - 0.65).abs() < 1e-6);
+
+        // Out-of-range values clamp.
+        let lua_high = "groundShadowDensity = 1.4,";
+        let mut s_high = MapSettings::default();
+        apply_mapinfo_overrides(lua_high, &mut s_high);
+        assert_eq!(s_high.lighting.ground_shadow_density, 1.0);
+
+        let lua_low = "groundShadowDensity = -0.1,";
+        let mut s_low = MapSettings::default();
+        apply_mapinfo_overrides(lua_low, &mut s_low);
+        assert_eq!(s_low.lighting.ground_shadow_density, 0.0);
+
+        // Missing key leaves the engine default (0.8) untouched.
+        let mut s_default = MapSettings::default();
+        apply_mapinfo_overrides("", &mut s_default);
+        assert!((s_default.lighting.ground_shadow_density - 0.8).abs() < 1e-6);
     }
 
     #[test]
