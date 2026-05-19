@@ -110,6 +110,7 @@ impl LayoutManager {
     /// Per-frame update. Drives eval scheduling, animation, and viewport
     /// rendering for whichever layout is currently active.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         ctx: &egui::Context,
@@ -119,6 +120,11 @@ impl LayoutManager {
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         executor: &Arc<dyn NodeExecutor + Send + Sync>,
         feature_catalog: Option<&bar_engine::FeatureCatalog>,
+        // engine_dir: path to the active BAR engine version
+        // (`<install>/data/engine/<ver>/`) used to source engine-shipped
+        // water assets (foam + caustics). `None` when no BAR install
+        // was detected; the renderer falls back to inert defaults.
+        engine_dir: Option<&std::path::Path>,
     ) {
         if app.project.take_graph_reset() {
             self.reset(gpu_context);
@@ -173,16 +179,25 @@ impl LayoutManager {
                     render_state,
                     executor,
                     feature_catalog,
+                    engine_dir,
                 );
             }
             bar_gui::Layout::Preview => {
-                self.update_preview(ctx, app, gpu_context, render_state, feature_catalog);
+                self.update_preview(
+                    ctx,
+                    app,
+                    gpu_context,
+                    render_state,
+                    feature_catalog,
+                    engine_dir,
+                );
             }
         }
     }
 
     // ── Sculpt3D ─────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     fn update_sculpt3d(
         &mut self,
         ctx: &egui::Context,
@@ -191,6 +206,7 @@ impl LayoutManager {
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         executor: &Arc<dyn NodeExecutor + Send + Sync>,
         feature_catalog: Option<&bar_engine::FeatureCatalog>,
+        engine_dir: Option<&std::path::Path>,
     ) {
         let Some(ref mut slot) = self.sculpt3d else {
             return;
@@ -270,6 +286,7 @@ impl LayoutManager {
                 &mut slot.core,
                 gpu,
             );
+            crate::viewport::sync_caustics(engine_dir, &mut slot.core, gpu);
         }
 
         // Force refresh: bump session_id so any in-flight result is rejected.
@@ -396,6 +413,7 @@ impl LayoutManager {
         gpu_context: &Option<GpuContext>,
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         feature_catalog: Option<&bar_engine::FeatureCatalog>,
+        engine_dir: Option<&std::path::Path>,
     ) {
         let Some(ref mut slot) = self.preview else {
             return;
@@ -467,6 +485,7 @@ impl LayoutManager {
                 &mut slot.core,
                 gpu,
             );
+            crate::viewport::sync_caustics(engine_dir, &mut slot.core, gpu);
         }
 
         // Feature instances: rebuild when dirty or heightmap changes.

@@ -160,6 +160,12 @@ pub struct ViewportCore {
     /// texture (mapinfo `resources.splatDetailTex`, engine path
     /// `SMF_DETAIL_TEXTURE_SPLATTING`).
     pub basic_splat_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// One-shot guard for the engine-shipped caustic animation upload.
+    /// Caustic content lives inside Recoil's `bitmaps.sdz` -- same set
+    /// of 32 frames for every map -- so we only need to load it once
+    /// per renderer. Stores the engine-dir path that produced the
+    /// current upload; cleared when the install isn't detected.
+    pub caustic_assets_loaded_from: Option<std::path::PathBuf>,
     /// Key currently being decoded on a background thread for each of the
     /// async-loaded texture slots. Set by the sync function when it spawns
     /// a worker; cleared on `poll_pending_texture_loads` once the result
@@ -264,6 +270,7 @@ impl ViewportCore {
             light_emission_tex_loaded_for: None,
             detail_normal_tex_loaded_for: None,
             basic_splat_tex_loaded_for: None,
+            caustic_assets_loaded_from: None,
             skybox_loading_for: None,
             detail_loading_for: None,
             splat_loading_for: None,
@@ -538,6 +545,64 @@ pub fn sync_specular_tex(
             data,
         });
     });
+}
+
+/// Decode the engine-shipped 32-frame caustic animation from the BAR
+/// install's `bitmaps.sdz` and upload it to the renderer's caustic
+/// texture array. Idempotent -- subsequent calls with the same
+/// `engine_dir` are no-ops. Failure modes (no install detected, no
+/// `bitmaps.sdz` under that engine dir, decode error) all leave
+/// caustics disabled but the renderer functional. Synchronous decode
+/// is acceptable here because the asset is only ~96KB of JPGs that we
+/// touch once at startup.
+pub fn sync_caustics(
+    engine_dir: Option<&std::path::Path>,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let Some(engine_dir) = engine_dir else {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_caustics(&gpu.device, &gpu.queue);
+        }
+        core.caustic_assets_loaded_from = None;
+        return;
+    };
+    let already = core
+        .caustic_assets_loaded_from
+        .as_deref()
+        .is_some_and(|p| p == engine_dir);
+    if already {
+        return;
+    }
+    let bundle = match bar_data::load_water_assets_from_engine_dir(engine_dir) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                engine_dir = %engine_dir.display(),
+                error = %e,
+                "failed to load engine water assets, caustics disabled",
+            );
+            core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
+            return;
+        }
+    };
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        let frames: Vec<(Vec<u8>, u32, u32)> = bundle
+            .caustics
+            .into_iter()
+            .map(|t| (t.rgba, t.width, t.height))
+            .collect();
+        renderer.update_caustics(&gpu.device, &gpu.queue, &frames);
+        tracing::debug!(
+            engine_dir = %engine_dir.display(),
+            "caustic animation uploaded",
+        );
+    }
+    core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
 }
 
 /// Schedule a background load of the SMF_BLEND_NORMALS detail-normal

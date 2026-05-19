@@ -245,6 +245,14 @@ pub struct SmfLighting {
     /// 7-tap blur geometric exponent. Default 1.5
     /// (`MapInfo.cpp:262`).
     pub water_blur_exponent: f32,
+    /// Caustic-sample UV scale (mapinfo `water.causticsResolution`).
+    /// Default 75.0 -- `BumpWaterFS:326` uses
+    /// `texture2D(caustic, uv * CausticsResolution)`.
+    pub caustics_resolution: f32,
+    /// Caustic blend strength (mapinfo `water.causticsStrength`).
+    /// Default 0.08 -- multiplied into the caustic colour before
+    /// adding to the underwater fragment.
+    pub caustics_strength: f32,
     // Height-based "custom" fog (mapinfo's `custom.fog` block). Applied as
     // a final post-pass in the terrain and water shaders -- not part of
     // the engine SMF/BumpWater pipeline but matches in-game appearance
@@ -312,6 +320,12 @@ pub struct SmfLighting {
     /// `splatDetailTex` (singular, color-only) without the four
     /// normal-splat textures need this fallback.
     pub basic_splat_enabled: bool,
+    /// True once the 32-frame caustic texture array has been uploaded
+    /// by `update_caustics`. Gates the engine's caustics block in
+    /// `water.wgsl` (`BumpWaterFS:324-334`). Default false so the
+    /// path is a no-op when no BAR install is detected -- the
+    /// renderer stays usable without engine assets.
+    pub caustic_array_enabled: bool,
     /// 1.0 when the legacy `detailTex` should apply to the playable
     /// area, 0.0 when it shouldn't. Engine-side, `detailTex` is only
     /// applied to the playable area by `SMFFragProg` when the map is
@@ -371,6 +385,7 @@ fn bar_render_smf_with_runtime_overrides(
     light_emission_tex_enabled: bool,
     detail_normal_tex_enabled: bool,
     basic_splat_enabled: bool,
+    caustic_array_enabled: bool,
     elmo_per_render_xz: [f32; 2],
 ) -> SmfLighting {
     smf.skybox_enabled = skybox_enabled;
@@ -381,6 +396,7 @@ fn bar_render_smf_with_runtime_overrides(
     smf.light_emission_tex_enabled = light_emission_tex_enabled;
     smf.detail_normal_tex_enabled = detail_normal_tex_enabled;
     smf.basic_splat_enabled = basic_splat_enabled;
+    smf.caustic_array_enabled = caustic_array_enabled;
     smf.elmo_per_render_xz = elmo_per_render_xz;
     smf
 }
@@ -435,6 +451,8 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             water_perlin_amplitude: w.perlin_amplitude,
             water_blur_base: w.blur_base,
             water_blur_exponent: w.blur_exponent,
+            caustics_resolution: w.caustics_resolution,
+            caustics_strength: w.caustics_strength,
             custom_fog_enabled: ms.custom_fog.enabled,
             custom_fog_color: ms.custom_fog.color,
             custom_fog_height_elmos: ms.custom_fog.height_elmos,
@@ -455,6 +473,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             light_emission_tex_enabled: false,
             detail_normal_tex_enabled: false,
             basic_splat_enabled: false,
+            caustic_array_enabled: false,
             // Apply legacy detailTex only when the map has no splat
             // distribution texture -- matches engine routing of
             // detailTex to the playable area only in that case.
@@ -510,6 +529,8 @@ impl Default for SmfLighting {
             water_perlin_amplitude: 0.9,
             water_blur_base: 2.0,
             water_blur_exponent: 1.5,
+            caustics_resolution: 75.0,
+            caustics_strength: 0.08,
             custom_fog_enabled: false,
             custom_fog_color: [0.0, 0.0, 0.0],
             custom_fog_height_elmos: 0.0,
@@ -527,6 +548,7 @@ impl Default for SmfLighting {
             light_emission_tex_enabled: false,
             detail_normal_tex_enabled: false,
             basic_splat_enabled: false,
+            caustic_array_enabled: false,
             detail_strength: 1.0,
             splat_tex_scales: [1.0, 1.0, 1.0, 1.0],
             splat_tex_mults: [1.0, 1.0, 1.0, 1.0],
@@ -738,9 +760,13 @@ struct WaterParamsUniform {
     /// the 7-tap reflection blur in `water.wgsl` -- the shader divides
     /// `x` by viewport height to get a UV-space offset.
     blur: [f32; 4],
+    /// x = causticsResolution (UV scale), y = causticsStrength
+    /// (intensity multiplier), z = caustics_enabled (0 = off, 1 = on
+    /// once the 32-frame caustic array is uploaded), w reserved.
+    caustics: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 96);
+const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 112);
 
 impl From<&SmfLighting> for WaterParamsUniform {
     fn from(l: &SmfLighting) -> Self {
@@ -783,6 +809,14 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 0.0,
             ],
             blur: [l.water_blur_base, l.water_blur_exponent, 0.0, 0.0],
+            caustics: [
+                l.caustics_resolution,
+                l.caustics_strength,
+                // Enabled gate -- the override fn flips this after
+                // `update_caustics` has populated the 32-frame array.
+                if l.caustic_array_enabled { 1.0 } else { 0.0 },
+                0.0,
+            ],
         }
     }
 }
@@ -901,6 +935,16 @@ pub struct TerrainRenderer {
     refraction_depth_sampler: wgpu::Sampler,
     water_planes_bind_group: wgpu::BindGroup,
     water_planes_bind_group_dummy: wgpu::BindGroup,
+    /// 32-layer caustic-animation texture array. Engine
+    /// `BumpWaterFS:324-334` cycles one frame per game step;
+    /// `water.wgsl` reproduces that by indexing the layer with
+    /// `(camera.time * 30.0) as i32 % 32`. Default 1x1x1 (black) so
+    /// the binding stays valid even when no BAR install was found at
+    /// startup -- the `caustic_array_enabled` flag gates the shader
+    /// stage so no caustic contribution lands in that case.
+    caustic_array_texture: wgpu::Texture,
+    caustic_sampler: wgpu::Sampler,
+    caustic_array_enabled: bool,
     /// Per-map water surface uniform (BumpWater inputs). Re-uploaded each
     /// frame in `render_internal` from the current `SmfLighting`.
     water_params_buffer: wgpu::Buffer,
@@ -1611,6 +1655,27 @@ impl TerrainRenderer {
                         binding: 6,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                    // 32-layer caustic animation. Filtered sample;
+                    // layer index picked by the shader from
+                    // `camera.time`. Engine path
+                    // `BumpWaterFS:324-334` (`uniform sampler2D
+                    // caustic`).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -2378,10 +2443,67 @@ impl TerrainRenderer {
             ..Default::default()
         });
 
+        // Default 1x1x1 black caustic array. Stays bound until
+        // `update_caustics` replaces it with the real 32-frame
+        // animation pulled from `bitmaps.sdz`. The `caustic_array_enabled`
+        // flag in `WaterParams` keeps the shader stage off in the
+        // meantime so this default produces zero visual contribution.
+        let caustic_default = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("caustic_array_default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // Single-layer placeholder writes one black texel so the
+        // texture isn't undefined; D2Array view with depth=1 is valid
+        // for the binding type.
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &caustic_default,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8, 0, 0, 0],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let caustic_default_view = caustic_default.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("caustic_array_default_view"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let caustic_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("caustic_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let make_water_planes_bg =
             |refl_view: &wgpu::TextureView,
              refr_view: &wgpu::TextureView,
-             refr_depth_view: &wgpu::TextureView| {
+             refr_depth_view: &wgpu::TextureView,
+             caust_view: &wgpu::TextureView| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("water_planes_bind_group"),
                     layout: &water_planes_bind_group_layout,
@@ -2414,6 +2536,14 @@ impl TerrainRenderer {
                             binding: 6,
                             resource: wgpu::BindingResource::Sampler(&refraction_depth_sampler),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::TextureView(caust_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: wgpu::BindingResource::Sampler(&caustic_sampler),
+                        },
                     ],
                 })
             };
@@ -2421,11 +2551,13 @@ impl TerrainRenderer {
             &reflection_default_view,
             &refraction_default_view,
             &refraction_depth_default_view,
+            &caustic_default_view,
         );
         let water_planes_bind_group_dummy = make_water_planes_bg(
             &reflection_default_view,
             &refraction_default_view,
             &refraction_depth_default_view,
+            &caustic_default_view,
         );
 
         let water_normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2730,6 +2862,9 @@ impl TerrainRenderer {
             refraction_depth_sampler,
             water_planes_bind_group,
             water_planes_bind_group_dummy,
+            caustic_array_texture: caustic_default,
+            caustic_sampler,
+            caustic_array_enabled: false,
             water_params_buffer,
             last_water_params: WaterParamsUniform::default(),
             water_normal_texture,
@@ -3780,6 +3915,199 @@ impl TerrainRenderer {
         self.rebuild_material_bind_group(device);
     }
 
+    /// Replace the 32-frame caustic animation. Each frame is one RGBA8
+    /// image with `(width, height)`; all frames must share the same
+    /// dimensions. The renderer creates a fresh `texture_2d_array`
+    /// with 32 layers and uploads them sequentially, then rebuilds
+    /// the water-planes bind group so the next render sees the new
+    /// texture. Engine path `BumpWaterFS:324-334` (`uniform sampler2D
+    /// caustic`); we map "engine swaps texture per game step" onto
+    /// "shader picks layer index from `(time * 30) % 32`".
+    ///
+    /// `frames` must contain exactly 32 entries -- the engine hardcodes
+    /// 32 frames. Returns silently on mismatched count so a partial
+    /// install can't take the renderer down.
+    pub fn update_caustics(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: &[(Vec<u8>, u32, u32)],
+    ) {
+        if frames.len() != 32 {
+            tracing::warn!(
+                got = frames.len(),
+                "caustic update expects 32 frames, ignoring",
+            );
+            return;
+        }
+        let (_, width, height) = frames[0];
+        if frames.iter().any(|(_, w, h)| *w != width || *h != height) {
+            tracing::warn!("caustic frames must all share dimensions, ignoring upload",);
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("caustic_array"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (layer, (rgba, _, _)) in frames.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.caustic_array_texture = texture;
+        self.caustic_array_enabled = true;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Reset caustics to the 1x1x1 black default. The shader gate
+    /// stays off until `update_caustics` runs again.
+    pub fn clear_caustics(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("caustic_array_default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8, 0, 0, 0],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.caustic_array_texture = texture;
+        self.caustic_array_enabled = false;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Rebuild the water-planes bind group against the current caustic
+    /// texture. Called by `update_caustics` / `clear_caustics`; the
+    /// reflection / refraction views are preserved from the last
+    /// reflection-pass setup (`resize_render_target`).
+    fn rebuild_water_planes_bind_group(&mut self, device: &wgpu::Device) {
+        // If the reflection/refraction views haven't been set yet
+        // (no water-bearing map loaded), point at the same dummy
+        // bind group -- nothing draws water in that state anyway.
+        let Some(refl_view) = self.reflection_view.as_ref() else {
+            return;
+        };
+        let Some(refr_view) = self.refraction_view.as_ref() else {
+            return;
+        };
+        let refr_depth_view = self
+            .refraction_texture
+            .as_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
+        let _ = refr_depth_view; // depth view comes from the depth attachment, not the colour tex
+
+        // The actual refraction-depth view lives behind
+        // `self.refraction_depth_view`; we reuse the existing bind
+        // group's depth view by reading from the same field used in
+        // `resize_render_target`.
+        let Some(refr_depth_sample) = self.refraction_depth_view.as_ref() else {
+            return;
+        };
+        let caustic_view = self
+            .caustic_array_texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                label: Some("caustic_array_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+        self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("water_planes_bind_group"),
+            layout: &self.water_planes_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(refl_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.reflection_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(refr_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.refraction_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.water_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(refr_depth_sample),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&self.refraction_depth_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&caustic_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&self.caustic_sampler),
+                },
+            ],
+        });
+    }
+
     /// Replace the `lightEmissionTex` 2D texture. Sets
     /// `light_emission_tex_enabled` on so the terrain shader's apply-
     /// emission stage actually runs. Engine path `SMF_LIGHT_EMISSION`
@@ -4316,6 +4644,13 @@ impl TerrainRenderer {
         let refraction_depth_sample_view =
             refraction_depth.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let caustic_view = self
+            .caustic_array_texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                label: Some("caustic_array_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
             layout: &self.water_planes_bind_group_layout,
@@ -4347,6 +4682,14 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(&self.refraction_depth_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&caustic_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&self.caustic_sampler),
                 },
             ],
         });
@@ -4402,6 +4745,7 @@ impl TerrainRenderer {
             self.light_emission_tex_enabled,
             self.detail_normal_tex_enabled,
             self.basic_splat_enabled,
+            self.caustic_array_enabled,
             self.elmo_per_render_xz,
         );
         self.x_extent = f.x_extent;

@@ -95,6 +95,12 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     if let Some(v) = parse_mapinfo_number(lua, "blurExponent") {
         water.blur_exponent = v;
     }
+    if let Some(v) = parse_mapinfo_number(lua, "causticsResolution") {
+        water.caustics_resolution = v;
+    }
+    if let Some(v) = parse_mapinfo_number(lua, "causticsStrength") {
+        water.caustics_strength = v;
+    }
 
     // Lighting table.
     let lighting = &mut settings.lighting;

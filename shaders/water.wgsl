@@ -52,6 +52,11 @@ struct WaterParams {
     /// by `camera.screen_h` to get a UV-space offset, then applies
     /// progressively-larger taps via the `y` exponent.
     blur: vec4<f32>,
+    /// x = causticsResolution, y = causticsStrength, z = caustics
+    /// enabled (0 = off, 1 = on once the 32-frame array is uploaded),
+    /// w reserved. Drives the engine's
+    /// `BumpWaterFS:324-334` caustics block.
+    caustics: vec4<f32>,
 }
 
 @group(2) @binding(4) var<uniform> water_params: WaterParams;
@@ -66,6 +71,15 @@ struct WaterParams {
 /// across the water surface.
 @group(2) @binding(5) var refraction_depth_tex: texture_depth_2d;
 @group(2) @binding(6) var refraction_depth_sam: sampler;
+
+/// 32-frame caustic animation pulled from the engine's
+/// `bitmaps/caustics/caustic00..31.jpg` (loaded via
+/// `bar_data::water_assets`). Engine cycles one frame per game step
+/// (`BumpWaterFS:326` samples a single `caustic` texture that the host
+/// swaps); we encode that as a layer pick from `camera.time` at the
+/// engine's 30 game-frames-per-second rate.
+@group(2) @binding(7) var caustic_array: texture_2d_array<f32>;
+@group(2) @binding(8) var caustic_sam: sampler;
 
 /// Sample the water normal map at four scales with time-animated UV offsets,
 /// then accumulate with the PerlinAmp falloff. Matches `BumpWaterFS.glsl:
@@ -298,6 +312,42 @@ fn shade_water(
     let refl_color = refl_acc * 0.125;
     let fresnel = water_fresnel(angle);
     col = mix(col, refl_color, fresnel * shallow_scale);
+
+    // --- 5.5. Caustics ---------------------------------------------------
+    // Engine `BumpWaterFS:324-334`:
+    //   if (waterdepth > 0) {
+    //     vec3 caust = texture2D(caustic, texCoords[0].pq * CausticsResolution);
+    //     float caustBlend = smoothstep(CausticRange, 0,
+    //                                   abs(waterdepth - CausticDepth));
+    //     col += caust * caustBlend * CausticsStrength;
+    //   }
+    // CausticDepth (0.5) and CausticRange (0.45) are compile-time
+    // `#define`s in upstream (`BumpWaterFS.glsl:14-15`). Frame index
+    // cycles at engine's 30-game-FPS rate.
+    //
+    // Engine's `texCoords[0].pq = world.xz * scaleX/mapX` works out to
+    // a per-elmo UV rate of `1/8192` for square maps regardless of map
+    // size (see `BumpWater.cpp:461-463`), so we apply the same constant
+    // here. Width / count of tile repetitions across the map then
+    // scales linearly with `causticsResolution`.
+    if (water_params.caustics.z > 0.5) {
+        let world_xz_elmos = world_pos.xz * camera.splat_params.xy;
+        let caust_uv = world_xz_elmos * (water_params.caustics.x / 8192.0);
+        let frame_idx = i32(camera.time * 30.0) % 32;
+        let caust = textureSample(
+            caustic_array,
+            caustic_sam,
+            caust_uv,
+            frame_idx,
+        ).rgb;
+        // Approximate `waterdepth` as the heightmap-derived 0..1 value
+        // already computed by `water_shallow_scale`. That uses a
+        // 33-elmo full-scale gate -- close enough to the engine's
+        // normalised invwaterdepth for the caustic-blend curve.
+        let waterdepth = shallow_scale;
+        let caust_blend = smoothstep(0.45, 0.0, abs(waterdepth - 0.5));
+        col = col + caust * caust_blend * water_params.caustics.y;
+    }
 
     // --- 6. Tonemap ------------------------------------------------------
     // BumpWaterFS produces HDR values: `waterSurface = surfaceColor +

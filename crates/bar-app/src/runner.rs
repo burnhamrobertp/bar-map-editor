@@ -658,6 +658,16 @@ impl eframe::App for AppRunner {
 
         // Delegate layout rendering to the layout manager.
         let layout = self.app.active_layout();
+        // Active engine dir (`<install>/data/engine/<version>/`) for
+        // engine-shipped water assets (foam, caustics). Pulled from
+        // the first detected engine version, which is the newest by
+        // mtime per `BarVersions::detect`.
+        let engine_dir = self
+            .bar_install
+            .as_ref()
+            .and_then(|v| v.engines.first())
+            .and_then(|e| e.exe.parent())
+            .map(|p| p.to_path_buf());
         self.layout_manager.update(
             ctx,
             &mut self.app,
@@ -666,6 +676,7 @@ impl eframe::App for AppRunner {
             &self.render_state,
             &self.executor,
             self.feature_catalog.as_ref(),
+            engine_dir.as_deref(),
         );
     }
 }

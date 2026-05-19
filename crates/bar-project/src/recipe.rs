@@ -465,6 +465,18 @@ pub struct WaterSettings {
     /// (`BlurExponent` in `BumpWaterFS:234-244`). Default 1.5 per
     /// `MapInfo.cpp:262`.
     pub blur_exponent: f32,
+    /// Per-frag UV scale for the caustic animation sample (mapinfo
+    /// `water.causticsResolution`, default 75.0 per `MapInfo.cpp:273`).
+    /// `BumpWaterFS:326`: `texture2D(caustic, texCoords[0].pq *
+    /// CausticsResolution)`. Multiplies the engine's UV-space caustic
+    /// tile rate -- higher = finer tiling, more "shimmer".
+    pub caustics_resolution: f32,
+    /// Caustic-pattern intensity multiplier (mapinfo
+    /// `water.causticsStrength`, default 0.08 per `MapInfo.cpp:274`).
+    /// Engine blends the caustic colour into underwater fragments by
+    /// `* CausticsStrength` -- 0 disables, ~0.1 is the typical
+    /// in-engine subtle shimmer.
+    pub caustics_strength: f32,
 }
 
 impl Default for WaterSettings {
@@ -490,6 +502,8 @@ impl Default for WaterSettings {
             perlin_amplitude: 0.9,
             blur_base: 2.0,
             blur_exponent: 1.5,
+            caustics_resolution: 75.0,
+            caustics_strength: 0.08,
         }
     }
 }
