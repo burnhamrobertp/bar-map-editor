@@ -689,7 +689,19 @@ pub fn sync_basic_splat_tex(
                 None
             }),
             None => {
-                tracing::warn!(file = %filename, "splatDetailTex not found in project");
+                // Map authors commonly set `splatDetailTex = "iwantDNTS.tga"` as a
+                // sentinel just to satisfy engine version-dependent path gating;
+                // the file itself isn't shipped because the normal-splat path
+                // (`splatDetailNormalTex1..4`) is what actually renders. Engine
+                // mirrors this with a silent grey fallback
+                // (`bar-recoil/rts/Map/SMF/SMFReadMap.cpp:264-267`), so we
+                // log at debug-level rather than warn -- a noisy warn would
+                // fire on every map import for the most common DNTS setup.
+                tracing::debug!(
+                    file = %filename,
+                    "splatDetailTex not found; basic-splat path stays disabled \
+                     (normal-splat takes over if its textures are present)",
+                );
                 None
             }
         };
