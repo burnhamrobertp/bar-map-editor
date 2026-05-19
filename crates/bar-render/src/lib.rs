@@ -12,6 +12,7 @@ pub mod renderer;
 pub mod shadow;
 pub mod terrain;
 pub mod thumbnail;
+pub mod widgets;
 
 pub use camera::Camera;
 pub use feature_lights::{lights_for_feature_def, FeatureLightConfig};

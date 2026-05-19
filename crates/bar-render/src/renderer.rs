@@ -265,14 +265,13 @@ pub struct SmfLighting {
     /// the per-map coast-distance field. Gates the shader's foam
     /// stage so machines without a BAR install don't render garbage.
     pub foam_enabled: bool,
-    // Height-based "custom" fog (mapinfo's `custom.fog` block). Applied as
-    // a final post-pass in the terrain and water shaders -- not part of
-    // the engine SMF/BumpWater pipeline but matches in-game appearance
-    // because BAR ships a widget that renders it.
-    pub custom_fog_enabled: bool,
-    pub custom_fog_color: [f32; 3],
-    pub custom_fog_height_elmos: f32,
-    pub custom_fog_atten: f32,
+    /// Height-based "custom" fog widget state. Applied as a final
+    /// post-pass in the terrain shader -- not engine-native, but
+    /// driven by the per-map `mapinfo.custom.fog` block that BAR's
+    /// game-side widget reads. Owned by
+    /// `crates/bar-render/src/widgets/custom_fog.rs` so widget
+    /// effects stay segmented from engine pipeline state.
+    pub custom_fog: crate::widgets::custom_fog::CustomFogWidget,
     // Atmosphere / sky parameters (`atmosphere = { ... }` in mapinfo).
     // Drive the procedural sky shader so each map has its authored sky
     // rather than a hardcoded one.
@@ -472,10 +471,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             wave_foam_intensity: w.wave_foam_intensity,
             wave_length: w.wave_length,
             foam_enabled: false,
-            custom_fog_enabled: ms.custom_fog.enabled,
-            custom_fog_color: ms.custom_fog.color,
-            custom_fog_height_elmos: ms.custom_fog.height_elmos,
-            custom_fog_atten: ms.custom_fog.atten,
+            custom_fog: crate::widgets::custom_fog::CustomFogWidget::from_settings(ms),
             sun_color: ms.atmosphere.sun_color,
             sun_intensity: ms.lighting.sun_intensity,
             sky_color: ms.atmosphere.sky_color,
@@ -555,10 +551,7 @@ impl Default for SmfLighting {
             wave_foam_intensity: 0.5,
             wave_length: 0.15,
             foam_enabled: false,
-            custom_fog_enabled: false,
-            custom_fog_color: [0.0, 0.0, 0.0],
-            custom_fog_height_elmos: 0.0,
-            custom_fog_atten: 0.0,
+            custom_fog: crate::widgets::custom_fog::CustomFogWidget::default(),
             sun_color: [1.0, 1.0, 1.0],
             sun_intensity: 1.0,
             sky_color: [0.1, 0.15, 0.7],
@@ -628,35 +621,37 @@ impl SmfLighting {
                 0.0,
             ],
             water_min_color: [self.water_min[0], self.water_min[1], self.water_min[2], 0.0],
-            custom_fog_color_atten: [
-                self.custom_fog_color[0],
-                self.custom_fog_color[1],
-                self.custom_fog_color[2],
-                self.custom_fog_atten,
-            ],
-            custom_fog_params: [
-                if self.custom_fog_enabled { 1.0 } else { 0.0 },
-                self.custom_fog_height_elmos,
-                // Repurposed: gates the map-edge extension between
-                // sampling `grassShadingTex` (when set) and falling
-                // back to the playable albedo (when unset). Belongs
-                // in a future dedicated `extension_params` uniform;
-                // packed here for now to avoid touching the layout.
-                if self.grass_shading_tex_enabled {
-                    1.0
-                } else {
-                    0.0
-                },
-                // Gates the engine's `SMF_LIGHT_EMISSION` apply-emission
-                // stage in `terrain.wgsl` -- when 0 the shader skips
-                // the blend; when 1 it applies `fragColor = fragColor *
-                // (1 - emit.a) + emit.rgb` (`SMFFragProg.glsl:392-401`).
-                if self.light_emission_tex_enabled {
-                    1.0
-                } else {
-                    0.0
-                },
-            ],
+            // Widget half of the uniform: custom-fog colour + atten
+            // (owned by `widgets::custom_fog`). The `.zw` lanes of
+            // `custom_fog_params` are non-widget runtime flags that
+            // happen to share the slot for layout-density reasons;
+            // see below.
+            custom_fog_color_atten: self.custom_fog.pack_color_atten(),
+            custom_fog_params: {
+                let xy = self.custom_fog.pack_params_xy();
+                [
+                    xy[0],
+                    xy[1],
+                    // Repurposed: gates the map-edge extension
+                    // between sampling `grassShadingTex` (when set)
+                    // and falling back to the playable albedo
+                    // (when unset). Belongs in a future dedicated
+                    // `extension_params` uniform; packed here for
+                    // now to avoid touching the layout.
+                    if self.grass_shading_tex_enabled {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    // Gates the engine's `SMF_LIGHT_EMISSION` apply-
+                    // emission stage in `terrain.wgsl`.
+                    if self.light_emission_tex_enabled {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ]
+            },
             sun_color: [
                 self.sun_color[0],
                 self.sun_color[1],
@@ -6038,6 +6033,6 @@ mod tests {
         assert_eq!(smf.water_surface_color, ms.water.surface_color);
         assert_eq!(smf.water_diffuse_color, ms.water.diffuse_color);
         assert_eq!(smf.water_specular_color, ms.water.specular_color);
-        assert_eq!(smf.custom_fog_color, ms.custom_fog.color);
+        assert_eq!(smf.custom_fog.color, ms.custom_fog.color);
     }
 }
