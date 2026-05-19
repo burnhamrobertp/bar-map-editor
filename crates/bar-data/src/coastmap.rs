@@ -13,13 +13,16 @@
 //! Output texture layout (matches what `water.wgsl`'s `GetShorewaves`
 //! port reads):
 //!
-//! - R: refined coastdist in `[0, 1]`. 0 = on land or right at the
-//!   shoreline; 1 = a foam-band's-worth offshore. Engine packs this
-//!   into `coast.g`; we use the R channel because we store as
-//!   `Rgba8Unorm` and the engine's three channels are independent
-//!   anyway.
-//! - G: raw coastdist (linear). Engine packs into `coast.r`. Used by
-//!   the "cliff foam" term that requires sharp distance falloff.
+//! - R: refined coast intensity in `[0, 1]`. 1 = at the shoreline;
+//!   0 = a foam-band's-worth offshore. Polarity matches engine's
+//!   `coast.g`: `BumpWaterFS:204-206` uses `f * 1.4 - coastdist`
+//!   then `1 - f * InvWavesLength`, which produces visible foam
+//!   only when `coastdist` is high (i.e. near the shore). If you
+//!   flip the polarity, the foam intensity saturates across the
+//!   open ocean instead -- this was a Phase 6 regression we fixed
+//!   by aligning with the engine's encoding.
+//! - G: raw coast intensity, same polarity. Engine's `coast.r`. Used
+//!   by the cliff-foam term via `pow(coast.r, 3)`.
 //! - B: invwaterdepth in `[0, 1]`. 1 = at or above water plane;
 //!   0 = at or below the deep-water threshold. Engine reads this in
 //!   `GetWaterHeight` to gate foam off where the seabed is too deep.
@@ -114,15 +117,20 @@ pub fn bake_coastmap(heightmap: &[f32], width: u32, height: u32, water_y: f32) -
     let mut out = vec![0u8; w * h * 4];
     for (i, &z) in heightmap.iter().enumerate() {
         let d = dist[i];
-        // Refined coastdist (R): smoothstep-like easing of the raw
-        // distance over the foam band. Engine uses a multi-pass blur
-        // for the same purpose; smoothstep is a close approximation
-        // for preview quality.
+        // Normalised distance d_norm: 0 at the shoreline, 1 a
+        // foam-band-radius offshore. We invert this below to match
+        // engine `coast.g` polarity (high near shore, falls to 0 in
+        // open ocean).
         let d_norm = (d / COAST_DISTANCE_TEXELS).clamp(0.0, 1.0);
-        let refined = d_norm * d_norm * (3.0 - 2.0 * d_norm);
-        // Raw distance (G): linear, used by the cliff-foam term that
-        // pow()s it to a high power.
-        let raw = d_norm;
+        // Refined coast intensity (R, engine's coast.g): 1 at the
+        // shoreline, 0 a band offshore. Smoothstep gives a soft
+        // foam-band roll-off rather than a hard linear falloff.
+        let shore = 1.0 - d_norm;
+        let refined = shore * shore * (3.0 - 2.0 * shore);
+        // Raw coast intensity (G, engine's coast.r): same polarity,
+        // linear. Cubed by the cliff-foam term so the falloff
+        // becomes very sharp.
+        let raw = shore;
         // invwaterdepth (B): 1 at the shoreline / above water,
         // decreases as the depth grows. 0 means deep enough that
         // foam should not appear.
@@ -142,21 +150,21 @@ pub fn bake_coastmap(heightmap: &[f32], width: u32, height: u32, water_y: f32) -
 mod tests {
     use super::*;
 
-    /// Land texels (height > water_y) get coastdist = 0; far-from-land
-    /// water texels saturate to 1 once they're past the foam-band
-    /// radius (`COAST_DISTANCE_TEXELS`).
+    /// Land / shoreline texels get peak coast intensity (R == 255);
+    /// open-ocean texels past the foam band collapse to 0. Polarity
+    /// matches engine `coast.g`.
     #[test]
-    fn distance_zero_on_land() {
+    fn shore_intensity_peaks_on_land() {
         let size = (COAST_DISTANCE_TEXELS as usize) * 2 + 4;
         let hm: Vec<f32> = (0..(size * size))
             .map(|i| if i == 0 { 10.0 } else { -1.0 })
             .collect();
         let out = bake_coastmap(&hm, size as u32, size as u32, 0.0);
-        // (0, 0) is land -- distance R == 0.
-        assert_eq!(out[0], 0);
-        // Far corner is well past the foam-band radius -- saturated.
+        // (0, 0) is on land -- R saturates to 255 (peak shore foam).
+        assert_eq!(out[0], 255);
+        // Far corner is past the foam band -- R == 0 (no foam).
         let far = (size - 1) * size + (size - 1);
-        assert_eq!(out[far * 4], 255);
+        assert_eq!(out[far * 4], 0);
     }
 
     /// invwaterdepth is 1 on land and decreases with depth below the
@@ -180,17 +188,23 @@ mod tests {
         assert_eq!(b3, 0);
     }
 
-    /// Diagonal-only land arrangement: distances grow with chamfer
-    /// metric (1.0 cardinal, ~1.414 diagonal).
+    /// Diagonal-only land arrangement: shore intensity DROPS faster
+    /// for the cardinal-step neighbour (closer to land) than for the
+    /// diagonal-step neighbour (farther from land). Polarity-flipped
+    /// from the raw chamfer distance.
     #[test]
     fn chamfer_metric_diagonal() {
         let mut hm = vec![-1.0f32; 4 * 4];
         hm[5] = 10.0; // land at (1, 1)
         let out = bake_coastmap(&hm, 4, 4, 0.0);
-        // (0, 0): diagonal step from land = SQRT_2 / 32 ≈ 0.0442.
-        let d_00 = out[0] as f32 / 255.0;
-        // (2, 1): cardinal step from land = 1 / 32 ≈ 0.0312.
-        let d_21 = out[(4 + 2) * 4] as f32 / 255.0;
-        assert!(d_00 > d_21, "expected diagonal {d_00} > cardinal {d_21}");
+        // (0, 0): one diagonal step from land (~1.414 / 32 norm).
+        let r_00 = out[0] as f32 / 255.0;
+        // (2, 1): one cardinal step from land (1 / 32 norm) -- closer,
+        // so shore intensity should be HIGHER.
+        let r_21 = out[(4 + 2) * 4] as f32 / 255.0;
+        assert!(
+            r_21 > r_00,
+            "cardinal neighbour {r_21} should have higher shore intensity than diagonal {r_00}",
+        );
     }
 }

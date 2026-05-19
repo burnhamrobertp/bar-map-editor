@@ -133,10 +133,21 @@ fn get_shorewaves(
     if water_params.caustics.w < 0.5 {
         return vec3<f32>(0.0);
     }
+    // The coastmap is baked at heightmap dimensions over the playable
+    // area only -- sampling outside [0, 1] is undefined. The shared
+    // `caustic_sam` runs in Repeat addressing for the foam / waverand
+    // tiles, so without an explicit early-out the off-playable water
+    // (the mirrored map-edge extension) would re-sample the playable
+    // coastmap and pick up its shoreline-foam pattern out at sea.
+    // That was the Phase 6 "water flashing white in the extension"
+    // regression.
+    if any(coast_uv < vec2<f32>(0.0)) || any(coast_uv > vec2<f32>(1.0)) {
+        return vec3<f32>(0.0);
+    }
     // Coastmap encoding (see `bar_data::coastmap::bake_coastmap`):
-    //   R = refined distance (engine's coast.g)
-    //   G = raw distance      (engine's coast.r)
-    //   B = invwaterdepth     (engine's coast.b)
+    //   R = refined coast intensity (engine's coast.g, high at shore)
+    //   G = raw coast intensity      (engine's coast.r, high at shore)
+    //   B = invwaterdepth            (engine's coast.b, 1 above water)
     let coast = textureSample(coastmap_tex, caustic_sam, coast_uv).rgb;
     let coast_refined = coast.r;
     let coast_raw     = coast.g;
@@ -462,6 +473,14 @@ fn shade_water(
     // (`bar_data::coastmap::bake_coastmap`). The gate sits inside
     // `get_shorewaves` -- returns zero when neither has been
     // uploaded.
+    //
+    // Engine animation counter: `frame = (frameNum + timeOffset)
+    // / 15000.0` (`BumpWater.cpp:933`). At BAR's 30 game-fps this
+    // grows by `30/15000 = 0.002` per second of wall clock. We
+    // mirror with `camera.time / 500.0` so the foam phase animates
+    // at the same rate engine does -- a faster rate (e.g.
+    // `camera.time * 30`) feeds back through the `fract` in the
+    // foam math and strobes per render frame.
     let coast_uv = vec2<f32>(
         world_pos.x / (2.0 * camera.x_extent) + 0.5,
         world_pos.z / (2.0 * camera.z_extent) + 0.5,
@@ -470,7 +489,7 @@ fn shade_water(
         world_pos.xz,
         coast_uv,
         normal,
-        camera.time * 30.0,
+        camera.time / 500.0,
     );
 
     // --- 6. Tonemap ------------------------------------------------------
