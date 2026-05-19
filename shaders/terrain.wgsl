@@ -558,6 +558,28 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
         let curv_alpha = clamp(1.0 + 6.0 * (curv_acc + 0.18), 0.0, 1.0);
 
+        // Pre-pass branch: in refraction / reflection passes
+        // (`skip_water > 0.5`), fade the extension content with the
+        // SAME curvature alpha used in the main pass, but toward
+        // `fog_color` (engine refraction-pass clear colour). This is
+        // the refraction-pass analogue of the engine widget's
+        // alpha-blend "fade to whatever's behind" -- the widget itself
+        // isn't in the engine's refraction texture, but our renderer
+        // is single-pipeline-for-all-passes, so we have to emit
+        // something. mix(fog_color, darkened, curv_alpha) gives:
+        //   - high curv_alpha (near playable boundary): visible
+        //     lit terrain content for water refraction to sample.
+        //   - low curv_alpha (far curve-off): the same fogColor the
+        //     refraction pass cleared to elsewhere -- so off-playable
+        //     water past the extension fade looks identical to
+        //     off-playable water without extension nearby.
+        // Avoids the mint tint that `smf_water_absorb` produces (via
+        // water_base_color) and avoids the sky-cubemap fade target
+        // that would leak the skybox into the refraction sample.
+        if (camera.skip_water > 0.5) {
+            return vec4<f32>(mix(camera.fog_color.rgb, darkened, curv_alpha), 1.0);
+        }
+
         // Edge fog -- linear falloff in camera-to-fragment world
         // distance, blended toward the atmosphere's sky colour.
         // Replaces the engine widget's "mix toward fogColor by
@@ -588,14 +610,33 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         let fog_target = camera.fog_color.rgb;
         let after_fog = mix(fog_target, darkened, fog_factor);
 
-        // Curvature alpha would normally drive output alpha for the
-        // engine's transparent-blend pipeline (where the sky shows
-        // through behind the extension). In our opaque pipeline the
-        // closest approximation is to mix toward the sky colour at
-        // the curvature falloff -- procedural-sky maps get the
-        // authored sky tint; cubemap-skybox maps get an approximation
-        // that's not pixel-perfect but reads as "dissolves into sky".
-        let sky_tint = camera.sky_color_density.rgb;
+        // Curvature alpha drives output alpha in the engine's
+        // transparent-blend pipeline (`map_edge_extension2.lua:391`:
+        // `finalColor.a = alphaFog.x`). The visible result of the
+        // alpha blend is `lit_fragment * curv_alpha + sky_pixel *
+        // (1 - curv_alpha)`, where `sky_pixel` is the rendered sky
+        // cubemap at that fragment's screen direction.
+        //
+        // Our opaque pipeline can't do that blend, but we can sample
+        // the cubemap ourselves with the same direction the sky
+        // pipeline would use for that pixel: the camera-to-fragment
+        // direction. That gives a per-fragment fade target that
+        // matches the cubemap content the engine would have shown
+        // behind the fragment. Critically this is NOT
+        // `sky_color_density.rgb` -- mapinfo `atmosphere.skyColor`
+        // is the procedural-sky uniform, often authored as a bright
+        // daylight value even when the actual cubemap is dark; using
+        // it as the fade target produces visible pale-blue beneath
+        // the water where the cubemap-sampling approach would give
+        // the dark mountain/ground content the cubemap actually
+        // contains in that direction.
+        let view_dir = normalize(in.world_position - camera.camera_pos);
+        let cubemap_sky = textureSample(skybox_tex, skybox_sam, view_dir).rgb;
+        let sky_tint = select(
+            camera.sky_color_density.rgb,
+            cubemap_sky,
+            camera.skybox_params.x > 0.5,
+        );
         let composited = mix(sky_tint, after_fog, curv_alpha);
         return vec4<f32>(apply_custom_fog(composited, in.world_position), 1.0);
     }

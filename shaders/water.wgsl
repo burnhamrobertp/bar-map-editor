@@ -267,8 +267,32 @@ fn shade_water(
     // pick up the mirror-like reflection.
     let refl_distort = normal.xz * 0.05 * water_params.factors.z;
     let refl_uv      = clamp(screen_uv + refl_distort, vec2<f32>(0.0), vec2<f32>(1.0));
-    let refl_color   = textureSample(reflection_texture, reflection_sampler, refl_uv).rgb;
-    let fresnel      = water_fresnel(angle);
+
+    // Engine `opt_blurreflection` (BumpWaterFS:234-244): 7 extra
+    // reflection samples along a vertical streak with geometric-
+    // progression spacing, all averaged together. Softens / dims the
+    // peak brightness of bright cubemap reflections at glancing
+    // angles. Engine defaults (`MapInfo.cpp:261-262`):
+    //   blurBase = 2.0 (pixels, then / viewSizeY in shader define)
+    //   blurExponent = 1.5
+    var refl_acc = textureSample(reflection_texture, reflection_sampler, refl_uv).rgb;
+    var blur_off = vec2<f32>(0.0, 2.0 / max(camera.screen_h, 1.0));
+    let blur_exp = 1.5;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    blur_off *= blur_exp;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    blur_off *= blur_exp;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    blur_off *= blur_exp;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    blur_off *= blur_exp;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    blur_off *= blur_exp;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    blur_off *= blur_exp;
+    refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
+    let refl_color = refl_acc * 0.125;
+    let fresnel = water_fresnel(angle);
     col = mix(col, refl_color, fresnel * shallow_scale);
 
     // --- 6. Tonemap ------------------------------------------------------
