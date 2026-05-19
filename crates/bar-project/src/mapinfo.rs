@@ -971,6 +971,52 @@ custom = {
     }
 
     #[test]
+    fn debug_parses_real_onyx_block() {
+        // Verbatim from Onyx Cauldron 2.2.2 mapinfo.lua (custom block
+        // only). Catches issues like extract_table_body losing the
+        // sub-table when a sibling table (`fog`, `clouds`) sits
+        // between or after grassConfig.
+        let lua = r#"
+custom = {
+    grassConfig= {
+        grassDistTGA = "maps/Onyx Cauldron 2.0_grassDist.tga",
+        grassMaxSize = 2.0,
+        grassBladeColorTex = "maps/grass_field_mixed.dds.cached.dds", -- rgb + alpha transp
+        grassShaderParams = { -- allcaps because thats how i know
+            MAPCOLORFACTOR = 0.2, -- how much effect the minimapcolor has
+            MAPCOLORBASE = 0.6,     --how much more to blend the bottom of the grass patches into map color
+        },
+    },
+    fog = {
+        color    = {0.71, 0.71, 0.86},
+        height   = "40%",
+        fogatten = 0.0075,
+    },
+    clouds = {
+        speed = 0.05,
+        color    = {0.9, 0.9, 0.9},
+        height   = 1100,
+        bottom = 300,
+    },
+},
+"#;
+        let mut settings = MapSettings {
+            max_height: 980.0,
+            ..MapSettings::default()
+        };
+        apply_mapinfo_overrides(lua, &mut settings);
+        assert_eq!(
+            settings.custom_grass.dist_tga,
+            "maps/Onyx Cauldron 2.0_grassDist.tga"
+        );
+        assert_eq!(
+            settings.custom_grass.blade_color_tex,
+            "maps/grass_field_mixed.dds.cached.dds"
+        );
+        assert!(settings.custom_fog.enabled);
+    }
+
+    #[test]
     fn custom_grass_without_dist_tga_disabled() {
         let lua = r#"
 custom = {
