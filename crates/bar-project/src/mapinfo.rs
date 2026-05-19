@@ -92,7 +92,14 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
 
     // Lighting table.
     let lighting = &mut settings.lighting;
-    if let Some(v) = parse_mapinfo_vec3(lua, "sunDir") {
+    // Engine reads `sunDir` as a `float4` (`bar-recoil/rts/Map/MapInfo.cpp:207`)
+    // with `.w` as sun intensity, packed into `sunColor.w` for the sky shader
+    // (`ModernSky.cpp:82`). Older / simpler mapinfo files write a 3-vector;
+    // engine treats the 4th as 1.0 by default.
+    if let Some(v) = parse_mapinfo_vec4(lua, "sunDir") {
+        lighting.sun_dir = [v[0], v[1], v[2]];
+        lighting.sun_intensity = v[3];
+    } else if let Some(v) = parse_mapinfo_vec3(lua, "sunDir") {
         lighting.sun_dir = v;
     }
     if let Some(v) = parse_mapinfo_vec3(lua, "groundAmbientColor") {
@@ -745,6 +752,21 @@ sunDir = { -0.64, 0.66, -0.57 },
         assert!((settings.water.fresnel_max - 0.5).abs() < 1e-6);
         assert_eq!(settings.water.base_color, [0.05, 0.7, 0.6]);
         assert_eq!(settings.lighting.sun_dir, [-0.64, 0.66, -0.57]);
+        // 3-element sunDir leaves intensity at its default 1.0.
+        assert!((settings.lighting.sun_intensity - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn four_element_sun_dir_picks_up_intensity() {
+        // Mirrors the engine's `light.sunDir = lightTable.GetFloat4("sunDir", ...)`
+        // path (`bar-recoil/rts/Map/MapInfo.cpp:207`). The 4th component is
+        // packed into `sunColor.w` by `ModernSky.cpp:82` and multiplied into
+        // the sun corona by `ModernSkyFS.glsl:88`.
+        let lua = "sunDir = { -0.64, 0.66, -0.57, 0.75 },";
+        let mut settings = MapSettings::default();
+        apply_mapinfo_overrides(lua, &mut settings);
+        assert_eq!(settings.lighting.sun_dir, [-0.64, 0.66, -0.57]);
+        assert!((settings.lighting.sun_intensity - 0.75).abs() < 1e-6);
     }
 
     #[test]

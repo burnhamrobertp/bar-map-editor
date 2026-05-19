@@ -337,6 +337,13 @@ pub struct ResourcesSettings {
 #[serde(default)]
 pub struct LightingSettings {
     pub sun_dir: [f32; 3],
+    /// Sun intensity multiplier. Mapinfo stores this as the 4th component
+    /// of `sunDir` (`light.sunDir = float4(x, y, z, intensity)` per
+    /// `bar-recoil/rts/Map/MapInfo.cpp:207`). The engine packs it into
+    /// `sunColor.w` and the sky shader multiplies the sun-corona term by
+    /// it (`ModernSkyFS.glsl:88` / `ModernSky.cpp:82`). Defaults to 1.0;
+    /// maps that dim the sun set this between 0 and 1.
+    pub sun_intensity: f32,
     pub ground_ambient: [f32; 3],
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
@@ -379,6 +386,7 @@ impl Default for LightingSettings {
     fn default() -> Self {
         Self {
             sun_dir: [0.0, 1.0, 2.0],
+            sun_intensity: 1.0,
             ground_ambient: [0.5, 0.5, 0.5],
             ground_diffuse: [0.5, 0.5, 0.5],
             ground_specular: [0.1, 0.1, 0.1],

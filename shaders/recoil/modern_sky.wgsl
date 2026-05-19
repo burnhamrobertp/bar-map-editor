@@ -109,7 +109,12 @@ fn modern_sky(dir: vec3<f32>, time: f32) -> vec3<f32> {
     let sky_color = camera.sky_color_density.xyz;
     let cloud_density = camera.sky_color_density.w;
     let cloud_color = camera.cloud_color.xyz;
-    let sun_color = camera.sun_color.xyz;
+    // `camera.sun_color.w` holds the mapinfo `light.sunDir.w` intensity,
+    // packed host-side. Engine multiplies the sun-corona contribution by
+    // it (`ModernSkyFS.glsl:88`: `sunColor.rgb * sunColor.w * 1.3`); we
+    // mirror that here so maps that dim the sun via the 4th sunDir
+    // component (rare but supported) render with the right corona power.
+    let sun_color = camera.sun_color.xyz * camera.sun_color.w;
     let sun_dir_raw = camera.sky_dir.xyz;
 
     let cirrus = cloud_density * CIRRUS1;

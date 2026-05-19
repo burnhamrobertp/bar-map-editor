@@ -236,6 +236,11 @@ pub struct SmfLighting {
     // Drive the procedural sky shader so each map has its authored sky
     // rather than a hardcoded one.
     pub sun_color: [f32; 3],
+    /// Sun intensity from mapinfo `light.sunDir.w`. Packed into the
+    /// uniform's `sun_color.w` so the sky shader can multiply its sun-
+    /// corona term by it (matches `ModernSky.cpp:82` ->
+    /// `ModernSkyFS.glsl:88` upstream). Default 1.0.
+    pub sun_intensity: f32,
     pub sky_color: [f32; 3],
     pub sky_dir: [f32; 3],
     pub cloud_density: f32,
@@ -384,6 +389,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             custom_fog_height_elmos: ms.custom_fog.height_elmos,
             custom_fog_atten: ms.custom_fog.atten,
             sun_color: ms.atmosphere.sun_color,
+            sun_intensity: ms.lighting.sun_intensity,
             sky_color: ms.atmosphere.sky_color,
             sky_dir: ms.atmosphere.sky_dir,
             cloud_density: ms.atmosphere.cloud_density,
@@ -452,6 +458,7 @@ impl Default for SmfLighting {
             custom_fog_height_elmos: 0.0,
             custom_fog_atten: 0.0,
             sun_color: [1.0, 1.0, 1.0],
+            sun_intensity: 1.0,
             sky_color: [0.1, 0.15, 0.7],
             sky_dir: [0.0, 0.0, -1.0],
             cloud_density: 0.5,
@@ -532,7 +539,12 @@ impl SmfLighting {
                 },
                 0.0,
             ],
-            sun_color: [self.sun_color[0], self.sun_color[1], self.sun_color[2], 1.0],
+            sun_color: [
+                self.sun_color[0],
+                self.sun_color[1],
+                self.sun_color[2],
+                self.sun_intensity,
+            ],
             sky_color_density: [
                 self.sky_color[0],
                 self.sky_color[1],
