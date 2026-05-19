@@ -219,6 +219,13 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
     return vec4<f32>(rgb, shading_sample.a * in.tint.a);
 }
 
-// Dynamic point/spot lights (`ModelFragProg.glsl:42-77`) are not yet
-// implemented. The editor has no in-scene light sources today, so the
-// path would be a no-op. Add it when light-emitter authoring lands.
+// Dynamic point/spot lights (`ModelFragProg.glsl:42-77`) are
+// **deliberately deferred**. The engine exposes `Spring.AddMapLight`
+// / `AddModelLight` Lua APIs, but a sweep of BAR's repos
+// (`bar-game`, `bar-chobby`, `bar-lobby`, `bar-maps-sources`, plus
+// the installed LuaUI tree) found zero callers -- no BAR gameplay,
+// widget, or map drives the engine's dynamic-light path today. The
+// editor preview shows only static map content, so this shader
+// stage would have no source to drive it. Land the path when (a)
+// BAR starts using dynamic lights or (b) BME adds in-editor light-
+// emitter authoring.
