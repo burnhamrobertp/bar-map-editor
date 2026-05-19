@@ -32,7 +32,7 @@ pub struct LoadedModel {
     pub tex2: Option<TextureRgba>,
 }
 
-/// CPU-side RGBA8 texture ready for `Rgba8UnormSrgb` upload.
+/// CPU-side RGBA8 texture ready for `Rgba8Unorm` upload.
 pub struct TextureRgba {
     pub width: u32,
     pub height: u32,
@@ -70,7 +70,7 @@ pub struct AppRunner {
     /// Receives parsed S3O meshes from the background model-loader threads.
     /// Each item is `(lowercase_feature_type_name, mesh, optional_diffuse_rgba)`.
     /// The texture, when present, is `(width, height, rgba8 bytes)` ready for
-    /// direct GPU upload as `Rgba8UnormSrgb`.
+    /// direct GPU upload as `Rgba8Unorm` (BAR-faithful non-sRGB).
     pub model_rx: Option<mpsc::Receiver<LoadedModel>>,
     /// Tracks the last seen value of `app.selected_feature_type` so the
     /// model loader can fire when the user queues a new placement type

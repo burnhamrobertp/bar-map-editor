@@ -1,8 +1,9 @@
 //! Offscreen renderer for S3O thumbnails shown in the feature palette.
 //!
 //! Renders one S3O model at a fixed three-quarter-view camera with
-//! simple Lambert + ambient lighting into a 128x128 Rgba8UnormSrgb
-//! target, then reads the pixels back to CPU. The caller hands the
+//! simple Lambert + ambient lighting into a 128x128 Rgba8Unorm
+//! target (BAR-faithful non-sRGB; matches the engine's pipeline),
+//! then reads the pixels back to CPU. The caller hands the
 //! bytes to egui (`ctx.load_texture`) and optionally writes them to a
 //! persistent on-disk cache so subsequent app launches skip the
 //! render entirely.

@@ -3,7 +3,9 @@
 //! per-model diffuse textures (M4).
 //!
 //! Each loaded S3O has its own GPU vertex/index buffer and its own diffuse
-//! `Rgba8UnormSrgb` texture. Models without a usable diffuse fall back to a
+//! `Rgba8Unorm` texture (BAR-faithful: no GPU gamma decode on sample,
+//! matches the engine's perceptual-everywhere pipeline). Models without a
+//! usable diffuse fall back to a
 //! shared 1x1 white texture so they still draw. Placeholder cubes (used for
 //! unknown feature types) also bind the default white texture.
 //!
