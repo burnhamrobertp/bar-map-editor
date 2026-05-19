@@ -47,6 +47,11 @@ struct WaterParams {
     factors: vec4<f32>,
     /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = unused
     fresnel: vec4<f32>,
+    /// x = blurBase (pixels), y = blurExponent, zw reserved. Drives
+    /// the 7-tap `opt_blurreflection` path -- the shader divides x
+    /// by `camera.screen_h` to get a UV-space offset, then applies
+    /// progressively-larger taps via the `y` exponent.
+    blur: vec4<f32>,
 }
 
 @group(2) @binding(4) var<uniform> water_params: WaterParams;
@@ -196,35 +201,28 @@ fn shade_water(
     let surface_mix   = (surface_alpha + diffuse) * shallow_scale;
 
     // --- 3. Refraction ---------------------------------------------------
-    // Distortion expressed as a UV magnitude (resolution-independent).
-    // BumpWaterFS:291 uses `60 * (1 - pow(fragZ, 80)) * shallowScale`
-    // PIXELS, then multiplies by `1/screen_w`. At engine 1920px that's
-    // 0.031 UV; at our 512-1024 preview that same formula gives 0.06-0.12
-    // UV, visibly stronger than in-engine.
+    // Engine formula (`BumpWaterFS:291`):
+    //   distortPx = 60 * (1 - pow(fragZ, 80)) * shallowScale
+    //   refrUV    = screencoord + normal.xz * distortPx * ScreenInverse
+    // ScreenInverse = (1/screen_w, 1/screen_h). Earlier comments here
+    // speculated that engine ran a `BumpWaterCoastBlur` over the
+    // refraction texture before sampling -- that turned out to be wrong
+    // (`BumpWaterCoastBlurFS` bakes the coastmap for shore foam, not
+    // the refraction). So the engine-faithful magnitude IS the pixel
+    // formula above; smaller previews get stronger distortion just as
+    // BAR running at lower resolution does.
     //
-    // Pure UV-magnitude math suggests 0.018 should look ~60% of the
-    // engine's effective magnitude, but visually the refraction still
-    // reads as significantly more distorted than in-engine. The
-    // likely culprit is **engine-side refraction blur**: BAR runs
-    // `BumpWaterCoastBlur` (a depth-aware Gaussian) over the refraction
-    // texture before BumpWater samples it. Our refraction pre-pass
-    // produces a sharp, full-resolution texture, so the same UV offset
-    // shifts between sharp pixels and reads as a louder ripple than the
-    // engine's blurred sample. Until we add the blur pass (deferred --
-    // tracked in docs/recoil-shader-ports.md as a port follow-up), we
-    // compensate by undershooting the UV magnitude further. 0.006 (=
-    // 0.6% UV) is ~20% of the engine's effective magnitude and matches
-    // the "see through clearly" feel in-engine.
-    //
-    // The `pow(z, 80)` depth gate stays: near the camera it is ~0 so
-    // distortion is full strength; toward the far plane it approaches 1
-    // and distortion collapses to 0. Without this, deep water gets full
-    // distortion everywhere and the refraction sample blows out (the
-    // original "Azurite ocean = spilled milk" failure mode).
+    // The `pow(z, 80)` depth gate near-fully attenuates distortion at
+    // the far plane so deep-water refraction doesn't blow out into
+    // garbage at the horizon.
     let depth_factor       = 1.0 - pow(frag_z, 80.0);
-    let refract_distortion = 0.006 * depth_factor * shallow_scale;
+    let refract_distortion = 60.0 * depth_factor * shallow_scale;
+    let screen_inv = vec2<f32>(
+        1.0 / max(camera.screen_w, 1.0),
+        1.0 / max(camera.screen_h, 1.0),
+    );
     let refr_uv            = clamp(
-        screen_uv + normal.xz * refract_distortion,
+        screen_uv + normal.xz * refract_distortion * screen_inv,
         vec2<f32>(0.0),
         vec2<f32>(1.0),
     );
@@ -277,12 +275,13 @@ fn shade_water(
     // reflection samples along a vertical streak with geometric-
     // progression spacing, all averaged together. Softens / dims the
     // peak brightness of bright cubemap reflections at glancing
-    // angles. Engine defaults (`MapInfo.cpp:261-262`):
-    //   blurBase = 2.0 (pixels, then / viewSizeY in shader define)
-    //   blurExponent = 1.5
+    // angles. `blurBase` / `blurExponent` now come from mapinfo
+    // (`MapInfo.cpp:261-262`, defaults 2.0 / 1.5); per-map overrides
+    // matter for shoreline maps that crank the blur to hide hard
+    // refraction edges.
     var refl_acc = textureSample(reflection_texture, reflection_sampler, refl_uv).rgb;
-    var blur_off = vec2<f32>(0.0, 2.0 / max(camera.screen_h, 1.0));
-    let blur_exp = 1.5;
+    var blur_off = vec2<f32>(0.0, water_params.blur.x / max(camera.screen_h, 1.0));
+    let blur_exp = water_params.blur.y;
     refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;
     blur_off *= blur_exp;
     refl_acc += textureSample(reflection_texture, reflection_sampler, refl_uv + blur_off).rgb;

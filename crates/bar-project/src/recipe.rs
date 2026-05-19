@@ -455,6 +455,16 @@ pub struct WaterSettings {
     pub fresnel_power: f32,
     pub reflection_distortion: f32,
     pub perlin_amplitude: f32,
+    /// Per-tap vertical offset for the engine's 7-tap `opt_blurreflection`
+    /// path (in pixels, divided by screen height in the shader define
+    /// `BlurBase = vec2(0, blurBase / viewSizeY)`, see
+    /// `bar-recoil/rts/Rendering/Env/BumpWater.cpp:442`). Default 2.0
+    /// per `MapInfo.cpp:261`.
+    pub blur_base: f32,
+    /// Geometric-progression factor between successive blur taps
+    /// (`BlurExponent` in `BumpWaterFS:234-244`). Default 1.5 per
+    /// `MapInfo.cpp:262`.
+    pub blur_exponent: f32,
 }
 
 impl Default for WaterSettings {
@@ -478,6 +488,8 @@ impl Default for WaterSettings {
             fresnel_power: 4.0,
             reflection_distortion: 1.0,
             perlin_amplitude: 0.9,
+            blur_base: 2.0,
+            blur_exponent: 1.5,
         }
     }
 }

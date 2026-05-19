@@ -89,6 +89,12 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     if let Some(v) = parse_mapinfo_number(lua, "perlinAmplitude") {
         water.perlin_amplitude = v;
     }
+    if let Some(v) = parse_mapinfo_number(lua, "blurBase") {
+        water.blur_base = v;
+    }
+    if let Some(v) = parse_mapinfo_number(lua, "blurExponent") {
+        water.blur_exponent = v;
+    }
 
     // Lighting table.
     let lighting = &mut settings.lighting;

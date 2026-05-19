@@ -237,6 +237,14 @@ pub struct SmfLighting {
     pub water_fresnel_power: f32,
     pub water_reflection_distortion: f32,
     pub water_perlin_amplitude: f32,
+    /// 7-tap blur base offset (pixels). Engine path
+    /// `opt_blurreflection` (`BumpWaterFS.glsl:234-244`); the shader
+    /// divides by viewport height to produce a UV-space offset.
+    /// Default 2.0 (`MapInfo.cpp:261`).
+    pub water_blur_base: f32,
+    /// 7-tap blur geometric exponent. Default 1.5
+    /// (`MapInfo.cpp:262`).
+    pub water_blur_exponent: f32,
     // Height-based "custom" fog (mapinfo's `custom.fog` block). Applied as
     // a final post-pass in the terrain and water shaders -- not part of
     // the engine SMF/BumpWater pipeline but matches in-game appearance
@@ -425,6 +433,8 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             water_fresnel_power: w.fresnel_power,
             water_reflection_distortion: w.reflection_distortion,
             water_perlin_amplitude: w.perlin_amplitude,
+            water_blur_base: w.blur_base,
+            water_blur_exponent: w.blur_exponent,
             custom_fog_enabled: ms.custom_fog.enabled,
             custom_fog_color: ms.custom_fog.color,
             custom_fog_height_elmos: ms.custom_fog.height_elmos,
@@ -498,6 +508,8 @@ impl Default for SmfLighting {
             water_fresnel_power: 4.0,
             water_reflection_distortion: 1.0,
             water_perlin_amplitude: 0.9,
+            water_blur_base: 2.0,
+            water_blur_exponent: 1.5,
             custom_fog_enabled: false,
             custom_fog_color: [0.0, 0.0, 0.0],
             custom_fog_height_elmos: 0.0,
@@ -722,9 +734,13 @@ struct WaterParamsUniform {
     factors: [f32; 4],
     /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = unused
     fresnel: [f32; 4],
+    /// x = blurBase (pixels), y = blurExponent, zw reserved. Drives
+    /// the 7-tap reflection blur in `water.wgsl` -- the shader divides
+    /// `x` by viewport height to get a UV-space offset.
+    blur: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 80);
+const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 96);
 
 impl From<&SmfLighting> for WaterParamsUniform {
     fn from(l: &SmfLighting) -> Self {
@@ -766,6 +782,7 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 l.water_fresnel_power.max(0.01),
                 0.0,
             ],
+            blur: [l.water_blur_base, l.water_blur_exponent, 0.0, 0.0],
         }
     }
 }
