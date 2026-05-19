@@ -821,6 +821,30 @@ fn apply_preview_result(
 
         if let Some(ref gpu) = gpu_context {
             if let Some(ref mut renderer) = core.terrain_renderer {
+                // Bake a coast-distance + invwaterdepth field from the
+                // raw heightmap and push it as the renderer's coastmap.
+                // Engine bakes its equivalent via a multi-pass shader;
+                // we do a chamfer distance transform CPU-side. Cost
+                // is O(N) over heightmap texels -- fast enough to run
+                // synchronously on each heightmap update.
+                let water_threshold = if result.height_scale > 1e-6 {
+                    result.water_y / result.height_scale
+                } else {
+                    0.0
+                };
+                let coastmap = bar_data::bake_coastmap(
+                    heightmap.data(),
+                    heightmap.width(),
+                    heightmap.height(),
+                    water_threshold,
+                );
+                renderer.update_coastmap(
+                    &gpu.device,
+                    &gpu.queue,
+                    &coastmap,
+                    heightmap.width(),
+                    heightmap.height(),
+                );
                 renderer.update_heightmap(
                     &gpu.device,
                     &gpu.queue,

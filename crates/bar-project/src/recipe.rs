@@ -477,6 +477,21 @@ pub struct WaterSettings {
     /// `* CausticsStrength` -- 0 disables, ~0.1 is the typical
     /// in-engine subtle shimmer.
     pub caustics_strength: f32,
+    /// `BumpWaterFS:186-220` GetShorewaves inputs from mapinfo
+    /// `water.*`. Default 0.0 per `MapInfo.cpp:269` (engine disables
+    /// foam-wave temporal offset by default; some maps crank it up
+    /// to add a hand-drawn-style shore animation).
+    pub wave_offset_factor: f32,
+    /// Default 0.05 (`MapInfo.cpp:271`). Scales how much the water
+    /// surface normal distorts the foam texture sample UV.
+    pub wave_foam_distortion: f32,
+    /// Default 0.5 (`MapInfo.cpp:272`). Multiplier on the foam
+    /// texture sample brightness before the rest of the foam math.
+    pub wave_foam_intensity: f32,
+    /// Default 0.15 (`MapInfo.cpp:270`). Shader uses `1/waveLength`
+    /// as the inverse wave-band reciprocal; controls how rapidly the
+    /// foam fades from shoreline outward.
+    pub wave_length: f32,
 }
 
 impl Default for WaterSettings {
@@ -504,6 +519,10 @@ impl Default for WaterSettings {
             blur_exponent: 1.5,
             caustics_resolution: 75.0,
             caustics_strength: 0.08,
+            wave_offset_factor: 0.0,
+            wave_foam_distortion: 0.05,
+            wave_foam_intensity: 0.5,
+            wave_length: 0.15,
         }
     }
 }

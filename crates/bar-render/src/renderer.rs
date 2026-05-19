@@ -253,6 +253,18 @@ pub struct SmfLighting {
     /// Default 0.08 -- multiplied into the caustic colour before
     /// adding to the underwater fragment.
     pub caustics_strength: f32,
+    /// `GetShorewaves` inputs from mapinfo `water.*`. Engine
+    /// reference `BumpWaterFS:186-220`. Defaults from
+    /// `MapInfo.cpp:269-272`.
+    pub wave_offset_factor: f32,
+    pub wave_foam_distortion: f32,
+    pub wave_foam_intensity: f32,
+    pub wave_length: f32,
+    /// True once `update_foam_assets` has uploaded the engine-shipped
+    /// foam + waverand textures AND `update_coastmap` has uploaded
+    /// the per-map coast-distance field. Gates the shader's foam
+    /// stage so machines without a BAR install don't render garbage.
+    pub foam_enabled: bool,
     // Height-based "custom" fog (mapinfo's `custom.fog` block). Applied as
     // a final post-pass in the terrain and water shaders -- not part of
     // the engine SMF/BumpWater pipeline but matches in-game appearance
@@ -386,6 +398,7 @@ fn bar_render_smf_with_runtime_overrides(
     detail_normal_tex_enabled: bool,
     basic_splat_enabled: bool,
     caustic_array_enabled: bool,
+    foam_enabled: bool,
     elmo_per_render_xz: [f32; 2],
 ) -> SmfLighting {
     smf.skybox_enabled = skybox_enabled;
@@ -397,6 +410,7 @@ fn bar_render_smf_with_runtime_overrides(
     smf.detail_normal_tex_enabled = detail_normal_tex_enabled;
     smf.basic_splat_enabled = basic_splat_enabled;
     smf.caustic_array_enabled = caustic_array_enabled;
+    smf.foam_enabled = foam_enabled;
     smf.elmo_per_render_xz = elmo_per_render_xz;
     smf
 }
@@ -453,6 +467,11 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             water_blur_exponent: w.blur_exponent,
             caustics_resolution: w.caustics_resolution,
             caustics_strength: w.caustics_strength,
+            wave_offset_factor: w.wave_offset_factor,
+            wave_foam_distortion: w.wave_foam_distortion,
+            wave_foam_intensity: w.wave_foam_intensity,
+            wave_length: w.wave_length,
+            foam_enabled: false,
             custom_fog_enabled: ms.custom_fog.enabled,
             custom_fog_color: ms.custom_fog.color,
             custom_fog_height_elmos: ms.custom_fog.height_elmos,
@@ -531,6 +550,11 @@ impl Default for SmfLighting {
             water_blur_exponent: 1.5,
             caustics_resolution: 75.0,
             caustics_strength: 0.08,
+            wave_offset_factor: 0.0,
+            wave_foam_distortion: 0.05,
+            wave_foam_intensity: 0.5,
+            wave_length: 0.15,
+            foam_enabled: false,
             custom_fog_enabled: false,
             custom_fog_color: [0.0, 0.0, 0.0],
             custom_fog_height_elmos: 0.0,
@@ -762,11 +786,17 @@ struct WaterParamsUniform {
     blur: [f32; 4],
     /// x = causticsResolution (UV scale), y = causticsStrength
     /// (intensity multiplier), z = caustics_enabled (0 = off, 1 = on
-    /// once the 32-frame caustic array is uploaded), w reserved.
+    /// once the 32-frame caustic array is uploaded), w = foam_enabled
+    /// (set once `update_foam_assets` + `update_coastmap` have both
+    /// run).
     caustics: [f32; 4],
+    /// x = waveOffsetFactor, y = waveFoamDistortion, z =
+    /// waveFoamIntensity, w = waveLength. Engine `BumpWaterFS:186-220`
+    /// inputs.
+    foam: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 112);
+const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 128);
 
 impl From<&SmfLighting> for WaterParamsUniform {
     fn from(l: &SmfLighting) -> Self {
@@ -815,7 +845,17 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 // Enabled gate -- the override fn flips this after
                 // `update_caustics` has populated the 32-frame array.
                 if l.caustic_array_enabled { 1.0 } else { 0.0 },
-                0.0,
+                // Foam-stage gate. The override fn sets this true
+                // once both the engine-shipped foam+waverand
+                // textures and the per-map coastmap have been
+                // uploaded.
+                if l.foam_enabled { 1.0 } else { 0.0 },
+            ],
+            foam: [
+                l.wave_offset_factor,
+                l.wave_foam_distortion,
+                l.wave_foam_intensity,
+                l.wave_length,
             ],
         }
     }
@@ -945,6 +985,21 @@ pub struct TerrainRenderer {
     caustic_array_texture: wgpu::Texture,
     caustic_sampler: wgpu::Sampler,
     caustic_array_enabled: bool,
+    /// Engine-shipped foam tile (`bitmaps/foam.jpg`) + wave
+    /// randomisation tile (`bitmaps/shorewaverand.png`). Both come
+    /// from BAR's `bitmaps.sdz`; loaded once at app startup by
+    /// `bar-app::viewport::sync_foam_assets`. 1x1 placeholders sit
+    /// here until the upload lands.
+    foam_texture: wgpu::Texture,
+    waverand_texture: wgpu::Texture,
+    foam_assets_enabled: bool,
+    /// Per-map coastmap baked from the heightmap by
+    /// `bar_data::coastmap::bake_coastmap`. Encodes refined / raw
+    /// distance to coast plus invwaterdepth in RGB. Re-baked on
+    /// every `update_heightmap` call. Default 1x1 (0,0,0,255) so
+    /// the shader gate keeps foam off until a real heightmap loads.
+    coastmap_texture: wgpu::Texture,
+    coastmap_enabled: bool,
     /// Per-map water surface uniform (BumpWater inputs). Re-uploaded each
     /// frame in `render_internal` from the current `SmfLighting`.
     water_params_buffer: wgpu::Buffer,
@@ -1676,6 +1731,39 @@ impl TerrainRenderer {
                         binding: 8,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Shore-foam textures + coastmap. All three share
+                    // the caustic sampler (bilinear, repeat). Engine
+                    // path `BumpWaterFS:186-220` (`GetShorewaves`).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -2499,11 +2587,76 @@ impl TerrainRenderer {
             ..Default::default()
         });
 
+        // Defaults for foam + waverand + coastmap. All 1x1 inert
+        // until `update_foam_assets` and `update_coastmap` flip their
+        // gates on.
+        let foam_default_data: [u8; 4] = [0, 0, 0, 255];
+        let foam_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("foam_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &foam_default_data,
+        );
+        let waverand_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("waverand_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &foam_default_data,
+        );
+        let coastmap_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("coastmap_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &foam_default_data,
+        );
+
         let make_water_planes_bg =
             |refl_view: &wgpu::TextureView,
              refr_view: &wgpu::TextureView,
              refr_depth_view: &wgpu::TextureView,
-             caust_view: &wgpu::TextureView| {
+             caust_view: &wgpu::TextureView,
+             foam_view: &wgpu::TextureView,
+             waverand_view: &wgpu::TextureView,
+             coastmap_view: &wgpu::TextureView| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("water_planes_bind_group"),
                     layout: &water_planes_bind_group_layout,
@@ -2544,20 +2697,43 @@ impl TerrainRenderer {
                             binding: 8,
                             resource: wgpu::BindingResource::Sampler(&caustic_sampler),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 9,
+                            resource: wgpu::BindingResource::TextureView(foam_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 10,
+                            resource: wgpu::BindingResource::TextureView(waverand_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 11,
+                            resource: wgpu::BindingResource::TextureView(coastmap_view),
+                        },
                     ],
                 })
             };
+        let foam_default_view = foam_default.create_view(&wgpu::TextureViewDescriptor::default());
+        let waverand_default_view =
+            waverand_default.create_view(&wgpu::TextureViewDescriptor::default());
+        let coastmap_default_view =
+            coastmap_default.create_view(&wgpu::TextureViewDescriptor::default());
         let water_planes_bind_group = make_water_planes_bg(
             &reflection_default_view,
             &refraction_default_view,
             &refraction_depth_default_view,
             &caustic_default_view,
+            &foam_default_view,
+            &waverand_default_view,
+            &coastmap_default_view,
         );
         let water_planes_bind_group_dummy = make_water_planes_bg(
             &reflection_default_view,
             &refraction_default_view,
             &refraction_depth_default_view,
             &caustic_default_view,
+            &foam_default_view,
+            &waverand_default_view,
+            &coastmap_default_view,
         );
 
         let water_normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2865,6 +3041,11 @@ impl TerrainRenderer {
             caustic_array_texture: caustic_default,
             caustic_sampler,
             caustic_array_enabled: false,
+            foam_texture: foam_default,
+            waverand_texture: waverand_default,
+            foam_assets_enabled: false,
+            coastmap_texture: coastmap_default,
+            coastmap_enabled: false,
             water_params_buffer,
             last_water_params: WaterParamsUniform::default(),
             water_normal_texture,
@@ -3989,6 +4170,98 @@ impl TerrainRenderer {
         self.rebuild_water_planes_bind_group(device);
     }
 
+    /// Replace the engine-shipped foam + waverand textures
+    /// (`bitmaps/foam.jpg` and `bitmaps/shorewaverand.png`). Both
+    /// uploaded together because they're a fused asset bundle and
+    /// the shader gate sees them as a pair.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_foam_assets(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        foam: &[u8],
+        foam_w: u32,
+        foam_h: u32,
+        waverand: &[u8],
+        waverand_w: u32,
+        waverand_h: u32,
+    ) {
+        self.foam_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("foam_tex"),
+                size: wgpu::Extent3d {
+                    width: foam_w,
+                    height: foam_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            foam,
+        );
+        self.waverand_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("waverand_tex"),
+                size: wgpu::Extent3d {
+                    width: waverand_w,
+                    height: waverand_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            waverand,
+        );
+        self.foam_assets_enabled = true;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Replace the per-map coastmap. `rgba` is the output of
+    /// `bar_data::coastmap::bake_coastmap` at `(width, height)`
+    /// matching the heightmap dimensions.
+    pub fn update_coastmap(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.coastmap_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("coastmap"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.coastmap_enabled = true;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
     /// Reset caustics to the 1x1x1 black default. The shader gate
     /// stays off until `update_caustics` runs again.
     pub fn clear_caustics(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
@@ -4064,6 +4337,15 @@ impl TerrainRenderer {
                 dimension: Some(wgpu::TextureViewDimension::D2Array),
                 ..Default::default()
             });
+        let foam_view = self
+            .foam_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let waverand_view = self
+            .waverand_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let coastmap_view = self
+            .coastmap_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
             layout: &self.water_planes_bind_group_layout,
@@ -4103,6 +4385,18 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: wgpu::BindingResource::Sampler(&self.caustic_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&foam_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&waverand_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&coastmap_view),
                 },
             ],
         });
@@ -4651,6 +4945,15 @@ impl TerrainRenderer {
                 dimension: Some(wgpu::TextureViewDimension::D2Array),
                 ..Default::default()
             });
+        let foam_view = self
+            .foam_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let waverand_view = self
+            .waverand_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let coastmap_view = self
+            .coastmap_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
             layout: &self.water_planes_bind_group_layout,
@@ -4690,6 +4993,18 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 8,
                     resource: wgpu::BindingResource::Sampler(&self.caustic_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&foam_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&waverand_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&coastmap_view),
                 },
             ],
         });
@@ -4746,6 +5061,10 @@ impl TerrainRenderer {
             self.detail_normal_tex_enabled,
             self.basic_splat_enabled,
             self.caustic_array_enabled,
+            // Foam needs BOTH the engine-shipped foam/waverand
+            // textures AND the per-map coastmap to have landed
+            // before the shader stage produces anything sensible.
+            self.foam_assets_enabled && self.coastmap_enabled,
             self.elmo_per_render_xz,
         );
         self.x_extent = f.x_extent;

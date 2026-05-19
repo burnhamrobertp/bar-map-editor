@@ -101,6 +101,18 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     if let Some(v) = parse_mapinfo_number(lua, "causticsStrength") {
         water.caustics_strength = v;
     }
+    if let Some(v) = parse_mapinfo_number(lua, "waveOffsetFactor") {
+        water.wave_offset_factor = v;
+    }
+    if let Some(v) = parse_mapinfo_number(lua, "waveFoamDistortion") {
+        water.wave_foam_distortion = v;
+    }
+    if let Some(v) = parse_mapinfo_number(lua, "waveFoamIntensity") {
+        water.wave_foam_intensity = v;
+    }
+    if let Some(v) = parse_mapinfo_number(lua, "waveLength") {
+        water.wave_length = v;
+    }
 
     // Lighting table.
     let lighting = &mut settings.lighting;

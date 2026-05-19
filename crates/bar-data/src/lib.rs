@@ -3,6 +3,7 @@
 //! Core data types for BAR map editor: heightmap buffers, color textures,
 //! .sd7/.smf/.smt format I/O, and image import/export.
 
+pub mod coastmap;
 pub mod color;
 pub mod heightmap;
 pub mod s3o;
@@ -11,6 +12,7 @@ pub mod skybox;
 pub mod smt;
 pub mod water_assets;
 
+pub use coastmap::{bake_coastmap, COAST_DISTANCE_TEXELS, FULL_DEPTH_ELMOS};
 pub use color::ColorBuffer;
 pub use heightmap::Heightmap;
 pub use s3o::{parse_s3o, S3oError, S3oMesh, S3oVertex};

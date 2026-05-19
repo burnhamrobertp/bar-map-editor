@@ -597,9 +597,23 @@ pub fn sync_caustics(
             .map(|t| (t.rgba, t.width, t.height))
             .collect();
         renderer.update_caustics(&gpu.device, &gpu.queue, &frames);
+        // Foam + waverand come from the same archive bundle; upload
+        // both here so the shader's `foam_enabled` flag only flips
+        // once the coastmap also lands (renderer.foam_assets_enabled
+        // && renderer.coastmap_enabled).
+        renderer.update_foam_assets(
+            &gpu.device,
+            &gpu.queue,
+            &bundle.foam.rgba,
+            bundle.foam.width,
+            bundle.foam.height,
+            &bundle.waverand.rgba,
+            bundle.waverand.width,
+            bundle.waverand.height,
+        );
         tracing::debug!(
             engine_dir = %engine_dir.display(),
-            "caustic animation uploaded",
+            "engine water assets uploaded (caustics + foam + waverand)",
         );
     }
     core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
@@ -2794,6 +2808,27 @@ pub fn apply_compiled_bc1(
     let mut loaded_hm: Option<bar_data::Heightmap> = None;
     if let Some(h) = result.height {
         if let Some(renderer) = core.terrain_renderer.as_mut() {
+            // Coastmap bake for the shore-foam shader stage. Same
+            // chamfer transform the sculpt-eval path uses; cost is
+            // O(N) over heightmap texels.
+            let water_threshold = if h.height_scale > 1e-6 {
+                h.water_y / h.height_scale
+            } else {
+                0.0
+            };
+            let coastmap = bar_data::bake_coastmap(
+                h.heightmap.data(),
+                h.heightmap.width(),
+                h.heightmap.height(),
+                water_threshold,
+            );
+            renderer.update_coastmap(
+                &gpu.device,
+                &gpu.queue,
+                &coastmap,
+                h.heightmap.width(),
+                h.heightmap.height(),
+            );
             renderer.update_heightmap(
                 &gpu.device,
                 &gpu.queue,

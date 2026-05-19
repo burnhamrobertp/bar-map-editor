@@ -53,10 +53,14 @@ struct WaterParams {
     /// progressively-larger taps via the `y` exponent.
     blur: vec4<f32>,
     /// x = causticsResolution, y = causticsStrength, z = caustics
-    /// enabled (0 = off, 1 = on once the 32-frame array is uploaded),
-    /// w reserved. Drives the engine's
-    /// `BumpWaterFS:324-334` caustics block.
+    /// enabled, w = foam_enabled. Drives the engine's
+    /// `BumpWaterFS:324-334` caustics block + the `GetShorewaves`
+    /// shore-foam gate.
     caustics: vec4<f32>,
+    /// x = waveOffsetFactor, y = waveFoamDistortion, z =
+    /// waveFoamIntensity, w = waveLength. Engine
+    /// `BumpWaterFS:186-220` (`GetShorewaves`).
+    foam: vec4<f32>,
 }
 
 @group(2) @binding(4) var<uniform> water_params: WaterParams;
@@ -80,6 +84,106 @@ struct WaterParams {
 /// engine's 30 game-frames-per-second rate.
 @group(2) @binding(7) var caustic_array: texture_2d_array<f32>;
 @group(2) @binding(8) var caustic_sam: sampler;
+
+/// Engine shore-foam assets (`bitmaps/foam.jpg`,
+/// `bitmaps/shorewaverand.png`) and per-map coastmap baked from the
+/// heightmap. Coastmap channels match what `GetShorewaves` reads:
+/// R = refined distance, G = raw distance, B = invwaterdepth. Engine
+/// path `BumpWaterFS:186-220`. All three share `caustic_sam`
+/// (bilinear, repeat).
+@group(2) @binding(9)  var foam_tex:     texture_2d<f32>;
+@group(2) @binding(10) var waverand_tex: texture_2d<f32>;
+@group(2) @binding(11) var coastmap_tex: texture_2d<f32>;
+
+/// Engine helper `BumpWaterFS:65-68`. Soft-clamps `x` above `edge`
+/// with a modulo-based curve so values just over the edge fall back
+/// rather than saturating hard.
+fn smoothlimit(x: f32, edge: f32) -> f32 {
+    let limitcurv = edge - ((x % edge) * edge) / max(1.0 - edge, 1e-4);
+    return select(x, limitcurv, x >= edge);
+}
+
+/// Engine helper `BumpWaterFS:70-75`. Two-half wave shape: rising
+/// linear ramp up to 0.85, then symmetric fall-off after.
+fn wave_intensity(v: vec4<f32>) -> vec4<f32> {
+    let front = vec4<f32>(1.0) - abs(v - vec4<f32>(0.85)) / vec4<f32>(1.0 - 0.85);
+    // step(0.85, v) gives 1 when v >= 0.85, so we invert with 1 - to
+    // mark the "below 0.85" texels.
+    let below = vec4<f32>(1.0) - step(vec4<f32>(0.85), v);
+    return max(front, below * v * 0.5);
+}
+
+/// Port of engine `GetShorewaves` (`BumpWaterFS:186-220`). Returns
+/// the additive foam colour that should be added to the water-surface
+/// composite. Off-engine inputs:
+///
+/// - `world_xz`: the fragment's world XZ (render space).
+/// - `coast_uv`: heightmap-UV-space sample position (matches the
+///   coastmap baked at heightmap resolution).
+/// - `octave`: water-surface normal sample (`normal.xyz`) used for
+///   foam-UV distortion and the wave-front breakup.
+/// - `invwaterdepth`: 1 at the shoreline, 0 in deep water.
+/// - `frame`: engine animation counter (`camera.time * 30`).
+fn get_shorewaves(
+    world_xz: vec2<f32>,
+    coast_uv: vec2<f32>,
+    octave: vec3<f32>,
+    frame: f32,
+) -> vec3<f32> {
+    if water_params.caustics.w < 0.5 {
+        return vec3<f32>(0.0);
+    }
+    // Coastmap encoding (see `bar_data::coastmap::bake_coastmap`):
+    //   R = refined distance (engine's coast.g)
+    //   G = raw distance      (engine's coast.r)
+    //   B = invwaterdepth     (engine's coast.b)
+    let coast = textureSample(coastmap_tex, caustic_sam, coast_uv).rgb;
+    let coast_refined = coast.r;
+    let coast_raw     = coast.g;
+    let invwaterdepth = coast.b;
+    let coastdist = coast_refined + octave.x * 0.1;
+    if coastdist <= 0.0 {
+        return vec3<f32>(0.0);
+    }
+    let underground = 1.0 - step(1.0, invwaterdepth);
+
+    // Engine `texCoords[3]` / `texCoords[4]`: world.xz scaled by
+    // `~1/8192` per the `TexGenPlane.pq` derivation
+    // (`BumpWater.cpp:461-463`), then multiplied by per-tier
+    // frequencies. We mirror with the same constants.
+    let base = world_xz * (1.0 / 8192.0);
+    let foam_uv_a = base * 160.0 + vec2<f32>(frame * 2.5) + octave.xy * water_params.foam.y;
+    let foam_uv_b = base * 90.0 - vec2<f32>(frame * 2.0) + octave.xy * water_params.foam.y;
+    let waverand_uv = base * 6.0 + vec2<f32>(frame * 0.37);
+    var wavefoam = textureSample(foam_tex, caustic_sam, foam_uv_a).rgb;
+    wavefoam = wavefoam + textureSample(foam_tex, caustic_sam, foam_uv_b).rgb;
+    wavefoam = wavefoam * water_params.foam.z;
+    let waverands = textureSample(waverand_tex, caustic_sam, waverand_uv);
+
+    let fi = vec4<f32>(0.25, 0.50, 0.75, 1.00);
+    var f = fract(
+        fi
+            + vec4<f32>(frame * 50.0)
+            + vec4<f32>((world_xz.x + world_xz.y) * water_params.foam.x),
+    );
+    f = f * 1.4 - vec4<f32>(coastdist);
+    let inv_waves_len = 1.0 / max(water_params.foam.w, 1e-4);
+    f = vec4<f32>(1.0) - f * inv_waves_len;
+    f = clamp(f, vec4<f32>(0.0), vec4<f32>(1.0));
+    f = wave_intensity(f);
+    var intensity = dot(f, waverands) * coastdist;
+    let iwd = smoothlimit(invwaterdepth, 0.8);
+    intensity = intensity * iwd * 1.5;
+    var color = wavefoam * underground * intensity;
+
+    // Cliff foam (engine line 216): brighter, squared-wavefoam term
+    // scaled by `coast_raw^3 * coastdist^4`. Produces the bright
+    // froth that breaks against vertical shorelines.
+    let coast_r_cubed = coast_raw * coast_raw * coast_raw;
+    let coast_dist_4 = coastdist * coastdist * coastdist * coastdist;
+    color = color + (wavefoam * wavefoam) * (underground * 5.5 * coast_r_cubed * coast_dist_4);
+    return color;
+}
 
 /// Sample the water normal map at four scales with time-animated UV offsets,
 /// then accumulate with the PerlinAmp falloff. Matches `BumpWaterFS.glsl:
@@ -348,6 +452,26 @@ fn shade_water(
         let caust_blend = smoothstep(0.45, 0.0, abs(waterdepth - 0.5));
         col = col + caust * caust_blend * water_params.caustics.y;
     }
+
+    // --- 5.6. Shore foam -------------------------------------------------
+    // Engine `BumpWaterFS:186-220` (`GetShorewaves`). Adds the
+    // shoreline foam-band animation, sourced from
+    // `bitmaps/foam.jpg` + `bitmaps/shorewaverand.png` (loaded from
+    // the engine install via `bar_data::water_assets`) and a per-map
+    // coastmap baked from the heightmap
+    // (`bar_data::coastmap::bake_coastmap`). The gate sits inside
+    // `get_shorewaves` -- returns zero when neither has been
+    // uploaded.
+    let coast_uv = vec2<f32>(
+        world_pos.x / (2.0 * camera.x_extent) + 0.5,
+        world_pos.z / (2.0 * camera.z_extent) + 0.5,
+    );
+    col = col + get_shorewaves(
+        world_pos.xz,
+        coast_uv,
+        normal,
+        camera.time * 30.0,
+    );
 
     // --- 6. Tonemap ------------------------------------------------------
     // BumpWaterFS produces HDR values: `waterSurface = surfaceColor +
