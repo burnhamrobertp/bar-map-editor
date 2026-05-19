@@ -775,16 +775,26 @@ pub struct TerrainRenderer {
     splat_detail_normal_4: wgpu::Texture,
     splat_distr_texture: wgpu::Texture,
     advanced_splat_enabled: bool,
-    /// `skyReflectModTex` upload state. 1x1 black default produces
-    /// zero reflection mix; replaced by `update_sky_reflect_mod` when
-    /// the map specifies one.
+    /// `skyReflectModTex` upload state. The 1x1 black default is
+    /// **never sampled** by the shader -- the cubemap-mix branch in
+    /// `terrain.wgsl` is gated behind `skybox_params.z > 0.5`
+    /// (the `sky_reflect_mod_enabled` flag), so maps without this
+    /// texture fall through to no env-reflection at all, matching the
+    /// engine's `#ifdef SMF_SKY_REFLECTIONS` compile-out
+    /// (`bar-recoil/rts/Map/SMF/SMFRenderState.cpp:117`). The 1x1
+    /// placeholder exists only so the bind group always has a valid
+    /// texture view; it's inert under the gate.
     sky_reflect_mod_texture: wgpu::Texture,
     sky_reflect_mod_enabled: bool,
-    /// `specularTex` upload state. 1x1 black default produces zero
-    /// per-pixel spec; replaced by `update_specular_tex` when the map
-    /// specifies one. The `specular_tex_enabled` flag is what gates the
-    /// shader's spec-tex path (SMF_SPECULAR_LIGHTING) -- when off, the
-    /// global `ground_specular` / spec exponent are used instead.
+    /// `specularTex` upload state. The 1x1 black default is **never
+    /// sampled** by the shader: the per-pixel branch in `terrain.wgsl`
+    /// is gated behind `skybox_params.w > 0.5` (the
+    /// `specular_tex_enabled` flag), and the `#else` path uses the
+    /// global `ground_specular.xyz` colour and `sun_dir_exp.w`
+    /// exponent uniforms. That mirrors the engine's
+    /// `#ifdef SMF_SPECULAR_LIGHTING ... #else ...` split in
+    /// `SMFFragProg.glsl:403-416`. The placeholder exists only to
+    /// keep the bind group valid; it's inert under the gate.
     specular_tex_texture: wgpu::Texture,
     specular_tex_enabled: bool,
     /// `grassShadingTex` upload state. 1x1 grey default; replaced by

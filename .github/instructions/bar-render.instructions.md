@@ -168,12 +168,25 @@ via `update_*` methods on `TerrainRenderer`:
 | `atmosphere.skyBox` | `update_skybox(Cubemap)` / `clear_skybox()` | 1×1 black cubemap (procedural sky path runs) |
 | `resources.detailTex` | `update_detail_texture(rgba, w, h)` | 1×1 mid-grey (zero contribution) |
 | `resources.splatDetailNormalTex1..4` + `splatDistrTex` | `update_splat_textures([5 textures])` / `clear_splat_textures()` | 1×1 mid-grey (zero contribution) |
-| `resources.skyReflectModTex` | `update_sky_reflect_mod(rgba, w, h)` / `clear_sky_reflect_mod()` | 1×1 black (zero reflection mix) |
+| `resources.skyReflectModTex` | `update_sky_reflect_mod(rgba, w, h)` / `clear_sky_reflect_mod()` | inert 1×1 (gate disables sample) |
+| `resources.specularTex` | `update_specular_tex(rgba, w, h)` / `clear_specular_tex()` | inert 1×1 (gate falls back to global ground_specular / spec_exponent) |
+| `resources.grassShadingTex` | `update_grass_shading_tex(rgba, w, h)` / `clear_grass_shading_tex()` | 1×1 mid-grey (extension falls back to playable albedo) |
+| `resources.lightEmissionTex` | `update_light_emission_tex(rgba, w, h)` / `clear_light_emission_tex()` | inert 1×1 (0,0,0,0) (gate skips apply-emission stage) |
 
 The host side (`bar-app::viewport::sync_*` helpers) handles file
 discovery via recursive `find_file_in_dir` on the `.barproj/passthrough/`
 tree, decoding via `bar_data::load_dds_cubemap` /
 `viewport::load_2d_image`, and idempotent re-upload on project change.
+
+**Inert-default convention**: where the table says "gate skips
+sample", the 1×1 placeholder is **never sampled** because a
+`*_enabled` flag in the `skybox_params` / `custom_fog_params` uniform
+gates the entire shader branch behind it. This mirrors the engine's
+compile-time `#ifdef SMF_SPECULAR_LIGHTING` / `SMF_SKY_REFLECTIONS` /
+`SMF_LIGHT_EMISSION` toggles (`SMFFragProg.glsl:403-416, 392-401`).
+When a map ships a real texture, `update_*` flips the gate on; when
+it doesn't, the global-uniform fallback (or no contribution) runs
+instead -- matching engine behaviour.
 
 ## Feature rendering
 
