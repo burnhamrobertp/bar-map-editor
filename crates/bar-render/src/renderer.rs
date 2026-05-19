@@ -338,33 +338,31 @@ impl From<&bar_project::MapSettings> for SmfLighting {
         let w = &ms.water;
         Self {
             sun_dir: l.sun_dir,
-            // RGB colour triples are stored in mapinfo as sRGB / perceptual.
-            // For most fields we sRGB-decode at this boundary so the
-            // sRGB-encoding framebuffer reproduces the same bytes that
-            // BAR's non-sRGB pipeline produces. But the *lighting
-            // multipliers* below (ground_ambient/diffuse/specular,
-            // sun_color) are used in shader math as multiplicative
-            // shading terms (`ambient + diffuse * cos_theta`). In BAR's
-            // gamma-incorrect pipeline these multiply albedo IN
-            // sRGB-perceptual space; decoding them to linear before
-            // multiplication darkens the visible result by ~30% because
-            // linear math compresses mid-tone products. Use the raw
-            // perceptual values here to match BAR's apparent lighting
-            // brightness. (The extension shader uses hemispheric
-            // lighting `dot * 0.5 + 1.0` and doesn't read these
-            // uniforms, so this revert doesn't undo the original
-            // extension-area brightness fix.)
+            // Engine-faithful colour pipeline: mapinfo colour triples
+            // pass through to the shader as raw sRGB-perceptual values.
+            // BAR runs with `GL_FRAMEBUFFER_SRGB` disabled
+            // (`bar-recoil/.../GL/State.h:185`) and samples colour
+            // textures as raw byte / 255 -- so every multiplication in
+            // BAR's terrain / water shaders happens in sRGB-perceptual
+            // space. To match BAR's visible output, BME does the same:
+            // no sRGB decode at this boundary, color textures are
+            // uploaded as linear formats (no GPU decode on sample),
+            // framebuffer is non-sRGB (no encode on write). The
+            // pipeline is gamma-incorrect by modern graphics
+            // standards, but the editor's purpose is engine-fidelity
+            // for map authors who tune their maps to look right
+            // in-game.
             ground_ambient: l.ground_ambient,
             ground_diffuse: l.ground_diffuse,
             ground_specular: l.ground_specular,
             specular_exponent: l.spec_exponent,
-            water_absorb: crate::color::srgb_to_linear_rgb(w.absorb),
-            water_base: crate::color::srgb_to_linear_rgb(w.base_color),
-            water_min: crate::color::srgb_to_linear_rgb(w.min_color),
-            water_surface_color: crate::color::srgb_to_linear_rgb(w.surface_color),
+            water_absorb: w.absorb,
+            water_base: w.base_color,
+            water_min: w.min_color,
+            water_surface_color: w.surface_color,
             water_surface_alpha: w.surface_alpha,
-            water_diffuse_color: crate::color::srgb_to_linear_rgb(w.diffuse_color),
-            water_specular_color: crate::color::srgb_to_linear_rgb(w.specular_color),
+            water_diffuse_color: w.diffuse_color,
+            water_specular_color: w.specular_color,
             water_ambient_factor: w.ambient_factor,
             water_diffuse_factor: w.diffuse_factor,
             water_specular_factor: w.specular_factor,
@@ -375,19 +373,14 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             water_reflection_distortion: w.reflection_distortion,
             water_perlin_amplitude: w.perlin_amplitude,
             custom_fog_enabled: ms.custom_fog.enabled,
-            custom_fog_color: crate::color::srgb_to_linear_rgb(ms.custom_fog.color),
+            custom_fog_color: ms.custom_fog.color,
             custom_fog_height_elmos: ms.custom_fog.height_elmos,
             custom_fog_atten: ms.custom_fog.atten,
-            // sun_color is used as a multiplier in `modern_sky.wgsl` for
-            // the procedural sky (not relevant on maps with a cubemap
-            // skybox like Onyx). Treated like the ground-lighting
-            // multipliers: raw perceptual values to match BAR's apparent
-            // brightness.
             sun_color: ms.atmosphere.sun_color,
-            sky_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.sky_color),
+            sky_color: ms.atmosphere.sky_color,
             sky_dir: ms.atmosphere.sky_dir,
             cloud_density: ms.atmosphere.cloud_density,
-            cloud_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.cloud_color),
+            cloud_color: ms.atmosphere.cloud_color,
             // MapSettings doesn't carry runtime upload state; the
             // renderer overrides this flag in `sync_to_frame` based
             // on whether a real cubemap is uploaded.
@@ -415,7 +408,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             elmo_per_render_xz: [1.0, 1.0],
             atmosphere_fog_start: ms.atmosphere.fog_start,
             atmosphere_fog_end: ms.atmosphere.fog_end,
-            atmosphere_fog_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.fog_color),
+            atmosphere_fog_color: ms.atmosphere.fog_color,
         }
     }
 }
@@ -4546,57 +4539,46 @@ mod tests {
     }
 
     #[test]
-    fn smf_lighting_decodes_display_colours_to_linear() {
-        // End-to-end check that `SmfLighting::from(&MapSettings)` runs
-        // sRGB->linear on the *display-output* colour triples (those
-        // used directly in the framebuffer or as fade targets). Onyx
-        // Cauldron's `fog_color = [0.11, 0.13, 0.15]` is the canonical
-        // reference: perceptual 0.11 should decode to linear ~0.0114
-        // (well below the byte-rounding precision needed to land at
-        // byte 28 after re-encoding for the sRGB framebuffer).
+    fn smf_lighting_passes_colours_through_in_perceptual_space() {
+        // Engine-faithful pipeline: `SmfLighting::from(&MapSettings)`
+        // passes every mapinfo colour triple through unchanged. BAR's
+        // shaders treat textures and uniforms as sRGB-perceptual values
+        // (no GPU decode on sample, no framebuffer encode on write), so
+        // BME's shader receives the raw perceptual values too. Pin the
+        // convention here -- any future "fix" to sRGB-decode at the
+        // boundary will silently re-darken the playable area and shift
+        // the colour balance.
         let mut ms = bar_project::MapSettings::default();
         ms.atmosphere.fog_color = [0.11, 0.13, 0.15];
-        ms.water.base_color = [0.5, 0.68, 0.68];
-
-        let smf = super::SmfLighting::from(&ms);
-
-        for (label, authored, decoded) in [
-            ("fog_color[0]", 0.11, smf.atmosphere_fog_color[0]),
-            ("fog_color[1]", 0.13, smf.atmosphere_fog_color[1]),
-            ("fog_color[2]", 0.15, smf.atmosphere_fog_color[2]),
-            ("water_base[0]", 0.5, smf.water_base[0]),
-            ("water_base[1]", 0.68, smf.water_base[1]),
-        ] {
-            let expected = crate::color::srgb_to_linear(authored);
-            assert!(
-                (decoded - expected).abs() < 1e-5,
-                "{label}: authored {authored} -> decoded {decoded}, expected linear {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn smf_lighting_keeps_lighting_multipliers_in_perceptual_space() {
-        // Lighting multipliers (`ground_ambient/diffuse/specular`,
-        // `sun_color`) are NOT sRGB-decoded -- they're used as
-        // shader-side multipliers and BAR's gamma-incorrect pipeline
-        // treats them as sRGB-perceptual values multiplied with the
-        // (also gamma-incorrect-sampled) albedo. Decoding them to
-        // linear darkens the visible terrain by ~30% because mid-tone
-        // products compress in linear space. Pin the convention here
-        // so a well-meaning future contributor doesn't "fix" them
-        // back to gamma-correct and re-darken the playable area.
-        let mut ms = bar_project::MapSettings::default();
+        ms.atmosphere.sun_color = [1.0, 0.92, 0.78];
+        ms.atmosphere.sky_color = [0.43, 0.58, 0.64];
+        ms.atmosphere.cloud_color = [0.9, 0.9, 0.9];
         ms.lighting.ground_ambient = [0.56, 0.55, 0.55];
         ms.lighting.ground_diffuse = [0.75, 0.75, 0.8];
         ms.lighting.ground_specular = [0.5, 0.5, 0.5];
-        ms.atmosphere.sun_color = [1.0, 0.92, 0.78];
+        ms.water.absorb = [0.011, 0.011, 0.015];
+        ms.water.base_color = [0.5, 0.68, 0.68];
+        ms.water.min_color = [0.022, 0.0035, 0.035];
+        ms.water.surface_color = [0.5, 0.6, 0.65];
+        ms.water.diffuse_color = [1.0, 1.0, 1.0];
+        ms.water.specular_color = [0.65, 0.65, 0.7];
+        ms.custom_fog.color = [0.3, 0.4, 0.5];
 
         let smf = super::SmfLighting::from(&ms);
 
+        assert_eq!(smf.atmosphere_fog_color, ms.atmosphere.fog_color);
+        assert_eq!(smf.sun_color, ms.atmosphere.sun_color);
+        assert_eq!(smf.sky_color, ms.atmosphere.sky_color);
+        assert_eq!(smf.cloud_color, ms.atmosphere.cloud_color);
         assert_eq!(smf.ground_ambient, ms.lighting.ground_ambient);
         assert_eq!(smf.ground_diffuse, ms.lighting.ground_diffuse);
         assert_eq!(smf.ground_specular, ms.lighting.ground_specular);
-        assert_eq!(smf.sun_color, ms.atmosphere.sun_color);
+        assert_eq!(smf.water_absorb, ms.water.absorb);
+        assert_eq!(smf.water_base, ms.water.base_color);
+        assert_eq!(smf.water_min, ms.water.min_color);
+        assert_eq!(smf.water_surface_color, ms.water.surface_color);
+        assert_eq!(smf.water_diffuse_color, ms.water.diffuse_color);
+        assert_eq!(smf.water_specular_color, ms.water.specular_color);
+        assert_eq!(smf.custom_fog_color, ms.custom_fog.color);
     }
 }
