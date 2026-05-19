@@ -287,6 +287,13 @@ impl LayoutManager {
                 gpu,
             );
             crate::viewport::sync_caustics(engine_dir, &mut slot.core, gpu);
+            // Grass widget (mapinfo `custom.grassConfig`). Build the
+            // widget config from the recipe synchronously; the
+            // sync_map_grass call kicks off async asset loading
+            // when it's enabled.
+            let grass_widget =
+                bar_render::widgets::map_grass::MapGrassWidget::from_settings(app.map_settings());
+            crate::viewport::sync_map_grass(asset_dir, grass_widget, &mut slot.core, gpu);
         }
 
         // Force refresh: bump session_id so any in-flight result is rejected.
@@ -486,6 +493,13 @@ impl LayoutManager {
                 gpu,
             );
             crate::viewport::sync_caustics(engine_dir, &mut slot.core, gpu);
+            // Grass widget (mapinfo `custom.grassConfig`). Build the
+            // widget config from the recipe synchronously; the
+            // sync_map_grass call kicks off async asset loading
+            // when it's enabled.
+            let grass_widget =
+                bar_render::widgets::map_grass::MapGrassWidget::from_settings(app.map_settings());
+            crate::viewport::sync_map_grass(asset_dir, grass_widget, &mut slot.core, gpu);
         }
 
         // Feature instances: rebuild when dirty or heightmap changes.

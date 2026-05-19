@@ -995,6 +995,10 @@ pub struct TerrainRenderer {
     /// the shader gate keeps foam off until a real heightmap loads.
     coastmap_texture: wgpu::Texture,
     coastmap_enabled: bool,
+    /// Map-grass widget pipeline (BAR `map_grass_gl4` widget port,
+    /// driven by mapinfo `custom.grassConfig`). Self-contained
+    /// instance-rendered pass between water and gamma encode.
+    pub map_grass: crate::widgets::map_grass::MapGrassPipeline,
     /// Per-map water surface uniform (BumpWater inputs). Re-uploaded each
     /// frame in `render_internal` from the current `SmfLighting`.
     water_params_buffer: wgpu::Buffer,
@@ -3002,6 +3006,18 @@ impl TerrainRenderer {
             cache: None,
         });
 
+        // Map-grass widget pipeline. Self-contained: owns its blade
+        // mesh, blade-color texture, instance buffer, and bind group.
+        // The bind group is wired to the heightmap view on each
+        // `update_heightmap` call.
+        let map_grass = crate::widgets::map_grass::MapGrassPipeline::new(
+            device,
+            queue,
+            &camera_bind_group_layout,
+            output_format,
+            depth_format,
+        );
+
         Self {
             render_pipeline,
             sky_pipeline,
@@ -3058,6 +3074,7 @@ impl TerrainRenderer {
             foam_assets_enabled: false,
             coastmap_texture: coastmap_default,
             coastmap_enabled: false,
+            map_grass,
             water_params_buffer,
             last_water_params: WaterParamsUniform::default(),
             water_normal_texture,
@@ -3357,6 +3374,13 @@ impl TerrainRenderer {
                 });
             self.heightmap_texture = tex;
             self.normal_map_texture = nm_tex;
+            // Rebuild the grass widget's bind group so its vertex
+            // shader can sample the new heightmap to anchor blade
+            // bases on the terrain surface.
+            let hm_view = self
+                .heightmap_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass.rebuild_bind_group(device, &hm_view);
         }
     }
 
@@ -5614,6 +5638,39 @@ impl TerrainRenderer {
             water_pass.draw_indexed(self.water_index_offset..self.num_indices, 0, 0..1);
         }
 
+        // ── Grass widget pass ────────────────────────────────────────────
+        // BAR `map_grass_gl4` widget port (mapinfo
+        // `custom.grassConfig`). Renders after water + features so
+        // blades alpha-blend over the terrain composite. Reuses the
+        // main encoder + same color/depth attachments; the pipeline
+        // disables depth-write so alpha-tested blade edges don't
+        // cast hard depth silhouettes.
+        if self.map_grass.ready_to_draw() {
+            let mut grass_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("map_grass_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            grass_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            self.map_grass.draw(&mut grass_pass);
+        }
+
         queue.submit(std::iter::once(encoder.finish()));
 
         // ── Gamma-encode post-pass ───────────────────────────────────────
@@ -5672,6 +5729,60 @@ impl TerrainRenderer {
     /// Returns `(height_scale, x_extent, z_extent)`.
     pub fn mesh_extents(&self) -> (f32, f32, f32) {
         (self.height_scale, self.x_extent, self.z_extent)
+    }
+
+    /// Sync the grass widget's per-map assets in one shot. Uploads
+    /// the blade-colour texture, regenerates the instance buffer
+    /// from `dist_mask`, and rebuilds the bind group against the
+    /// current heightmap view. The caller passes the BAR-widget
+    /// config; we read the playable map dimensions from
+    /// `mesh_extents()` to translate distribution-mask coordinates
+    /// to world elmos.
+    #[allow(clippy::too_many_arguments)]
+    pub fn sync_grass_assets(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        widget: crate::widgets::map_grass::MapGrassWidget,
+        dist_mask: &[u8],
+        mask_w: u32,
+        mask_h: u32,
+        blade_color_rgba: &[u8],
+        blade_w: u32,
+        blade_h: u32,
+    ) {
+        let enabled = self.map_grass.set_config(queue, widget.clone());
+        if !enabled {
+            self.map_grass.clear_blade_color(device, queue);
+            self.map_grass.update_instances(device, &[]);
+            return;
+        }
+        self.map_grass
+            .update_blade_color(device, queue, blade_color_rgba, blade_w, blade_h);
+        let hm_view = self
+            .heightmap_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.map_grass.rebuild_bind_group(device, &hm_view);
+        let map_w_elmos = self.x_extent * 2.0;
+        let map_h_elmos = self.z_extent * 2.0;
+        let instances = crate::widgets::map_grass::generate_instances(
+            &widget,
+            dist_mask,
+            mask_w,
+            mask_h,
+            map_w_elmos,
+            map_h_elmos,
+        );
+        self.map_grass.update_instances(device, &instances);
+    }
+
+    /// Clear the grass widget state -- used on map switch when the
+    /// new map has no `custom.grassConfig` block.
+    pub fn clear_grass_assets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.map_grass
+            .set_config(queue, crate::widgets::map_grass::MapGrassWidget::default());
+        self.map_grass.clear_blade_color(device, queue);
+        self.map_grass.update_instances(device, &[]);
     }
 
     /// Display-bound texture view. This is the gamma-encoded copy of the

@@ -166,6 +166,11 @@ pub struct ViewportCore {
     /// per renderer. Stores the engine-dir path that produced the
     /// current upload; cleared when the install isn't detected.
     pub caustic_assets_loaded_from: Option<std::path::PathBuf>,
+    /// Grass widget asset bundle. Dedupe key is
+    /// `(project_dir, distTGA path)` -- changing either the project
+    /// or the dist-mask filename re-loads.
+    pub map_grass_loaded_for: Option<(std::path::PathBuf, String)>,
+    pub map_grass_loading_for: Option<(std::path::PathBuf, String)>,
     /// Key currently being decoded on a background thread for each of the
     /// async-loaded texture slots. Set by the sync function when it spawns
     /// a worker; cleared on `poll_pending_texture_loads` once the result
@@ -236,6 +241,27 @@ pub enum TextureLoadResult {
         key: (std::path::PathBuf, String),
         data: Option<Mip>,
     },
+    /// Grass widget bundle. `(dist_mask_bytes, mask_w, mask_h,
+    /// blade_color_rgba, blade_w, blade_h)`. Loaded as one unit
+    /// because both pieces are needed before any visible grass can
+    /// render; the renderer waits for the bundle then generates
+    /// instances + uploads textures in a single transaction.
+    MapGrass {
+        key: (std::path::PathBuf, String),
+        data: Option<MapGrassAssets>,
+    },
+}
+
+/// Decoded grass-widget assets for one map. Distribution mask is
+/// reduced to a single byte per texel (the R channel of the source
+/// TGA, matching engine widget convention).
+pub struct MapGrassAssets {
+    pub dist_mask: Vec<u8>,
+    pub mask_w: u32,
+    pub mask_h: u32,
+    pub blade_color_rgba: Vec<u8>,
+    pub blade_w: u32,
+    pub blade_h: u32,
 }
 
 impl ViewportCore {
@@ -271,6 +297,8 @@ impl ViewportCore {
             detail_normal_tex_loaded_for: None,
             basic_splat_tex_loaded_for: None,
             caustic_assets_loaded_from: None,
+            map_grass_loaded_for: None,
+            map_grass_loading_for: None,
             skybox_loading_for: None,
             detail_loading_for: None,
             splat_loading_for: None,
@@ -446,6 +474,31 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                     _ => {}
                 }
             }
+            TextureLoadResult::MapGrass { key, data } => {
+                core.map_grass_loading_for = None;
+                core.map_grass_loaded_for = Some(key);
+                if let (Some(bundle), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
+                    let widget = renderer.map_grass.widget().clone();
+                    renderer.sync_grass_assets(
+                        &gpu.device,
+                        &gpu.queue,
+                        widget,
+                        &bundle.dist_mask,
+                        bundle.mask_w,
+                        bundle.mask_h,
+                        &bundle.blade_color_rgba,
+                        bundle.blade_w,
+                        bundle.blade_h,
+                    );
+                    tracing::debug!(
+                        blade_w = bundle.blade_w,
+                        blade_h = bundle.blade_h,
+                        mask_w = bundle.mask_w,
+                        mask_h = bundle.mask_h,
+                        "map grass loaded",
+                    );
+                }
+            }
         }
     }
 }
@@ -545,6 +598,100 @@ pub fn sync_specular_tex(
             data,
         });
     });
+}
+
+/// Schedule a background load of the grass widget's per-map assets
+/// (mapinfo `custom.grassConfig`). Sets the widget config on the
+/// renderer synchronously so the shader has the right tuning
+/// constants by the next frame; the textures themselves load
+/// off-thread and arrive via `TextureLoadResult::MapGrass`.
+///
+/// On the calling thread we:
+///   1. Push the widget config to the renderer (configures pipeline
+///      uniforms; doesn't draw yet).
+///   2. If the map has no grass config, clear renderer state and
+///      return.
+///   3. Otherwise spawn a thread to decode both the distribution
+///      mask and the blade-colour texture; main thread receives a
+///      `MapGrassAssets` bundle through the existing texture-load
+///      channel and uploads it in `poll_pending_texture_loads`.
+pub fn sync_map_grass(
+    project_dir: Option<&std::path::Path>,
+    widget: bar_render::widgets::map_grass::MapGrassWidget,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    // Sync side: push the config so the renderer knows its tuning
+    // values regardless of whether asset loading succeeds.
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if !widget.enabled {
+            renderer.clear_grass_assets(&gpu.device, &gpu.queue);
+        } else {
+            renderer.map_grass.set_config(&gpu.queue, widget.clone());
+        }
+    }
+    if !widget.enabled {
+        // Clear dedupe key so a future enabled-state re-load triggers.
+        core.map_grass_loaded_for = None;
+        return;
+    }
+
+    let key = match project_dir {
+        Some(p) => (p.to_path_buf(), widget.dist_tga.clone()),
+        None => return,
+    };
+    if core.map_grass_loaded_for.as_ref() == Some(&key)
+        || core.map_grass_loading_for.as_ref() == Some(&key)
+    {
+        return;
+    }
+    core.map_grass_loading_for = Some(key.clone());
+
+    let tx = core.texture_load_tx.clone();
+    let project_dir = key.0.clone();
+    let dist_filename = widget.dist_tga.clone();
+    let blade_filename = widget.blade_color_tex.clone();
+    std::thread::spawn(move || {
+        let assets = load_grass_assets(&project_dir, &dist_filename, &blade_filename);
+        let _ = tx.send(TextureLoadResult::MapGrass { key, data: assets });
+    });
+}
+
+/// Load both grass assets from disk and reduce the distribution
+/// mask to a single byte-per-texel R channel. Returns `None` if
+/// either asset fails to decode -- both are required for the
+/// renderer to spawn any visible blades.
+fn load_grass_assets(
+    project_dir: &std::path::Path,
+    dist_filename: &str,
+    blade_filename: &str,
+) -> Option<MapGrassAssets> {
+    let dist_path = find_file_in_dir(&project_dir.join("passthrough"), dist_filename)
+        .or_else(|| find_file_in_dir(project_dir, dist_filename));
+    let blade_path = find_file_in_dir(&project_dir.join("passthrough"), blade_filename)
+        .or_else(|| find_file_in_dir(project_dir, blade_filename));
+    let dist_path = dist_path.or_else(|| {
+        tracing::warn!(file = %dist_filename, "grass dist mask not found");
+        None
+    })?;
+    let blade_path = blade_path.or_else(|| {
+        tracing::warn!(file = %blade_filename, "grass blade tex not found");
+        None
+    })?;
+    let (dist_rgba, mask_w, mask_h) = load_2d_image(&dist_path)?;
+    // BAR's widget expects an 8-bit greyscale TGA; we decode it as
+    // RGBA8 above (the `image` crate normalises), then pull the R
+    // channel as the per-patch byte.
+    let dist_mask: Vec<u8> = dist_rgba.iter().step_by(4).copied().collect();
+    let (blade_color_rgba, blade_w, blade_h) = load_2d_image(&blade_path)?;
+    Some(MapGrassAssets {
+        dist_mask,
+        mask_w,
+        mask_h,
+        blade_color_rgba,
+        blade_w,
+        blade_h,
+    })
 }
 
 /// Decode the engine-shipped 32-frame caustic animation from the BAR

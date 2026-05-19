@@ -7,21 +7,24 @@
 //! positions, and animates them via a wind-perturbation noise
 //! texture.
 //!
-//! The configuration half lives here. The rendering half (instance
-//! generation, GPU pipeline, vertex / fragment shaders) is **not yet
-//! implemented** -- see `docs/recoil-shader-ports.md` for the
-//! widget-port status. Landing the renderer is the follow-up to this
-//! foundation commit; the data-flow is wired up so the next commit
-//! can plug in instances + draw calls without touching the recipe or
-//! mapinfo paths.
+//! This module exposes three things:
+//! - `MapGrassWidget`: per-map config (`from_settings`).
+//! - `generate_instances`: CPU scan of the distribution mask
+//!   producing per-blade transforms.
+//! - `MapGrassPipeline`: GPU resources (pipeline, blade mesh,
+//!   instance buffer, blade-colour texture, bind group). Owned by
+//!   `TerrainRenderer`; render integration in
+//!   `renderer.rs::render_internal`.
 //!
-//! Shader half (when it lands): `shaders/widgets/map_grass_vs.wgsl`
-//! plus `shaders/widgets/map_grass_fs.wgsl`. Separate files because a
-//! widget that has its own render pipeline needs both vertex and
-//! fragment entry points, unlike `custom_fog` which is just a helper
-//! function concatenated into the terrain composer.
+//! Shader half: `shaders/widgets/map_grass_vs.wgsl` plus
+//! `shaders/widgets/map_grass_fs.wgsl`. Separate files because a
+//! widget with its own render pipeline needs both vertex and
+//! fragment entry points; the runtime concats them at pipeline-
+//! build time into a single WGSL module per stage.
 
 use bar_project::MapSettings;
+use bytemuck::{Pod, Zeroable};
+use wgpu::util::DeviceExt;
 
 /// Resolved configuration for the grass widget. `enabled = false`
 /// when the map has no `mapinfo.custom.grassConfig` block or it
@@ -98,6 +101,604 @@ impl MapGrassWidget {
     }
 }
 
+/// Per-blade instance data uploaded to the grass pipeline's instance
+/// buffer. Matches BAR widget's `instancePosRotSize` vertex attribute
+/// layout (`map_grass_gl4.vert.glsl:24`).
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+pub struct GrassInstance {
+    /// World X position in elmos.
+    pub world_x: f32,
+    /// Random Y rotation in radians.
+    pub rotation: f32,
+    /// World Z position in elmos.
+    pub world_z: f32,
+    /// Blade height in elmos (scaled per-instance from the
+    /// distribution-mask byte).
+    pub size: f32,
+}
+
+/// Static blade mesh vertex layout. Two crossed quads in object
+/// space (origin at blade base). The vertex shader scales by
+/// instance.size and rotates around Y, then anchors to the
+/// heightmap at the instance's world XZ.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct BladeVertex {
+    pos: [f32; 3],
+    uv: [f32; 2],
+}
+
+/// 8 vertices, 12 indices (4 triangles). Each blade renders both
+/// faces of two crossed quads; back-face culling is disabled on
+/// the pipeline so we don't need to duplicate indices for the
+/// reverse winding.
+const BLADE_VERTICES: &[BladeVertex] = &[
+    // Quad 1: axis along X.
+    BladeVertex {
+        pos: [-0.5, 0.0, 0.0],
+        uv: [0.0, 1.0],
+    },
+    BladeVertex {
+        pos: [0.5, 0.0, 0.0],
+        uv: [1.0, 1.0],
+    },
+    BladeVertex {
+        pos: [0.5, 1.0, 0.0],
+        uv: [1.0, 0.0],
+    },
+    BladeVertex {
+        pos: [-0.5, 1.0, 0.0],
+        uv: [0.0, 0.0],
+    },
+    // Quad 2: axis along Z.
+    BladeVertex {
+        pos: [0.0, 0.0, -0.5],
+        uv: [0.0, 1.0],
+    },
+    BladeVertex {
+        pos: [0.0, 0.0, 0.5],
+        uv: [1.0, 1.0],
+    },
+    BladeVertex {
+        pos: [0.0, 1.0, 0.5],
+        uv: [1.0, 0.0],
+    },
+    BladeVertex {
+        pos: [0.0, 1.0, -0.5],
+        uv: [0.0, 0.0],
+    },
+];
+
+const BLADE_INDICES: &[u16] = &[
+    0, 1, 2, 2, 3, 0, // quad 1
+    4, 5, 6, 6, 7, 4, // quad 2
+];
+
+/// Wind sway amplitude in world elmos. Hardcoded -- the widget
+/// exposes `WINDSTRENGTH` per map but every BAR map uses the
+/// default `0.1`.
+const WIND_STRENGTH: f32 = 0.1;
+/// Distance (elmos) past which blades fully fade out. Linear ramp
+/// starts at 0.65 of this value.
+const FADE_END: f32 = 8000.0;
+
+/// GPU-resident grass renderer. Owned by `TerrainRenderer`; lives
+/// across map switches (the pipeline is static, only the instance
+/// buffer + blade-colour texture get replaced when a new map's
+/// `mapinfo.custom.grassConfig` lands).
+pub struct MapGrassPipeline {
+    pipeline: wgpu::RenderPipeline,
+    blade_bgl: wgpu::BindGroupLayout,
+    /// Static blade mesh (8 vertices, 12 indices). Allocated once
+    /// at construction; the instance buffer is what changes per
+    /// map.
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    /// Per-pipeline tuning constants (wind strength, blend factors,
+    /// fade distance).
+    params_buffer: wgpu::Buffer,
+    /// Default 1x1 blade-color texture. Retained for the lifetime
+    /// of the pipeline so `clear_blade_color` can reset to it
+    /// cheaply, and so it stays alive even if `blade_color_texture`
+    /// is swapped out mid-frame.
+    #[allow(dead_code)]
+    blade_color_default: wgpu::Texture,
+    blade_color_texture: wgpu::Texture,
+    blade_color_sampler: wgpu::Sampler,
+    /// Bind group for the grass-specific resources (blade tex,
+    /// heightmap, params uniform). Rebuilt whenever the blade
+    /// texture OR heightmap texture changes.
+    bind_group: Option<wgpu::BindGroup>,
+    /// Per-map instance buffer. None until the distribution mask
+    /// has been processed via `update_instances`.
+    instance_buffer: Option<wgpu::Buffer>,
+    instance_count: u32,
+    /// Cached widget config; carries the per-map shader-blend
+    /// factors that get re-packed into `params_buffer` after any
+    /// recipe change.
+    widget: MapGrassWidget,
+}
+
+impl MapGrassPipeline {
+    pub fn new(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        camera_bgl: &wgpu::BindGroupLayout,
+        output_format: wgpu::TextureFormat,
+        depth_format: wgpu::TextureFormat,
+    ) -> Self {
+        let vs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("map_grass_vs"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../../shaders/widgets/map_grass_vs.wgsl").into(),
+            ),
+        });
+        let fs = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("map_grass_fs"),
+            source: wgpu::ShaderSource::Wgsl({
+                // Concat the VS source again so the FS module sees
+                // the shared `blade_color_tex` / `blade_color_sam`
+                // bindings declared in the VS file. WGSL modules
+                // are single-translation-units; the simplest way to
+                // share bindings between two entry points in
+                // wgpu is to compile them as one module each, both
+                // including the binding declarations.
+                let vs_src = include_str!("../../../../shaders/widgets/map_grass_vs.wgsl");
+                let fs_src = include_str!("../../../../shaders/widgets/map_grass_fs.wgsl");
+                format!("{vs_src}\n{fs_src}").into()
+            }),
+        });
+
+        let blade_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("map_grass_bgl"),
+            entries: &[
+                // blade color texture
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                // heightmap (non-filterable, R32Float).
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                // grass params uniform.
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("map_grass_pipeline_layout"),
+            bind_group_layouts: &[camera_bgl, &blade_bgl],
+            push_constant_ranges: &[],
+        });
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("map_grass_vertices"),
+            contents: bytemuck::cast_slice(BLADE_VERTICES),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("map_grass_indices"),
+            contents: bytemuck::cast_slice(BLADE_INDICES),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+
+        let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("map_grass_params"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let default_params = [WIND_STRENGTH, 0.6_f32, 1.0_f32, FADE_END];
+        queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&default_params));
+
+        // 1x1 white default blade-colour texture. Inert until the
+        // map upload replaces it -- with `enabled = false` on the
+        // widget config the renderer doesn't draw anyway.
+        let default_pixel: [u8; 4] = [255, 255, 255, 255];
+        let blade_color_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("map_grass_blade_color_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &default_pixel,
+        );
+        // The active texture starts as a clone of the default.
+        let blade_color_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("map_grass_blade_color"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &default_pixel,
+        );
+        let blade_color_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("map_grass_blade_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("map_grass_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &vs,
+                entry_point: Some("vs_grass"),
+                compilation_options: Default::default(),
+                buffers: &[
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<BladeVertex>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[
+                            wgpu::VertexAttribute {
+                                offset: 0,
+                                shader_location: 0,
+                                format: wgpu::VertexFormat::Float32x3,
+                            },
+                            wgpu::VertexAttribute {
+                                offset: 12,
+                                shader_location: 1,
+                                format: wgpu::VertexFormat::Float32x2,
+                            },
+                        ],
+                    },
+                    wgpu::VertexBufferLayout {
+                        array_stride: std::mem::size_of::<GrassInstance>() as wgpu::BufferAddress,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &[wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x4,
+                        }],
+                    },
+                ],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                // Disable culling so both sides of each quad render.
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                // Read existing depth (so terrain occludes far
+                // blades), don't write to it -- writing would make
+                // alpha-tested blades cast hard depth shadows across
+                // the foliage edges where the alpha is sub-threshold.
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &fs,
+                entry_point: Some("fs_grass"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        Self {
+            pipeline,
+            blade_bgl,
+            vertex_buffer,
+            index_buffer,
+            params_buffer,
+            blade_color_default,
+            blade_color_texture,
+            blade_color_sampler,
+            bind_group: None,
+            instance_buffer: None,
+            instance_count: 0,
+            widget: MapGrassWidget::default(),
+        }
+    }
+
+    /// Update the per-map widget config + repack the params uniform.
+    /// Returns the new `enabled` state so callers can branch on
+    /// whether to even bother loading assets.
+    pub fn set_config(&mut self, queue: &wgpu::Queue, widget: MapGrassWidget) -> bool {
+        let params = [
+            WIND_STRENGTH,
+            widget.map_color_factor,
+            widget.map_color_base,
+            FADE_END,
+        ];
+        queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
+        let enabled = widget.enabled;
+        self.widget = widget;
+        if !enabled {
+            // Drop any stale instance buffer so a previous map's
+            // grass doesn't ghost into the next one.
+            self.instance_buffer = None;
+            self.instance_count = 0;
+        }
+        enabled
+    }
+
+    /// Replace the blade-colour texture with a freshly-decoded RGBA
+    /// asset. The bind group must be rebuilt afterwards via
+    /// `rebuild_bind_group`.
+    pub fn update_blade_color(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.blade_color_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("map_grass_blade_color"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+    }
+
+    /// Reset the blade-colour texture to the inert white default
+    /// (e.g. on map switch when no grass widget is configured).
+    pub fn clear_blade_color(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let default_pixel: [u8; 4] = [255, 255, 255, 255];
+        self.blade_color_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("map_grass_blade_color_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &default_pixel,
+        );
+    }
+
+    /// Upload (or replace) the instance buffer. An empty `instances`
+    /// vector clears the buffer.
+    pub fn update_instances(&mut self, device: &wgpu::Device, instances: &[GrassInstance]) {
+        if instances.is_empty() {
+            self.instance_buffer = None;
+            self.instance_count = 0;
+            return;
+        }
+        self.instance_buffer = Some(
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("map_grass_instances"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+        );
+        self.instance_count = instances.len() as u32;
+    }
+
+    /// Rebuild the grass bind group against the current blade-colour
+    /// + heightmap views. Called every time either texture changes.
+    pub fn rebuild_bind_group(
+        &mut self,
+        device: &wgpu::Device,
+        heightmap_view: &wgpu::TextureView,
+    ) {
+        let blade_view = self
+            .blade_color_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("map_grass_bind_group"),
+            layout: &self.blade_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&blade_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.blade_color_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(heightmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.params_buffer.as_entire_binding(),
+                },
+            ],
+        }));
+    }
+
+    /// Whether the renderer should issue the draw call this frame.
+    /// True only when: config is enabled, AND we have instances,
+    /// AND the bind group has been built (heightmap available).
+    pub fn ready_to_draw(&self) -> bool {
+        self.widget.enabled
+            && self.instance_count > 0
+            && self.instance_buffer.is_some()
+            && self.bind_group.is_some()
+    }
+
+    /// Emit the grass draw inside an already-active render pass.
+    /// Caller is responsible for setting the camera bind group
+    /// (group 0); we bind the grass bind group at group 1 here.
+    pub fn draw(&self, render_pass: &mut wgpu::RenderPass<'_>) {
+        if !self.ready_to_draw() {
+            return;
+        }
+        let bg = match &self.bind_group {
+            Some(bg) => bg,
+            None => return,
+        };
+        let inst = match &self.instance_buffer {
+            Some(b) => b,
+            None => return,
+        };
+        render_pass.set_pipeline(&self.pipeline);
+        render_pass.set_bind_group(1, bg, &[]);
+        render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+        render_pass.set_vertex_buffer(1, inst.slice(..));
+        render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        render_pass.draw_indexed(0..BLADE_INDICES.len() as u32, 0, 0..self.instance_count);
+    }
+
+    /// Read-only access to the cached widget config (used by
+    /// callers that need to know `widget.enabled` after a
+    /// `set_config` call without holding their own copy).
+    pub fn widget(&self) -> &MapGrassWidget {
+        &self.widget
+    }
+}
+
+/// Tiny deterministic hash producing `[0, 1)` floats. Matches the
+/// widget's per-patch jitter pattern (deterministic-per-position so
+/// blades don't dance between frames).
+fn hash01(x: i32, z: i32, salt: u32) -> f32 {
+    // xorshift32-ish mix. Repeatable across runs, no random-state.
+    let mut h: u32 = (x as u32).wrapping_mul(0x9E3779B1);
+    h ^= (z as u32).wrapping_mul(0x85EBCA77);
+    h ^= salt.wrapping_mul(0xC2B2AE3D);
+    h ^= h.rotate_left(13);
+    h = h.wrapping_mul(0x85EBCA6B);
+    h ^= h >> 13;
+    (h & 0x00FF_FFFF) as f32 / 0x0100_0000 as f32
+}
+
+/// Scan an 8-bit distribution mask and produce one instance per
+/// non-zero texel. The mask is sized
+/// `(map_width_elmos / patch_resolution) x (map_height_elmos /
+/// patch_resolution)`; each texel byte controls the blade size for
+/// that patch (0 = no blade, 254 = max_size).
+///
+/// `map_width_elmos` / `map_height_elmos` are the full playable map
+/// dimensions in elmos. We sample the heightmap on the GPU side, so
+/// the CPU-generated instance positions are 2D only here.
+pub fn generate_instances(
+    widget: &MapGrassWidget,
+    mask: &[u8],
+    mask_w: u32,
+    mask_h: u32,
+    map_width_elmos: f32,
+    map_height_elmos: f32,
+) -> Vec<GrassInstance> {
+    if !widget.enabled || mask.is_empty() {
+        return Vec::new();
+    }
+    let stride_x = map_width_elmos / mask_w.max(1) as f32;
+    let stride_z = map_height_elmos / mask_h.max(1) as f32;
+    let jitter_amount = widget.patch_placement_jitter * widget.patch_resolution.max(1) as f32;
+    let size_range = (widget.max_size - widget.min_size).max(0.0);
+
+    let mut instances = Vec::new();
+    for z in 0..mask_h {
+        for x in 0..mask_w {
+            let byte = mask[(z * mask_w + x) as usize];
+            if byte == 0 {
+                continue;
+            }
+            // Patch centre + per-patch jitter (deterministic from
+            // grid position so two loads of the same map produce
+            // identical placements).
+            let jitter_x = (hash01(x as i32, z as i32, 0) - 0.5) * 2.0 * jitter_amount;
+            let jitter_z = (hash01(x as i32, z as i32, 1) - 0.5) * 2.0 * jitter_amount;
+            let rotation = hash01(x as i32, z as i32, 2) * std::f32::consts::TAU;
+            let size = widget.min_size + (byte as f32 / 254.0) * size_range;
+            let world_x = (x as f32 + 0.5) * stride_x + jitter_x;
+            let world_z = (z as f32 + 0.5) * stride_z + jitter_z;
+            instances.push(GrassInstance {
+                world_x,
+                rotation,
+                world_z,
+                size,
+            });
+        }
+    }
+    instances
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -137,6 +738,55 @@ mod tests {
         };
         let w = MapGrassWidget::from_settings(&ms);
         assert!(!w.enabled);
+    }
+
+    #[test]
+    fn disabled_widget_produces_no_instances() {
+        let widget = MapGrassWidget::default();
+        let inst = generate_instances(&widget, &[1, 1, 1, 1], 2, 2, 100.0, 100.0);
+        assert!(inst.is_empty());
+    }
+
+    #[test]
+    fn non_zero_mask_seeds_one_instance_per_texel() {
+        let widget = MapGrassWidget {
+            enabled: true,
+            dist_tga: "x".to_string(),
+            blade_color_tex: "y".to_string(),
+            patch_resolution: 32,
+            patch_placement_jitter: 0.0, // disable jitter for predictable test
+            ..MapGrassWidget::default()
+        };
+        // 2x2 mask: top-left and bottom-right set.
+        let mask = [254u8, 0, 0, 127];
+        let inst = generate_instances(&widget, &mask, 2, 2, 200.0, 200.0);
+        assert_eq!(inst.len(), 2);
+        // First instance ~ patch centre (50, 50), second ~ (150, 150).
+        assert!((inst[0].world_x - 50.0).abs() < 1.0);
+        assert!((inst[0].world_z - 50.0).abs() < 1.0);
+        assert!((inst[1].world_x - 150.0).abs() < 1.0);
+        // Size scales with byte value.
+        assert!(inst[0].size > inst[1].size);
+    }
+
+    #[test]
+    fn deterministic_jitter() {
+        let widget = MapGrassWidget {
+            enabled: true,
+            dist_tga: "x".to_string(),
+            blade_color_tex: "y".to_string(),
+            patch_placement_jitter: 0.5,
+            ..MapGrassWidget::default()
+        };
+        let mask = vec![100u8; 16];
+        let a = generate_instances(&widget, &mask, 4, 4, 100.0, 100.0);
+        let b = generate_instances(&widget, &mask, 4, 4, 100.0, 100.0);
+        assert_eq!(a.len(), b.len());
+        for (ai, bi) in a.iter().zip(b.iter()) {
+            assert_eq!(ai.world_x, bi.world_x);
+            assert_eq!(ai.world_z, bi.world_z);
+            assert_eq!(ai.rotation, bi.rotation);
+        }
     }
 
     #[test]
