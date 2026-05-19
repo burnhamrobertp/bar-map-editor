@@ -620,8 +620,10 @@ fn cmd_preview(
         pollster::block_on(GpuContext::new_standalone()).context("Failed to create wgpu device")?;
 
     // Set up the renderer at the requested output resolution.
+    // BAR-faithful: non-sRGB target so the GPU doesn't gamma-encode
+    // on write -- matches BAR's pipeline.
     let mut renderer =
-        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.resize(&gpu.device, out_w, out_h);
     renderer.update_heightmap(
         &gpu.device,

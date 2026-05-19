@@ -11,32 +11,39 @@ use bar_data::{ColorBuffer, Heightmap};
 
 // ── Texture-format conventions ────────────────────────────────────────────
 //
-// Maps each map-authored texture role to the wgpu format it must use. The
-// distinction between sRGB and linear formats is load-bearing: sRGB
-// formats trigger automatic gamma decode on sample, which is correct for
-// COLOUR textures (BAR mapinfo authors values in perceptual sRGB) but
-// destroys data textures (normal maps, weight masks) whose channels are
-// numerical not perceptual.
+// Maps each map-authored texture role to the wgpu format it must use.
 //
 // Engine reference: BAR runs with `GL_FRAMEBUFFER_SRGB` disabled
-// (`bar-recoil/.../GL/State.h:185`), so its samplers don't gamma-decode
-// anything -- every texture, colour or data, reaches BAR's shader as
-// `byte/255` directly. In BME we use an sRGB framebuffer (correct), so
-// we have to pick the format per-texture: sRGB format for things BAR
-// would have authored as perceptual colour, linear for things BAR would
-// have used as direct numerical inputs.
+// (`bar-recoil/.../GL/State.h:185`) and uploads textures without the
+// sRGB flag, so its samplers return raw `byte/255` to the shader for
+// every texture -- colour or data. BAR's shaders do all their math in
+// this sRGB-perceptual space and write to a non-sRGB framebuffer; the
+// display device gamma-decodes the bytes on output. The pipeline is
+// gamma-incorrect by modern standards, but consistent end-to-end.
 //
-// Changing any of these requires checking the engine shader's sample
-// pattern -- look for `* 2 - 1` decode (data, needs linear) or direct
-// `* multiplier` use (data, needs linear). Mix factors are data;
-// per-pixel diffuse / albedo / shading textures are colour.
+// BME mirrors BAR's pipeline so map authors see what they'll see
+// in-engine: every colour texture uses a non-sRGB format (no GPU
+// decode on sample), every data texture too, every render target /
+// framebuffer uses non-sRGB (no GPU encode on write). The named
+// constants below pin this convention per texture role so an
+// accidental sRGB format choice surfaces immediately in the
+// format-convention tests at the bottom of this file.
 
-/// Colour textures (sampled as perceptual sRGB by BAR; we use sRGB so
-/// the GPU gamma-decodes back to linear before the shader sees them).
-/// Marker constant; the inline texture-creation sites still spell
-/// `Rgba8UnormSrgb` for now. Pinned by the format-convention test.
+/// Colour textures (mapinfo-authored perceptual sRGB values, treated
+/// as linear by every shader that multiplies them with lighting
+/// uniforms). Stored without the sRGB flag so the GPU returns raw
+/// byte/255 -- matches BAR's `glTexImage2D` upload that omits the
+/// sRGB internal-format variant. Marker constant; the inline
+/// `create_texture` call sites spell `Rgba8Unorm` directly. Pinned by
+/// the format-convention test below.
 #[allow(dead_code)]
-const COLOUR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const COLOUR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// BC1-compressed colour textures (the SMT terrain atlas). Same
+/// reasoning as `COLOUR_TEX_FORMAT`: BAR uploads BC1 without the
+/// `_SRGB` variant, samples return raw byte/255 to the shader.
+#[allow(dead_code)]
+const COLOUR_TEX_FORMAT_BC1: wgpu::TextureFormat = wgpu::TextureFormat::Bc1RgbaUnorm;
 
 /// Splat detail-normal textures: RGB carries tangent-space normal
 /// coordinates decoded via `(sample * 2 - 1)` in `SMFFragProg.glsl:183`;
@@ -1636,7 +1643,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1707,7 +1714,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1734,7 +1741,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1866,7 +1873,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1979,7 +1986,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2011,7 +2018,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2666,7 +2673,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2700,7 +2707,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2755,7 +2762,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2817,7 +2824,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2855,7 +2862,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+                format: wgpu::TextureFormat::Bc1RgbaUnorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3269,7 +3276,7 @@ impl TerrainRenderer {
             mip_level_count: mip_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -3315,7 +3322,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3460,7 +3467,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3511,7 +3518,7 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -3547,7 +3554,7 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -3580,7 +3587,7 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -4451,24 +4458,39 @@ mod tests {
 
     // ── Texture-format convention tests ────────────────────────────────
     //
-    // Each map-authored texture is either a COLOUR (perceptual sRGB by
-    // BAR convention) or DATA (numerical values BAR samples at face
-    // value). Picking the wrong wgpu format silently corrupts the
-    // texture content: sRGB format gamma-decodes data channels;
-    // non-sRGB format on a colour texture skips the decode we rely on
-    // for linear math. These tests pin the convention so an accidental
-    // change to one of the named constants surfaces immediately.
+    // Engine-faithful pipeline: BAR uploads every texture without the
+    // sRGB flag (`bar-recoil/.../GL/State.h:185`), so its samplers
+    // return raw `byte/255` to the shader and the shader's math runs
+    // in sRGB-perceptual space throughout. BME mirrors this: every
+    // texture uses a non-sRGB wgpu format so the GPU passes bytes
+    // through unchanged. Pinned here so an accidental sRGB choice
+    // surfaces immediately.
 
     #[test]
-    fn colour_textures_use_srgb_format() {
-        // Colour textures must use the sRGB variant so that author-
-        // perceptual values (sky/cloud albedo, grass texture, etc.)
-        // are auto-decoded to linear before shader math.
+    fn colour_textures_use_linear_format() {
+        // BAR-faithful: colour textures use the non-sRGB Rgba8Unorm
+        // variant so the GPU returns raw byte/255 to the shader.
+        // The shader's lighting math then operates on perceptual
+        // values throughout, matching BAR's gamma-incorrect but
+        // visually-consistent appearance.
         assert_eq!(
             super::COLOUR_TEX_FORMAT,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            "colour textures must use sRGB so authored perceptual \
-             values decode correctly for linear shader math"
+            wgpu::TextureFormat::Rgba8Unorm,
+            "colour textures must use the non-sRGB variant -- BAR's \
+             samplers return byte/255 and all shader math stays in \
+             sRGB-perceptual space"
+        );
+    }
+
+    #[test]
+    fn bc1_colour_textures_use_linear_format() {
+        // Same reasoning for the BC1-compressed SMT terrain atlas.
+        assert_eq!(
+            super::COLOUR_TEX_FORMAT_BC1,
+            wgpu::TextureFormat::Bc1RgbaUnorm,
+            "BC1 colour textures must use the non-sRGB variant -- \
+             same gamma-incorrect-but-consistent reasoning as \
+             COLOUR_TEX_FORMAT"
         );
     }
 

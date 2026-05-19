@@ -209,8 +209,11 @@ pub enum TextureLoadResult {
 impl ViewportCore {
     pub fn new(gpu_context: &Option<GpuContext>, session_id: u64) -> Self {
         let terrain_renderer = gpu_context.as_ref().map(|ctx| {
+            // BAR-faithful: non-sRGB render target so the GPU doesn't
+            // gamma-encode on write -- matches BAR's pipeline which
+            // uses unflagged Rgba8 framebuffers throughout.
             let mut r =
-                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8Unorm);
             r.resize(&ctx.device, 512, 512);
             r
         });
