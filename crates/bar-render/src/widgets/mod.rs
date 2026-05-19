@@ -18,3 +18,4 @@
 //! - The shader half lives in `shaders/widgets/<name>.wgsl`.
 
 pub mod custom_fog;
+pub mod map_grass;

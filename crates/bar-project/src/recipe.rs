@@ -190,6 +190,12 @@ pub struct MapSettings {
     #[serde(default)]
     pub custom_fog: CustomFogSettings,
 
+    /// Grass widget configuration (mapinfo `custom.grassConfig`).
+    /// Read by BAR's LuaUI `map_grass_gl4` widget; an empty
+    /// `dist_tga` means the widget is disabled for this map.
+    #[serde(default)]
+    pub custom_grass: CustomGrassSettings,
+
     /// Per-map asset filenames from mapinfo `resources = { ... }`.
     #[serde(default)]
     pub resources: ResourcesSettings,
@@ -410,6 +416,67 @@ impl Default for CustomFogSettings {
     }
 }
 
+/// Grass widget configuration (mapinfo `custom.grassConfig`). Driven
+/// by BAR's `map_grass_gl4` LuaUI widget (`bar-game/luaui/Widgets/
+/// map_grass_gl4.lua`). When `dist_tga` is empty the widget is
+/// considered disabled for the map -- BAR's widget similarly
+/// requires this asset to be present before it generates any
+/// blades. Defaults match the widget's `grassConfig` block
+/// (`map_grass_gl4.lua:87-110`).
+///
+/// Polish-level sub-fields (`grassShaderParams.{WINDSTRENGTH,
+/// FADESTART, FADEEND, ALPHATHRESHOLD, WINDSCALE}`) are not
+/// surfaced here -- they're shader-side defaults that the widget
+/// hardcodes per map type, never authored at the map level. BME
+/// inherits the same hardcoded values.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CustomGrassSettings {
+    /// Path (inside the map archive) to the 8-bit greyscale
+    /// distribution mask. Each non-zero texel spawns a grass blade;
+    /// the byte value scales the blade size. Empty string disables
+    /// the widget.
+    pub dist_tga: String,
+    /// Path to the RGBA blade texture sampled by the fragment shader.
+    pub blade_color_tex: String,
+    /// Maximum blade height for a `dist_tga` byte of 254. Default
+    /// 1.7 per the widget's `grassConfig.grassMaxSize`. Aurelia /
+    /// Onyx typically override to ~2.0.
+    pub max_size: f32,
+    /// Minimum blade size for a non-zero `dist_tga` byte.
+    pub min_size: f32,
+    /// Linear distance between candidate grass patches in elmos.
+    /// Default 32 per the widget; lower = denser grass at higher
+    /// vertex cost.
+    pub patch_resolution: u32,
+    /// Per-patch placement jitter (fraction of `patch_resolution`).
+    /// 0.66 by default; produces a natural scattered look without
+    /// patch overlap.
+    pub patch_placement_jitter: f32,
+    /// `grassShaderParams.MAPCOLORFACTOR` -- how strongly the
+    /// terrain albedo tints the blade colour (multiplicative blend).
+    /// Default 0.6.
+    pub map_color_factor: f32,
+    /// `grassShaderParams.MAPCOLORBASE` -- additional terrain-
+    /// albedo blend strength toward the blade base. Default 1.0.
+    pub map_color_base: f32,
+}
+
+impl Default for CustomGrassSettings {
+    fn default() -> Self {
+        Self {
+            dist_tga: String::new(),
+            blade_color_tex: String::new(),
+            max_size: 1.7,
+            min_size: 0.4,
+            patch_resolution: 32,
+            patch_placement_jitter: 0.66,
+            map_color_factor: 0.6,
+            map_color_base: 1.0,
+        }
+    }
+}
+
 impl Default for LightingSettings {
     fn default() -> Self {
         Self {
@@ -546,6 +613,7 @@ impl Default for MapSettings {
             lighting: LightingSettings::default(),
             water: WaterSettings::default(),
             custom_fog: CustomFogSettings::default(),
+            custom_grass: CustomGrassSettings::default(),
             resources: ResourcesSettings::default(),
             start_positions: Vec::new(),
         }

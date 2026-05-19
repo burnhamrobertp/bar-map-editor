@@ -34,9 +34,9 @@ pub use project::{
     SubgraphPort,
 };
 pub use recipe::{
-    AtmosphereSettings, CustomFogSettings, DetailTexture, LightingSettings, MapSettings,
-    OutputConfig, Recipe, RecipeConnection, RecipeNode, ResourcesSettings, WaterSettings,
-    RECIPE_SCHEMA_VERSION,
+    AtmosphereSettings, CustomFogSettings, CustomGrassSettings, DetailTexture, LightingSettings,
+    MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, ResourcesSettings,
+    WaterSettings, RECIPE_SCHEMA_VERSION,
 };
 pub use scan::{scan_to_project, PendingAsset, PendingRawFile, WorkDirScan, SMF_MINIMAP_SIDE_CAR};
 pub use validation::{has_errors, validate_project, Finding, Severity};

@@ -244,6 +244,14 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     if let Some(fog) = parse_custom_fog(lua, settings.max_height) {
         settings.custom_fog = fog;
     }
+
+    // Grass widget config (`custom = { grassConfig = { ... } }`). BAR's
+    // `map_grass_gl4` LuaUI widget reads this block to spawn animated
+    // grass blades from a distribution mask. Same in-scope-because-
+    // mapinfo-authored line as `custom.fog`.
+    if let Some(grass) = parse_custom_grass(lua) {
+        settings.custom_grass = grass;
+    }
 }
 
 /// Parse a string field of the form `key = "value"` or `key = 'value'`.
@@ -314,6 +322,57 @@ pub fn parse_custom_fog(lua: &str, max_h_elmos: f32) -> Option<crate::recipe::Cu
         height_elmos: height,
         atten,
     })
+}
+
+/// Pull the `custom.grassConfig = { ... }` block out of `mapinfo.lua`.
+/// Returns `None` when the block is absent or has no `grassDistTGA`
+/// (without that the widget can't pick patch positions). Matches
+/// BAR's `map_grass_gl4` widget config-read logic
+/// (`bar-game/luaui/Widgets/map_grass_gl4.lua:87-110` for defaults
+/// and `~:160-200` for per-map override pattern).
+pub fn parse_custom_grass(lua: &str) -> Option<crate::recipe::CustomGrassSettings> {
+    let custom_body = extract_table_body(lua, "custom")?;
+    let grass_body = extract_table_body(&custom_body, "grassConfig")?;
+
+    let mut settings = crate::recipe::CustomGrassSettings::default();
+    if let Some(s) = parse_mapinfo_string(&grass_body, "grassDistTGA") {
+        settings.dist_tga = s;
+    }
+    if settings.dist_tga.is_empty() {
+        // No distribution mask -> widget would generate zero blades.
+        // Treat the block as if it weren't present so the renderer
+        // gate stays off.
+        return None;
+    }
+    if let Some(s) = parse_mapinfo_string(&grass_body, "grassBladeColorTex") {
+        settings.blade_color_tex = s;
+    }
+    if let Some(v) = parse_mapinfo_number(&grass_body, "grassMaxSize") {
+        settings.max_size = v;
+    }
+    if let Some(v) = parse_mapinfo_number(&grass_body, "grassMinSize") {
+        settings.min_size = v;
+    }
+    if let Some(v) = parse_mapinfo_number(&grass_body, "patchResolution") {
+        settings.patch_resolution = v.max(1.0) as u32;
+    }
+    if let Some(v) = parse_mapinfo_number(&grass_body, "patchPlacementJitter") {
+        settings.patch_placement_jitter = v.clamp(0.0, 1.0);
+    }
+
+    // The grass-shader scalars hide inside a nested `grassShaderParams = {
+    // ... }` sub-table -- parse that body separately and pull out the two
+    // keys BME actually consumes.
+    if let Some(shader_body) = extract_table_body(&grass_body, "grassShaderParams") {
+        if let Some(v) = parse_mapinfo_number(&shader_body, "MAPCOLORFACTOR") {
+            settings.map_color_factor = v;
+        }
+        if let Some(v) = parse_mapinfo_number(&shader_body, "MAPCOLORBASE") {
+            settings.map_color_base = v;
+        }
+    }
+
+    Some(settings)
 }
 
 /// Extract the body (everything between the outermost `{` and matching `}`)
@@ -865,6 +924,65 @@ local mapinfo = {
         let mut settings = MapSettings::default();
         apply_mapinfo_overrides(lua, &mut settings);
         assert!(!settings.custom_fog.enabled);
+    }
+
+    #[test]
+    fn parses_onyx_cauldron_custom_grass_block() {
+        // Format taken from Onyx Cauldron 2.2.2's mapinfo.lua. The
+        // grassConfig sub-table sits inside `custom = { ... }` along
+        // with `fog`; we should pick up the grass keys without
+        // interfering with the fog parser.
+        let lua = r#"
+custom = {
+    fog = {
+        color = {0.71, 0.71, 0.86},
+        height = "40%",
+        fogatten = 0.0075,
+    },
+    grassConfig = {
+        grassDistTGA = "maps/Onyx Cauldron 2.0_grassDist.tga",
+        grassMaxSize = 2.0,
+        grassBladeColorTex = "maps/grass_field_mixed.dds.cached.dds",
+        grassShaderParams = {
+            MAPCOLORFACTOR = 0.2,
+            MAPCOLORBASE = 0.6,
+        },
+    },
+}
+"#;
+        let mut settings = MapSettings {
+            max_height: 1000.0,
+            ..MapSettings::default()
+        };
+        apply_mapinfo_overrides(lua, &mut settings);
+        assert_eq!(
+            settings.custom_grass.dist_tga,
+            "maps/Onyx Cauldron 2.0_grassDist.tga"
+        );
+        assert_eq!(
+            settings.custom_grass.blade_color_tex,
+            "maps/grass_field_mixed.dds.cached.dds"
+        );
+        assert!((settings.custom_grass.max_size - 2.0).abs() < 1e-6);
+        assert!((settings.custom_grass.map_color_factor - 0.2).abs() < 1e-6);
+        assert!((settings.custom_grass.map_color_base - 0.6).abs() < 1e-6);
+        // The neighbouring fog block must still parse correctly.
+        assert!(settings.custom_fog.enabled);
+    }
+
+    #[test]
+    fn custom_grass_without_dist_tga_disabled() {
+        let lua = r#"
+custom = {
+    grassConfig = {
+        grassMaxSize = 2.0,
+        -- no grassDistTGA -> widget has no patches to seed from
+    },
+}
+"#;
+        let mut settings = MapSettings::default();
+        apply_mapinfo_overrides(lua, &mut settings);
+        assert!(settings.custom_grass.dist_tga.is_empty());
     }
 
     #[test]
