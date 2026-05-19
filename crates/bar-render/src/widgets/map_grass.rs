@@ -103,18 +103,28 @@ impl MapGrassWidget {
 
 /// Per-blade instance data uploaded to the grass pipeline's instance
 /// buffer. Matches BAR widget's `instancePosRotSize` vertex attribute
-/// layout (`map_grass_gl4.vert.glsl:24`).
+/// layout (`map_grass_gl4.vert.glsl:24`), but in BME's render space
+/// (not engine elmos) so the vertex shader can multiply directly
+/// against `camera.view_proj` without a conversion step.
+///
+/// Render-space units: `world_x` and `world_z` cover the playable
+/// area as `[-x_extent, +x_extent]` / `[-z_extent, +z_extent]`
+/// (typically `[-1, +1]`). `size` is the elmo-space blade-size
+/// multiplier scaled by the renderer's elmo-to-render conversion
+/// so the shader can multiply the static mesh's elmo-unit positions
+/// by it and land in render space.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
 pub struct GrassInstance {
-    /// World X position in elmos.
+    /// Render-space X position.
     pub world_x: f32,
     /// Random Y rotation in radians.
     pub rotation: f32,
-    /// World Z position in elmos.
+    /// Render-space Z position.
     pub world_z: f32,
-    /// Blade height in elmos (scaled per-instance from the
-    /// distribution-mask byte).
+    /// Render-space size scalar (already converted from elmos via
+    /// the renderer's elmo-to-render factor). The shader multiplies
+    /// the mesh's elmo-unit positions by this.
     pub size: f32,
 }
 
@@ -129,6 +139,16 @@ struct BladeVertex {
     uv: [f32; 2],
 }
 
+/// Blade mesh vertex positions in **elmo units**, matching BAR's
+/// `grassPatches.lua` blade-patch layout (height ~17 elmos, width
+/// ~2 elmos). The vertex shader multiplies these by the
+/// per-instance `size` (which is the elmo-space mapinfo multiplier
+/// pre-converted to render units by `generate_instances`); a
+/// `size = 2` instance therefore renders a ~34-elmo-tall blade in
+/// render space, matching the engine's visible scale.
+const BLADE_MESH_HEIGHT_ELMOS: f32 = 17.0;
+const BLADE_MESH_HALF_WIDTH_ELMOS: f32 = 1.0;
+
 /// 8 vertices, 12 indices (4 triangles). Each blade renders both
 /// faces of two crossed quads; back-face culling is disabled on
 /// the pipeline so we don't need to duplicate indices for the
@@ -136,36 +156,36 @@ struct BladeVertex {
 const BLADE_VERTICES: &[BladeVertex] = &[
     // Quad 1: axis along X.
     BladeVertex {
-        pos: [-0.5, 0.0, 0.0],
+        pos: [-BLADE_MESH_HALF_WIDTH_ELMOS, 0.0, 0.0],
         uv: [0.0, 1.0],
     },
     BladeVertex {
-        pos: [0.5, 0.0, 0.0],
+        pos: [BLADE_MESH_HALF_WIDTH_ELMOS, 0.0, 0.0],
         uv: [1.0, 1.0],
     },
     BladeVertex {
-        pos: [0.5, 1.0, 0.0],
+        pos: [BLADE_MESH_HALF_WIDTH_ELMOS, BLADE_MESH_HEIGHT_ELMOS, 0.0],
         uv: [1.0, 0.0],
     },
     BladeVertex {
-        pos: [-0.5, 1.0, 0.0],
+        pos: [-BLADE_MESH_HALF_WIDTH_ELMOS, BLADE_MESH_HEIGHT_ELMOS, 0.0],
         uv: [0.0, 0.0],
     },
     // Quad 2: axis along Z.
     BladeVertex {
-        pos: [0.0, 0.0, -0.5],
+        pos: [0.0, 0.0, -BLADE_MESH_HALF_WIDTH_ELMOS],
         uv: [0.0, 1.0],
     },
     BladeVertex {
-        pos: [0.0, 0.0, 0.5],
+        pos: [0.0, 0.0, BLADE_MESH_HALF_WIDTH_ELMOS],
         uv: [1.0, 1.0],
     },
     BladeVertex {
-        pos: [0.0, 1.0, 0.5],
+        pos: [0.0, BLADE_MESH_HEIGHT_ELMOS, BLADE_MESH_HALF_WIDTH_ELMOS],
         uv: [1.0, 0.0],
     },
     BladeVertex {
-        pos: [0.0, 1.0, -0.5],
+        pos: [0.0, BLADE_MESH_HEIGHT_ELMOS, -BLADE_MESH_HALF_WIDTH_ELMOS],
         uv: [0.0, 0.0],
     },
 ];
@@ -464,12 +484,24 @@ impl MapGrassPipeline {
     /// Update the per-map widget config + repack the params uniform.
     /// Returns the new `enabled` state so callers can branch on
     /// whether to even bother loading assets.
-    pub fn set_config(&mut self, queue: &wgpu::Queue, widget: MapGrassWidget) -> bool {
+    ///
+    /// `elmo_to_render` converts the elmo-space `FADE_END` constant
+    /// into render units that match `world_pos` in the shader. The
+    /// caller (`TerrainRenderer::sync_grass_assets`) computes this
+    /// from the same `height_scale / height_range_elmos` factor it
+    /// uses for instance sizes; without it the fade ramp would
+    /// kick in way past the rendered viewport.
+    pub fn set_config(
+        &mut self,
+        queue: &wgpu::Queue,
+        widget: MapGrassWidget,
+        elmo_to_render: f32,
+    ) -> bool {
         let params = [
             WIND_STRENGTH,
             widget.map_color_factor,
             widget.map_color_base,
-            FADE_END,
+            FADE_END * elmo_to_render.max(1e-6),
         ];
         queue.write_buffer(&self.params_buffer, 0, bytemuck::bytes_of(&params));
         let enabled = widget.enabled;
@@ -653,23 +685,32 @@ fn hash01(x: i32, z: i32, salt: u32) -> f32 {
 /// patch_resolution)`; each texel byte controls the blade size for
 /// that patch (0 = no blade, 254 = max_size).
 ///
-/// `map_width_elmos` / `map_height_elmos` are the full playable map
-/// dimensions in elmos. We sample the heightmap on the GPU side, so
-/// the CPU-generated instance positions are 2D only here.
+/// Output is in **render space**: positions land in
+/// `[-x_extent_render, +x_extent_render]` /
+/// `[-z_extent_render, +z_extent_render]`, and `size` is the
+/// elmo-space multiplier already scaled by `elmo_to_render` so the
+/// shader can apply it directly against the static mesh's
+/// elmo-unit positions.
 pub fn generate_instances(
     widget: &MapGrassWidget,
     mask: &[u8],
     mask_w: u32,
     mask_h: u32,
-    map_width_elmos: f32,
-    map_height_elmos: f32,
+    x_extent_render: f32,
+    z_extent_render: f32,
+    elmo_to_render: f32,
 ) -> Vec<GrassInstance> {
     if !widget.enabled || mask.is_empty() {
         return Vec::new();
     }
-    let stride_x = map_width_elmos / mask_w.max(1) as f32;
-    let stride_z = map_height_elmos / mask_h.max(1) as f32;
-    let jitter_amount = widget.patch_placement_jitter * widget.patch_resolution.max(1) as f32;
+    let stride_x = (2.0 * x_extent_render) / mask_w.max(1) as f32;
+    let stride_z = (2.0 * z_extent_render) / mask_h.max(1) as f32;
+    // Jitter as a fraction of the per-texel patch stride. Engine
+    // uses `patch_placement_jitter * patch_resolution_elmos`; we
+    // mirror that in render space because the mask was sized so
+    // that `stride_elmos == patch_resolution`.
+    let jitter_amount_x = widget.patch_placement_jitter * stride_x;
+    let jitter_amount_z = widget.patch_placement_jitter * stride_z;
     let size_range = (widget.max_size - widget.min_size).max(0.0);
 
     let mut instances = Vec::new();
@@ -682,17 +723,17 @@ pub fn generate_instances(
             // Patch centre + per-patch jitter (deterministic from
             // grid position so two loads of the same map produce
             // identical placements).
-            let jitter_x = (hash01(x as i32, z as i32, 0) - 0.5) * 2.0 * jitter_amount;
-            let jitter_z = (hash01(x as i32, z as i32, 1) - 0.5) * 2.0 * jitter_amount;
+            let jitter_x = (hash01(x as i32, z as i32, 0) - 0.5) * 2.0 * jitter_amount_x;
+            let jitter_z = (hash01(x as i32, z as i32, 1) - 0.5) * 2.0 * jitter_amount_z;
             let rotation = hash01(x as i32, z as i32, 2) * std::f32::consts::TAU;
-            let size = widget.min_size + (byte as f32 / 254.0) * size_range;
-            let world_x = (x as f32 + 0.5) * stride_x + jitter_x;
-            let world_z = (z as f32 + 0.5) * stride_z + jitter_z;
+            let size_elmos = widget.min_size + (byte as f32 / 254.0) * size_range;
+            let world_x = -x_extent_render + (x as f32 + 0.5) * stride_x + jitter_x;
+            let world_z = -z_extent_render + (z as f32 + 0.5) * stride_z + jitter_z;
             instances.push(GrassInstance {
                 world_x,
                 rotation,
                 world_z,
-                size,
+                size: size_elmos * elmo_to_render,
             });
         }
     }
@@ -743,7 +784,7 @@ mod tests {
     #[test]
     fn disabled_widget_produces_no_instances() {
         let widget = MapGrassWidget::default();
-        let inst = generate_instances(&widget, &[1, 1, 1, 1], 2, 2, 100.0, 100.0);
+        let inst = generate_instances(&widget, &[1, 1, 1, 1], 2, 2, 1.0, 1.0, 1.0);
         assert!(inst.is_empty());
     }
 
@@ -757,14 +798,15 @@ mod tests {
             patch_placement_jitter: 0.0, // disable jitter for predictable test
             ..MapGrassWidget::default()
         };
-        // 2x2 mask: top-left and bottom-right set.
+        // 2x2 mask: top-left and bottom-right set. Render-space
+        // half-extents of 1.0 give a [-1, +1] playable area.
         let mask = [254u8, 0, 0, 127];
-        let inst = generate_instances(&widget, &mask, 2, 2, 200.0, 200.0);
+        let inst = generate_instances(&widget, &mask, 2, 2, 1.0, 1.0, 1.0);
         assert_eq!(inst.len(), 2);
-        // First instance ~ patch centre (50, 50), second ~ (150, 150).
-        assert!((inst[0].world_x - 50.0).abs() < 1.0);
-        assert!((inst[0].world_z - 50.0).abs() < 1.0);
-        assert!((inst[1].world_x - 150.0).abs() < 1.0);
+        // First instance ~ patch centre (-0.5, -0.5), second ~ (+0.5, +0.5).
+        assert!((inst[0].world_x - -0.5).abs() < 1e-3);
+        assert!((inst[0].world_z - -0.5).abs() < 1e-3);
+        assert!((inst[1].world_x - 0.5).abs() < 1e-3);
         // Size scales with byte value.
         assert!(inst[0].size > inst[1].size);
     }
@@ -779,14 +821,31 @@ mod tests {
             ..MapGrassWidget::default()
         };
         let mask = vec![100u8; 16];
-        let a = generate_instances(&widget, &mask, 4, 4, 100.0, 100.0);
-        let b = generate_instances(&widget, &mask, 4, 4, 100.0, 100.0);
+        let a = generate_instances(&widget, &mask, 4, 4, 1.0, 1.0, 1e-3);
+        let b = generate_instances(&widget, &mask, 4, 4, 1.0, 1.0, 1e-3);
         assert_eq!(a.len(), b.len());
         for (ai, bi) in a.iter().zip(b.iter()) {
             assert_eq!(ai.world_x, bi.world_x);
             assert_eq!(ai.world_z, bi.world_z);
             assert_eq!(ai.rotation, bi.rotation);
         }
+    }
+
+    #[test]
+    fn size_is_pre_converted_to_render_units() {
+        let widget = MapGrassWidget {
+            enabled: true,
+            dist_tga: "x".to_string(),
+            blade_color_tex: "y".to_string(),
+            max_size: 2.0,
+            min_size: 2.0, // pin size so byte value doesn't matter
+            patch_placement_jitter: 0.0,
+            ..MapGrassWidget::default()
+        };
+        let mask = [254u8];
+        let inst = generate_instances(&widget, &mask, 1, 1, 1.0, 1.0, 1e-3);
+        // 2 elmos * 1e-3 render-per-elmo = 0.002 render units.
+        assert!((inst[0].size - 0.002).abs() < 1e-6);
     }
 
     #[test]

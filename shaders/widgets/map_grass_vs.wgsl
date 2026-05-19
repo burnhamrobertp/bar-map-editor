@@ -81,8 +81,8 @@ struct VsOut {
 @vertex
 fn vs_grass(in: VsIn) -> VsOut {
     var out: VsOut;
-    let size = in.instance.w;
-    if size <= 0.0 {
+    let size_render = in.instance.w;
+    if size_render <= 0.0 {
         // Cull zero-size instances by pushing them outside clip space.
         out.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         out.uv = in.uv;
@@ -90,8 +90,12 @@ fn vs_grass(in: VsIn) -> VsOut {
         out.fade = 0.0;
         return out;
     }
-    // Scale by the per-instance size, then rotate around Y.
-    let scaled = in.pos * size;
+    // The static mesh's positions are authored in elmo units
+    // (`BLADE_MESH_HEIGHT_ELMOS` etc. in `widgets/map_grass.rs`).
+    // `size_render` is the engine `grassMaxSize` multiplier already
+    // converted to render units by the CPU instance generator, so
+    // multiplying the mesh by it lands in render space.
+    let scaled = in.pos * size_render;
     let cos_r = cos(in.instance.y);
     let sin_r = sin(in.instance.y);
     let rotated = vec3<f32>(
@@ -99,13 +103,14 @@ fn vs_grass(in: VsIn) -> VsOut {
         scaled.y,
         scaled.x * sin_r + scaled.z * cos_r,
     );
-    // Sample heightmap at the instance position to anchor the blade
-    // base on the terrain. `world_xz` is in elmos; the heightmap is
-    // sized to the playable map and stored 0..1 along each axis.
-    let world_xz = vec2<f32>(in.instance.x, in.instance.z);
+    // `world_xz` is already in render space ([-x_extent, +x_extent])
+    // -- the CPU side generates instance positions there directly.
+    let world_xz_render = vec2<f32>(in.instance.x, in.instance.z);
+    // Heightmap sample: render space -> normalized UV across the
+    // playable area.
     let hm_uv = vec2<f32>(
-        (world_xz.x / (2.0 * camera.x_extent)) + 0.5,
-        (world_xz.y / (2.0 * camera.z_extent)) + 0.5,
+        (world_xz_render.x / (2.0 * camera.x_extent)) + 0.5,
+        (world_xz_render.y / (2.0 * camera.z_extent)) + 0.5,
     );
     let dim = vec2<i32>(textureDimensions(grass_heightmap_tex));
     let dim_f = vec2<f32>(dim);
@@ -116,39 +121,41 @@ fn vs_grass(in: VsIn) -> VsOut {
     );
     let ground_y = textureLoad(grass_heightmap_tex, tc, 0).r * camera.height_scale;
 
-    // Wind: low-frequency sine in world XZ + time. Only the top of
-    // the blade sways (`in.pos.y` is the local up-axis; the base is
-    // at 0, the tip at 1).
+    // Wind sway: low-frequency sine in world XZ + time. Only the
+    // top of the blade moves (`in.pos.y` is the local up-axis;
+    // base at 0, tip at BLADE_MESH_HEIGHT_ELMOS). `wind_strength`
+    // is in render units so the displacement is proportional to
+    // blade height; very tall blades sway more.
     let wind_strength = grass_params.x;
     let wind_phase = camera.time * 0.6
-        + world_xz.x * 0.05
-        + world_xz.y * 0.05;
-    let wind_x = sin(wind_phase) * wind_strength;
-    let wind_z = cos(wind_phase * 1.3) * wind_strength;
-    let sway = in.pos.y * size;
+        + world_xz_render.x * 0.05
+        + world_xz_render.y * 0.05;
+    let sway_amount = in.pos.y * size_render;
+    let wind_x = sin(wind_phase) * wind_strength * sway_amount;
+    let wind_z = cos(wind_phase * 1.3) * wind_strength * sway_amount;
 
     let world_pos = vec3<f32>(
-        world_xz.x + rotated.x + wind_x * sway,
+        world_xz_render.x + rotated.x + wind_x,
         ground_y + rotated.y,
-        world_xz.y + rotated.z + wind_z * sway,
+        world_xz_render.y + rotated.z + wind_z,
     );
 
-    // Distance-fade towards the camera so far blades dissolve
-    // cleanly. Matches the engine's FADESTART / FADEEND idea but
-    // simplified to a linear ramp.
+    // Distance-fade towards the camera. `fade_end` is in render
+    // units (the CPU side packs it that way), matching the
+    // render-space coords of `world_pos` and `camera.camera_pos`.
     let to_cam = camera.camera_pos - world_pos;
     let dist = length(to_cam);
-    let fade_end = max(grass_params.w, 1.0);
+    let fade_end = max(grass_params.w, 1e-4);
     let fade_start = fade_end * 0.65;
     let fade = clamp(
-        (fade_end - dist) / max(fade_end - fade_start, 1.0),
+        (fade_end - dist) / max(fade_end - fade_start, 1e-4),
         0.0,
         1.0,
     );
 
     out.clip = camera.view_proj * vec4<f32>(world_pos, 1.0);
     out.uv = in.uv;
-    out.world_xz = world_xz;
+    out.world_xz = world_xz_render;
     out.fade = fade;
     return out;
 }

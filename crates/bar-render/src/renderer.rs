@@ -5731,6 +5731,14 @@ impl TerrainRenderer {
         (self.height_scale, self.x_extent, self.z_extent)
     }
 
+    /// Total vertical span of the heightmap in elmos. Needed by
+    /// widget callers (grass + others) to convert elmo-space
+    /// quantities into render-space units via
+    /// `height_scale / height_range_elmos`.
+    pub fn height_range_elmos(&self) -> f32 {
+        self.height_range_elmos
+    }
+
     /// Sync the grass widget's per-map assets in one shot. Uploads
     /// the blade-colour texture, regenerates the instance buffer
     /// from `dist_mask`, and rebuilds the bind group against the
@@ -5751,7 +5759,14 @@ impl TerrainRenderer {
         blade_w: u32,
         blade_h: u32,
     ) {
-        let enabled = self.map_grass.set_config(queue, widget.clone());
+        let elmo_to_render = if self.height_range_elmos > 1e-6 {
+            self.height_scale / self.height_range_elmos
+        } else {
+            1.0
+        };
+        let enabled = self
+            .map_grass
+            .set_config(queue, widget.clone(), elmo_to_render);
         if !enabled {
             self.map_grass.clear_blade_color(device, queue);
             self.map_grass.update_instances(device, &[]);
@@ -5763,15 +5778,25 @@ impl TerrainRenderer {
             .heightmap_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         self.map_grass.rebuild_bind_group(device, &hm_view);
-        let map_w_elmos = self.x_extent * 2.0;
-        let map_h_elmos = self.z_extent * 2.0;
+        // Conversion from elmo-space sizes (mapinfo `grassMaxSize`)
+        // to BME render-space units. The blade mesh is authored in
+        // elmo units (`BLADE_MESH_HEIGHT_ELMOS` etc.); pre-applying
+        // `height_scale / height_range_elmos` here means the
+        // vertex shader can multiply mesh positions by the
+        // per-instance size directly and land in render space.
+        let elmo_to_render = if self.height_range_elmos > 1e-6 {
+            self.height_scale / self.height_range_elmos
+        } else {
+            1.0
+        };
         let instances = crate::widgets::map_grass::generate_instances(
             &widget,
             dist_mask,
             mask_w,
             mask_h,
-            map_w_elmos,
-            map_h_elmos,
+            self.x_extent,
+            self.z_extent,
+            elmo_to_render,
         );
         self.map_grass.update_instances(device, &instances);
     }
@@ -5779,8 +5804,11 @@ impl TerrainRenderer {
     /// Clear the grass widget state -- used on map switch when the
     /// new map has no `custom.grassConfig` block.
     pub fn clear_grass_assets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
-        self.map_grass
-            .set_config(queue, crate::widgets::map_grass::MapGrassWidget::default());
+        self.map_grass.set_config(
+            queue,
+            crate::widgets::map_grass::MapGrassWidget::default(),
+            1.0,
+        );
         self.map_grass.clear_blade_color(device, queue);
         self.map_grass.update_instances(device, &[]);
     }

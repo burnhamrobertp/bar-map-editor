@@ -622,12 +622,28 @@ pub fn sync_map_grass(
     gpu: &GpuContext,
 ) {
     // Sync side: push the config so the renderer knows its tuning
-    // values regardless of whether asset loading succeeds.
+    // values regardless of whether asset loading succeeds. The
+    // renderer's `sync_grass_assets` is the canonical path -- we
+    // call it with empty payloads here only when the widget is
+    // disabled (it re-uses the same elmo-to-render conversion).
     if let Some(renderer) = core.terrain_renderer.as_mut() {
         if !widget.enabled {
             renderer.clear_grass_assets(&gpu.device, &gpu.queue);
         } else {
-            renderer.map_grass.set_config(&gpu.queue, widget.clone());
+            // Stash the config now so the renderer's shader fade
+            // ramp + blend factors take effect immediately; the
+            // instance + blade-color upload still waits for the
+            // async asset bundle.
+            let (height_scale, _x_extent, _z_extent) = renderer.mesh_extents();
+            let height_range = renderer.height_range_elmos();
+            let elmo_to_render = if height_range > 1e-6 {
+                height_scale / height_range
+            } else {
+                1.0
+            };
+            renderer
+                .map_grass
+                .set_config(&gpu.queue, widget.clone(), elmo_to_render);
         }
     }
     if !widget.enabled {
