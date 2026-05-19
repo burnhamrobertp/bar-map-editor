@@ -225,12 +225,44 @@ emissive=1 (whole feature self-illuminating) and spec-mult=4 -- not the
 intended no-op. If you add another use of the texture2 binding,
 re-check the fallback for that pixel pattern.
 
+## Gamma-encode post-pass
+
+BME mirrors BAR's gamma-incorrect pipeline: every shader runs in
+sRGB-perceptual space and writes perceptual bytes to a non-sRGB
+framebuffer. On a native sRGB display the engine's final intensity is
+therefore `byte/255` raised to the display gamma (~2.2). eframe
+composites our output onto an sRGB swapchain, which would otherwise
+re-encode our perceptual bytes such that displayed intensity lands at
+`V` instead of `V^2.2` -- visibly brighter, with washed-out highlights
+and oversaturated channels.
+
+A fullscreen `gamma_pipeline` runs at the end of `render_internal`,
+sampling `output_texture` (the live perceptual render target) and
+writing `pow(c, gamma_params.exponent)` into a separate
+`display_texture`. The exponent is a uniform driven by
+`TerrainRenderer::set_gamma_exponent`; the viewport debug overlay's
+gear menu surfaces it as a slider so it can be tuned visually against
+in-engine reference screenshots. eframe / egui_wgpu does partial
+gamma handling in its compose pipeline so the net swapchain chain is
+neither pure sRGB nor pure passthrough -- the residual correction
+lands somewhere in `[1.0, 2.2]` (current empirical default 1.5). The
+public `output_view()` accessor returns the **display** view;
+`read_pixels` (used by the CLI preview) also reads the display target
+so saved PNGs match the editor viewport.
+
+Cross-pass intermediates (refraction, reflection) keep their raw
+perceptual contents -- only the final swapchain-bound copy is gamma-
+encoded. Shader code (`shaders/gamma_encode.wgsl`) is a fullscreen
+triangle, no vertex buffer, depth disabled.
+
 ## Adding new render passes
 
 New passes should be added to `render_internal` using the same
 encoder, either before or after existing passes as the depth-ordering
 requires. The depth texture view is `self.depth_texture` and the
-color output is `self.output_view`. Use the established pattern:
+color output is `self.output_view` (the **internal** perceptual
+target; the public `output_view()` accessor returns the gamma-encoded
+copy and is for egui only). Use the established pattern:
 
 1. Write the relevant per-pass camera uniform variant via
    `queue.write_buffer(&self.camera_buffer, ...)`.

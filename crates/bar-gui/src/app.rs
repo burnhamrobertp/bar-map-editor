@@ -304,12 +304,27 @@ pub struct BarEditorApp {
 
 /// Per-session viewport debug toggles. Surfaced via a small gear menu
 /// in the Sculpt3D / Preview viewports.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug)]
 pub struct ViewportDebug {
     /// When true, render a corner overlay with the camera's world-space
     /// position + orientation. Useful when reproducing rendering bugs
     /// against specific viewpoints.
     pub show_camera_readout: bool,
+    /// Exponent fed into the gamma post-pass uniform. 1.0 disables the
+    /// correction (raw perceptual pixels through eframe's swapchain --
+    /// visibly too bright), 2.2 applies the full display gamma decode
+    /// (overshoots dark because egui_wgpu's compose does partial gamma
+    /// handling already). Tuned visually against in-engine ref shots.
+    pub gamma_exponent: f32,
+}
+
+impl Default for ViewportDebug {
+    fn default() -> Self {
+        Self {
+            show_camera_readout: false,
+            gamma_exponent: 1.5,
+        }
+    }
 }
 
 impl Default for BarEditorApp {

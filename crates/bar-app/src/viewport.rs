@@ -956,6 +956,11 @@ fn draw_viewport_body(
 
     if let Some(ref gpu) = gpu_context {
         if let Some(ref mut renderer) = core.terrain_renderer {
+            // Push the gamma post-pass exponent from the viewport debug
+            // overlay. Just a 16-byte queue write; doing it every tick
+            // avoids having to bookkeep changed-since-last-frame across
+            // every renderer.render call site.
+            renderer.set_gamma_exponent(&gpu.queue, app.viewport_debug.gamma_exponent);
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
                 let elapsed = core.started_at.elapsed().as_secs_f32();
@@ -1159,11 +1164,19 @@ fn draw_viewport_debug_overlay(
         &response,
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
-            ui.set_min_width(180.0);
+            ui.set_min_width(220.0);
             ui.checkbox(
                 &mut app.viewport_debug.show_camera_readout,
                 "Camera readout",
             );
+            ui.separator();
+            ui.label("Gamma post-pass exponent");
+            ui.add(
+                egui::Slider::new(&mut app.viewport_debug.gamma_exponent, 1.0..=2.4)
+                    .step_by(0.05)
+                    .text("pow"),
+            );
+            ui.small("1.0 = no correction (too bright)\n2.2 = full sRGB gamma (too dark)");
         },
     );
 

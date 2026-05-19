@@ -793,6 +793,25 @@ pub struct TerrainRenderer {
     water_index_offset: u32,
     /// Grid resolution used when building the flat terrain mesh.
     grid_n: u32,
+    // ── Gamma-encode post-process pass ──────────────────────────────────────
+    /// Fullscreen pipeline that samples `output_texture` (BAR's perceptual
+    /// pixels) and writes `pow(c, 2.2)` into `display_texture`. egui samples
+    /// the display texture, the sRGB swapchain re-encodes back to the raw
+    /// perceptual byte, and the display gamma decodes to V^2.2 -- the
+    /// in-engine appearance. Without this pass the sRGB swapchain leaves
+    /// the displayed intensity at V (too bright, washed-out highlights).
+    gamma_pipeline: wgpu::RenderPipeline,
+    gamma_bgl: wgpu::BindGroupLayout,
+    gamma_sampler: wgpu::Sampler,
+    gamma_bind_group: Option<wgpu::BindGroup>,
+    /// Single-float uniform driving `gamma_encode.wgsl`'s pow exponent.
+    /// Live-tunable via the viewport debug overlay so the right value
+    /// can be dialled in against an in-engine reference. Padded to 16
+    /// bytes for std140.
+    gamma_uniform_buffer: wgpu::Buffer,
+    display_texture: Option<wgpu::Texture>,
+    display_view: Option<wgpu::TextureView>,
+    output_format: wgpu::TextureFormat,
     // ── Output targets ──────────────────────────────────────────────────────
     depth_texture: Option<wgpu::TextureView>,
     depth_format: wgpu::TextureFormat,
@@ -2270,6 +2289,113 @@ impl TerrainRenderer {
             &shadow.receiver_bgl,
         );
 
+        // ── Gamma-encode post-process pipeline ──────────────────────────
+        // Samples `output_texture` (perceptual) and writes pow(c, 2.2) to
+        // `display_texture`. See shaders/gamma_encode.wgsl for the full
+        // chain rationale.
+        let gamma_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gamma_encode_shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/gamma_encode.wgsl").into(),
+            ),
+        });
+        let gamma_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gamma_encode_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        // Seed the uniform with a sensible starting exponent so the very
+        // first frame after resize -- before any UI tick has called
+        // `set_gamma_exponent` -- already runs with a non-zero pow().
+        // 1.5 is the current empirical sweet-spot pick; the slider in
+        // the viewport debug overlay can dial it from there.
+        let gamma_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gamma_encode_uniform"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &gamma_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&[1.5_f32, 0.0, 0.0, 0.0]),
+        );
+        let gamma_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("gamma_encode_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let gamma_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("gamma_encode_layout"),
+                bind_group_layouts: &[&gamma_bgl],
+                push_constant_ranges: &[],
+            });
+        let gamma_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gamma_encode_pipeline"),
+            layout: Some(&gamma_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &gamma_shader,
+                entry_point: Some("vs_gamma"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gamma_shader,
+                entry_point: Some("fs_gamma"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             render_pipeline,
             sky_pipeline,
@@ -2326,6 +2452,14 @@ impl TerrainRenderer {
             num_indices: 0,
             water_index_offset: 0,
             grid_n: 512,
+            gamma_pipeline,
+            gamma_bgl,
+            gamma_sampler,
+            gamma_bind_group: None,
+            gamma_uniform_buffer,
+            display_texture: None,
+            display_view: None,
+            output_format,
             depth_texture: None,
             depth_format,
             output_texture: None,
@@ -3492,6 +3626,15 @@ impl TerrainRenderer {
         self.brush_cursor = cursor;
     }
 
+    /// Live-tune the gamma post-pass exponent. See
+    /// `shaders/gamma_encode.wgsl` for the rationale; the viewport
+    /// debug overlay surfaces this as a slider so the right value can
+    /// be dialled visually against an in-engine reference.
+    pub fn set_gamma_exponent(&self, queue: &wgpu::Queue, exponent: f32) {
+        let padded = [exponent, 0.0, 0.0, 0.0];
+        queue.write_buffer(&self.gamma_uniform_buffer, 0, bytemuck::bytes_of(&padded));
+    }
+
     fn brush_cursor_uniform(&self) -> [f32; 4] {
         match self.brush_cursor {
             Some((x, z, r)) => [x, z, r, 1.0],
@@ -3524,8 +3667,54 @@ impl TerrainRenderer {
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        self.output_view = Some(texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let output_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Gamma-encoded copy of the perceptual render target. egui samples
+        // this view, not the raw output; sRGB swapchain re-encoding then
+        // cancels back to V^2.2 on display (matches BAR's in-game
+        // appearance). Same dimensions, same format -- only the contents
+        // are pre-darkened by the gamma post-pass.
+        let display = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("terrain_display"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.output_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let display_view = display.create_view(&wgpu::TextureViewDescriptor::default());
+        let gamma_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("gamma_encode_bg"),
+            layout: &self.gamma_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.gamma_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.gamma_uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        self.output_view = Some(output_view);
         self.output_texture = Some(texture);
+        self.display_view = Some(display_view);
+        self.display_texture = Some(display);
+        self.gamma_bind_group = Some(gamma_bg);
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("terrain_depth"),
@@ -4245,6 +4434,42 @@ impl TerrainRenderer {
         }
 
         queue.submit(std::iter::once(encoder.finish()));
+
+        // ── Gamma-encode post-pass ───────────────────────────────────────
+        // Sample the perceptual render target and write pow(c, 2.2) into
+        // `display_texture`. egui binds the display view (see
+        // `output_view()`), the sRGB swapchain re-encodes the gamma-
+        // darkened pixels back to BAR's raw perceptual bytes, and the
+        // display gamma decodes to V^2.2 -- the engine appearance. This
+        // runs after every main-pass write so cross-pass intermediates
+        // (refraction / reflection) stay perceptual for their samplers.
+        if let (Some(display_view), Some(gamma_bg)) =
+            (self.display_view.as_ref(), self.gamma_bind_group.as_ref())
+        {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gamma_encode_encoder"),
+            });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("gamma_encode_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: display_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rp.set_pipeline(&self.gamma_pipeline);
+                rp.set_bind_group(0, gamma_bg, &[]);
+                rp.draw(0..3, 0..1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+        }
     }
 
     // ── Accessors ───────────────────────────────────────────────────────────
@@ -4268,8 +4493,13 @@ impl TerrainRenderer {
         (self.height_scale, self.x_extent, self.z_extent)
     }
 
+    /// Display-bound texture view. This is the gamma-encoded copy of the
+    /// perceptual render target, written by the gamma post-pass at the end
+    /// of `render_internal`. egui samples this view so the sRGB swapchain
+    /// re-encoding cancels back to BAR's raw perceptual bytes, landing the
+    /// final display intensity at V^2.2 -- matching the engine.
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
-        self.output_view.as_ref()
+        self.display_view.as_ref()
     }
 
     pub fn depth_texture_view(&self) -> Option<&wgpu::TextureView> {
@@ -4327,8 +4557,14 @@ impl TerrainRenderer {
 
     /// Copy the rendered output back to a CPU RGBA8 buffer. Used by the
     /// headless CLI preview command. Returns `None` if no render has occurred.
+    ///
+    /// Reads the gamma-encoded display target so the resulting PNG matches
+    /// what the editor viewport shows -- without this, the PNG would be
+    /// the raw perceptual buffer (too bright when viewed in any sRGB-aware
+    /// image viewer, the same mismatch the gamma post-pass corrects for
+    /// the editor's sRGB swapchain).
     pub fn read_pixels(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u8>> {
-        let texture = self.output_texture.as_ref()?;
+        let texture = self.display_texture.as_ref()?;
         let w = self.width;
         let h = self.height;
         let bytes_per_pixel = 4u32;
@@ -4452,6 +4688,17 @@ mod tests {
         assert!(
             module.is_ok(),
             "minimap shader failed to parse: {:?}",
+            module.err()
+        );
+    }
+
+    #[test]
+    fn gamma_encode_shader_wgsl_parses() {
+        let s = include_str!("../../../shaders/gamma_encode.wgsl");
+        let module = naga::front::wgsl::parse_str(s);
+        assert!(
+            module.is_ok(),
+            "gamma_encode shader failed to parse: {:?}",
             module.err()
         );
     }
