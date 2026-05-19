@@ -153,6 +153,13 @@ pub struct ViewportCore {
     /// texture (mapinfo `resources.lightEmissionTex`, engine path
     /// `SMF_LIGHT_EMISSION`).
     pub light_emission_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for` for the SMF_BLEND_NORMALS
+    /// detail-normal texture (mapinfo `resources.detailNormalTex`).
+    pub detail_normal_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for` for the basic colour-splat
+    /// texture (mapinfo `resources.splatDetailTex`, engine path
+    /// `SMF_DETAIL_TEXTURE_SPLATTING`).
+    pub basic_splat_tex_loaded_for: Option<(std::path::PathBuf, String)>,
     /// Key currently being decoded on a background thread for each of the
     /// async-loaded texture slots. Set by the sync function when it spawns
     /// a worker; cleared on `poll_pending_texture_loads` once the result
@@ -165,6 +172,8 @@ pub struct ViewportCore {
     pub specular_tex_loading_for: Option<(std::path::PathBuf, String)>,
     pub grass_shading_tex_loading_for: Option<(std::path::PathBuf, String)>,
     pub light_emission_tex_loading_for: Option<(std::path::PathBuf, String)>,
+    pub detail_normal_tex_loading_for: Option<(std::path::PathBuf, String)>,
+    pub basic_splat_tex_loading_for: Option<(std::path::PathBuf, String)>,
     /// Background-decoded texture payloads ready to be uploaded on the
     /// main thread. Drained by `poll_pending_texture_loads` each frame.
     pub texture_load_tx: mpsc::Sender<TextureLoadResult>,
@@ -213,6 +222,14 @@ pub enum TextureLoadResult {
         key: (std::path::PathBuf, String),
         data: Option<Mip>,
     },
+    DetailNormalTex {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
+    BasicSplatTex {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
 }
 
 impl ViewportCore {
@@ -245,6 +262,8 @@ impl ViewportCore {
             specular_tex_loaded_for: None,
             grass_shading_tex_loaded_for: None,
             light_emission_tex_loaded_for: None,
+            detail_normal_tex_loaded_for: None,
+            basic_splat_tex_loaded_for: None,
             skybox_loading_for: None,
             detail_loading_for: None,
             splat_loading_for: None,
@@ -252,6 +271,8 @@ impl ViewportCore {
             specular_tex_loading_for: None,
             grass_shading_tex_loading_for: None,
             light_emission_tex_loading_for: None,
+            detail_normal_tex_loading_for: None,
+            basic_splat_tex_loading_for: None,
             texture_load_tx,
             texture_load_rx,
         }
@@ -390,6 +411,34 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                     _ => {}
                 }
             }
+            TextureLoadResult::DetailNormalTex { key, data } => {
+                core.detail_normal_tex_loading_for = None;
+                core.detail_normal_tex_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_detail_normal_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::debug!(w, h, "detailNormalTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_detail_normal_tex(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+            TextureLoadResult::BasicSplatTex { key, data } => {
+                core.basic_splat_tex_loading_for = None;
+                core.basic_splat_tex_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_basic_splat_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::debug!(w, h, "splatDetailTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_basic_splat_tex(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
         }
     }
 }
@@ -485,6 +534,101 @@ pub fn sync_specular_tex(
             }
         };
         let _ = tx.send(TextureLoadResult::SpecularTex {
+            key: key_pair,
+            data,
+        });
+    });
+}
+
+/// Schedule a background load of the SMF_BLEND_NORMALS detail-normal
+/// texture (mapinfo `resources.detailNormalTex`,
+/// `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:299-307`). When `filename`
+/// is empty the renderer is told to clear back to the inert default.
+pub fn sync_detail_normal_tex(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.detail_normal_tex_loaded_for == key || core.detail_normal_tex_loading_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_detail_normal_tex(&gpu.device, &gpu.queue);
+        }
+        core.detail_normal_tex_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.detail_normal_tex_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode detailNormalTex");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "detailNormalTex not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::DetailNormalTex {
+            key: key_pair,
+            data,
+        });
+    });
+}
+
+/// Schedule a background load of the basic 4-channel colour splat
+/// texture (mapinfo `resources.splatDetailTex`, singular, engine path
+/// `SMF_DETAIL_TEXTURE_SPLATTING`). Empty filename clears.
+pub fn sync_basic_splat_tex(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.basic_splat_tex_loaded_for == key || core.basic_splat_tex_loading_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_basic_splat_tex(&gpu.device, &gpu.queue);
+        }
+        core.basic_splat_tex_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.basic_splat_tex_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode splatDetailTex");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "splatDetailTex not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::BasicSplatTex {
             key: key_pair,
             data,
         });

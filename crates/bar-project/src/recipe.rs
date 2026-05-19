@@ -338,6 +338,19 @@ pub struct ResourcesSettings {
     /// glow term that overrides the underlying fragment colour by
     /// `(1 - emit.a)` weighted blend. Empty string == no emission.
     pub light_emission_tex: String,
+    /// Tangent-space normal perturbation texture (mapinfo
+    /// `detailNormalTex`, engine path `SMF_BLEND_NORMALS`,
+    /// `SMFFragProg.glsl:299-307`). Sampled at the world-XZ
+    /// normalised UV; alpha gates the mix weight that perturbs the
+    /// surface normal. Empty string == no perturbation.
+    pub detail_normal_tex: String,
+    /// Basic 4-channel colour splat texture (mapinfo
+    /// `splatDetailTex` singular, engine path
+    /// `SMF_DETAIL_TEXTURE_SPLATTING`, `SMFFragProg.glsl:80-85,
+    /// 159-169`). Mutually exclusive with the normal-splat path;
+    /// modern BAR maps use the normal-splat variant. Empty string
+    /// == no basic-splat contribution.
+    pub splat_detail_tex: String,
 }
 
 /// Lighting configuration for mapinfo.lua.

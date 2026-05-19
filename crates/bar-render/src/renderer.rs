@@ -165,9 +165,16 @@ struct CameraUniform {
     // `fogColor` uniform every fog-aware shader (sky / projectiles /
     // map_edge_extension2 / etc.) reads. rgb = colour, w reserved.
     fog_color: [f32; 4],
+    // Terrain detail-path enable flags. Engine compiles each path in
+    // via a `#define`; we gate at runtime so a single pipeline serves
+    // every map.
+    //   x = detail_normal_enabled (SMF_BLEND_NORMALS)
+    //   y = basic_splat_enabled   (SMF_DETAIL_TEXTURE_SPLATTING)
+    //   z, w = reserved
+    terrain_detail_params: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CameraUniform>() == 528);
+const _: () = assert!(std::mem::size_of::<CameraUniform>() == 544);
 
 /// Clip-plane value that passes every fragment. Used by the main pass.
 const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -283,6 +290,20 @@ pub struct SmfLighting {
     /// the inert 1x1 `(0,0,0,0)` default so it costs nothing to
     /// sample, but the explicit gate keeps the data-flow obvious.
     pub light_emission_tex_enabled: bool,
+    /// True when a `detailNormalTex` has been uploaded. Gates the
+    /// engine's `SMF_BLEND_NORMALS` path (`SMFFragProg.glsl:299-307`)
+    /// in the terrain shader: surface normal is mixed toward the
+    /// alpha-weighted tangent-space normal sampled from the texture.
+    /// When false, the normal passes through unmodified.
+    pub detail_normal_tex_enabled: bool,
+    /// True when basic 4-texture color splatting is active (engine
+    /// `SMF_DETAIL_TEXTURE_SPLATTING && !SMF_DETAIL_NORMAL_TEXTURE_SPLATTING`,
+    /// `SMFFragProg.glsl:80-85, 159-169`). Mutually exclusive with the
+    /// normal-splat path; modern BAR maps use the normal-splat
+    /// variant, but older / community maps that set
+    /// `splatDetailTex` (singular, color-only) without the four
+    /// normal-splat textures need this fallback.
+    pub basic_splat_enabled: bool,
     /// 1.0 when the legacy `detailTex` should apply to the playable
     /// area, 0.0 when it shouldn't. Engine-side, `detailTex` is only
     /// applied to the playable area by `SMFFragProg` when the map is
@@ -340,6 +361,8 @@ fn bar_render_smf_with_runtime_overrides(
     specular_tex_enabled: bool,
     grass_shading_tex_enabled: bool,
     light_emission_tex_enabled: bool,
+    detail_normal_tex_enabled: bool,
+    basic_splat_enabled: bool,
     elmo_per_render_xz: [f32; 2],
 ) -> SmfLighting {
     smf.skybox_enabled = skybox_enabled;
@@ -348,6 +371,8 @@ fn bar_render_smf_with_runtime_overrides(
     smf.specular_tex_enabled = specular_tex_enabled;
     smf.grass_shading_tex_enabled = grass_shading_tex_enabled;
     smf.light_emission_tex_enabled = light_emission_tex_enabled;
+    smf.detail_normal_tex_enabled = detail_normal_tex_enabled;
+    smf.basic_splat_enabled = basic_splat_enabled;
     smf.elmo_per_render_xz = elmo_per_render_xz;
     smf
 }
@@ -418,6 +443,8 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             specular_tex_enabled: false,
             grass_shading_tex_enabled: false,
             light_emission_tex_enabled: false,
+            detail_normal_tex_enabled: false,
+            basic_splat_enabled: false,
             // Apply legacy detailTex only when the map has no splat
             // distribution texture -- matches engine routing of
             // detailTex to the playable area only in that case.
@@ -486,6 +513,8 @@ impl Default for SmfLighting {
             specular_tex_enabled: false,
             grass_shading_tex_enabled: false,
             light_emission_tex_enabled: false,
+            detail_normal_tex_enabled: false,
+            basic_splat_enabled: false,
             detail_strength: 1.0,
             splat_tex_scales: [1.0, 1.0, 1.0, 1.0],
             splat_tex_mults: [1.0, 1.0, 1.0, 1.0],
@@ -629,6 +658,20 @@ impl SmfLighting {
                 self.atmosphere_fog_color[2],
                 1.0,
             ],
+            terrain_detail_params: [
+                // .x = SMF_BLEND_NORMALS texture present
+                if self.detail_normal_tex_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
+                // .y = basic SMF_DETAIL_TEXTURE_SPLATTING active (engine
+                // path uses splatDetailTex singular, not the four
+                // splat-detail-normal textures).
+                if self.basic_splat_enabled { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -657,6 +700,9 @@ struct SmfUniformSlots {
     /// Mapinfo `atmosphere.fogColor` packed for `CameraUniform::fog_color`.
     atmosphere_fog_color: [f32; 4],
     splat_params: [f32; 4],
+    /// Detail-path enable flags. .x = detail_normal_enabled, .y =
+    /// basic_splat_enabled. zw reserved.
+    terrain_detail_params: [f32; 4],
 }
 
 /// Per-map water surface parameters consumed by the BumpWater port in
@@ -812,6 +858,22 @@ pub struct TerrainRenderer {
     /// from a prior map doesn't keep glowing after a switch.
     light_emission_tex_texture: wgpu::Texture,
     light_emission_tex_enabled: bool,
+    /// `detailNormalTex` upload state. Default is 1x1
+    /// `(0.5, 0.5, 1.0, 0.0)` -- decoded as tangent-space normal
+    /// `(0, 0, 1)` with alpha 0, so the blend in
+    /// `SMFFragProg.glsl:299-307` is `mix(normal, ..., 0) = normal`
+    /// and produces no perturbation. `detail_normal_tex_enabled`
+    /// gates the shader stage at runtime.
+    detail_normal_tex_texture: wgpu::Texture,
+    detail_normal_tex_enabled: bool,
+    /// Basic `splatDetailTex` upload state (singular -- different
+    /// texture from the four `splatDetailNormalTex1..4`). Used by
+    /// the engine's `SMF_DETAIL_TEXTURE_SPLATTING` path when the
+    /// map sets the basic-splat key but NOT the normal-splat keys.
+    /// Mutually exclusive with the normal-splat path; default 1x1
+    /// mid-grey produces zero contribution after `(2*sample - 1)`.
+    basic_splat_tex_texture: wgpu::Texture,
+    basic_splat_enabled: bool,
     has_albedo: bool,
     // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) + water params (b4) ──────
     water_planes_bind_group_layout: wgpu::BindGroupLayout,
@@ -1426,6 +1488,37 @@ impl TerrainRenderer {
                         },
                         count: None,
                     },
+                    // SMF_BLEND_NORMALS texture (mapinfo `detailNormalTex`,
+                    // `SMFFragProg.glsl:299-307`). Sampled at
+                    // `normTexCoords`; alpha gates a tangent-space-to-
+                    // world-space normal mix. Default decodes to identity
+                    // normal with alpha 0 so the blend is a no-op.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Basic SMF_DETAIL_TEXTURE_SPLATTING texture (mapinfo
+                    // `splatDetailTex` singular, `SMFFragProg.glsl:80-85,
+                    // 159-169`). Sampled per-channel at world-XZ scaled
+                    // coordinates; mutually exclusive with the
+                    // normal-splat path. Default mid-grey produces zero
+                    // contribution after the `(2*s - 1)` sign decode.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1717,6 +1810,7 @@ impl TerrainRenderer {
             // live camera.
             fog_dists: [smf.atmosphere_fog[0], smf.atmosphere_fog[1], 0.0, 0.0],
             fog_color: smf.atmosphere_fog_color,
+            terrain_detail_params: smf.terrain_detail_params,
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1980,6 +2074,58 @@ impl TerrainRenderer {
             &grass_shading_tex_default_data,
         );
 
+        // 1x1 mid-grey default for SMF_BLEND_NORMALS' `detailNormalTex`.
+        // Engine decodes `(dtSample.xyz * 2 - 1)`; (0.5, 0.5, 1.0)
+        // decodes to (0, 0, 1) = identity tangent-space normal. Alpha
+        // 0 makes the blend weight zero, so the surface normal passes
+        // through unchanged even if a future code path ever samples
+        // this default while the gate is off.
+        let detail_normal_tex_default_data: [u8; 4] = [127, 127, 255, 0];
+        let detail_normal_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_normal_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &detail_normal_tex_default_data,
+        );
+
+        // 1x1 mid-grey default for basic `splatDetailTex` (singular).
+        // Engine signs samples via `(s * 2 - 1)`; mid-grey produces 0
+        // contribution per channel. Path is also gated at runtime so
+        // this default is inert when the basic-splat flag is off.
+        let basic_splat_tex_default_data: [u8; 4] = [127, 127, 127, 255];
+        let basic_splat_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("basic_splat_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &basic_splat_tex_default_data,
+        );
+
         // 1x1 (0, 0, 0, 0) default for lightEmissionTex. Engine blend is
         // `fragColor = fragColor * (1 - emit.a) + emit.rgb`; with alpha
         // zero the blend collapses to identity (no glow). Maps that
@@ -2022,6 +2168,9 @@ impl TerrainRenderer {
                 grass_shading_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             let letv =
                 light_emission_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let dntv =
+                detail_normal_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let bspv = basic_splat_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture_bind_group"),
                 layout: &texture_bind_group_layout,
@@ -2089,6 +2238,14 @@ impl TerrainRenderer {
                     wgpu::BindGroupEntry {
                         binding: 15,
                         resource: wgpu::BindingResource::TextureView(&letv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&dntv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: wgpu::BindingResource::TextureView(&bspv),
                     },
                 ],
             })
@@ -2544,6 +2701,10 @@ impl TerrainRenderer {
             grass_shading_tex_texture: grass_shading_tex_default,
             light_emission_tex_texture: light_emission_tex_default,
             light_emission_tex_enabled: false,
+            detail_normal_tex_texture: detail_normal_tex_default,
+            detail_normal_tex_enabled: false,
+            basic_splat_tex_texture: basic_splat_tex_default,
+            basic_splat_enabled: false,
             grass_shading_tex_enabled: false,
             has_albedo: false,
             water_planes_bind_group_layout,
@@ -3301,6 +3462,12 @@ impl TerrainRenderer {
         let letv = self
             .light_emission_tex_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let dntv = self
+            .detail_normal_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let bspv = self
+            .basic_splat_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("texture_bind_group"),
             layout: &self.texture_bind_group_layout,
@@ -3368,6 +3535,14 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 15,
                     resource: wgpu::BindingResource::TextureView(&letv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: wgpu::BindingResource::TextureView(&dntv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: wgpu::BindingResource::TextureView(&bspv),
                 },
             ],
         });
@@ -3621,6 +3796,132 @@ impl TerrainRenderer {
             rgba,
         );
         self.light_emission_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the `detailNormalTex` 2D texture. Flips
+    /// `detail_normal_tex_enabled` on so the next frame's terrain
+    /// shader runs the engine's `SMF_BLEND_NORMALS` perturbation
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:299-307`).
+    pub fn update_detail_normal_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.detail_normal_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_normal_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.detail_normal_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset `detailNormalTex` to the inert default (identity normal,
+    /// alpha 0) so the SMF_BLEND_NORMALS blend is a no-op.
+    pub fn clear_detail_normal_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let identity: [u8; 4] = [127, 127, 255, 0];
+        self.detail_normal_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_normal_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &identity,
+        );
+        self.detail_normal_tex_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the basic `splatDetailTex` (singular). Flips
+    /// `basic_splat_enabled` on so the next frame's terrain shader
+    /// runs the engine's basic 4-channel colour splat path
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:80-85, 159-169`).
+    /// Mutually exclusive with the normal-splat path -- a map that
+    /// sets both will see the normal-splat path win.
+    pub fn update_basic_splat_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.basic_splat_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("basic_splat_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.basic_splat_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset basic `splatDetailTex` to the 1x1 mid-grey default so the
+    /// basic-splat colour contribution is zero.
+    pub fn clear_basic_splat_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let grey: [u8; 4] = [127, 127, 127, 255];
+        self.basic_splat_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("basic_splat_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &grey,
+        );
+        self.basic_splat_enabled = false;
         self.rebuild_material_bind_group(device);
     }
 
@@ -4082,6 +4383,8 @@ impl TerrainRenderer {
             self.specular_tex_enabled,
             self.grass_shading_tex_enabled,
             self.light_emission_tex_enabled,
+            self.detail_normal_tex_enabled,
+            self.basic_splat_enabled,
             self.elmo_per_render_xz,
         );
         self.x_extent = f.x_extent;
@@ -4232,6 +4535,7 @@ impl TerrainRenderer {
                 0.0,
             ],
             fog_color: smf.atmosphere_fog_color,
+            terrain_detail_params: smf.terrain_detail_params,
         };
 
         // ── Pass 0: shadow map ──────────────────────────────────────────────
