@@ -190,6 +190,14 @@ const DBG_VISUALIZE_SPLAT_DETAIL: bool = false;
 /// real content lands via `update_grass_shading_tex`.
 @group(1) @binding(14) var grass_shading_tex: texture_2d<f32>;
 
+/// Self-illumination texture (mapinfo `lightEmissionTex`). Engine path
+/// `SMF_LIGHT_EMISSION` -- sampled at spec UV, alpha-gated additive
+/// blend per `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`. Glow
+/// is unshadowed by design (e.g. lava cracks, industrial lighting).
+/// Defaults to 1x1 (0,0,0,0); `custom_fog_params.w` gates whether
+/// the apply-emission stage runs at all.
+@group(1) @binding(15) var light_emission_tex: texture_2d<f32>;
+
 /// Planar-reflection texture -- rendered in a pre-pass with the camera mirrored
 /// through the water plane. Sampled in the water fragment branch.
 @group(2) @binding(0) var reflection_texture: texture_2d<f32>;
@@ -945,6 +953,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // `detail_contrib` is zero when no detail texture is loaded (default
     // 1x1 grey - 0.5 = 0), so this stays a no-op for maps without one.
     var lit_color = (color + detail_contrib) * shade_int + spec_term;
+
+    // SMF_LIGHT_EMISSION apply-emission stage
+    // (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`): unshadowed
+    // glow that overrides the shaded fragment via alpha-gated blend.
+    // `custom_fog_params.w` carries the `light_emission_tex_enabled`
+    // flag from `SmfLighting`; when zero we skip the sample entirely
+    // so maps without an emission texture pay nothing for the stage.
+    if (camera.custom_fog_params.w > 0.5) {
+        let emit_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let emit_sample = textureSample(light_emission_tex, detail_sam, emit_uv);
+        lit_color = lit_color * (1.0 - emit_sample.a) + emit_sample.rgb;
+    }
 
     // Debug viz: short-circuit the shader and output diagnostic channels.
     //   R = cos_specular  (red: where half_dir aligns with normal)

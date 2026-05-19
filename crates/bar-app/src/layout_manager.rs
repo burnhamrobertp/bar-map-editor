@@ -252,6 +252,12 @@ impl LayoutManager {
                 &mut slot.core,
                 gpu,
             );
+            crate::viewport::sync_light_emission_tex(
+                asset_dir,
+                &app.map_settings().resources.light_emission_tex,
+                &mut slot.core,
+                gpu,
+            );
         }
 
         // Force refresh: bump session_id so any in-flight result is rejected.
@@ -428,6 +434,12 @@ impl LayoutManager {
             crate::viewport::sync_grass_shading_tex(
                 asset_dir,
                 &app.map_settings().resources.grass_shading_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_light_emission_tex(
+                asset_dir,
+                &app.map_settings().resources.light_emission_tex,
                 &mut slot.core,
                 gpu,
             );

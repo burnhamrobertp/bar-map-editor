@@ -330,6 +330,14 @@ pub struct ResourcesSettings {
     /// area. Independent of the engine grass renderer (BAR doesn't
     /// use that drawer).
     pub grass_shading_tex: String,
+    /// Self-illumination texture (mapinfo `lightEmissionTex` — read by
+    /// the engine from the `resources = { ... }` table even though the
+    /// C++ struct stores it under `smf`, see
+    /// `bar-recoil/rts/Map/MapInfo.cpp:357,368`). Engine path
+    /// `SMF_LIGHT_EMISSION` (`SMFFragProg.glsl:392-401`): unshadowed
+    /// glow term that overrides the underlying fragment colour by
+    /// `(1 - emit.a)` weighted blend. Empty string == no emission.
+    pub light_emission_tex: String,
 }
 
 /// Lighting configuration for mapinfo.lua.

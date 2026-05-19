@@ -276,6 +276,13 @@ pub struct SmfLighting {
     /// map-edge extension shader between sampling the dedicated
     /// border texture vs falling back to the playable albedo.
     pub grass_shading_tex_enabled: bool,
+    /// True when a `lightEmissionTex` has been uploaded. Gates the
+    /// engine's `SMF_LIGHT_EMISSION` apply-emission stage in the
+    /// terrain shader (`SMFFragProg.glsl:392-401`). When false, the
+    /// emission blend is skipped entirely; the bound texture is still
+    /// the inert 1x1 `(0,0,0,0)` default so it costs nothing to
+    /// sample, but the explicit gate keeps the data-flow obvious.
+    pub light_emission_tex_enabled: bool,
     /// 1.0 when the legacy `detailTex` should apply to the playable
     /// area, 0.0 when it shouldn't. Engine-side, `detailTex` is only
     /// applied to the playable area by `SMFFragProg` when the map is
@@ -332,6 +339,7 @@ fn bar_render_smf_with_runtime_overrides(
     sky_reflect_mod_enabled: bool,
     specular_tex_enabled: bool,
     grass_shading_tex_enabled: bool,
+    light_emission_tex_enabled: bool,
     elmo_per_render_xz: [f32; 2],
 ) -> SmfLighting {
     smf.skybox_enabled = skybox_enabled;
@@ -339,6 +347,7 @@ fn bar_render_smf_with_runtime_overrides(
     smf.sky_reflect_mod_enabled = sky_reflect_mod_enabled;
     smf.specular_tex_enabled = specular_tex_enabled;
     smf.grass_shading_tex_enabled = grass_shading_tex_enabled;
+    smf.light_emission_tex_enabled = light_emission_tex_enabled;
     smf.elmo_per_render_xz = elmo_per_render_xz;
     smf
 }
@@ -408,6 +417,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             sky_reflect_mod_enabled: false,
             specular_tex_enabled: false,
             grass_shading_tex_enabled: false,
+            light_emission_tex_enabled: false,
             // Apply legacy detailTex only when the map has no splat
             // distribution texture -- matches engine routing of
             // detailTex to the playable area only in that case.
@@ -475,6 +485,7 @@ impl Default for SmfLighting {
             sky_reflect_mod_enabled: false,
             specular_tex_enabled: false,
             grass_shading_tex_enabled: false,
+            light_emission_tex_enabled: false,
             detail_strength: 1.0,
             splat_tex_scales: [1.0, 1.0, 1.0, 1.0],
             splat_tex_mults: [1.0, 1.0, 1.0, 1.0],
@@ -549,7 +560,15 @@ impl SmfLighting {
                 } else {
                     0.0
                 },
-                0.0,
+                // Gates the engine's `SMF_LIGHT_EMISSION` apply-emission
+                // stage in `terrain.wgsl` -- when 0 the shader skips
+                // the blend; when 1 it applies `fragColor = fragColor *
+                // (1 - emit.a) + emit.rgb` (`SMFFragProg.glsl:392-401`).
+                if self.light_emission_tex_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
             ],
             sun_color: [
                 self.sun_color[0],
@@ -775,6 +794,14 @@ pub struct TerrainRenderer {
     /// the playable albedo instead.
     grass_shading_tex_texture: wgpu::Texture,
     grass_shading_tex_enabled: bool,
+    /// `lightEmissionTex` upload state. 1x1 `(0,0,0,0)` default so the
+    /// emission blend collapses to identity (no glow) until a real
+    /// texture is uploaded. Engine path `SMF_LIGHT_EMISSION`
+    /// (`SMFFragProg.glsl:392-401`). `light_emission_enabled` gates
+    /// the shader's apply-emission stage so even a stale texture
+    /// from a prior map doesn't keep glowing after a switch.
+    light_emission_tex_texture: wgpu::Texture,
+    light_emission_tex_enabled: bool,
     has_albedo: bool,
     // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) + water params (b4) ──────
     water_planes_bind_group_layout: wgpu::BindGroupLayout,
@@ -1370,6 +1397,25 @@ impl TerrainRenderer {
                         },
                         count: None,
                     },
+                    // Self-illumination texture (mapinfo `lightEmissionTex`,
+                    // engine path `SMF_LIGHT_EMISSION` -- see
+                    // `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`).
+                    // Sampled at `specTexCoords`; alpha gates the blend
+                    // (`fragColor = fragColor * (1 - emit.a) + emit.rgb`)
+                    // so the glow is unshadowed and overrides whatever's
+                    // underneath. Defaults to 1x1 (0,0,0,0) so the blend
+                    // is a no-op for maps that don't ship an emission
+                    // texture.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1924,6 +1970,32 @@ impl TerrainRenderer {
             &grass_shading_tex_default_data,
         );
 
+        // 1x1 (0, 0, 0, 0) default for lightEmissionTex. Engine blend is
+        // `fragColor = fragColor * (1 - emit.a) + emit.rgb`; with alpha
+        // zero the blend collapses to identity (no glow). Maps that
+        // ship a real emission texture get it via
+        // `update_light_emission_tex`.
+        let light_emission_tex_default_data: [u8; 4] = [0, 0, 0, 0];
+        let light_emission_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light_emission_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &light_emission_tex_default_data,
+        );
+
         let texture_bind_group = {
             let av = albedo_texture.create_view(&wgpu::TextureViewDescriptor::default());
             let mv = metalmap_texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1938,6 +2010,8 @@ impl TerrainRenderer {
             let specv = specular_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             let gstv =
                 grass_shading_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let letv =
+                light_emission_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture_bind_group"),
                 layout: &texture_bind_group_layout,
@@ -2001,6 +2075,10 @@ impl TerrainRenderer {
                     wgpu::BindGroupEntry {
                         binding: 14,
                         resource: wgpu::BindingResource::TextureView(&gstv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: wgpu::BindingResource::TextureView(&letv),
                     },
                 ],
             })
@@ -2454,6 +2532,8 @@ impl TerrainRenderer {
             specular_tex_texture: specular_tex_default,
             specular_tex_enabled: false,
             grass_shading_tex_texture: grass_shading_tex_default,
+            light_emission_tex_texture: light_emission_tex_default,
+            light_emission_tex_enabled: false,
             grass_shading_tex_enabled: false,
             has_albedo: false,
             water_planes_bind_group_layout,
@@ -3208,6 +3288,9 @@ impl TerrainRenderer {
         let gstv = self
             .grass_shading_tex_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let letv = self
+            .light_emission_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("texture_bind_group"),
             layout: &self.texture_bind_group_layout,
@@ -3271,6 +3354,10 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 14,
                     resource: wgpu::BindingResource::TextureView(&gstv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(&letv),
                 },
             ],
         });
@@ -3488,6 +3575,69 @@ impl TerrainRenderer {
             &grey,
         );
         self.grass_shading_tex_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the `lightEmissionTex` 2D texture. Sets
+    /// `light_emission_tex_enabled` on so the terrain shader's apply-
+    /// emission stage actually runs. Engine path `SMF_LIGHT_EMISSION`
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`); unshadowed
+    /// glow, alpha-gated additive blend.
+    pub fn update_light_emission_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.light_emission_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light_emission_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.light_emission_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset `lightEmissionTex` to the 1x1 `(0,0,0,0)` default so the
+    /// emission blend collapses to identity (no glow contribution).
+    pub fn clear_light_emission_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let zero: [u8; 4] = [0, 0, 0, 0];
+        self.light_emission_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light_emission_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &zero,
+        );
+        self.light_emission_tex_enabled = false;
         self.rebuild_material_bind_group(device);
     }
 
@@ -3921,6 +4071,7 @@ impl TerrainRenderer {
             self.sky_reflect_mod_enabled,
             self.specular_tex_enabled,
             self.grass_shading_tex_enabled,
+            self.light_emission_tex_enabled,
             self.elmo_per_render_xz,
         );
         self.x_extent = f.x_extent;
