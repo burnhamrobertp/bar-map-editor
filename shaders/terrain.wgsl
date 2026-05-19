@@ -276,30 +276,12 @@ fn pass_clip_plane(world_pos: vec3<f32>) -> bool {
     return dot(camera.clip_plane.xyz, world_pos) + camera.clip_plane.w >= 0.0;
 }
 
-/// Apply the mapinfo `custom.fog` height-based tint to a fragment colour.
-/// Returns `color` unchanged when the fog is disabled or the fragment is
-/// above the ceiling. Inside the fog region the colour is *multiplicatively
-/// tinted* toward `fog_color`: at the ceiling `tint = vec3(1)` (no change),
-/// at full attenuation `tint = fog_color` (dims and colour-shifts). This
-/// matches the in-game behaviour where the fog absorbs light selectively
-/// per channel rather than blending the fragment toward a bright fog
-/// colour (which is what a plain `mix(...)` would do and what made the
-/// previous version of this pass look milky/cloudy at depth).
-fn apply_custom_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    if (camera.custom_fog_params.x < 0.5) {
-        return color;
-    }
-    let elmo_y = world_pos.y
-        / max(camera.height_scale, 1e-4)
-        * camera.height_range_elmos;
-    let below = camera.custom_fog_params.y - elmo_y;
-    if (below <= 0.0) {
-        return color;
-    }
-    let f = clamp(below * camera.custom_fog_color_atten.w, 0.0, 1.0);
-    let tint = mix(vec3<f32>(1.0), camera.custom_fog_color_atten.xyz, f);
-    return color * tint;
-}
+// `apply_custom_fog` lives in `shaders/widgets/custom_fog.wgsl` and is
+// concatenated into this shader source by `bar-render::renderer.rs::new`.
+// See that file for the height-fog widget rationale -- the mapinfo
+// `custom.fog` block is a BAR LuaUI widget contract, not an engine-
+// shader contract, so the implementation is segmented away from the
+// engine-native paths.
 
 struct VertexInput {
     @location(0) position: vec3<f32>,

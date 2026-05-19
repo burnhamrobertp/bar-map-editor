@@ -1349,14 +1349,31 @@ impl TerrainRenderer {
         queue: &wgpu::Queue,
         output_format: wgpu::TextureFormat,
     ) -> Self {
-        // Assemble WGSL from Recoil ports + original shaders. Concatenation
-        // gives the same effect as #include; WGSL has no preprocessor.
+        // Assemble WGSL from Recoil ports + widget overlays + composer
+        // shaders. Concatenation gives the same effect as #include;
+        // WGSL has no preprocessor.
+        //
+        // Order:
+        // - `recoil/*` -- engine-native ports (sky / SMF helpers).
+        // - `widgets/*` -- BAR-widget effects driven by mapinfo
+        //   `custom.*` blocks. Must come BEFORE the composer shaders
+        //   that call into them (WGSL doesn't forward-reference
+        //   functions; it does forward-reference module-scope
+        //   `var`s, which is why widgets can use `camera.*` even
+        //   though that binding is declared later in `terrain.wgsl`).
+        // - `water.wgsl` + `terrain.wgsl` -- composer shaders that
+        //   declare bindings and call into the recoil + widget pools.
+        //
+        // See `feedback_no_game_widget_porting.md` memory for the
+        // widget-effect in-scope rule.
         let modern_sky_source = include_str!("../../../shaders/recoil/modern_sky.wgsl");
         let smf_ground_source = include_str!("../../../shaders/recoil/smf_ground.wgsl");
+        let custom_fog_source = include_str!("../../../shaders/widgets/custom_fog.wgsl");
         let water_source = include_str!("../../../shaders/water.wgsl");
         let terrain_source = include_str!("../../../shaders/terrain.wgsl");
-        let shader_source =
-            format!("{modern_sky_source}\n{smf_ground_source}\n{water_source}\n{terrain_source}");
+        let shader_source = format!(
+            "{modern_sky_source}\n{smf_ground_source}\n{custom_fog_source}\n{water_source}\n{terrain_source}",
+        );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -5799,11 +5816,15 @@ impl TerrainRenderer {
 mod tests {
     #[test]
     fn terrain_shader_wgsl_parses() {
+        // Concat order must mirror `TerrainRenderer::new` -- widget
+        // overlays sit between the engine-native helpers and the
+        // composer shaders so callers can resolve their functions.
         let modern_sky = include_str!("../../../shaders/recoil/modern_sky.wgsl");
         let smf_ground = include_str!("../../../shaders/recoil/smf_ground.wgsl");
+        let custom_fog = include_str!("../../../shaders/widgets/custom_fog.wgsl");
         let water = include_str!("../../../shaders/water.wgsl");
         let terrain = include_str!("../../../shaders/terrain.wgsl");
-        let combined = format!("{modern_sky}\n{smf_ground}\n{water}\n{terrain}");
+        let combined = format!("{modern_sky}\n{smf_ground}\n{custom_fog}\n{water}\n{terrain}");
         let module = naga::front::wgsl::parse_str(&combined);
         assert!(
             module.is_ok(),

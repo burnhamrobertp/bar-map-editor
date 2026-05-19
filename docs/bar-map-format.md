@@ -164,21 +164,6 @@ The 4 detail-normal textures themselves are referenced from `resources`.
 
 ---
 
-## `mapinfo.lua → grass`
-
-**Not consumed by BAR.** These are Recoil engine grass-renderer fields. BAR ships its own grass system that ignores this entire block; see `custom.grassDistTGA` for the path BAR actually uses. Fields listed only so import code can recognise and skip them.
-
-| Field | Default |
-|---|---|
-| `bladeWaveScale` | `1.0` |
-| `bladeWidth` | `0.7` |
-| `bladeHeight` | `4.5` |
-| `bladeAngle` | `1.0` |
-| `maxStrawsPerTurf` | `150` |
-| `bladeColor` | `{0.1, 0.4, 0.1}` |
-
----
-
 ## `mapinfo.lua → resources`
 
 Texture filenames; engine resolves against the archive's VFS.

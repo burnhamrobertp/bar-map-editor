@@ -16,10 +16,35 @@ per-shader status and what's missing.
 | `picking.rs` | CPU ray-cast terrain picker |
 | `shadow.rs` | Directional shadow caster + receiver, PCF sampling |
 
-Shaders live in `shaders/` at the workspace root and are concatenated
-in this order at pipeline-build time: `modern_sky.wgsl` → `smf_ground.wgsl`
-→ `water.wgsl` → `terrain.wgsl`. Plus standalone shaders
-`features.wgsl`, `shadow_terrain.wgsl`, `shadow_feature.wgsl`.
+Shaders live in `shaders/` at the workspace root, organised by
+origin:
+
+| Directory | Provenance |
+|---|---|
+| `shaders/recoil/` | Pure engine ports (BAR's `SMFFragProg`, `ModernSkyFS`, etc.). Stable upstream contract; only changes when Recoil changes. |
+| `shaders/widgets/` | **BAR LuaUI widget ports** -- effects driven by `mapinfo.custom.*` per-map blocks (e.g. `custom_fog.wgsl` for the height-fog widget). Per-map authored content; segmented so engine-native paths stay clean. See `memory/feedback_no_game_widget_porting.md` for the in-scope rule. |
+| `shaders/*.wgsl` (top level) | Composer shaders -- `terrain.wgsl`, `water.wgsl`, `features.wgsl`, `gamma_encode.wgsl`, shadow shaders. These declare bindings + entry points and call helpers from the directories above. |
+
+Concatenation order at pipeline-build time
+(`TerrainRenderer::new`):
+`recoil/modern_sky.wgsl` → `recoil/smf_ground.wgsl` →
+`widgets/custom_fog.wgsl` → `water.wgsl` → `terrain.wgsl`.
+
+Widget shaders go BEFORE the composer shaders that call them
+because WGSL does not forward-reference functions (it does
+forward-reference module-scope `var`s, which is why widget shaders
+can use `camera.*` even though that binding is declared in
+`terrain.wgsl`).
+
+When adding a new widget port, drop the WGSL into
+`shaders/widgets/<name>.wgsl` and `include_str!` it in
+`TerrainRenderer::new` (and in the `terrain_shader_wgsl_parses`
+unit test). The Rust-side state (bind groups, uniforms,
+`update_*` methods) ideally belongs under
+`crates/bar-render/src/widgets/<name>.rs` -- the existing
+`custom.fog` plumbing currently still sits in `SmfLighting` +
+`CameraUniform` for historical reasons; new widgets should land
+in their own module.
 
 ## Render passes
 
