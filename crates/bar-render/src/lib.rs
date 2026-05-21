@@ -9,6 +9,7 @@ pub mod feature_lights;
 pub mod features;
 pub mod picking;
 pub mod renderer;
+pub(crate) mod samplers;
 pub mod shadow;
 pub mod terrain;
 pub mod thumbnail;

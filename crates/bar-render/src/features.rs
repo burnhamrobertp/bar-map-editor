@@ -12,6 +12,7 @@
 //! All draws share one pipeline and one render pass (LoadOp::Load so the
 //! terrain depth buffer correctly occludes features).
 
+use crate::samplers::make_filtered_sampler;
 use std::collections::HashMap;
 
 use bar_data::S3oVertex;
@@ -478,16 +479,7 @@ impl FeatureRenderer {
         let default_shading_view =
             default_shading.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("feature_sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = make_filtered_sampler(device, "feature_sampler", wgpu::AddressMode::Repeat);
 
         let placeholder_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("feature_placeholder_bg"),

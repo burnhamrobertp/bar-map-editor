@@ -3,6 +3,7 @@ use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
+use crate::samplers::make_filtered_sampler;
 use crate::terrain::{
     generate_flat_grid, generate_map_edge_extension, generate_terrain_skirts_and_cap,
     generate_water_plane, TerrainVertex,
@@ -423,8 +424,14 @@ impl From<&bar_project::MapSettings> for SmfLighting {
     /// CLI to drift (it shipped default zero-water for a while, which
     /// in turn made headless debugging meaningless).
     fn from(ms: &bar_project::MapSettings) -> Self {
-        let l = &ms.lighting;
-        let w = &ms.water;
+        // Resolve once at the top: every Option<T> on the recipe gets
+        // replaced with its effective value (user-explicit -> source
+        // mapinfo -> engine default) so the renderer never has to
+        // branch on `Option`. See `engine_defaults.rs` for the table.
+        let rs = ms.resolved();
+        let l = &rs.lighting;
+        let w = &rs.water;
+        let atm = &rs.atmosphere;
         Self {
             sun_dir: l.sun_dir,
             // Engine-faithful colour pipeline: mapinfo colour triples
@@ -444,7 +451,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             ground_ambient: l.ground_ambient,
             ground_diffuse: l.ground_diffuse,
             ground_specular: l.ground_specular,
-            ground_shadow_density: l.ground_shadow_density.clamp(0.0, 1.0),
+            ground_shadow_density: l.ground_shadow_density,
             specular_exponent: l.spec_exponent,
             water_absorb: w.absorb,
             water_base: w.base_color,
@@ -472,12 +479,12 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             wave_length: w.wave_length,
             foam_enabled: false,
             custom_fog: crate::widgets::custom_fog::CustomFogWidget::from_settings(ms),
-            sun_color: ms.atmosphere.sun_color,
-            sun_intensity: ms.lighting.sun_intensity,
-            sky_color: ms.atmosphere.sky_color,
-            sky_dir: ms.atmosphere.sky_dir,
-            cloud_density: ms.atmosphere.cloud_density,
-            cloud_color: ms.atmosphere.cloud_color,
+            sun_color: atm.sun_color,
+            sun_intensity: l.sun_intensity,
+            sky_color: atm.sky_color,
+            sky_dir: atm.sky_dir,
+            cloud_density: atm.cloud_density,
+            cloud_color: atm.cloud_color,
             // MapSettings doesn't carry runtime upload state; the
             // renderer overrides this flag in `sync_to_frame` based
             // on whether a real cubemap is uploaded.
@@ -497,8 +504,11 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             } else {
                 0.0
             },
-            splat_tex_scales: ms.resources.splat_tex_scales,
-            splat_tex_mults: ms.resources.splat_tex_mults,
+            // Engine defaults: identity on both. The recipe stores
+            // `None` when the source mapinfo's `splats` block was
+            // absent; fall through to those defaults at render time.
+            splat_tex_scales: ms.resources.splat_tex_scales.unwrap_or([1.0; 4]),
+            splat_tex_mults: ms.resources.splat_tex_mults.unwrap_or([1.0; 4]),
             // `advanced_splat_enabled` is a renderer-runtime flag,
             // overridden in `sync_to_frame` based on which textures
             // were actually uploaded. Map-settings can't know that.
@@ -507,9 +517,9 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             // Same: host computes this from map dimensions and sets
             // it via update_heightmap / sync_to_frame.
             elmo_per_render_xz: [1.0, 1.0],
-            atmosphere_fog_start: ms.atmosphere.fog_start,
-            atmosphere_fog_end: ms.atmosphere.fog_end,
-            atmosphere_fog_color: ms.atmosphere.fog_color,
+            atmosphere_fog_start: atm.fog_start,
+            atmosphere_fog_end: atm.fog_end,
+            atmosphere_fog_color: atm.fog_color,
         }
     }
 }
@@ -2034,16 +2044,8 @@ impl TerrainRenderer {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        let skybox_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("skybox_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let skybox_sampler =
+            make_filtered_sampler(device, "skybox_sampler", wgpu::AddressMode::ClampToEdge);
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera_bind_group"),
@@ -2064,21 +2066,8 @@ impl TerrainRenderer {
             ],
         });
 
-        let albedo_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("albedo_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            // Linear mip interpolation so the map-edge extension's
-            // mirrored sampling reads cleanly at oblique angles without
-            // sparkle. Other consumers (playable albedo) already had
-            // chain-aware mip selection in their textures; this sampler
-            // is shared, so flipping to Linear lifts quality everywhere
-            // without a behavioural change for the playable area.
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let albedo_sampler =
+            make_filtered_sampler(device, "albedo_sampler", wgpu::AddressMode::ClampToEdge);
 
         let white: [u8; 4] = [255, 255, 255, 255];
         let albedo_texture = device.create_texture_with_data(
@@ -2128,27 +2117,14 @@ impl TerrainRenderer {
             &mid_grey,
         );
         // Shared sampler for the detail / splat-detail-normal / splat
-        // distribution / sky-reflection-mask textures. Trilinear with 16x
-        // anisotropy. Matches engine behaviour:
-        //   - `GL_LINEAR_MIPMAP_LINEAR` -> wgpu `mipmap_filter: Linear` +
-        //     min/mag/`Linear` for the in-mip and inter-mip filtering steps.
-        //   - `GL_TEXTURE_MAX_ANISOTROPY_EXT` defaults to 16 in BAR
-        //     -> wgpu `anisotropy_clamp: 16`. wgpu silently caps to the
-        //     adapter's max anisotropy support (most desktop drivers do 16).
-        // Without anisotropy + mips, the splat-detail-normal textures
-        // sampled at world-space elmo scales alias into per-fragment normal
-        // noise at oblique angles, which lit every shadowed surface as
-        // grain.
-        let detail_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("detail_sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            anisotropy_clamp: 16,
-            ..Default::default()
-        });
+        // distribution / sky-reflection-mask textures. See
+        // `crate::samplers::make_filtered_sampler` for the rationale --
+        // without anisotropy + mips, splat-detail-normal textures
+        // sampled at world-space elmo scales alias into per-fragment
+        // normal noise at oblique angles, which lit every shadowed
+        // surface as grain.
+        let detail_sampler =
+            make_filtered_sampler(device, "detail_sampler", wgpu::AddressMode::Repeat);
 
         // Default splat textures: 1x1 (127, 127, 127, 127). The shader
         // does `sample * 2 - 1` so 127/255 ≈ 0.498 → centered ≈ -0.004,
@@ -2593,15 +2569,8 @@ impl TerrainRenderer {
             dimension: Some(wgpu::TextureViewDimension::D2Array),
             ..Default::default()
         });
-        let caustic_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("caustic_sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let caustic_sampler =
+            make_filtered_sampler(device, "caustic_sampler", wgpu::AddressMode::Repeat);
 
         // Defaults for foam + waverand + coastmap. All 1x1 inert
         // until `update_foam_assets` and `update_coastmap` flip their
@@ -3014,6 +2983,7 @@ impl TerrainRenderer {
             device,
             queue,
             &camera_bind_group_layout,
+            &shadow.receiver_bgl,
             output_format,
             depth_format,
         );
@@ -3376,11 +3346,18 @@ impl TerrainRenderer {
             self.normal_map_texture = nm_tex;
             // Rebuild the grass widget's bind group so its vertex
             // shader can sample the new heightmap to anchor blade
-            // bases on the terrain surface.
+            // bases on the terrain surface. The FS reads
+            // `grass_shading_tex` (= `$grass` in BAR's widget; per-
+            // map override or minimap fallback) for the
+            // MAPCOLORFACTOR / MAPCOLORBASE blends.
             let hm_view = self
                 .heightmap_texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-            self.map_grass.rebuild_bind_group(device, &hm_view);
+            let grass_color_mod_view = self
+                .grass_shading_tex_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass
+                .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
         }
     }
 
@@ -4103,6 +4080,22 @@ impl TerrainRenderer {
         self.grass_shading_tex_texture = tex;
         self.grass_shading_tex_enabled = true;
         self.rebuild_material_bind_group(device);
+        // The grass widget's bind group at binding 4 holds a
+        // TextureView captured from the OLD grass_shading_tex
+        // (the 1x1 grey default at first build). Replacing the
+        // texture variable doesn't update the bind group's view --
+        // we have to rebuild explicitly. Skip if the heightmap
+        // hasn't been built yet (no grass to draw anyway).
+        if self.heightmap_texture.size().width > 1 {
+            let hm_view = self
+                .heightmap_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let grass_color_mod_view = self
+                .grass_shading_tex_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass
+                .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
+        }
     }
 
     /// Reset grassShadingTex to the 1x1 grey default; extension shader
@@ -4130,6 +4123,18 @@ impl TerrainRenderer {
         );
         self.grass_shading_tex_enabled = false;
         self.rebuild_material_bind_group(device);
+        // See `update_grass_shading_tex` for why the grass widget
+        // bind group needs an explicit rebuild on texture swap.
+        if self.heightmap_texture.size().width > 1 {
+            let hm_view = self
+                .heightmap_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let grass_color_mod_view = self
+                .grass_shading_tex_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass
+                .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
+        }
     }
 
     /// Replace the 32-frame caustic animation. Each frame is one RGBA8
@@ -5668,7 +5673,8 @@ impl TerrainRenderer {
                 occlusion_query_set: None,
             });
             grass_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            self.map_grass.draw(&mut grass_pass);
+            self.map_grass
+                .draw(&mut grass_pass, self.shadow.receiver_bind_group());
         }
 
         queue.submit(std::iter::once(encoder.finish()));
@@ -5746,7 +5752,6 @@ impl TerrainRenderer {
     /// config; we read the playable map dimensions from
     /// `mesh_extents()` to translate distribution-mask coordinates
     /// to world elmos.
-    #[allow(clippy::too_many_arguments)]
     pub fn sync_grass_assets(
         &mut self,
         device: &wgpu::Device,
@@ -5755,40 +5760,41 @@ impl TerrainRenderer {
         dist_mask: &[u8],
         mask_w: u32,
         mask_h: u32,
-        blade_color_rgba: &[u8],
-        blade_w: u32,
-        blade_h: u32,
+        blade_color_mips: &[(Vec<u8>, u32, u32)],
     ) {
-        let elmo_to_render = if self.height_range_elmos > 1e-6 {
-            self.height_scale / self.height_range_elmos
-        } else {
-            1.0
-        };
-        let enabled = self
-            .map_grass
-            .set_config(queue, widget.clone(), elmo_to_render);
+        let enabled = self.map_grass.set_config(device, queue, widget.clone());
         if !enabled {
             self.map_grass.clear_blade_color(device, queue);
             self.map_grass.update_instances(device, &[]);
             return;
         }
         self.map_grass
-            .update_blade_color(device, queue, blade_color_rgba, blade_w, blade_h);
+            .update_blade_color(device, queue, blade_color_mips);
         let hm_view = self
             .heightmap_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.map_grass.rebuild_bind_group(device, &hm_view);
-        // Conversion from elmo-space sizes (mapinfo `grassMaxSize`)
-        // to BME render-space units. The blade mesh is authored in
-        // elmo units (`BLADE_MESH_HEIGHT_ELMOS` etc.); pre-applying
-        // `height_scale / height_range_elmos` here means the
-        // vertex shader can multiply mesh positions by the
-        // per-instance size directly and land in render space.
-        let elmo_to_render = if self.height_range_elmos > 1e-6 {
-            self.height_scale / self.height_range_elmos
-        } else {
-            1.0
-        };
+        // `mapGrassColorModTex = "$grass"` in `map_grass_gl4.lua:112`
+        // resolves to `MAP_BASE_GRASS_TEX` (`LuaOpenGLUtils.cpp:74`)
+        // which is `grassShadingTex` (`SMFReadMap.h:104`). Confirmed
+        // empirically via diagnostic shader edit -- displaying the
+        // raw mapColor sample on blade silhouettes shows the same
+        // darkened-minimap content as the per-map grassShadingTex
+        // file. BME's `grass_shading_tex_texture` is the matching
+        // source; using `albedo_texture` here would over-saturate
+        // because the engine's blend math is tuned for a downgraded
+        // colour map.
+        let grass_color_mod_view = self
+            .grass_shading_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.map_grass
+            .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
+        // The blade mesh is authored in elmos and the instance
+        // buffer stores raw mapinfo `grassMaxSize` in elmos too.
+        // Render-space conversion happens in the vertex shader
+        // against the camera uniform's `height_scale /
+        // height_range_elmos` -- always current, so the instance
+        // buffer doesn't go stale if terrain dimensions arrive
+        // after grass assets do.
         let instances = crate::widgets::map_grass::generate_instances(
             &widget,
             dist_mask,
@@ -5796,7 +5802,18 @@ impl TerrainRenderer {
             mask_h,
             self.x_extent,
             self.z_extent,
-            elmo_to_render,
+        );
+        // Cache the mask + extents so later `set_config` calls can
+        // regenerate the instance buffer in place when the user
+        // tweaks `grassMinSize`, `grassMaxSize`, or `patchPlacement
+        // Jitter` via the editor (each of those bakes into the
+        // per-patch instance data).
+        self.map_grass.cache_mask_for_regen(
+            dist_mask,
+            mask_w,
+            mask_h,
+            self.x_extent,
+            self.z_extent,
         );
         self.map_grass.update_instances(device, &instances);
     }
@@ -5805,12 +5822,13 @@ impl TerrainRenderer {
     /// new map has no `custom.grassConfig` block.
     pub fn clear_grass_assets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
         self.map_grass.set_config(
+            device,
             queue,
             crate::widgets::map_grass::MapGrassWidget::default(),
-            1.0,
         );
         self.map_grass.clear_blade_color(device, queue);
         self.map_grass.update_instances(device, &[]);
+        self.map_grass.invalidate_cached_mask();
     }
 
     /// Display-bound texture view. This is the gamma-encoded copy of the
@@ -6142,36 +6160,36 @@ mod tests {
         // boundary will silently re-darken the playable area and shift
         // the colour balance.
         let mut ms = bar_project::MapSettings::default();
-        ms.atmosphere.fog_color = [0.11, 0.13, 0.15];
-        ms.atmosphere.sun_color = [1.0, 0.92, 0.78];
-        ms.atmosphere.sky_color = [0.43, 0.58, 0.64];
-        ms.atmosphere.cloud_color = [0.9, 0.9, 0.9];
-        ms.lighting.ground_ambient = [0.56, 0.55, 0.55];
-        ms.lighting.ground_diffuse = [0.75, 0.75, 0.8];
-        ms.lighting.ground_specular = [0.5, 0.5, 0.5];
-        ms.water.absorb = [0.011, 0.011, 0.015];
-        ms.water.base_color = [0.5, 0.68, 0.68];
-        ms.water.min_color = [0.022, 0.0035, 0.035];
-        ms.water.surface_color = [0.5, 0.6, 0.65];
-        ms.water.diffuse_color = [1.0, 1.0, 1.0];
-        ms.water.specular_color = [0.65, 0.65, 0.7];
+        ms.atmosphere.fog_color = Some([0.11, 0.13, 0.15]);
+        ms.atmosphere.sun_color = Some([1.0, 0.92, 0.78]);
+        ms.atmosphere.sky_color = Some([0.43, 0.58, 0.64]);
+        ms.atmosphere.cloud_color = Some([0.9, 0.9, 0.9]);
+        ms.lighting.ground_ambient = Some([0.56, 0.55, 0.55]);
+        ms.lighting.ground_diffuse = Some([0.75, 0.75, 0.8]);
+        ms.lighting.ground_specular = Some([0.5, 0.5, 0.5]);
+        ms.water.absorb = Some([0.011, 0.011, 0.015]);
+        ms.water.base_color = Some([0.5, 0.68, 0.68]);
+        ms.water.min_color = Some([0.022, 0.0035, 0.035]);
+        ms.water.surface_color = Some([0.5, 0.6, 0.65]);
+        ms.water.diffuse_color = Some([1.0, 1.0, 1.0]);
+        ms.water.specular_color = Some([0.65, 0.65, 0.7]);
         ms.custom_fog.color = [0.3, 0.4, 0.5];
 
         let smf = super::SmfLighting::from(&ms);
 
-        assert_eq!(smf.atmosphere_fog_color, ms.atmosphere.fog_color);
-        assert_eq!(smf.sun_color, ms.atmosphere.sun_color);
-        assert_eq!(smf.sky_color, ms.atmosphere.sky_color);
-        assert_eq!(smf.cloud_color, ms.atmosphere.cloud_color);
-        assert_eq!(smf.ground_ambient, ms.lighting.ground_ambient);
-        assert_eq!(smf.ground_diffuse, ms.lighting.ground_diffuse);
-        assert_eq!(smf.ground_specular, ms.lighting.ground_specular);
-        assert_eq!(smf.water_absorb, ms.water.absorb);
-        assert_eq!(smf.water_base, ms.water.base_color);
-        assert_eq!(smf.water_min, ms.water.min_color);
-        assert_eq!(smf.water_surface_color, ms.water.surface_color);
-        assert_eq!(smf.water_diffuse_color, ms.water.diffuse_color);
-        assert_eq!(smf.water_specular_color, ms.water.specular_color);
+        assert_eq!(Some(smf.atmosphere_fog_color), ms.atmosphere.fog_color);
+        assert_eq!(Some(smf.sun_color), ms.atmosphere.sun_color);
+        assert_eq!(Some(smf.sky_color), ms.atmosphere.sky_color);
+        assert_eq!(Some(smf.cloud_color), ms.atmosphere.cloud_color);
+        assert_eq!(Some(smf.ground_ambient), ms.lighting.ground_ambient);
+        assert_eq!(Some(smf.ground_diffuse), ms.lighting.ground_diffuse);
+        assert_eq!(Some(smf.ground_specular), ms.lighting.ground_specular);
+        assert_eq!(Some(smf.water_absorb), ms.water.absorb);
+        assert_eq!(Some(smf.water_base), ms.water.base_color);
+        assert_eq!(Some(smf.water_min), ms.water.min_color);
+        assert_eq!(Some(smf.water_surface_color), ms.water.surface_color);
+        assert_eq!(Some(smf.water_diffuse_color), ms.water.diffuse_color);
+        assert_eq!(Some(smf.water_specular_color), ms.water.specular_color);
         assert_eq!(smf.custom_fog.color, ms.custom_fog.color);
     }
 }
