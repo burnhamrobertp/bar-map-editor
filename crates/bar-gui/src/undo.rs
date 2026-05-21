@@ -423,12 +423,12 @@ mod tests {
         let mut app = BarEditorApp::default();
         app.map.width = 513;
         app.map.height = 513;
-        app.map.settings.water.fresnel_power = 4.0;
+        app.map.settings.water.fresnel_power = Some(4.0);
         app.map.features.clear();
         app.push_undo("baseline");
 
         // Simulate "user edits mapinfo + adds a feature".
-        app.map.settings.water.fresnel_power = 6.5;
+        app.map.settings.water.fresnel_power = Some(6.5);
         app.map.features.push(bar_project::recipe::PlacedFeature {
             feature_type: "arborreal".into(),
             x: 1.0,
@@ -436,12 +436,13 @@ mod tests {
             z: 2.0,
             angle: 0.0,
             taken_damage: 0,
+            source: bar_project::recipe::FeatureSource::Smf,
         });
 
         app.undo();
         assert!(
-            (app.map.settings.water.fresnel_power - 4.0).abs() < 1e-6,
-            "fresnel_power should revert to baseline 4.0, got {}",
+            (app.map.settings.water.fresnel_power.unwrap_or_default() - 4.0).abs() < 1e-6,
+            "fresnel_power should revert to baseline 4.0, got {:?}",
             app.map.settings.water.fresnel_power
         );
         assert!(
@@ -472,6 +473,7 @@ mod tests {
             z: 1.0,
             angle: 0.0,
             taken_damage: 0,
+            source: bar_project::recipe::FeatureSource::Smf,
         });
         // Place feature 2.
         app.push_undo("Place feature");
@@ -482,6 +484,7 @@ mod tests {
             z: 2.0,
             angle: 0.0,
             taken_damage: 0,
+            source: bar_project::recipe::FeatureSource::Smf,
         });
         // Delete feature 1 (index 0 after both placements).
         app.push_undo("Delete feature");
@@ -524,7 +527,7 @@ mod tests {
         state.map.height = 1025;
         state.map.min_height = -50.0;
         state.map.max_height = 800.0;
-        state.map.settings.water.fresnel_power = 6.5;
+        state.map.settings.water.fresnel_power = Some(6.5);
         state.map.recipe_meta.author = Some("test_author".into());
         state.map.features.push(bar_project::recipe::PlacedFeature {
             feature_type: "arborreal".into(),
@@ -533,6 +536,7 @@ mod tests {
             z: 200.0,
             angle: 0.0,
             taken_damage: 0,
+            source: bar_project::recipe::FeatureSource::Smf,
         });
         let snap = Snapshot {
             state: state.clone(),
@@ -544,7 +548,18 @@ mod tests {
         assert_eq!(cloned.state.map.height, 1025);
         assert!((cloned.state.map.min_height - (-50.0)).abs() < 1e-6);
         assert!((cloned.state.map.max_height - 800.0).abs() < 1e-6);
-        assert!((cloned.state.map.settings.water.fresnel_power - 6.5).abs() < 1e-6);
+        assert!(
+            (cloned
+                .state
+                .map
+                .settings
+                .water
+                .fresnel_power
+                .unwrap_or_default()
+                - 6.5)
+                .abs()
+                < 1e-6
+        );
         assert_eq!(
             cloned.state.map.recipe_meta.author.as_deref(),
             Some("test_author")
