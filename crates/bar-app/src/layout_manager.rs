@@ -234,7 +234,11 @@ impl LayoutManager {
                 .or(app.project.pending_map_data_dir.as_deref());
             crate::viewport::sync_skybox(
                 asset_dir,
-                &app.map_settings().atmosphere.skybox,
+                app.map_settings()
+                    .atmosphere
+                    .skybox
+                    .as_deref()
+                    .unwrap_or(""),
                 &mut slot.core,
                 gpu,
             );
@@ -440,7 +444,11 @@ impl LayoutManager {
                 .or(app.project.pending_map_data_dir.as_deref());
             crate::viewport::sync_skybox(
                 asset_dir,
-                &app.map_settings().atmosphere.skybox,
+                app.map_settings()
+                    .atmosphere
+                    .skybox
+                    .as_deref()
+                    .unwrap_or(""),
                 &mut slot.core,
                 gpu,
             );

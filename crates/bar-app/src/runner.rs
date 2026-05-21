@@ -56,6 +56,25 @@ pub struct AppRunner {
     pub sd7_progress_rx: Option<mpsc::Receiver<String>>,
     pub compile_result_rx: Option<mpsc::Receiver<Result<(), String>>>,
     pub test_in_bar_rx: Option<mpsc::Receiver<Result<(std::path::PathBuf, String), String>>>,
+    /// Cache key for the last successful Test-in-BAR run: hash of
+    /// (graph topology + params + recipe.output) plus the resulting
+    /// `.sdd` path and map-internal name. On a fresh click, if the
+    /// hash matches we skip evaluate_graph + execute_bundlers
+    /// entirely and re-launch against the cached artifact.
+    /// `(heavy_key, full_key, sdd_path, map_internal_name)` -- the
+    /// `heavy_key` covers everything that requires re-running the
+    /// graph + SMF/SMT write + file copies; the `full_key` additionally
+    /// covers mapinfo-only fields (atmosphere / lighting / water /
+    /// grass / identity / physics scalars). A heavy hit with a full
+    /// miss skips the heavy pipeline and only re-emits mapinfo.lua.
+    pub test_in_bar_cache: Option<(u64, u64, std::path::PathBuf, String)>,
+    /// True iff the user clicked "Test in BAR" while the compiled
+    /// state was stale, kicking off an automatic Compile first. When
+    /// the compile finishes successfully we chain into the actual
+    /// Test-in-BAR flow so the bundler can copy the up-to-date
+    /// compiled SMT instead of re-encoding. Cleared on chain or on
+    /// compile failure.
+    pub pending_test_in_bar_after_compile: bool,
     pub pending_export_dir: Option<PendingExportDir>,
     pub bar_install: Option<bar_install::BarVersions>,
     pub layout_manager: LayoutManager,
@@ -188,16 +207,22 @@ impl eframe::App for AppRunner {
                     self.compile_result_rx = None;
                     self.app.set_status("Compile complete");
                     self.layout_manager.invalidate_bc1();
+                    if self.pending_test_in_bar_after_compile {
+                        self.pending_test_in_bar_after_compile = false;
+                        self.start_test_in_bar(ctx);
+                    }
                 }
                 Ok(Err(e)) => {
                     self.app.preview.compile_running = false;
                     self.compile_result_rx = None;
                     self.app.set_status(format!("Compile failed: {e}"));
+                    self.pending_test_in_bar_after_compile = false;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.app.preview.compile_running = false;
                     self.compile_result_rx = None;
+                    self.pending_test_in_bar_after_compile = false;
                 }
             }
         }
@@ -398,7 +423,39 @@ impl eframe::App for AppRunner {
 
         // Test in BAR.
         if self.app.preview.take_test_in_bar() && self.test_in_bar_rx.is_none() {
-            self.start_test_in_bar(ctx);
+            // If the compiled state is stale or absent, run Compile
+            // first so the bundler can copy the cached SMT instead of
+            // re-encoding it from scratch. The compile spinner picks
+            // up the work, and `pending_test_in_bar_after_compile`
+            // makes the result-poll above chain into the BAR phase
+            // automatically. A valid Test-in-BAR cache short-circuits
+            // both steps -- the .sdd is already on disk and the launch
+            // can fire immediately.
+            let needs_compile = self.app.project.path.is_some()
+                && (self.app.project.compile_dirty || self.app.project.compiled_at.is_none())
+                && self.compile_result_rx.is_none()
+                && {
+                    // Only the heavy half of the cache key gates
+                    // the pre-compile -- a mapinfo-only change is
+                    // handled by the partial-regen path inside
+                    // `start_test_in_bar`, no full recompile needed.
+                    let (heavy_key, _) = compute_test_in_bar_keys(
+                        self.app.graph(),
+                        &self.app.recipe_for_export(),
+                        self.app.project.path.as_deref(),
+                    );
+                    !self
+                        .test_in_bar_cache
+                        .as_ref()
+                        .is_some_and(|(h, _, p, _)| *h == heavy_key && p.is_dir())
+                };
+            if needs_compile {
+                self.pending_test_in_bar_after_compile = true;
+                self.app.preview.compile_requested = true;
+                self.app.set_status("Compiling before launch...");
+            } else {
+                self.start_test_in_bar(ctx);
+            }
         }
         if let Some(ref rx) = self.test_in_bar_rx {
             if let Ok(result) = rx.try_recv() {
@@ -412,6 +469,20 @@ impl eframe::App for AppRunner {
                 self.progress_rx = None;
                 match result {
                     Ok((sd7_path, map_internal_name)) => {
+                        // Cache the successful bundle so a repeat
+                        // click with unchanged graph/recipe/assets
+                        // skips the whole pipeline.
+                        let (heavy_key, full_key) = compute_test_in_bar_keys(
+                            self.app.graph(),
+                            &self.app.recipe_for_export(),
+                            self.app.project.path.as_deref(),
+                        );
+                        self.test_in_bar_cache = Some((
+                            heavy_key,
+                            full_key,
+                            sd7_path.clone(),
+                            map_internal_name.clone(),
+                        ));
                         self.finish_test_in_bar(&sd7_path, &map_internal_name)
                     }
                     Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
@@ -882,25 +953,23 @@ impl AppRunner {
     }
 
     fn start_test_in_bar(&mut self, ctx: &egui::Context) {
-        if self.bar_install.is_none() {
+        let Some(ref install) = self.bar_install else {
             self.app.set_status(
                 "BAR install not found. Install Beyond All Reason or set the path manually."
                     .to_string(),
             );
             return;
-        }
-
-        let temp_dir = std::env::temp_dir().join(format!(
-            "om_test_in_bar_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_millis())
-                .unwrap_or(0),
-        ));
-        if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+        };
+        // Write the test artifact straight into BAR's `maps/` folder
+        // as a `.sdd` directory (not `.sd7`). Engine accepts both
+        // formats from `maps/`; the directory variant skips 7z
+        // compression (typically 10+ seconds for an Onyx-sized map)
+        // AND skips the temp-dir -> install-dir copy that the
+        // .sd7 path did, since we're already writing in place.
+        let bundler_output_dir = install.maps_dir.clone();
+        if let Err(e) = std::fs::create_dir_all(&bundler_output_dir) {
             self.app
-                .set_status(format!("Test in BAR: cannot create temp dir: {e}"));
+                .set_status(format!("Test in BAR: cannot create maps dir: {e}"));
             return;
         }
 
@@ -908,11 +977,69 @@ impl AppRunner {
         let recipe = self.app.recipe_for_export();
         let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
+
+        // Two-tier cache check.
+        //
+        // * heavy_key covers graph + asset files + recipe parts that
+        //   require regenerating SMF/SMT or recopying files into the
+        //   bundle (dimensions, terrain types, features, detail
+        //   textures, resources). A heavy match means the existing
+        //   .sdd's binary artifacts are still current.
+        // * full_key adds the mapinfo-only fields (atmosphere /
+        //   lighting / water / grass / physics scalars / identity).
+        //
+        // Heavy match + full match: full cache hit, just launch.
+        // Heavy match + full miss : only mapinfo-affecting settings
+        //   changed; re-emit mapinfo.lua into the existing .sdd and
+        //   launch -- skips graph evaluation entirely.
+        // Heavy miss              : full rebuild.
+        let (heavy_key, full_key) =
+            compute_test_in_bar_keys(&graph, &recipe, self.app.project.path.as_deref());
+        if let Some((prev_heavy, prev_full, prev_sdd, prev_map_name)) =
+            self.test_in_bar_cache.clone()
+        {
+            if prev_heavy == heavy_key && prev_sdd.is_dir() {
+                if prev_full == full_key {
+                    tracing::info!(
+                        sdd = %prev_sdd.display(),
+                        "Test in BAR: full cache hit, reusing existing .sdd"
+                    );
+                    self.app
+                        .set_status("Test in BAR: reusing cached bundle...".to_string());
+                    self.finish_test_in_bar(prev_sdd.as_path(), &prev_map_name);
+                    return;
+                }
+                // Mapinfo-only change: regenerate the file in place.
+                tracing::info!(
+                    sdd = %prev_sdd.display(),
+                    "Test in BAR: heavy cache hit, regenerating mapinfo.lua only"
+                );
+                self.app
+                    .set_status("Test in BAR: updating mapinfo.lua...".to_string());
+                match bar_engine::regenerate_mapinfo_in_bundle(
+                    &graph,
+                    &recipe,
+                    &prev_sdd,
+                    self.app.project.path.as_deref(),
+                ) {
+                    Ok(()) => {
+                        self.test_in_bar_cache =
+                            Some((heavy_key, full_key, prev_sdd.clone(), prev_map_name.clone()));
+                        self.finish_test_in_bar(prev_sdd.as_path(), &prev_map_name);
+                        return;
+                    }
+                    Err(e) => {
+                        tracing::warn!(err = %e, "Mapinfo-only regen failed; falling back to full rebuild");
+                    }
+                }
+            }
+        }
+
         let (tx, rx) = mpsc::channel::<Result<(std::path::PathBuf, String), String>>();
         self.test_in_bar_rx = Some(rx);
         let (progress_tx, progress_rx) = mpsc::channel::<String>();
         self.progress_rx = Some(progress_rx);
-        self.export_status = bar_gui::ExportStatus::All;
+        self.export_status = bar_gui::ExportStatus::TestInBar;
         self.app
             .set_status(format!("Generating {}x{} map...", w, h));
         let ctx_clone = ctx.clone();
@@ -933,19 +1060,20 @@ impl AppRunner {
                 (h - 1) * 8,
                 &progress_cb,
             ) {
-                Ok(outputs) => match bar_engine::execute_bundlers(
+                Ok(outputs) => match bar_engine::execute_bundlers_with_format(
                     &graph,
                     &outputs,
                     &recipe,
-                    &temp_dir,
+                    &bundler_output_dir,
                     None,
                     test_project_dir.as_deref(),
+                    Some(bar_engine::ArchiveFormat::Directory),
                 ) {
                     Ok(results) => results
                         .into_iter()
-                        .find(|r| r.output_path.extension().and_then(|s| s.to_str()) == Some("sd7"))
+                        .find(|r| r.output_path.extension().and_then(|s| s.to_str()) == Some("sdd"))
                         .map(|r| Ok((r.output_path, r.map_internal_name)))
-                        .unwrap_or_else(|| Err("Bundler produced no SD7".to_string())),
+                        .unwrap_or_else(|| Err("Bundler produced no SDD".to_string())),
                     Err(e) => Err(format!("Bundler error: {e}")),
                 },
                 Err(e) => Err(format!("Graph evaluation failed: {e:?}")),
@@ -963,7 +1091,18 @@ impl AppRunner {
         };
         let game_idx = self.app.bar_versions.selected_game;
         let engine_idx = self.app.bar_versions.selected_engine;
-        match install.launch_skirmish(sd7_path, map_internal_name, game_idx, engine_idx) {
+        // Convert heightmap dims (e.g. 257x257) to Spring map squares
+        // (the (w-1, h-1) convention the bundler also uses) so the
+        // launcher can place AI starts proportional to world size.
+        let (w, h) = self.app.map.dimensions();
+        let map_squares = (w.saturating_sub(1).max(1), h.saturating_sub(1).max(1));
+        match install.launch_skirmish(
+            sd7_path,
+            map_internal_name,
+            map_squares,
+            game_idx,
+            engine_idx,
+        ) {
             Ok(bar_install::LaunchOutcome::EngineStarted { map_name }) => {
                 self.app
                     .set_status(format!("BAR started: skirmish on {map_name}"));
@@ -1055,6 +1194,119 @@ impl<'a> AssetSources<'a> {
         }
         None
     }
+}
+
+/// Two-tier cache key for the Test-in-BAR pipeline.
+///
+/// Returns `(heavy_key, full_key)`. The heavy key covers everything
+/// that requires regenerating the SMF / SMT binary artifacts or
+/// recopying passthrough files into the bundle:
+///
+/// * Graph topology + node params (JSON-serialised).
+/// * Asset files under `<project>/assets/` (mtimes + sizes).
+/// * `recipe.output.width` / `height`, min/max height, terrain
+///   types, detail textures, resources (texture filenames), and
+///   feature placements.
+///
+/// The full key adds the mapinfo-only fields: identity strings
+/// (name / shortname / description / author / version / tip /
+/// depend), and every `MapSettings` sub-section that only affects
+/// the generated `mapinfo.lua` (atmosphere, lighting, water,
+/// custom_grass, custom_fog, custom_clouds, sound, replace, and
+/// the physics scalars + bools + start positions).
+///
+/// A change that bumps only the full key skips the heavy pipeline:
+/// the existing `.sdd`'s binaries are reused and just `mapinfo.lua`
+/// is rewritten. A change that bumps the heavy key forces a full
+/// rebuild.
+fn compute_test_in_bar_keys(
+    graph: &bar_graph::GraphEngine,
+    recipe: &bar_project::Recipe,
+    project_dir: Option<&std::path::Path>,
+) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+
+    let mut heavy = std::collections::hash_map::DefaultHasher::new();
+    if let Ok(s) = serde_json::to_string(graph) {
+        s.hash(&mut heavy);
+    }
+    // Recipe parts that the bundler bakes into the binary artifacts
+    // or the file-copy set. Anything not listed here is a mapinfo-
+    // only field and lives in the full key further down.
+    let s = &recipe.output.map_settings;
+    "DIM".hash(&mut heavy);
+    recipe.output.width.hash(&mut heavy);
+    recipe.output.height.hash(&mut heavy);
+    "HEIGHT".hash(&mut heavy);
+    s.min_height.map(f32::to_bits).hash(&mut heavy);
+    s.max_height.map(f32::to_bits).hash(&mut heavy);
+    "FEAT".hash(&mut heavy);
+    if let Ok(j) = serde_json::to_string(&recipe.features) {
+        j.hash(&mut heavy);
+    }
+    "TT".hash(&mut heavy);
+    if let Ok(j) = serde_json::to_string(&s.terrain_types) {
+        j.hash(&mut heavy);
+    }
+    "DT".hash(&mut heavy);
+    if let Ok(j) = serde_json::to_string(&s.detail_textures) {
+        j.hash(&mut heavy);
+    }
+    "RES".hash(&mut heavy);
+    if let Ok(j) = serde_json::to_string(&s.resources) {
+        j.hash(&mut heavy);
+    }
+    // Asset files: heightmap / colour layers land in `<project>/
+    // assets/` and a paint stroke bumps their mtime without
+    // touching the graph JSON. Walk + hash the directory listing
+    // so any of those flushes the heavy cache.
+    if let Some(dir) = project_dir {
+        let assets_dir = dir.join("assets");
+        if let Ok(entries) = std::fs::read_dir(&assets_dir) {
+            let mut entries: Vec<_> = entries
+                .flatten()
+                .filter_map(|e| {
+                    let meta = e.metadata().ok()?;
+                    if !meta.is_file() {
+                        return None;
+                    }
+                    let mtime = meta
+                        .modified()
+                        .ok()?
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .ok()?
+                        .as_nanos();
+                    Some((
+                        e.file_name().to_string_lossy().into_owned(),
+                        meta.len(),
+                        mtime,
+                    ))
+                })
+                .collect();
+            entries.sort();
+            for (name, len, mtime) in entries {
+                name.hash(&mut heavy);
+                len.hash(&mut heavy);
+                mtime.hash(&mut heavy);
+            }
+        }
+    }
+    let heavy_key = heavy.finish();
+
+    // Full key: heavy_key folded back in + everything else on the
+    // recipe. The trivial full = hash(serialize_full_recipe) keeps
+    // the implementation honest; the heavy_key inclusion guarantees
+    // that any heavy change also bumps the full key, so the cache
+    // can't end up in a state where heavy matches but full pretends
+    // to match too.
+    let mut full = std::collections::hash_map::DefaultHasher::new();
+    heavy_key.hash(&mut full);
+    if let Ok(s) = serde_json::to_string(recipe) {
+        s.hash(&mut full);
+    }
+    let full_key = full.finish();
+
+    (heavy_key, full_key)
 }
 
 /// Enumerate cached SD7 work directories under `work_dir_root()`. Best-effort:

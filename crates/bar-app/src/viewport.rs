@@ -254,14 +254,20 @@ pub enum TextureLoadResult {
 
 /// Decoded grass-widget assets for one map. Distribution mask is
 /// reduced to a single byte per texel (the R channel of the source
-/// TGA, matching engine widget convention).
+/// TGA, matching engine widget convention). The blade-colour
+/// texture is shipped with its full mip chain; without it,
+/// minified blades alias heavily and read as blocky pixels rather
+/// than crisp silhouettes.
 pub struct MapGrassAssets {
     pub dist_mask: Vec<u8>,
     pub mask_w: u32,
     pub mask_h: u32,
-    pub blade_color_rgba: Vec<u8>,
-    pub blade_w: u32,
-    pub blade_h: u32,
+    /// Mip chain for the blade colour texture: `(rgba_bytes, w, h)`
+    /// per level. Index 0 is the base mip; subsequent entries are
+    /// half-size downsamples. For DDS sources the chain comes
+    /// directly from the file; for raster images we generate it
+    /// CPU-side via box-filter downscale.
+    pub blade_color_mips: Vec<(Vec<u8>, u32, u32)>,
 }
 
 impl ViewportCore {
@@ -479,6 +485,12 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                 core.map_grass_loaded_for = Some(key);
                 if let (Some(bundle), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
                     let widget = renderer.map_grass.widget().clone();
+                    let mip_count = bundle.blade_color_mips.len();
+                    let (base_w, base_h) = bundle
+                        .blade_color_mips
+                        .first()
+                        .map(|(_, w, h)| (*w, *h))
+                        .unwrap_or((0, 0));
                     renderer.sync_grass_assets(
                         &gpu.device,
                         &gpu.queue,
@@ -486,13 +498,12 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                         &bundle.dist_mask,
                         bundle.mask_w,
                         bundle.mask_h,
-                        &bundle.blade_color_rgba,
-                        bundle.blade_w,
-                        bundle.blade_h,
+                        &bundle.blade_color_mips,
                     );
                     tracing::debug!(
-                        blade_w = bundle.blade_w,
-                        blade_h = bundle.blade_h,
+                        blade_w = base_w,
+                        blade_h = base_h,
+                        mip_count = mip_count,
                         mask_w = bundle.mask_w,
                         mask_h = bundle.mask_h,
                         "map grass loaded",
@@ -623,27 +634,17 @@ pub fn sync_map_grass(
 ) {
     // Sync side: push the config so the renderer knows its tuning
     // values regardless of whether asset loading succeeds. The
-    // renderer's `sync_grass_assets` is the canonical path -- we
-    // call it with empty payloads here only when the widget is
-    // disabled (it re-uses the same elmo-to-render conversion).
+    // renderer's `sync_grass_assets` is the canonical path; here
+    // we only need to push the blend/fade constants for the
+    // shader (elmo->render conversion happens in the shader against
+    // the camera uniform, so this doesn't need any terrain state).
     if let Some(renderer) = core.terrain_renderer.as_mut() {
         if !widget.enabled {
             renderer.clear_grass_assets(&gpu.device, &gpu.queue);
         } else {
-            // Stash the config now so the renderer's shader fade
-            // ramp + blend factors take effect immediately; the
-            // instance + blade-color upload still waits for the
-            // async asset bundle.
-            let (height_scale, _x_extent, _z_extent) = renderer.mesh_extents();
-            let height_range = renderer.height_range_elmos();
-            let elmo_to_render = if height_range > 1e-6 {
-                height_scale / height_range
-            } else {
-                1.0
-            };
             renderer
                 .map_grass
-                .set_config(&gpu.queue, widget.clone(), elmo_to_render);
+                .set_config(&gpu.device, &gpu.queue, widget.clone());
         }
     }
     if !widget.enabled {
@@ -698,16 +699,110 @@ fn load_grass_assets(
     // BAR's widget expects an 8-bit greyscale TGA; we decode it as
     // RGBA8 above (the `image` crate normalises), then pull the R
     // channel as the per-patch byte.
-    let dist_mask: Vec<u8> = dist_rgba.iter().step_by(4).copied().collect();
-    let (blade_color_rgba, blade_w, blade_h) = load_2d_image(&blade_path)?;
+    let mut dist_mask: Vec<u8> = dist_rgba.iter().step_by(4).copied().collect();
+    // BAR's `Spring.Utilities.LoadTGA` (common/springUtilities/
+    // image_tga.lua:7) explicitly comments "origin is bottom left
+    // by default" and reads the file in storage order ignoring the
+    // image-descriptor flag. `map_grass_gl4.lua:824-830` then places
+    // texture[1] (= bottom row of the displayed image when stored
+    // bottom-up) at world `lz = 16` (north). The `image` crate
+    // respects the flag and normalises to top-down, so to match
+    // BAR's interpretation we must undo that flip when the source
+    // file was actually stored bottom-up (TGA default, bit 5 of
+    // byte 17 unset). For files saved with origin-top-left
+    // (bit 5 = 1) BAR also reads top-down by accident and no flip
+    // is needed -- the two interpretations agree.
+    let bottom_up = match std::fs::File::open(&dist_path).ok().and_then(|mut f| {
+        use std::io::Read;
+        let mut hdr = [0u8; 18];
+        f.read_exact(&mut hdr).ok().map(|_| hdr)
+    }) {
+        Some(hdr) => (hdr[17] & 0x20) == 0,
+        // If we can't read the header (e.g. file moved between
+        // decode and now), assume the TGA default. Worst case the
+        // user notices a mirror and we revisit.
+        None => true,
+    };
+    if bottom_up {
+        // In-place Y-flip of the R-channel mask buffer.
+        let row = mask_w as usize;
+        let rows = mask_h as usize;
+        for y in 0..rows / 2 {
+            let top = y * row;
+            let bot = (rows - 1 - y) * row;
+            for x in 0..row {
+                dist_mask.swap(top + x, bot + x);
+            }
+        }
+    }
+    let blade_color_mips = load_2d_image_mip_chain(&blade_path)?;
     Some(MapGrassAssets {
         dist_mask,
         mask_w,
         mask_h,
-        blade_color_rgba,
-        blade_w,
-        blade_h,
+        blade_color_mips,
     })
+}
+
+/// Load a 2D image and produce a complete mip chain `(rgba, w, h)`
+/// per level, base first. For DDS files the chain comes from the
+/// file's own mip data; for other formats we generate the chain
+/// CPU-side via box-filter downscale (matches GL's
+/// `glGenerateMipmap` enough for blade textures that BAR's widget
+/// otherwise reads from baked DDS).
+fn load_2d_image_mip_chain(path: &std::path::Path) -> Option<Vec<(Vec<u8>, u32, u32)>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "dds" {
+        if let Ok(mips) = bar_data::load_dds_2d_with_mips(path) {
+            return Some(
+                mips.into_iter()
+                    .map(|m| (m.rgba, m.width, m.height))
+                    .collect(),
+            );
+        }
+    }
+    let (base, base_w, base_h) = load_2d_image(path)?;
+    let mut chain: Vec<(Vec<u8>, u32, u32)> = vec![(base, base_w, base_h)];
+    let mut w = base_w;
+    let mut h = base_h;
+    while w > 1 || h > 1 {
+        let prev = &chain.last().unwrap().0;
+        let prev_w = w;
+        let prev_h = h;
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+        let mut next = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                // Average 2x2 block from the previous level. Edge
+                // texels read the closest available pixel from the
+                // odd-dimension parent (clamp).
+                let sx0 = (x * 2).min(prev_w - 1) as usize;
+                let sy0 = (y * 2).min(prev_h - 1) as usize;
+                let sx1 = (x * 2 + 1).min(prev_w - 1) as usize;
+                let sy1 = (y * 2 + 1).min(prev_h - 1) as usize;
+                let prev_row = prev_w as usize * 4;
+                let p0 = sy0 * prev_row + sx0 * 4;
+                let p1 = sy0 * prev_row + sx1 * 4;
+                let p2 = sy1 * prev_row + sx0 * 4;
+                let p3 = sy1 * prev_row + sx1 * 4;
+                let dst = (y as usize * w as usize + x as usize) * 4;
+                for c in 0..4 {
+                    let sum = prev[p0 + c] as u32
+                        + prev[p1 + c] as u32
+                        + prev[p2 + c] as u32
+                        + prev[p3 + c] as u32;
+                    next[dst + c] = (sum / 4) as u8;
+                }
+            }
+        }
+        chain.push((next, w, h));
+    }
+    Some(chain)
 }
 
 /// Decode the engine-shipped 32-frame caustic animation from the BAR
@@ -1433,22 +1528,34 @@ fn draw_viewport_body(
             // avoids having to bookkeep changed-since-last-frame across
             // every renderer.render call site.
             renderer.set_gamma_exponent(&gpu.queue, app.viewport_debug.gamma_exponent);
+            // Grass diagnostic output mode -- piped into the FS via
+            // the params uniform's wind.w slot.
+            renderer
+                .map_grass
+                .set_debug_output(&gpu.queue, app.viewport_debug.grass_debug_output);
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
-                let elapsed = core.started_at.elapsed().as_secs_f32();
-                let smf = live_smf_lighting(app);
-                let frame = core
-                    .current_frame
-                    .as_ref()
-                    .map(|f| f.as_frame(elapsed, smf));
-                renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
-                update_viewport_texture(
-                    &mut core.viewport_texture_id,
-                    &core.terrain_renderer,
-                    render_state,
-                    ctx,
-                );
             }
+            // Render every frame the viewport body runs. egui's own
+            // `request_repaint` in `update_viewport_texture` keeps
+            // the frame loop ticking; rendering unconditionally here
+            // means any change that affects rendering -- camera,
+            // viewport size, mapinfo edits, debug toggles -- shows
+            // up the next frame for free, without per-diagnostic
+            // plumbing.
+            let elapsed = core.started_at.elapsed().as_secs_f32();
+            let smf = live_smf_lighting(app);
+            let frame = core
+                .current_frame
+                .as_ref()
+                .map(|f| f.as_frame(elapsed, smf));
+            renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+            update_viewport_texture(
+                &mut core.viewport_texture_id,
+                &core.terrain_renderer,
+                render_state,
+                ctx,
+            );
         }
     }
 
@@ -1649,6 +1756,17 @@ fn draw_viewport_debug_overlay(
                     .text("pow"),
             );
             ui.small("1.0 = no correction (too bright)\n2.2 = full sRGB gamma (too dark)");
+
+            ui.separator();
+            ui.label("Grass debug output");
+            for (value, label) in [
+                (0, "Off (normal output)"),
+                (1, "Raw map_color"),
+                (2, "Raw blade colour"),
+                (3, "Post-blend rgb (pre-modulator)"),
+            ] {
+                ui.selectable_value(&mut app.viewport_debug.grass_debug_output, value, label);
+            }
         },
     );
 
@@ -1832,6 +1950,7 @@ fn handle_camera_input(
                                     z: spring_z,
                                     angle: app.pending_placement_angle,
                                     taken_damage: 0,
+                                    source: bar_project::FeatureSource::Smf,
                                 });
                                 app.map.features_placement_dirty = true;
                             }
@@ -2248,6 +2367,7 @@ fn handle_camera_input(
             z: spring_z,
             angle: app.pending_placement_angle,
             taken_damage: 0,
+            source: bar_project::recipe::FeatureSource::Smf,
         })
     })();
 }

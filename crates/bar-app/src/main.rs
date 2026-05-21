@@ -152,6 +152,8 @@ fn main() -> Result<()> {
                 sd7_progress_rx: None,
                 compile_result_rx: None,
                 test_in_bar_rx: None,
+                test_in_bar_cache: None,
+                pending_test_in_bar_after_compile: false,
                 pending_export_dir: None,
                 bar_install,
                 layout_manager: layout_manager::LayoutManager::new(),

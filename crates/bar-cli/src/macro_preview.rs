@@ -327,6 +327,8 @@ fn build_recipe(
         description: String::new(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes,
         connections,
         output: OutputConfig {

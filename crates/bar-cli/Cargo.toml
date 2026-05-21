@@ -13,6 +13,7 @@ path = "src/main.rs"
 bar-data = { workspace = true }
 bar-engine = { workspace = true }
 bar-graph = { workspace = true }
+bar-project = { workspace = true }
 bar-compute = { workspace = true }
 bar-render = { workspace = true }
 anyhow = { workspace = true }
