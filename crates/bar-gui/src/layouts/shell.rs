@@ -11,14 +11,150 @@ use eframe::egui;
 use std::time::Instant;
 
 use crate::app::{
-    paint_bar_icon, paint_compile_icon, paint_export_icon, paint_inspector_icon,
-    paint_map_edge_icon, paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
-    BarEditorApp, ConfirmAction, ConfirmDialog, ExportStatus, GroupDeleteChoice, InspectorMode,
-    Layout, MapInfoTab, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
+    paint_export_icon, paint_grass_icon, paint_identity_icon, paint_lighting_icon,
+    paint_map_edge_icon, paint_physics_icon, paint_resources_icon, paint_startbox_icon,
+    paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog, ExportStatus, GroupDeleteChoice,
+    Layout, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
+use crate::editor::validation::{BlockingAction, ModalId, ValidationSummary};
 use crate::panels::log::level_color;
 use crate::panels::tokens;
 use crate::t;
+
+/// Paint a small severity badge in the top-right corner of `btn_rect`
+/// when `summary` has any non-zero counts. Red dot for errors,
+/// yellow for warnings (Error wins if both present). `Info` alone
+/// renders nothing -- low-signal, would just clutter the bar.
+fn paint_validation_badge(ui: &egui::Ui, btn_rect: egui::Rect, summary: &ValidationSummary) {
+    if summary.is_clean() || (summary.errors == 0 && summary.warnings == 0) {
+        return;
+    }
+    let (color, count) = if summary.errors > 0 {
+        (egui::Color32::from_rgb(220, 80, 70), summary.errors)
+    } else {
+        (egui::Color32::from_rgb(230, 180, 60), summary.warnings)
+    };
+    let radius = 7.0;
+    let center = egui::pos2(btn_rect.max.x - radius, btn_rect.min.y + radius);
+    let painter = ui.painter_at(btn_rect.expand(radius));
+    painter.circle_filled(center, radius, color);
+    painter.circle_stroke(
+        center,
+        radius,
+        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 200)),
+    );
+    if count > 0 {
+        let label = if count > 9 {
+            "9+".to_string()
+        } else {
+            count.to_string()
+        };
+        painter.text(
+            center,
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(10.0),
+            egui::Color32::WHITE,
+        );
+    }
+}
+
+/// Position of a button within a visually-joined group, used to
+/// decide which corners get rounding and which sides get clipped
+/// flush to the neighbour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GroupPos {
+    /// Standalone button -- full rounding on all four corners.
+    #[allow(dead_code)]
+    Single,
+    /// Left edge of a group -- left corners rounded, right corners flush.
+    Left,
+    /// Interior of a group -- no corner rounding.
+    Mid,
+    /// Right edge of a group -- right corners rounded, left corners flush.
+    Right,
+}
+
+impl GroupPos {
+    fn corner_radius(self) -> egui::CornerRadius {
+        match self {
+            GroupPos::Single => egui::CornerRadius::same(5),
+            GroupPos::Left => egui::CornerRadius {
+                nw: 5,
+                sw: 5,
+                ne: 0,
+                se: 0,
+            },
+            GroupPos::Mid => egui::CornerRadius::ZERO,
+            GroupPos::Right => egui::CornerRadius {
+                nw: 0,
+                sw: 0,
+                ne: 5,
+                se: 5,
+            },
+        }
+    }
+}
+
+/// Draw one of the per-tab Map Info action-bar buttons. Returns true
+/// if clicked. Caller supplies the per-tab colour triple and the
+/// button's position within the group so corners join cleanly with
+/// neighbours.
+#[allow(clippy::too_many_arguments)]
+fn draw_mapinfo_tab_button(
+    ui: &mut egui::Ui,
+    btn_size: egui::Vec2,
+    icon: fn(&egui::Painter, egui::Rect, egui::Color32),
+    category: &str,
+    tooltip: &str,
+    colors: (egui::Color32, egui::Color32, egui::Color32),
+    pos: GroupPos,
+    validation: &crate::editor::validation::ValidationState,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let (normal, hover, press) = colors;
+        let bg = if resp.is_pointer_button_down_on() {
+            press
+        } else if resp.hovered() {
+            hover
+        } else {
+            normal
+        };
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, pos.corner_radius(), bg);
+        icon(&painter, rect, egui::Color32::WHITE);
+    }
+    let summary = validation.summary_for_category(category);
+    paint_validation_badge(ui, rect, &summary);
+    let hover = hover_with_summary(tooltip, &summary, "");
+    let resp = resp.on_hover_text(hover);
+    resp.clicked()
+}
+
+/// Append a severity-summary suffix to a button's hover text. Empty
+/// summary -> base text unchanged. Used so every action-bar button
+/// surfaces its own validation findings on hover without the user
+/// having to open the sidebar.
+fn hover_with_summary(base: &str, summary: &ValidationSummary, blocking_msg: &str) -> String {
+    if summary.is_clean() {
+        return base.to_string();
+    }
+    let mut s = base.to_string();
+    s.push('\n');
+    if summary.errors > 0 {
+        s.push_str(&format!("\n{} error(s)", summary.errors));
+    }
+    if summary.warnings > 0 {
+        s.push_str(&format!("\n{} warning(s)", summary.warnings));
+    }
+    if !blocking_msg.is_empty() {
+        s.push_str("\n\nBlocking: ");
+        s.push_str(blocking_msg);
+    }
+    s
+}
 
 /// Maps a 0-based layout index to its Ctrl+# trigger key (Num1..Num9).
 fn layout_num_key(idx: usize) -> Option<egui::Key> {
@@ -545,8 +681,7 @@ impl BarEditorApp {
                     .on_hover_text(t!("editor.status.open_map_settings"))
                     .clicked()
                 {
-                    self.dialog.show_mapinfo_editor = true;
-                    self.set_mapinfo_tab(MapInfoTab::Dimensions);
+                    self.dialog.show_dimensions_editor = true;
                 }
                 ui.separator();
                 let status_resp = if let Some(ref msg) = self.dialog.status_message {
@@ -800,13 +935,18 @@ impl BarEditorApp {
             self.draw_inspector_window(ctx);
         }
 
-        if self.dialog.show_mapinfo_editor {
-            self.draw_mapinfo_editor_window(ctx);
-        }
-
-        if self.dialog.show_map_edge_editor {
-            crate::panels::map_edge_editor::draw(self, ctx);
-        }
+        // Action-bar modals -- each module short-circuits when its
+        // dialog flag is false, so call them all unconditionally.
+        crate::panels::action_bar_modals::identity::draw(self, ctx);
+        crate::panels::action_bar_modals::dimensions::draw(self, ctx);
+        crate::panels::action_bar_modals::physics::draw(self, ctx);
+        crate::panels::action_bar_modals::atmosphere::draw(self, ctx);
+        crate::panels::action_bar_modals::lighting::draw(self, ctx);
+        crate::panels::action_bar_modals::water::draw(self, ctx);
+        crate::panels::action_bar_modals::resources::draw(self, ctx);
+        crate::panels::action_bar_modals::grass::draw(self, ctx);
+        crate::panels::action_bar_modals::map_edge::draw(self, ctx);
+        crate::panels::action_bar_modals::start_boxes::draw(self, ctx);
 
         crate::panels::validation::draw_details(self, ctx);
 
@@ -823,14 +963,16 @@ impl BarEditorApp {
                     } else {
                         egui::Sense::click()
                     };
-                    // Compile button (first in the "build / ship" group:
-                    // Compile -> Bundle -> Test in BAR). Compile produces
-                    // the engine-loadable artefacts; Bundle packages them;
-                    // Test in BAR launches a skirmish on them. Group order
-                    // tracks that pipeline.
+                    // "Build / ship" group: Compile -> Test in BAR (+ optional
+                    // chevron) -> Bundle. Members keep individual
+                    // rounded-rectangle styling -- they belong to the
+                    // same conceptual group (separated from the next
+                    // group by a divider) but read more clearly as
+                    // discrete actions than as one continuous strip.
                     let compile_running = self.preview.compile_running;
                     let compile_dirty = self.project.compile_dirty;
-                    let can_compile = !compile_running && !any_running;
+                    let compile_blocked = self.validation.is_blocking(BlockingAction::Compile);
+                    let can_compile = !compile_running && !any_running && !compile_blocked;
                     let compile_sense = if can_compile {
                         egui::Sense::click()
                     } else {
@@ -854,37 +996,133 @@ impl BarEditorApp {
                         painter.rect_filled(compile_rect, 5.0, bg);
                         paint_compile_icon(&painter, compile_rect, egui::Color32::WHITE);
                     }
-                    let hover = if compile_running {
+                    let compile_summary =
+                        self.validation.summary_for_action(BlockingAction::Compile);
+                    paint_validation_badge(ui, compile_rect, &compile_summary);
+                    let base_hover = if compile_running {
                         "Compiling...".to_string()
-                    } else if let Some(compiled_at) = self.project.compiled_at {
-                        let secs = compiled_at.elapsed().as_secs();
-                        let age = if secs < 60 {
-                            format!("{secs}s ago")
-                        } else {
-                            format!("{}m ago", secs / 60)
-                        };
-                        let suffix = if compile_dirty { " (out of date)" } else { "" };
-                        format!("Compile -- last compiled {age}{suffix}")
                     } else {
                         "Compile".to_string()
                     };
+                    // Suppress unused-warning until compile age is
+                    // re-surfaced through a different UI affordance.
+                    let _ = compile_dirty;
+                    let blocking_msg = if compile_blocked {
+                        self.validation.blocking_summary(BlockingAction::Compile, 3)
+                    } else {
+                        String::new()
+                    };
+                    let hover = hover_with_summary(&base_hover, &compile_summary, &blocking_msg);
                     let compile_clicked = compile_resp.clicked();
                     compile_resp.on_hover_text(hover);
-                    if !compile_running && compile_clicked {
+                    if !compile_running && !compile_blocked && compile_clicked {
                         self.preview.compile_requested = true;
                     }
                     if compile_running {
                         crate::layouts::preview::draw_animated_border(ui, compile_rect);
                     }
 
-                    // Bundle (Export all Bundler nodes).
+                    // Test in BAR -- the iteration-loop action. Comes
+                    // before Bundle in the action bar because (a) it's
+                    // the more-used button during authoring, and (b)
+                    // it's independent of Bundle (writes a `.sdd`
+                    // directly into the BAR install) rather than
+                    // downstream of it.
+                    //
+                    // When multiple game/engine versions are installed
+                    // a small chevron button appears to the right for
+                    // picking which version to use.
                     ui.add_space(4.0);
-                    let (rect, response) = ui.allocate_exact_size(btn_size, sense);
+                    let test_in_bar_busy = self.preview.export_status == ExportStatus::TestInBar;
+                    let has_choice = self.bar_versions.has_choice();
+                    let chevron_w = if has_choice { 14.0 } else { 0.0 };
+                    let group_size = egui::vec2(btn_size.x + chevron_w, btn_size.y);
+                    let (group_rect, _) = ui.allocate_exact_size(group_size, egui::Sense::hover());
+
+                    let bar_rect = egui::Rect::from_min_size(group_rect.min, btn_size);
+                    let bar_blocked = self.validation.is_blocking(BlockingAction::TestInBar);
+                    let bar_sense = if any_running || bar_blocked {
+                        egui::Sense::hover()
+                    } else {
+                        egui::Sense::click()
+                    };
+                    let bar_resp = ui.interact(bar_rect, ui.id().with("bar_btn"), bar_sense);
+
+                    if ui.is_rect_visible(bar_rect) {
+                        let bg = if test_in_bar_busy {
+                            tokens::BTN_BAR_NORMAL
+                        } else if any_running {
+                            tokens::BTN_BAR_BLOCKED
+                        } else if bar_resp.is_pointer_button_down_on() {
+                            tokens::BTN_BAR_PRESS
+                        } else if bar_resp.hovered() {
+                            tokens::BTN_BAR_HOVER
+                        } else {
+                            tokens::BTN_BAR_NORMAL
+                        };
+                        let painter = ui.painter_at(bar_rect);
+                        // Bar button keeps its left corners rounded;
+                        // when a chevron is present, its right corners
+                        // stay flush so the two read as one widget.
+                        let rounding = if has_choice {
+                            egui::CornerRadius {
+                                nw: 5,
+                                sw: 5,
+                                ne: 0,
+                                se: 0,
+                            }
+                        } else {
+                            egui::CornerRadius::same(5)
+                        };
+                        painter.rect_filled(bar_rect, rounding, bg);
+                        paint_bar_icon(&painter, bar_rect, egui::Color32::WHITE);
+                    }
+                    if test_in_bar_busy {
+                        crate::layouts::preview::draw_animated_border(ui, bar_rect);
+                    }
+                    let bar_summary = self
+                        .validation
+                        .summary_for_action(BlockingAction::TestInBar);
+                    paint_validation_badge(ui, bar_rect, &bar_summary);
+                    let base_tooltip = if test_in_bar_busy {
+                        "Test in BAR (launching)".to_string()
+                    } else {
+                        "Test in BAR".to_string()
+                    };
+                    let blocking_msg = if bar_blocked {
+                        self.validation
+                            .blocking_summary(BlockingAction::TestInBar, 3)
+                    } else {
+                        String::new()
+                    };
+                    let bar_tooltip =
+                        hover_with_summary(&base_tooltip, &bar_summary, &blocking_msg);
+                    let bar_resp = bar_resp.on_hover_text(bar_tooltip);
+                    if !any_running && !bar_blocked && bar_resp.clicked() {
+                        self.run_validation();
+                        if bar_project::has_errors(&self.validation.findings) {
+                            self.dialog.show_validation_panel = true;
+                            self.log_warning(t!("editor.toolbar.validate_first"));
+                        } else {
+                            self.preview.test_in_bar_requested = true;
+                        }
+                    }
+
+                    // Bundle (Export all Bundler nodes) -- the ship-it
+                    // action and rightmost button of the build group.
+                    ui.add_space(4.0);
+                    let bundle_blocked = self.validation.is_blocking(BlockingAction::Bundle);
+                    let bundle_sense = if any_running || bundle_blocked {
+                        egui::Sense::hover()
+                    } else {
+                        sense
+                    };
+                    let (rect, response) = ui.allocate_exact_size(btn_size, bundle_sense);
 
                     if ui.is_rect_visible(rect) {
                         let bg = if busy {
                             tokens::BTN_EXPORT_BUSY
-                        } else if any_running {
+                        } else if any_running || bundle_blocked {
                             tokens::BTN_EXPORT_BLOCKED
                         } else if response.is_pointer_button_down_on() {
                             tokens::BTN_EXPORT_PRESS
@@ -901,70 +1139,26 @@ impl BarEditorApp {
                         crate::layouts::preview::draw_animated_border(ui, rect);
                     }
 
-                    let tooltip = if busy {
-                        "Exporting…"
-                    } else if any_running {
-                        "Another export is running"
+                    let bundle_summary = self.validation.summary_for_action(BlockingAction::Bundle);
+                    paint_validation_badge(ui, rect, &bundle_summary);
+                    let base_tooltip = if busy {
+                        "Bundle (exporting)".to_string()
                     } else {
-                        "Export all Bundler nodes"
+                        "Bundle".to_string()
                     };
+                    let blocking_msg = if bundle_blocked {
+                        self.validation.blocking_summary(BlockingAction::Bundle, 3)
+                    } else {
+                        String::new()
+                    };
+                    let tooltip = hover_with_summary(&base_tooltip, &bundle_summary, &blocking_msg);
                     let response = response.on_hover_text(tooltip);
                     if !any_running
+                        && !bundle_blocked
                         && response.clicked()
                         && self.validate_before_export("Bundle all")
                     {
                         self.preview.run_requested = true;
-                    }
-
-                    // Test in BAR -- export and launch directly in the engine.
-                    // When multiple game/engine versions are installed a small
-                    // chevron button appears to the right of the main button
-                    // for picking which version to use.
-                    ui.add_space(4.0);
-                    let has_choice = self.bar_versions.has_choice();
-                    let chevron_w = if has_choice { 14.0 } else { 0.0 };
-                    let group_size = egui::vec2(btn_size.x + chevron_w, btn_size.y);
-                    let (group_rect, _) = ui.allocate_exact_size(group_size, egui::Sense::hover());
-
-                    let bar_rect = egui::Rect::from_min_size(group_rect.min, btn_size);
-                    let bar_resp =
-                        ui.interact(bar_rect, ui.id().with("bar_btn"), egui::Sense::click());
-
-                    if ui.is_rect_visible(bar_rect) {
-                        let bg = if any_running {
-                            tokens::BTN_BAR_BLOCKED
-                        } else if bar_resp.is_pointer_button_down_on() {
-                            tokens::BTN_BAR_PRESS
-                        } else if bar_resp.hovered() {
-                            tokens::BTN_BAR_HOVER
-                        } else {
-                            tokens::BTN_BAR_NORMAL
-                        };
-                        let painter = ui.painter_at(bar_rect);
-                        let rounding = if has_choice {
-                            egui::CornerRadius {
-                                nw: 5,
-                                sw: 5,
-                                ne: 0,
-                                se: 0,
-                            }
-                        } else {
-                            egui::CornerRadius::same(5)
-                        };
-                        painter.rect_filled(bar_rect, rounding, bg);
-                        paint_bar_icon(&painter, bar_rect, egui::Color32::WHITE);
-                    }
-                    let bar_resp = bar_resp.on_hover_text(
-                        "Test in BAR — export and launch a skirmish directly in the BAR engine",
-                    );
-                    if !any_running && bar_resp.clicked() {
-                        self.run_validation();
-                        if bar_project::has_errors(&self.validation.findings) {
-                            self.dialog.show_validation_panel = true;
-                            self.log_warning(t!("editor.toolbar.validate_first"));
-                        } else {
-                            self.preview.test_in_bar_requested = true;
-                        }
                     }
 
                     // Chevron -- only rendered when multiple versions exist.
@@ -988,6 +1182,8 @@ impl BarEditorApp {
                                 tokens::BTN_BAR_NORMAL
                             };
                             let painter = ui.painter_at(chevron_rect);
+                            // Chevron is the right edge of the bar
+                            // button widget.
                             let rounding = egui::CornerRadius {
                                 nw: 0,
                                 sw: 0,
@@ -1076,92 +1272,195 @@ impl BarEditorApp {
                         }
                     }
 
-                    // Visual separator: end of the "build / ship" group
-                    // (Bundle | Compile | Test in BAR) and start of the
-                    // project-metadata / inspection group (Edit Map Info,
-                    // 2D Inspector, etc.). The build buttons share an
-                    // operational pipeline; everything past this separator
-                    // operates on the project source instead.
+                    // Visual separator: end of the build / ship group
+                    // (Compile | Test in BAR | Bundle) and start of
+                    // the project-metadata group.
                     ui.add_space(4.0);
                     ui.separator();
                     ui.add_space(4.0);
 
-                    // Edit Map Info button — opens the project's designated map
-                    // info file in the OS default editor. Prompts for the file
-                    // on first use.
-                    let (info_rect, info_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if ui.is_rect_visible(info_rect) {
-                        let bg = if info_resp.is_pointer_button_down_on() {
-                            tokens::BTN_MAPINFO_PRESS
-                        } else if info_resp.hovered() {
-                            tokens::BTN_MAPINFO_HOVER
+                    // Metadata group: action-bar buttons whose modals
+                    // describe the project itself rather than its
+                    // rendered world.  Each entry's `flag_for` returns
+                    // the `&mut bool` on `DialogState` that the
+                    // button toggles directly -- no shared mapinfo
+                    // tab indirection.
+                    type IconFn = fn(&egui::Painter, egui::Rect, egui::Color32);
+                    type ColorTriple = (egui::Color32, egui::Color32, egui::Color32);
+                    type FlagFn = fn(&mut crate::dialog::DialogState) -> &mut bool;
+                    let metadata_tabs: &[(IconFn, FlagFn, &str, &str, ColorTriple)] = &[
+                        (
+                            paint_identity_icon,
+                            |d| &mut d.show_identity_editor,
+                            "identity",
+                            "Identity",
+                            (
+                                tokens::BTN_TAB_IDENTITY_NORMAL,
+                                tokens::BTN_TAB_IDENTITY_HOVER,
+                                tokens::BTN_TAB_IDENTITY_PRESS,
+                            ),
+                        ),
+                        (
+                            paint_dimensions_icon,
+                            |d| &mut d.show_dimensions_editor,
+                            "dimensions",
+                            "Dimensions",
+                            (
+                                tokens::BTN_TAB_DIMENSIONS_NORMAL,
+                                tokens::BTN_TAB_DIMENSIONS_HOVER,
+                                tokens::BTN_TAB_DIMENSIONS_PRESS,
+                            ),
+                        ),
+                        (
+                            paint_physics_icon,
+                            |d| &mut d.show_physics_editor,
+                            "physics",
+                            "Physics",
+                            (
+                                tokens::BTN_TAB_PHYSICS_NORMAL,
+                                tokens::BTN_TAB_PHYSICS_HOVER,
+                                tokens::BTN_TAB_PHYSICS_PRESS,
+                            ),
+                        ),
+                        (
+                            paint_resources_icon,
+                            |d| &mut d.show_resources_editor,
+                            "resources",
+                            "Resources",
+                            (
+                                tokens::BTN_TAB_RESOURCES_NORMAL,
+                                tokens::BTN_TAB_RESOURCES_HOVER,
+                                tokens::BTN_TAB_RESOURCES_PRESS,
+                            ),
+                        ),
+                    ];
+                    // Environment group: world-appearance modals.
+                    // Atmosphere / lighting / water are all
+                    // `MapSettings` blocks; Grass is its own modal but
+                    // groups here so the four world-appearance
+                    // controls cluster on the action bar.
+                    let env_tabs: &[(IconFn, FlagFn, &str, &str, ColorTriple)] = &[
+                        (
+                            paint_atmosphere_icon,
+                            |d| &mut d.show_atmosphere_editor,
+                            "atmosphere",
+                            "Atmosphere",
+                            (
+                                tokens::BTN_TAB_ATMOSPHERE_NORMAL,
+                                tokens::BTN_TAB_ATMOSPHERE_HOVER,
+                                tokens::BTN_TAB_ATMOSPHERE_PRESS,
+                            ),
+                        ),
+                        (
+                            paint_lighting_icon,
+                            |d| &mut d.show_lighting_editor,
+                            "lighting",
+                            "Lighting",
+                            (
+                                tokens::BTN_TAB_LIGHTING_NORMAL,
+                                tokens::BTN_TAB_LIGHTING_HOVER,
+                                tokens::BTN_TAB_LIGHTING_PRESS,
+                            ),
+                        ),
+                        (
+                            paint_water_icon,
+                            |d| &mut d.show_water_editor,
+                            "water",
+                            "Water",
+                            (
+                                tokens::BTN_TAB_WATER_NORMAL,
+                                tokens::BTN_TAB_WATER_HOVER,
+                                tokens::BTN_TAB_WATER_PRESS,
+                            ),
+                        ),
+                    ];
+
+                    // Draw the metadata group: leading separator
+                    // distinguishes it from the build group; group-
+                    // internal item spacing drops to zero so the four
+                    // buttons render flush.
+                    let saved_spacing = ui.spacing().item_spacing.x;
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let mut clicked_flag: Option<FlagFn> = None;
+                    let last_meta = metadata_tabs.len() - 1;
+                    for (i, (icon, flag, category, tooltip, colors)) in
+                        metadata_tabs.iter().enumerate()
+                    {
+                        let pos = if i == 0 {
+                            GroupPos::Left
+                        } else if i == last_meta {
+                            GroupPos::Right
                         } else {
-                            tokens::BTN_MAPINFO_NORMAL
+                            GroupPos::Mid
                         };
-                        let painter = ui.painter_at(info_rect);
-                        painter.rect_filled(info_rect, 5.0, bg);
-                        paint_map_info_icon(&painter, info_rect, egui::Color32::WHITE);
+                        if draw_mapinfo_tab_button(
+                            ui,
+                            btn_size,
+                            *icon,
+                            category,
+                            tooltip,
+                            *colors,
+                            pos,
+                            &self.validation,
+                        ) {
+                            clicked_flag = Some(*flag);
+                        }
                     }
-                    let info_resp = info_resp.on_hover_text(
-                        "Edit Map Info — open the project's map info file (e.g. mapinfo.lua)",
-                    );
-                    if info_resp.clicked() {
-                        self.handle_edit_map_info_clicked();
-                    }
+                    ui.spacing_mut().item_spacing.x = saved_spacing;
 
-                    // The toolbar Validate button used to live here. It's
-                    // been removed in favour of the live Validation panel
-                    // in the left sidebar (counts auto-refresh as you
-                    // edit) and an automatic validation gate on the
-                    // bundle / bundle-all buttons. The "Show details"
-                    // button in the sidebar opens the same findings
-                    // window the toolbar button used to open.
-
-                    // 2D Inspector — top-down heightmap view with draggable
-                    // start-position markers.
+                    // Environment group: atmosphere / lighting / water
+                    // (schema-driven Map Info sections, Left/Mid/Mid)
+                    // followed by Grass on the right edge.
                     ui.add_space(4.0);
-                    let (insp_rect, insp_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if ui.is_rect_visible(insp_rect) {
-                        let bg = if insp_resp.is_pointer_button_down_on() {
-                            tokens::BTN_INSPECTOR_PRESS
-                        } else if insp_resp.hovered() {
-                            tokens::BTN_INSPECTOR_HOVER
-                        } else {
-                            tokens::BTN_INSPECTOR_NORMAL
-                        };
-                        let painter = ui.painter_at(insp_rect);
-                        painter.rect_filled(insp_rect, 5.0, bg);
-                        paint_inspector_icon(&painter, insp_rect, egui::Color32::WHITE);
-                    }
-                    let insp_resp = insp_resp
-                        .on_hover_text("2D Inspector — top-down map view, place start positions");
-                    if insp_resp.clicked() {
-                        self.dialog.show_inspector = !self.dialog.show_inspector;
-                    }
-
-                    // Structured Map Info editor — form for atmosphere /
-                    // lighting / water / physics / heights. The Edit Map
-                    // Info button (pencil icon, opens raw lua) stays for
-                    // power users; this is the friendly path.
+                    ui.separator();
                     ui.add_space(4.0);
-                    let (mi_rect, mi_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if ui.is_rect_visible(mi_rect) {
-                        let bg = if mi_resp.is_pointer_button_down_on() {
-                            tokens::BTN_MAPSET_PRESS
-                        } else if mi_resp.hovered() {
-                            tokens::BTN_MAPSET_HOVER
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    for (i, (icon, flag, category, tooltip, colors)) in env_tabs.iter().enumerate()
+                    {
+                        let pos = if i == 0 {
+                            GroupPos::Left
                         } else {
-                            tokens::BTN_MAPSET_NORMAL
+                            GroupPos::Mid
                         };
-                        let painter = ui.painter_at(mi_rect);
-                        painter.rect_filled(mi_rect, 5.0, bg);
-                        paint_mapinfo_form_icon(&painter, mi_rect, egui::Color32::WHITE);
+                        if draw_mapinfo_tab_button(
+                            ui,
+                            btn_size,
+                            *icon,
+                            category,
+                            tooltip,
+                            *colors,
+                            pos,
+                            &self.validation,
+                        ) {
+                            clicked_flag = Some(*flag);
+                        }
                     }
-                    let mi_resp = mi_resp.on_hover_text(t!("editor.toolbar.map_settings"));
-                    if mi_resp.clicked() {
-                        self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
+                    // Grass: right edge of the environment group.
+                    let (gr_rect, gr_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    if ui.is_rect_visible(gr_rect) {
+                        let bg = if gr_resp.is_pointer_button_down_on() {
+                            tokens::BTN_GRASS_PRESS
+                        } else if gr_resp.hovered() {
+                            tokens::BTN_GRASS_HOVER
+                        } else {
+                            tokens::BTN_GRASS_NORMAL
+                        };
+                        let painter = ui.painter_at(gr_rect);
+                        painter.rect_filled(gr_rect, GroupPos::Right.corner_radius(), bg);
+                        paint_grass_icon(&painter, gr_rect, egui::Color32::WHITE);
+                    }
+                    let gr_summary = self.validation.summary_for_modal(ModalId::Grass);
+                    paint_validation_badge(ui, gr_rect, &gr_summary);
+                    let gr_hover = hover_with_summary("Grass", &gr_summary, "");
+                    let gr_resp = gr_resp.on_hover_text(gr_hover);
+                    if gr_resp.clicked() {
+                        self.dialog.show_grass_editor = !self.dialog.show_grass_editor;
+                    }
+                    ui.spacing_mut().item_spacing.x = saved_spacing;
+
+                    if let Some(flag_fn) = clicked_flag {
+                        let flag = flag_fn(&mut self.dialog);
+                        *flag = !*flag;
                     }
 
                     // Map Edge — dedicated panel for the mirrored map-edge
@@ -1171,8 +1470,9 @@ impl BarEditorApp {
                     // panel rather than crowding the main Map Settings
                     // modal.
                     ui.add_space(4.0);
-                    let (me_rect, me_resp) =
-                        ui.allocate_exact_size(btn_size, egui::Sense::click());
+                    ui.separator();
+                    ui.add_space(4.0);
+                    let (me_rect, me_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
                     if ui.is_rect_visible(me_rect) {
                         let bg = if me_resp.is_pointer_button_down_on() {
                             tokens::BTN_MAPEDGE_PRESS
@@ -1185,18 +1485,19 @@ impl BarEditorApp {
                         painter.rect_filled(me_rect, 5.0, bg);
                         paint_map_edge_icon(&painter, me_rect, egui::Color32::WHITE);
                     }
-                    let me_resp = me_resp.on_hover_text(
-                        "Map Edge -- configure the mirrored area surrounding the playable map (grassShadingTex preview / picker)",
-                    );
+                    let me_summary = self.validation.summary_for_modal(ModalId::MapEdge);
+                    paint_validation_badge(ui, me_rect, &me_summary);
+                    let me_hover = hover_with_summary("Map Edge", &me_summary, "");
+                    let me_resp = me_resp.on_hover_text(me_hover);
                     if me_resp.clicked() {
                         self.dialog.show_map_edge_editor = !self.dialog.show_map_edge_editor;
                     }
 
-                    // Startboxes — opens the 2D inspector at Spawns mode so
-                    // the user can drag spawn markers. Lives in its own
-                    // button (rather than a tab inside Map Settings) because
-                    // box-authoring is a spatial task that wants the full
-                    // inspector canvas, not a side-panel form.
+                    // Startboxes — opens the Start Boxes modal so the user
+                    // can edit team spawn positions. Last group on the
+                    // action bar.
+                    ui.add_space(4.0);
+                    ui.separator();
                     ui.add_space(4.0);
                     let (sb_rect, sb_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
                     if ui.is_rect_visible(sb_rect) {
@@ -1211,10 +1512,16 @@ impl BarEditorApp {
                         painter.rect_filled(sb_rect, 5.0, bg);
                         paint_startbox_icon(&painter, sb_rect, egui::Color32::WHITE);
                     }
-                    let sb_resp = sb_resp.on_hover_text(t!("editor.toolbar.startboxes"));
+                    let sb_summary = self.validation.summary_for_modal(ModalId::StartBoxes);
+                    paint_validation_badge(ui, sb_rect, &sb_summary);
+                    let sb_hover = hover_with_summary(
+                        &t!("editor.toolbar.startboxes").to_string(),
+                        &sb_summary,
+                        "",
+                    );
+                    let sb_resp = sb_resp.on_hover_text(sb_hover);
                     if sb_resp.clicked() {
-                        self.dialog.show_inspector = true;
-                        self.paint.inspector_mode = InspectorMode::Spawns;
+                        self.dialog.show_start_boxes_editor = !self.dialog.show_start_boxes_editor;
                     }
                 });
                 ui.add_space(4.0);
