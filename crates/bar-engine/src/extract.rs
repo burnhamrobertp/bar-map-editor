@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use bar_data::smt::TILE_SIZE;
 use directories::ProjectDirs;
+use image::{ImageBuffer, Luma};
 
 pub use bar_project::{WorkDirScan, SMF_MINIMAP_SIDE_CAR};
 
@@ -74,22 +75,41 @@ pub fn extract_sd7_to_work_dir_with_progress(
     archive: &Path,
     progress: &dyn Fn(&str),
 ) -> Result<WorkDirScan> {
+    let work_dir = work_dir_for(archive);
+    extract_sd7_to_dir_with_progress(archive, &work_dir, progress)
+}
+
+/// Extract `.sd7` into a caller-chosen directory and scan its
+/// contents. Used by the unified import flow (both GUI and CLI go
+/// through this) -- the GUI's "Import .sd7" prompts the user for a
+/// destination .barproj directory, the CLI's `bar-cli import` takes
+/// `--out-dir` directly, and both then call into this function so
+/// downstream recipe construction lives in one place.
+///
+/// If `dest` already exists and is non-empty, extraction is skipped
+/// so any edits the user has made are preserved. Caller is
+/// responsible for choosing whether `dest` is a project dir (.barproj)
+/// or a transient work dir.
+pub fn extract_sd7_to_dir_with_progress(
+    archive: &Path,
+    dest: &Path,
+    progress: &dyn Fn(&str),
+) -> Result<WorkDirScan> {
     let stem = archive
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("map");
     let map_name = stem.to_string();
-    let work_dir = work_dir_for(archive);
 
-    let should_extract = !work_dir.exists()
-        || std::fs::read_dir(&work_dir)
+    let should_extract = !dest.exists()
+        || std::fs::read_dir(dest)
             .map(|mut d| d.next().is_none())
             .unwrap_or(true);
 
     if should_extract {
-        progress("Preparing work directory");
-        std::fs::create_dir_all(&work_dir)
-            .with_context(|| format!("Failed to create work directory: {}", work_dir.display()))?;
+        progress("Preparing destination directory");
+        std::fs::create_dir_all(dest)
+            .with_context(|| format!("Failed to create destination: {}", dest.display()))?;
         progress("Extracting archive");
         // Per-entry hook so the modal shows the file currently being
         // extracted. sevenz-rust's bare `decompress_file` blocks for
@@ -97,23 +117,19 @@ pub fn extract_sd7_to_work_dir_with_progress(
         // the modal read as frozen on large maps. We delegate the
         // actual extraction to `default_entry_extract_fn` and only
         // wrap the progress emission.
-        sevenz_rust::decompress_file_with_extract_fn(
-            archive,
-            &work_dir,
-            |entry, reader, dest_path| {
-                if !entry.is_directory() {
-                    let label = format!("Extracting {}", entry.name());
-                    progress(&label);
-                }
-                sevenz_rust::default_entry_extract_fn(entry, reader, dest_path)
-            },
-        )
+        sevenz_rust::decompress_file_with_extract_fn(archive, dest, |entry, reader, dest_path| {
+            if !entry.is_directory() {
+                let label = format!("Extracting {}", entry.name());
+                progress(&label);
+            }
+            sevenz_rust::default_entry_extract_fn(entry, reader, dest_path)
+        })
         .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
     } else {
-        progress("Reusing cached work directory");
+        progress("Reusing existing destination");
     }
 
-    scan_work_dir(work_dir, map_name, progress)
+    scan_work_dir(dest.to_path_buf(), map_name, progress)
 }
 
 /// Delete work directories under [`work_dir_root`] whose mtime is older than
@@ -317,6 +333,14 @@ fn scan_work_dir(
     // Modern BAR maps store the bulk of their features in
     // mapconfig/featureplacer/set.lua; the SMF section often has only a handful
     // of legacy entries (or none).
+    //
+    // Each PlacedFeature carries a `source` tag so re-export routes them back
+    // to the correct location: SMF-native features into the SMF feature
+    // section (which the engine reader caps at 31-char names per
+    // `SMFMapFile.h:62`), FeaturePlacer-set features back into
+    // `mapconfig/featureplacer/set.lua` (no length limit; spawned by the
+    // gadget at runtime). Mixing the two would truncate long FP names in
+    // the SMF write and crash the engine on the garbled type string.
     progress("Parsing feature placements");
     let mut features: Vec<bar_project::recipe::PlacedFeature> = smf_data
         .as_ref()
@@ -337,6 +361,7 @@ fn scan_work_dir(
                     // consistent unit.
                     angle: f.angle * 32768.0 / std::f32::consts::PI,
                     taken_damage: f.taken_damage,
+                    source: bar_project::recipe::FeatureSource::Smf,
                 })
                 .collect()
         })
@@ -351,6 +376,32 @@ fn scan_work_dir(
             let lua_features = parse_feature_placer_set(&content);
             tracing::debug!(count = lua_features.len(), "Parsed FeaturePlacer set.lua");
             features.extend(lua_features);
+        }
+    }
+
+    // SMF `MEH_Vegetation` extra header -> `grassmap.png` next to
+    // the other extracted files. Mirrors BAR's
+    // `Spring.GetGrass(x,z)` fallback (`map_grass_gl4.lua:856-892`):
+    // when mapinfo doesn't specify `grassDistTGA`, the widget reads
+    // the SMF's built-in grass map instead. We materialise it here
+    // so the rest of the pipeline (which keys off filename in
+    // passthrough/) finds it without special-casing.
+    if let Some(ref smf) = smf_data {
+        if !smf.grass_map.is_empty() {
+            let grass_w = (smf.header.map_x.max(0) as u32) / 4;
+            let grass_h = (smf.header.map_y.max(0) as u32) / 4;
+            if grass_w > 0 && grass_h > 0 {
+                let grassmap_path = work_dir.join("grassmap.png");
+                if write_grassmap_png(&smf.grass_map, grass_w, grass_h, &grassmap_path).is_ok() {
+                    let rel = PathBuf::from("grassmap.png");
+                    if !passthrough_files
+                        .iter()
+                        .any(|(_, r)| r.to_string_lossy().eq_ignore_ascii_case("grassmap.png"))
+                    {
+                        passthrough_files.push((grassmap_path, rel));
+                    }
+                }
+            }
         }
     }
 
@@ -433,6 +484,16 @@ fn downsample_f32_to_u8_square(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8
 /// any map with more than ~256 effective elevation levels (Azurite hinted
 /// it, Ascendancy made it obvious -- 8m vertical range per step at 2000m
 /// total elevation). f32 storage preserves the full SMF precision.
+/// Write an 8-bit-per-pixel grayscale `grassmap.png`. Used to
+/// materialise the SMF `MEH_Vegetation` extra header into a file the
+/// rest of the pipeline keys off by filename.
+fn write_grassmap_png(data: &[u8], w: u32, h: u32, path: &Path) -> Result<()> {
+    let img: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::from_raw(w, h, data.to_vec())
+        .context("Failed to construct grass map image buffer")?;
+    img.save(path)
+        .with_context(|| format!("Failed to write grass map PNG: {}", path.display()))
+}
+
 fn downsample_f32_to_f32_bytes(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity((res * res) as usize * 4);
     for oy in 0..res {
@@ -579,6 +640,7 @@ fn parse_feature_placer_set(content: &str) -> Vec<bar_project::recipe::PlacedFea
                 z,
                 angle: rot.unwrap_or(0.0),
                 taken_damage: 0,
+                source: bar_project::recipe::FeatureSource::FeaturePlacerSet,
             });
         }
     }

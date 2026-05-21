@@ -9,9 +9,11 @@ pub mod feature_lights;
 pub mod features;
 pub mod picking;
 pub mod renderer;
+pub(crate) mod samplers;
 pub mod shadow;
 pub mod terrain;
 pub mod thumbnail;
+pub mod widgets;
 
 pub use camera::Camera;
 pub use feature_lights::{lights_for_feature_def, FeatureLightConfig};

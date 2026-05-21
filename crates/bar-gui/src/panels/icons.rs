@@ -23,45 +23,6 @@ pub(crate) fn paint_bar_icon(painter: &egui::Painter, rect: egui::Rect, color: e
     );
 }
 
-/// "Document with pencil" icon for the Edit Map Info toolbar button.
-pub(crate) fn paint_map_info_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
-    let stroke = egui::Stroke::new(1.8, color);
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-
-    let pw = 10.0_f32;
-    let ph = 13.0_f32;
-    let px = cx - pw / 2.0 - 2.0;
-    let py = cy - ph / 2.0;
-    painter.line_segment([egui::pos2(px, py), egui::pos2(px + pw - 3.0, py)], stroke);
-    painter.line_segment(
-        [egui::pos2(px + pw - 3.0, py), egui::pos2(px + pw, py + 3.0)],
-        stroke,
-    );
-    painter.line_segment(
-        [egui::pos2(px + pw, py + 3.0), egui::pos2(px + pw, py + ph)],
-        stroke,
-    );
-    painter.line_segment(
-        [egui::pos2(px + pw, py + ph), egui::pos2(px, py + ph)],
-        stroke,
-    );
-    painter.line_segment([egui::pos2(px, py + ph), egui::pos2(px, py)], stroke);
-
-    for i in 0..3 {
-        let y = py + 4.0 + i as f32 * 3.0;
-        painter.line_segment(
-            [egui::pos2(px + 2.0, y), egui::pos2(px + pw - 3.0, y)],
-            egui::Stroke::new(1.2, color),
-        );
-    }
-
-    let tip = egui::pos2(rect.right() - 5.0, rect.bottom() - 5.0);
-    let base = egui::pos2(tip.x - 6.0, tip.y - 6.0);
-    painter.line_segment([base, tip], egui::Stroke::new(2.5, color));
-    painter.circle_filled(tip, 1.5, color);
-}
-
 /// Upload-arrow icon for the Export / Run toolbar button.
 pub(crate) fn paint_export_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let stroke = egui::Stroke::new(2.0, color);
@@ -102,38 +63,6 @@ pub(crate) fn paint_export_icon(painter: &egui::Painter, rect: egui::Rect, color
         color,
         egui::Stroke::NONE,
     ));
-}
-
-/// Gear icon for the Map Settings (structured mapinfo form) toolbar button.
-pub(crate) fn paint_mapinfo_form_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    let teeth = 8usize;
-    let outer_r = 9.0_f32;
-    let inner_r = 6.5_f32;
-    let hub_r = 2.6_f32;
-    let half_tooth = std::f32::consts::TAU / (teeth as f32 * 4.0);
-    let step = std::f32::consts::TAU / teeth as f32;
-
-    let mut points = Vec::with_capacity(teeth * 4);
-    let pt = |r: f32, angle: f32| egui::pos2(cx + r * angle.cos(), cy + r * angle.sin());
-    for i in 0..teeth {
-        let a = step * i as f32;
-        let a_next = step * (i + 1) as f32;
-        points.push(pt(outer_r, a - half_tooth));
-        points.push(pt(outer_r, a + half_tooth));
-        points.push(pt(inner_r, a + half_tooth));
-        points.push(pt(inner_r, a_next - half_tooth));
-    }
-    painter.add(egui::Shape::closed_line(
-        points,
-        egui::Stroke::new(1.6, color),
-    ));
-    painter.circle_stroke(egui::pos2(cx, cy), hub_r, egui::Stroke::new(1.6, color));
 }
 
 /// Dashed outer rectangle wrapping a solid inner square. Reads as
@@ -227,26 +156,6 @@ pub(crate) fn paint_startbox_icon(painter: &egui::Painter, rect: egui::Rect, col
         ),
         1.0,
         color,
-    );
-}
-
-/// Map-pin teardrop for the 2D Inspector toolbar button.
-pub(crate) fn paint_inspector_icon(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    color: egui::Color32,
-) {
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    painter.circle_stroke(egui::pos2(cx, cy - 3.0), 6.0, egui::Stroke::new(2.0, color));
-    painter.circle_filled(egui::pos2(cx, cy - 3.0), 2.5, color);
-    painter.line_segment(
-        [egui::pos2(cx - 4.5, cy + 1.5), egui::pos2(cx, cy + 9.0)],
-        egui::Stroke::new(2.0, color),
-    );
-    painter.line_segment(
-        [egui::pos2(cx + 4.5, cy + 1.5), egui::pos2(cx, cy + 9.0)],
-        egui::Stroke::new(2.0, color),
     );
 }
 
@@ -660,25 +569,256 @@ pub fn paint_trash_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::
     );
 }
 
-/// Info icon: a circle containing a lowercase `i` (dot + stem).
-/// Sized to read at ~16 px square.
+/// Info icon: a stylised question-mark glyph drawn as a thick
+/// stroked path (curved hook curling into a vertical stem) plus a
+/// filled dot below. Drawn larger and bolder than the surrounding
+/// text would render the `?` character, so it reads clearly at the
+/// 14 px sizes used next to section headings and field labels.
 pub fn paint_info_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
-    let center = rect.center();
-    let radius = (rect.width().min(rect.height()) * 0.5 - 1.0).max(2.0);
-    let ring = egui::Stroke::new(1.4, color);
-    painter.circle_stroke(center, radius, ring);
+    let s = rect.width().min(rect.height());
+    let cx = rect.center().x;
+    let cy = rect.center().y;
 
-    let dot_r = (radius * 0.16).max(1.0);
-    let dot_y = center.y - radius * 0.42;
-    painter.circle_filled(center + egui::vec2(0.0, dot_y - center.y), dot_r, color);
+    let stroke_w = (s * 0.20).max(1.6);
+    let stroke = egui::Stroke::new(stroke_w, color);
 
-    let stem_top = center.y - radius * 0.14;
-    let stem_bot = center.y + radius * 0.48;
+    // Hook geometry: arc traces from the LEFT side of the implied
+    // circle over the top and down to just past the bottom on the
+    // right -- a "?" curve with an open mouth (the curve covers
+    // only about two-thirds of the implied circle rather than
+    // wrapping nearly all the way around).
+    //
+    // Screen-space convention: pos = (cx + r*cos(a), cy - r*sin(a)).
+    // Visually CCW means *decreasing* math angle (screen y is flipped).
+    let hook_cx = cx;
+    let hook_cy = cy - s * 0.16;
+    let hook_r = s * 0.22;
+    let a_start = -std::f32::consts::PI; // -180° (LEFT side)
+    let a_end = -std::f32::consts::PI * 0.42; // ~ -76° (just past bottom)
+    let total = (a_start - a_end).rem_euclid(std::f32::consts::TAU);
+
+    let n = 18;
+    let mut path = Vec::with_capacity(n + 2);
+    for i in 0..=n {
+        let t = i as f32 / n as f32;
+        let a = a_start - total * t;
+        path.push(egui::pos2(
+            hook_cx + hook_r * a.cos(),
+            hook_cy - hook_r * a.sin(),
+        ));
+    }
+    // Short straight tail continues the curve downward into a stem.
+    if let Some(&arc_end) = path.last() {
+        path.push(egui::pos2(arc_end.x, arc_end.y + s * 0.10));
+    }
+    painter.add(egui::Shape::line(path, stroke));
+
+    // Filled dot below the stem.
+    let dot_x = hook_cx + hook_r * a_end.cos();
+    let dot_y = hook_cy - hook_r * a_end.sin() + s * 0.10 + stroke_w * 0.5 + s * 0.09;
+    painter.circle_filled(egui::pos2(dot_x, dot_y), stroke_w * 0.55, color);
+}
+
+/// Stylised cluster of grass blades for the Grass action-bar button.
+/// Three upward arcs of different heights pointing at small offsets
+/// to read as "tuft of grass" without any added text.
+pub(crate) fn paint_grass_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.8, color);
+    // Ground line.
     painter.line_segment(
         [
-            egui::pos2(center.x, stem_top),
-            egui::pos2(center.x, stem_bot),
+            egui::pos2(cx - 8.0, cy + 6.0),
+            egui::pos2(cx + 8.0, cy + 6.0),
         ],
-        egui::Stroke::new(1.5, color),
+        stroke,
     );
+    // Three blade strokes leaning slightly outward.
+    painter.line_segment(
+        [
+            egui::pos2(cx - 5.0, cy + 6.0),
+            egui::pos2(cx - 6.5, cy - 4.0),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx, cy + 6.0), egui::pos2(cx + 0.5, cy - 6.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(cx + 5.0, cy + 6.0),
+            egui::pos2(cx + 6.5, cy - 3.0),
+        ],
+        stroke,
+    );
+}
+
+/// Tag / label icon for the Identity action-bar button. A rectangle
+/// with one chamfered corner, mimicking a name-tag silhouette.
+pub(crate) fn paint_identity_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.5, color);
+    let pts = vec![
+        egui::pos2(cx - 7.0, cy - 5.0),
+        egui::pos2(cx + 4.0, cy - 5.0),
+        egui::pos2(cx + 7.0, cy - 2.0),
+        egui::pos2(cx + 7.0, cy + 5.0),
+        egui::pos2(cx - 7.0, cy + 5.0),
+    ];
+    painter.add(egui::Shape::closed_line(pts, stroke));
+    // Small hole at the chamfer for a tag string.
+    painter.circle_stroke(egui::pos2(cx + 4.5, cy - 2.5), 1.0, stroke);
+}
+
+/// Crossed ruler icon for the Dimensions action-bar button.
+pub(crate) fn paint_dimensions_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.4, color);
+    // Horizontal ruler.
+    painter.rect_stroke(
+        egui::Rect::from_min_max(
+            egui::pos2(cx - 8.0, cy + 1.0),
+            egui::pos2(cx + 8.0, cy + 5.0),
+        ),
+        1.0,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    for i in 1..4 {
+        let x = cx - 8.0 + (i as f32) * 4.0;
+        painter.line_segment([egui::pos2(x, cy + 1.0), egui::pos2(x, cy + 3.0)], stroke);
+    }
+    // Vertical ruler.
+    painter.rect_stroke(
+        egui::Rect::from_min_max(
+            egui::pos2(cx - 5.0, cy - 8.0),
+            egui::pos2(cx - 1.0, cy + 8.0),
+        ),
+        1.0,
+        stroke,
+        egui::StrokeKind::Inside,
+    );
+    for i in 1..4 {
+        let y = cy - 8.0 + (i as f32) * 4.0;
+        painter.line_segment([egui::pos2(cx - 5.0, y), egui::pos2(cx - 3.0, y)], stroke);
+    }
+}
+
+/// Downward gravity arrow over a ground line for the Physics button.
+pub(crate) fn paint_physics_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.6, color);
+    // Shaft.
+    painter.line_segment([egui::pos2(cx, cy - 7.0), egui::pos2(cx, cy + 4.0)], stroke);
+    // Arrow head.
+    painter.line_segment(
+        [egui::pos2(cx - 3.0, cy + 1.0), egui::pos2(cx, cy + 4.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx + 3.0, cy + 1.0), egui::pos2(cx, cy + 4.0)],
+        stroke,
+    );
+    // Ground line (dashed).
+    for i in 0..3 {
+        let x0 = cx - 8.0 + (i as f32) * 6.0;
+        painter.line_segment(
+            [egui::pos2(x0, cy + 7.5), egui::pos2(x0 + 4.0, cy + 7.5)],
+            stroke,
+        );
+    }
+}
+
+/// Solid cloud silhouette for the Atmosphere action-bar button.
+/// Three overlapping filled circles form the stylised cloud shape.
+pub(crate) fn paint_atmosphere_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    painter.circle_filled(egui::pos2(cx - 4.0, cy + 1.0), 3.5, color);
+    painter.circle_filled(egui::pos2(cx, cy - 1.5), 4.5, color);
+    painter.circle_filled(egui::pos2(cx + 4.5, cy + 1.0), 3.5, color);
+}
+
+/// Sun with rays for the Lighting action-bar button.
+pub(crate) fn paint_lighting_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.6, color);
+    painter.circle_stroke(egui::pos2(cx, cy), 4.0, stroke);
+    let ray_inner = 5.5_f32;
+    let ray_outer = 8.5_f32;
+    for i in 0..8 {
+        let a = (i as f32) * std::f32::consts::TAU / 8.0;
+        painter.line_segment(
+            [
+                egui::pos2(cx + ray_inner * a.cos(), cy + ray_inner * a.sin()),
+                egui::pos2(cx + ray_outer * a.cos(), cy + ray_outer * a.sin()),
+            ],
+            stroke,
+        );
+    }
+}
+
+/// Solid water-droplet silhouette for the Water action-bar button.
+/// Constructed as a filled circular bulge with a triangular tip
+/// stacked on top; the slight overlap at the join hides the seam.
+pub(crate) fn paint_water_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let r = 5.0_f32;
+    let tip = egui::pos2(cx, cy - 8.0);
+    let bulge_center = egui::pos2(cx, cy + 2.0);
+    painter.circle_filled(bulge_center, r, color);
+    let shoulder_y = bulge_center.y - r * 0.7;
+    let shoulder_dx = r * 0.72;
+    painter.add(egui::Shape::convex_polygon(
+        vec![
+            tip,
+            egui::pos2(cx + shoulder_dx, shoulder_y),
+            egui::pos2(cx - shoulder_dx, shoulder_y),
+        ],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// 2x2 grid of squares for the Resources (texture-splat) button.
+pub(crate) fn paint_resources_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    color: egui::Color32,
+) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.4, color);
+    let size = 6.0_f32;
+    let gap = 1.5_f32;
+    let half_total = size + gap * 0.5;
+    let cells = [
+        (cx - half_total, cy - half_total),
+        (cx + gap * 0.5, cy - half_total),
+        (cx - half_total, cy + gap * 0.5),
+        (cx + gap * 0.5, cy + gap * 0.5),
+    ];
+    for (i, (x, y)) in cells.iter().enumerate() {
+        let r = egui::Rect::from_min_max(egui::pos2(*x, *y), egui::pos2(*x + size, *y + size));
+        if i == 0 || i == 3 {
+            painter.rect_filled(r, 1.0, color);
+        } else {
+            painter.rect_stroke(r, 1.0, stroke, egui::StrokeKind::Inside);
+        }
+    }
 }

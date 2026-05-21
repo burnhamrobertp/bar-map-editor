@@ -16,10 +16,35 @@ per-shader status and what's missing.
 | `picking.rs` | CPU ray-cast terrain picker |
 | `shadow.rs` | Directional shadow caster + receiver, PCF sampling |
 
-Shaders live in `shaders/` at the workspace root and are concatenated
-in this order at pipeline-build time: `modern_sky.wgsl` → `smf_ground.wgsl`
-→ `water.wgsl` → `terrain.wgsl`. Plus standalone shaders
-`features.wgsl`, `shadow_terrain.wgsl`, `shadow_feature.wgsl`.
+Shaders live in `shaders/` at the workspace root, organised by
+origin:
+
+| Directory | Provenance |
+|---|---|
+| `shaders/recoil/` | Pure engine ports (BAR's `SMFFragProg`, `ModernSkyFS`, etc.). Stable upstream contract; only changes when Recoil changes. |
+| `shaders/widgets/` | **BAR LuaUI widget ports** -- effects driven by `mapinfo.custom.*` per-map blocks (e.g. `custom_fog.wgsl` for the height-fog widget). Per-map authored content; segmented so engine-native paths stay clean. See `memory/feedback_no_game_widget_porting.md` for the in-scope rule. |
+| `shaders/*.wgsl` (top level) | Composer shaders -- `terrain.wgsl`, `water.wgsl`, `features.wgsl`, `gamma_encode.wgsl`, shadow shaders. These declare bindings + entry points and call helpers from the directories above. |
+
+Concatenation order at pipeline-build time
+(`TerrainRenderer::new`):
+`recoil/modern_sky.wgsl` → `recoil/smf_ground.wgsl` →
+`widgets/custom_fog.wgsl` → `water.wgsl` → `terrain.wgsl`.
+
+Widget shaders go BEFORE the composer shaders that call them
+because WGSL does not forward-reference functions (it does
+forward-reference module-scope `var`s, which is why widget shaders
+can use `camera.*` even though that binding is declared in
+`terrain.wgsl`).
+
+When adding a new widget port, drop the WGSL into
+`shaders/widgets/<name>.wgsl` and `include_str!` it in
+`TerrainRenderer::new` (and in the `terrain_shader_wgsl_parses`
+unit test). The Rust-side state (bind groups, uniforms,
+`update_*` methods) ideally belongs under
+`crates/bar-render/src/widgets/<name>.rs` -- the existing
+`custom.fog` plumbing currently still sits in `SmfLighting` +
+`CameraUniform` for historical reasons; new widgets should land
+in their own module.
 
 ## Render passes
 
@@ -157,6 +182,30 @@ binary `CameraUniform` layout. The runtime upload flags
 overridden in `sync_to_frame` based on which assets the renderer has
 actually uploaded.
 
+## Sampler convention
+
+Every world-space filtered sampler routes through
+`crate::samplers::make_filtered_sampler(device, label, address_mode)`.
+This guarantees a single workspace-wide filtering story:
+linear min/mag/mip + `anisotropy_clamp: 16`, mirroring BAR's
+engine-wide `Springsettings.cfg::MaxTexAniso = 16` applied via
+`Bitmap.cpp:1746`.
+
+**Use the helper for**: terrain albedo, splat detail textures,
+feature model textures, grass blade + grass shading textures,
+water caustics, skybox cubemap -- anything that binds a textured
+world-space asset.
+
+**Don't use the helper for**: samplers where any filter must be
+`Nearest` (depth-comparison shadow PCF, mipmap-Nearest lookups
+like water reflection / refraction, full-screen post-passes like
+gamma encode, or 1×1 placeholder textures without mip chains).
+
+If you find yourself writing `device.create_sampler` directly for
+a world-space asset, the helper is what you want -- skipping it
+leads to ad-hoc divergence where one texture looks crisp at
+oblique angles and the texture next to it looks smeared.
+
 ## Asset upload paths
 
 Map-authored textures from mapinfo `resources = { ... }` and
@@ -168,12 +217,25 @@ via `update_*` methods on `TerrainRenderer`:
 | `atmosphere.skyBox` | `update_skybox(Cubemap)` / `clear_skybox()` | 1×1 black cubemap (procedural sky path runs) |
 | `resources.detailTex` | `update_detail_texture(rgba, w, h)` | 1×1 mid-grey (zero contribution) |
 | `resources.splatDetailNormalTex1..4` + `splatDistrTex` | `update_splat_textures([5 textures])` / `clear_splat_textures()` | 1×1 mid-grey (zero contribution) |
-| `resources.skyReflectModTex` | `update_sky_reflect_mod(rgba, w, h)` / `clear_sky_reflect_mod()` | 1×1 black (zero reflection mix) |
+| `resources.skyReflectModTex` | `update_sky_reflect_mod(rgba, w, h)` / `clear_sky_reflect_mod()` | inert 1×1 (gate disables sample) |
+| `resources.specularTex` | `update_specular_tex(rgba, w, h)` / `clear_specular_tex()` | inert 1×1 (gate falls back to global ground_specular / spec_exponent) |
+| `resources.grassShadingTex` | `update_grass_shading_tex(rgba, w, h)` / `clear_grass_shading_tex()` | 1×1 mid-grey (extension falls back to playable albedo) |
+| `resources.lightEmissionTex` | `update_light_emission_tex(rgba, w, h)` / `clear_light_emission_tex()` | inert 1×1 (0,0,0,0) (gate skips apply-emission stage) |
 
 The host side (`bar-app::viewport::sync_*` helpers) handles file
 discovery via recursive `find_file_in_dir` on the `.barproj/passthrough/`
 tree, decoding via `bar_data::load_dds_cubemap` /
 `viewport::load_2d_image`, and idempotent re-upload on project change.
+
+**Inert-default convention**: where the table says "gate skips
+sample", the 1×1 placeholder is **never sampled** because a
+`*_enabled` flag in the `skybox_params` / `custom_fog_params` uniform
+gates the entire shader branch behind it. This mirrors the engine's
+compile-time `#ifdef SMF_SPECULAR_LIGHTING` / `SMF_SKY_REFLECTIONS` /
+`SMF_LIGHT_EMISSION` toggles (`SMFFragProg.glsl:403-416, 392-401`).
+When a map ships a real texture, `update_*` flips the gate on; when
+it doesn't, the global-uniform fallback (or no contribution) runs
+instead -- matching engine behaviour.
 
 ## Feature rendering
 
@@ -225,12 +287,44 @@ emissive=1 (whole feature self-illuminating) and spec-mult=4 -- not the
 intended no-op. If you add another use of the texture2 binding,
 re-check the fallback for that pixel pattern.
 
+## Gamma-encode post-pass
+
+BME mirrors BAR's gamma-incorrect pipeline: every shader runs in
+sRGB-perceptual space and writes perceptual bytes to a non-sRGB
+framebuffer. On a native sRGB display the engine's final intensity is
+therefore `byte/255` raised to the display gamma (~2.2). eframe
+composites our output onto an sRGB swapchain, which would otherwise
+re-encode our perceptual bytes such that displayed intensity lands at
+`V` instead of `V^2.2` -- visibly brighter, with washed-out highlights
+and oversaturated channels.
+
+A fullscreen `gamma_pipeline` runs at the end of `render_internal`,
+sampling `output_texture` (the live perceptual render target) and
+writing `pow(c, gamma_params.exponent)` into a separate
+`display_texture`. The exponent is a uniform driven by
+`TerrainRenderer::set_gamma_exponent`; the viewport debug overlay's
+gear menu surfaces it as a slider so it can be tuned visually against
+in-engine reference screenshots. eframe / egui_wgpu does partial
+gamma handling in its compose pipeline so the net swapchain chain is
+neither pure sRGB nor pure passthrough -- the residual correction
+lands somewhere in `[1.0, 2.2]` (current empirical default 1.5). The
+public `output_view()` accessor returns the **display** view;
+`read_pixels` (used by the CLI preview) also reads the display target
+so saved PNGs match the editor viewport.
+
+Cross-pass intermediates (refraction, reflection) keep their raw
+perceptual contents -- only the final swapchain-bound copy is gamma-
+encoded. Shader code (`shaders/gamma_encode.wgsl`) is a fullscreen
+triangle, no vertex buffer, depth disabled.
+
 ## Adding new render passes
 
 New passes should be added to `render_internal` using the same
 encoder, either before or after existing passes as the depth-ordering
 requires. The depth texture view is `self.depth_texture` and the
-color output is `self.output_view`. Use the established pattern:
+color output is `self.output_view` (the **internal** perceptual
+target; the public `output_view()` accessor returns the gamma-encoded
+copy and is for egui only). Use the established pattern:
 
 1. Write the relevant per-pass camera uniform variant via
    `queue.write_buffer(&self.camera_buffer, ...)`.

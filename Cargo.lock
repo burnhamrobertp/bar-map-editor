@@ -506,6 +506,7 @@ dependencies = [
  "bar-data",
  "bar-engine",
  "bar-graph",
+ "bar-project",
  "bar-render",
  "clap",
  "glam",
@@ -543,6 +544,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.18",
  "tracing",
+ "zip",
 ]
 
 [[package]]
@@ -623,6 +625,7 @@ dependencies = [
  "bar-project",
  "bytemuck",
  "glam",
+ "image",
  "naga",
  "tracing",
  "wgpu",

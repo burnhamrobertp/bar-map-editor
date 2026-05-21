@@ -94,6 +94,8 @@ fn bench_full_export(c: &mut Criterion) {
                 description: String::new(),
                 author: None,
                 version: None,
+                tip: None,
+                depend: vec!["Map Helper v1".to_string()],
                 nodes: Vec::new(),
                 connections: Vec::new(),
                 output: OutputConfig {

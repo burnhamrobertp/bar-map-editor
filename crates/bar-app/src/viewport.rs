@@ -149,6 +149,28 @@ pub struct ViewportCore {
     /// grass-shading texture (mapinfo `resources.grassShadingTex`,
     /// engine `MAP_BASE_GRASS_TEX`).
     pub grass_shading_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for` for the self-illumination
+    /// texture (mapinfo `resources.lightEmissionTex`, engine path
+    /// `SMF_LIGHT_EMISSION`).
+    pub light_emission_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for` for the SMF_BLEND_NORMALS
+    /// detail-normal texture (mapinfo `resources.detailNormalTex`).
+    pub detail_normal_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// Same idea as `skybox_loaded_for` for the basic colour-splat
+    /// texture (mapinfo `resources.splatDetailTex`, engine path
+    /// `SMF_DETAIL_TEXTURE_SPLATTING`).
+    pub basic_splat_tex_loaded_for: Option<(std::path::PathBuf, String)>,
+    /// One-shot guard for the engine-shipped caustic animation upload.
+    /// Caustic content lives inside Recoil's `bitmaps.sdz` -- same set
+    /// of 32 frames for every map -- so we only need to load it once
+    /// per renderer. Stores the engine-dir path that produced the
+    /// current upload; cleared when the install isn't detected.
+    pub caustic_assets_loaded_from: Option<std::path::PathBuf>,
+    /// Grass widget asset bundle. Dedupe key is
+    /// `(project_dir, distTGA path)` -- changing either the project
+    /// or the dist-mask filename re-loads.
+    pub map_grass_loaded_for: Option<(std::path::PathBuf, String)>,
+    pub map_grass_loading_for: Option<(std::path::PathBuf, String)>,
     /// Key currently being decoded on a background thread for each of the
     /// async-loaded texture slots. Set by the sync function when it spawns
     /// a worker; cleared on `poll_pending_texture_loads` once the result
@@ -160,6 +182,9 @@ pub struct ViewportCore {
     pub sky_reflect_mod_loading_for: Option<(std::path::PathBuf, String)>,
     pub specular_tex_loading_for: Option<(std::path::PathBuf, String)>,
     pub grass_shading_tex_loading_for: Option<(std::path::PathBuf, String)>,
+    pub light_emission_tex_loading_for: Option<(std::path::PathBuf, String)>,
+    pub detail_normal_tex_loading_for: Option<(std::path::PathBuf, String)>,
+    pub basic_splat_tex_loading_for: Option<(std::path::PathBuf, String)>,
     /// Background-decoded texture payloads ready to be uploaded on the
     /// main thread. Drained by `poll_pending_texture_loads` each frame.
     pub texture_load_tx: mpsc::Sender<TextureLoadResult>,
@@ -204,13 +229,55 @@ pub enum TextureLoadResult {
         key: (std::path::PathBuf, String),
         data: Option<Mip>,
     },
+    LightEmissionTex {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
+    DetailNormalTex {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
+    BasicSplatTex {
+        key: (std::path::PathBuf, String),
+        data: Option<Mip>,
+    },
+    /// Grass widget bundle. `(dist_mask_bytes, mask_w, mask_h,
+    /// blade_color_rgba, blade_w, blade_h)`. Loaded as one unit
+    /// because both pieces are needed before any visible grass can
+    /// render; the renderer waits for the bundle then generates
+    /// instances + uploads textures in a single transaction.
+    MapGrass {
+        key: (std::path::PathBuf, String),
+        data: Option<MapGrassAssets>,
+    },
+}
+
+/// Decoded grass-widget assets for one map. Distribution mask is
+/// reduced to a single byte per texel (the R channel of the source
+/// TGA, matching engine widget convention). The blade-colour
+/// texture is shipped with its full mip chain; without it,
+/// minified blades alias heavily and read as blocky pixels rather
+/// than crisp silhouettes.
+pub struct MapGrassAssets {
+    pub dist_mask: Vec<u8>,
+    pub mask_w: u32,
+    pub mask_h: u32,
+    /// Mip chain for the blade colour texture: `(rgba_bytes, w, h)`
+    /// per level. Index 0 is the base mip; subsequent entries are
+    /// half-size downsamples. For DDS sources the chain comes
+    /// directly from the file; for raster images we generate it
+    /// CPU-side via box-filter downscale.
+    pub blade_color_mips: Vec<(Vec<u8>, u32, u32)>,
 }
 
 impl ViewportCore {
     pub fn new(gpu_context: &Option<GpuContext>, session_id: u64) -> Self {
         let terrain_renderer = gpu_context.as_ref().map(|ctx| {
+            // BAR-faithful: non-sRGB render target so the GPU doesn't
+            // gamma-encode on write -- matches BAR's pipeline which
+            // uses unflagged Rgba8 framebuffers throughout.
             let mut r =
-                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8Unorm);
             r.resize(&ctx.device, 512, 512);
             r
         });
@@ -232,12 +299,21 @@ impl ViewportCore {
             sky_reflect_mod_loaded_for: None,
             specular_tex_loaded_for: None,
             grass_shading_tex_loaded_for: None,
+            light_emission_tex_loaded_for: None,
+            detail_normal_tex_loaded_for: None,
+            basic_splat_tex_loaded_for: None,
+            caustic_assets_loaded_from: None,
+            map_grass_loaded_for: None,
+            map_grass_loading_for: None,
             skybox_loading_for: None,
             detail_loading_for: None,
             splat_loading_for: None,
             sky_reflect_mod_loading_for: None,
             specular_tex_loading_for: None,
             grass_shading_tex_loading_for: None,
+            light_emission_tex_loading_for: None,
+            detail_normal_tex_loading_for: None,
+            basic_splat_tex_loading_for: None,
             texture_load_tx,
             texture_load_rx,
         }
@@ -362,6 +438,78 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
                     _ => {}
                 }
             }
+            TextureLoadResult::LightEmissionTex { key, data } => {
+                core.light_emission_tex_loading_for = None;
+                core.light_emission_tex_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_light_emission_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::debug!(w, h, "lightEmissionTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_light_emission_tex(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+            TextureLoadResult::DetailNormalTex { key, data } => {
+                core.detail_normal_tex_loading_for = None;
+                core.detail_normal_tex_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_detail_normal_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::debug!(w, h, "detailNormalTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_detail_normal_tex(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+            TextureLoadResult::BasicSplatTex { key, data } => {
+                core.basic_splat_tex_loading_for = None;
+                core.basic_splat_tex_loaded_for = Some(key);
+                match (data, core.terrain_renderer.as_mut()) {
+                    (Some((rgba, w, h)), Some(renderer)) => {
+                        renderer.update_basic_splat_tex(&gpu.device, &gpu.queue, &rgba, w, h);
+                        tracing::debug!(w, h, "splatDetailTex loaded");
+                    }
+                    (None, Some(renderer)) => {
+                        renderer.clear_basic_splat_tex(&gpu.device, &gpu.queue);
+                    }
+                    _ => {}
+                }
+            }
+            TextureLoadResult::MapGrass { key, data } => {
+                core.map_grass_loading_for = None;
+                core.map_grass_loaded_for = Some(key);
+                if let (Some(bundle), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
+                    let widget = renderer.map_grass.widget().clone();
+                    let mip_count = bundle.blade_color_mips.len();
+                    let (base_w, base_h) = bundle
+                        .blade_color_mips
+                        .first()
+                        .map(|(_, w, h)| (*w, *h))
+                        .unwrap_or((0, 0));
+                    renderer.sync_grass_assets(
+                        &gpu.device,
+                        &gpu.queue,
+                        widget,
+                        &bundle.dist_mask,
+                        bundle.mask_w,
+                        bundle.mask_h,
+                        &bundle.blade_color_mips,
+                    );
+                    tracing::debug!(
+                        blade_w = base_w,
+                        blade_h = base_h,
+                        mip_count = mip_count,
+                        mask_w = bundle.mask_w,
+                        mask_h = bundle.mask_h,
+                        "map grass loaded",
+                    );
+                }
+            }
         }
     }
 }
@@ -457,6 +605,428 @@ pub fn sync_specular_tex(
             }
         };
         let _ = tx.send(TextureLoadResult::SpecularTex {
+            key: key_pair,
+            data,
+        });
+    });
+}
+
+/// Schedule a background load of the grass widget's per-map assets
+/// (mapinfo `custom.grassConfig`). Sets the widget config on the
+/// renderer synchronously so the shader has the right tuning
+/// constants by the next frame; the textures themselves load
+/// off-thread and arrive via `TextureLoadResult::MapGrass`.
+///
+/// On the calling thread we:
+///   1. Push the widget config to the renderer (configures pipeline
+///      uniforms; doesn't draw yet).
+///   2. If the map has no grass config, clear renderer state and
+///      return.
+///   3. Otherwise spawn a thread to decode both the distribution
+///      mask and the blade-colour texture; main thread receives a
+///      `MapGrassAssets` bundle through the existing texture-load
+///      channel and uploads it in `poll_pending_texture_loads`.
+pub fn sync_map_grass(
+    project_dir: Option<&std::path::Path>,
+    widget: bar_render::widgets::map_grass::MapGrassWidget,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    // Sync side: push the config so the renderer knows its tuning
+    // values regardless of whether asset loading succeeds. The
+    // renderer's `sync_grass_assets` is the canonical path; here
+    // we only need to push the blend/fade constants for the
+    // shader (elmo->render conversion happens in the shader against
+    // the camera uniform, so this doesn't need any terrain state).
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if !widget.enabled {
+            renderer.clear_grass_assets(&gpu.device, &gpu.queue);
+        } else {
+            renderer
+                .map_grass
+                .set_config(&gpu.device, &gpu.queue, widget.clone());
+        }
+    }
+    if !widget.enabled {
+        // Clear dedupe key so a future enabled-state re-load triggers.
+        core.map_grass_loaded_for = None;
+        return;
+    }
+
+    let key = match project_dir {
+        Some(p) => (p.to_path_buf(), widget.dist_tga.clone()),
+        None => return,
+    };
+    if core.map_grass_loaded_for.as_ref() == Some(&key)
+        || core.map_grass_loading_for.as_ref() == Some(&key)
+    {
+        return;
+    }
+    core.map_grass_loading_for = Some(key.clone());
+
+    let tx = core.texture_load_tx.clone();
+    let project_dir = key.0.clone();
+    let dist_filename = widget.dist_tga.clone();
+    let blade_filename = widget.blade_color_tex.clone();
+    std::thread::spawn(move || {
+        let assets = load_grass_assets(&project_dir, &dist_filename, &blade_filename);
+        let _ = tx.send(TextureLoadResult::MapGrass { key, data: assets });
+    });
+}
+
+/// Load both grass assets from disk and reduce the distribution
+/// mask to a single byte-per-texel R channel. Returns `None` if
+/// either asset fails to decode -- both are required for the
+/// renderer to spawn any visible blades.
+fn load_grass_assets(
+    project_dir: &std::path::Path,
+    dist_filename: &str,
+    blade_filename: &str,
+) -> Option<MapGrassAssets> {
+    let dist_path = find_file_in_dir(&project_dir.join("passthrough"), dist_filename)
+        .or_else(|| find_file_in_dir(project_dir, dist_filename));
+    let blade_path = find_file_in_dir(&project_dir.join("passthrough"), blade_filename)
+        .or_else(|| find_file_in_dir(project_dir, blade_filename));
+    let dist_path = dist_path.or_else(|| {
+        tracing::warn!(file = %dist_filename, "grass dist mask not found");
+        None
+    })?;
+    let blade_path = blade_path.or_else(|| {
+        tracing::warn!(file = %blade_filename, "grass blade tex not found");
+        None
+    })?;
+    let (dist_rgba, mask_w, mask_h) = load_2d_image(&dist_path)?;
+    // BAR's widget expects an 8-bit greyscale TGA; we decode it as
+    // RGBA8 above (the `image` crate normalises), then pull the R
+    // channel as the per-patch byte.
+    let mut dist_mask: Vec<u8> = dist_rgba.iter().step_by(4).copied().collect();
+    // BAR's `Spring.Utilities.LoadTGA` (common/springUtilities/
+    // image_tga.lua:7) explicitly comments "origin is bottom left
+    // by default" and reads the file in storage order ignoring the
+    // image-descriptor flag. `map_grass_gl4.lua:824-830` then places
+    // texture[1] (= bottom row of the displayed image when stored
+    // bottom-up) at world `lz = 16` (north). The `image` crate
+    // respects the flag and normalises to top-down, so to match
+    // BAR's interpretation we must undo that flip when the source
+    // file was actually stored bottom-up (TGA default, bit 5 of
+    // byte 17 unset). For files saved with origin-top-left
+    // (bit 5 = 1) BAR also reads top-down by accident and no flip
+    // is needed -- the two interpretations agree.
+    let bottom_up = match std::fs::File::open(&dist_path).ok().and_then(|mut f| {
+        use std::io::Read;
+        let mut hdr = [0u8; 18];
+        f.read_exact(&mut hdr).ok().map(|_| hdr)
+    }) {
+        Some(hdr) => (hdr[17] & 0x20) == 0,
+        // If we can't read the header (e.g. file moved between
+        // decode and now), assume the TGA default. Worst case the
+        // user notices a mirror and we revisit.
+        None => true,
+    };
+    if bottom_up {
+        // In-place Y-flip of the R-channel mask buffer.
+        let row = mask_w as usize;
+        let rows = mask_h as usize;
+        for y in 0..rows / 2 {
+            let top = y * row;
+            let bot = (rows - 1 - y) * row;
+            for x in 0..row {
+                dist_mask.swap(top + x, bot + x);
+            }
+        }
+    }
+    let blade_color_mips = load_2d_image_mip_chain(&blade_path)?;
+    Some(MapGrassAssets {
+        dist_mask,
+        mask_w,
+        mask_h,
+        blade_color_mips,
+    })
+}
+
+/// Load a 2D image and produce a complete mip chain `(rgba, w, h)`
+/// per level, base first. For DDS files the chain comes from the
+/// file's own mip data; for other formats we generate the chain
+/// CPU-side via box-filter downscale (matches GL's
+/// `glGenerateMipmap` enough for blade textures that BAR's widget
+/// otherwise reads from baked DDS).
+fn load_2d_image_mip_chain(path: &std::path::Path) -> Option<Vec<(Vec<u8>, u32, u32)>> {
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "dds" {
+        if let Ok(mips) = bar_data::load_dds_2d_with_mips(path) {
+            return Some(
+                mips.into_iter()
+                    .map(|m| (m.rgba, m.width, m.height))
+                    .collect(),
+            );
+        }
+    }
+    let (base, base_w, base_h) = load_2d_image(path)?;
+    let mut chain: Vec<(Vec<u8>, u32, u32)> = vec![(base, base_w, base_h)];
+    let mut w = base_w;
+    let mut h = base_h;
+    while w > 1 || h > 1 {
+        let prev = &chain.last().unwrap().0;
+        let prev_w = w;
+        let prev_h = h;
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+        let mut next = vec![0u8; (w * h * 4) as usize];
+        for y in 0..h {
+            for x in 0..w {
+                // Average 2x2 block from the previous level. Edge
+                // texels read the closest available pixel from the
+                // odd-dimension parent (clamp).
+                let sx0 = (x * 2).min(prev_w - 1) as usize;
+                let sy0 = (y * 2).min(prev_h - 1) as usize;
+                let sx1 = (x * 2 + 1).min(prev_w - 1) as usize;
+                let sy1 = (y * 2 + 1).min(prev_h - 1) as usize;
+                let prev_row = prev_w as usize * 4;
+                let p0 = sy0 * prev_row + sx0 * 4;
+                let p1 = sy0 * prev_row + sx1 * 4;
+                let p2 = sy1 * prev_row + sx0 * 4;
+                let p3 = sy1 * prev_row + sx1 * 4;
+                let dst = (y as usize * w as usize + x as usize) * 4;
+                for c in 0..4 {
+                    let sum = prev[p0 + c] as u32
+                        + prev[p1 + c] as u32
+                        + prev[p2 + c] as u32
+                        + prev[p3 + c] as u32;
+                    next[dst + c] = (sum / 4) as u8;
+                }
+            }
+        }
+        chain.push((next, w, h));
+    }
+    Some(chain)
+}
+
+/// Decode the engine-shipped 32-frame caustic animation from the BAR
+/// install's `bitmaps.sdz` and upload it to the renderer's caustic
+/// texture array. Idempotent -- subsequent calls with the same
+/// `engine_dir` are no-ops. Failure modes (no install detected, no
+/// `bitmaps.sdz` under that engine dir, decode error) all leave
+/// caustics disabled but the renderer functional. Synchronous decode
+/// is acceptable here because the asset is only ~96KB of JPGs that we
+/// touch once at startup.
+pub fn sync_caustics(
+    engine_dir: Option<&std::path::Path>,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let Some(engine_dir) = engine_dir else {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_caustics(&gpu.device, &gpu.queue);
+        }
+        core.caustic_assets_loaded_from = None;
+        return;
+    };
+    let already = core
+        .caustic_assets_loaded_from
+        .as_deref()
+        .is_some_and(|p| p == engine_dir);
+    if already {
+        return;
+    }
+    let bundle = match bar_data::load_water_assets_from_engine_dir(engine_dir) {
+        Ok(Some(b)) => b,
+        Ok(None) => {
+            core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
+            return;
+        }
+        Err(e) => {
+            tracing::warn!(
+                engine_dir = %engine_dir.display(),
+                error = %e,
+                "failed to load engine water assets, caustics disabled",
+            );
+            core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
+            return;
+        }
+    };
+    if let Some(renderer) = core.terrain_renderer.as_mut() {
+        let frames: Vec<(Vec<u8>, u32, u32)> = bundle
+            .caustics
+            .into_iter()
+            .map(|t| (t.rgba, t.width, t.height))
+            .collect();
+        renderer.update_caustics(&gpu.device, &gpu.queue, &frames);
+        // Foam + waverand come from the same archive bundle; upload
+        // both here so the shader's `foam_enabled` flag only flips
+        // once the coastmap also lands (renderer.foam_assets_enabled
+        // && renderer.coastmap_enabled).
+        renderer.update_foam_assets(
+            &gpu.device,
+            &gpu.queue,
+            &bundle.foam.rgba,
+            bundle.foam.width,
+            bundle.foam.height,
+            &bundle.waverand.rgba,
+            bundle.waverand.width,
+            bundle.waverand.height,
+        );
+        tracing::debug!(
+            engine_dir = %engine_dir.display(),
+            "engine water assets uploaded (caustics + foam + waverand)",
+        );
+    }
+    core.caustic_assets_loaded_from = Some(engine_dir.to_path_buf());
+}
+
+/// Schedule a background load of the SMF_BLEND_NORMALS detail-normal
+/// texture (mapinfo `resources.detailNormalTex`,
+/// `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:299-307`). When `filename`
+/// is empty the renderer is told to clear back to the inert default.
+pub fn sync_detail_normal_tex(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.detail_normal_tex_loaded_for == key || core.detail_normal_tex_loading_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_detail_normal_tex(&gpu.device, &gpu.queue);
+        }
+        core.detail_normal_tex_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.detail_normal_tex_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode detailNormalTex");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "detailNormalTex not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::DetailNormalTex {
+            key: key_pair,
+            data,
+        });
+    });
+}
+
+/// Schedule a background load of the basic 4-channel colour splat
+/// texture (mapinfo `resources.splatDetailTex`, singular, engine path
+/// `SMF_DETAIL_TEXTURE_SPLATTING`). Empty filename clears.
+pub fn sync_basic_splat_tex(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.basic_splat_tex_loaded_for == key || core.basic_splat_tex_loading_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_basic_splat_tex(&gpu.device, &gpu.queue);
+        }
+        core.basic_splat_tex_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.basic_splat_tex_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode splatDetailTex");
+                None
+            }),
+            None => {
+                // Map authors commonly set `splatDetailTex = "iwantDNTS.tga"` as a
+                // sentinel just to satisfy engine version-dependent path gating;
+                // the file itself isn't shipped because the normal-splat path
+                // (`splatDetailNormalTex1..4`) is what actually renders. Engine
+                // mirrors this with a silent grey fallback
+                // (`bar-recoil/rts/Map/SMF/SMFReadMap.cpp:264-267`), so we
+                // log at debug-level rather than warn -- a noisy warn would
+                // fire on every map import for the most common DNTS setup.
+                tracing::debug!(
+                    file = %filename,
+                    "splatDetailTex not found; basic-splat path stays disabled \
+                     (normal-splat takes over if its textures are present)",
+                );
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::BasicSplatTex {
+            key: key_pair,
+            data,
+        });
+    });
+}
+
+/// Schedule a background load of the self-illumination texture
+/// (mapinfo `resources.lightEmissionTex`, engine path
+/// `SMF_LIGHT_EMISSION`). When `filename` is empty the renderer is told
+/// to clear back to the inert default. Decode runs off-thread; upload
+/// happens in `poll_pending_texture_loads`.
+pub fn sync_light_emission_tex(
+    project_dir: Option<&std::path::Path>,
+    filename: &str,
+    core: &mut ViewportCore,
+    gpu: &GpuContext,
+) {
+    let key = project_dir.map(|p| (p.to_path_buf(), filename.to_string()));
+    if core.light_emission_tex_loaded_for == key || core.light_emission_tex_loading_for == key {
+        return;
+    }
+    if filename.is_empty() {
+        if let Some(renderer) = core.terrain_renderer.as_mut() {
+            renderer.clear_light_emission_tex(&gpu.device, &gpu.queue);
+        }
+        core.light_emission_tex_loaded_for = key;
+        return;
+    }
+    let Some(project_dir) = project_dir else {
+        return;
+    };
+    let key_pair = (project_dir.to_path_buf(), filename.to_string());
+    core.light_emission_tex_loading_for = Some(key_pair.clone());
+    let tx = core.texture_load_tx.clone();
+    std::thread::spawn(move || {
+        let (project_dir, filename) = key_pair.clone();
+        let path = find_file_in_dir(&project_dir.join("passthrough"), &filename)
+            .or_else(|| find_file_in_dir(&project_dir, &filename));
+        let data = match path {
+            Some(p) => load_2d_image(&p).or_else(|| {
+                tracing::warn!(file = %filename, "Failed to decode lightEmissionTex");
+                None
+            }),
+            None => {
+                tracing::warn!(file = %filename, "lightEmissionTex not found in project");
+                None
+            }
+        };
+        let _ = tx.send(TextureLoadResult::LightEmissionTex {
             key: key_pair,
             data,
         });
@@ -953,22 +1523,39 @@ fn draw_viewport_body(
 
     if let Some(ref gpu) = gpu_context {
         if let Some(ref mut renderer) = core.terrain_renderer {
+            // Push the gamma post-pass exponent from the viewport debug
+            // overlay. Just a 16-byte queue write; doing it every tick
+            // avoids having to bookkeep changed-since-last-frame across
+            // every renderer.render call site.
+            renderer.set_gamma_exponent(&gpu.queue, app.viewport_debug.gamma_exponent);
+            // Grass diagnostic output mode -- piped into the FS via
+            // the params uniform's wind.w slot.
+            renderer
+                .map_grass
+                .set_debug_output(&gpu.queue, app.viewport_debug.grass_debug_output);
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
-                let elapsed = core.started_at.elapsed().as_secs_f32();
-                let smf = live_smf_lighting(app);
-                let frame = core
-                    .current_frame
-                    .as_ref()
-                    .map(|f| f.as_frame(elapsed, smf));
-                renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
-                update_viewport_texture(
-                    &mut core.viewport_texture_id,
-                    &core.terrain_renderer,
-                    render_state,
-                    ctx,
-                );
             }
+            // Render every frame the viewport body runs. egui's own
+            // `request_repaint` in `update_viewport_texture` keeps
+            // the frame loop ticking; rendering unconditionally here
+            // means any change that affects rendering -- camera,
+            // viewport size, mapinfo edits, debug toggles -- shows
+            // up the next frame for free, without per-diagnostic
+            // plumbing.
+            let elapsed = core.started_at.elapsed().as_secs_f32();
+            let smf = live_smf_lighting(app);
+            let frame = core
+                .current_frame
+                .as_ref()
+                .map(|f| f.as_frame(elapsed, smf));
+            renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+            update_viewport_texture(
+                &mut core.viewport_texture_id,
+                &core.terrain_renderer,
+                render_state,
+                ctx,
+            );
         }
     }
 
@@ -1156,11 +1743,30 @@ fn draw_viewport_debug_overlay(
         &response,
         egui::PopupCloseBehavior::CloseOnClickOutside,
         |ui| {
-            ui.set_min_width(180.0);
+            ui.set_min_width(220.0);
             ui.checkbox(
                 &mut app.viewport_debug.show_camera_readout,
                 "Camera readout",
             );
+            ui.separator();
+            ui.label("Gamma post-pass exponent");
+            ui.add(
+                egui::Slider::new(&mut app.viewport_debug.gamma_exponent, 1.0..=2.4)
+                    .step_by(0.05)
+                    .text("pow"),
+            );
+            ui.small("1.0 = no correction (too bright)\n2.2 = full sRGB gamma (too dark)");
+
+            ui.separator();
+            ui.label("Grass debug output");
+            for (value, label) in [
+                (0, "Off (normal output)"),
+                (1, "Raw map_color"),
+                (2, "Raw blade colour"),
+                (3, "Post-blend rgb (pre-modulator)"),
+            ] {
+                ui.selectable_value(&mut app.viewport_debug.grass_debug_output, value, label);
+            }
         },
     );
 
@@ -1344,6 +1950,7 @@ fn handle_camera_input(
                                     z: spring_z,
                                     angle: app.pending_placement_angle,
                                     taken_damage: 0,
+                                    source: bar_project::FeatureSource::Smf,
                                 });
                                 app.map.features_placement_dirty = true;
                             }
@@ -1760,6 +2367,7 @@ fn handle_camera_input(
             z: spring_z,
             angle: app.pending_placement_angle,
             taken_damage: 0,
+            source: bar_project::recipe::FeatureSource::Smf,
         })
     })();
 }
@@ -2483,6 +3091,27 @@ pub fn apply_compiled_bc1(
     let mut loaded_hm: Option<bar_data::Heightmap> = None;
     if let Some(h) = result.height {
         if let Some(renderer) = core.terrain_renderer.as_mut() {
+            // Coastmap bake for the shore-foam shader stage. Same
+            // chamfer transform the sculpt-eval path uses; cost is
+            // O(N) over heightmap texels.
+            let water_threshold = if h.height_scale > 1e-6 {
+                h.water_y / h.height_scale
+            } else {
+                0.0
+            };
+            let coastmap = bar_data::bake_coastmap(
+                h.heightmap.data(),
+                h.heightmap.width(),
+                h.heightmap.height(),
+                water_threshold,
+            );
+            renderer.update_coastmap(
+                &gpu.device,
+                &gpu.queue,
+                &coastmap,
+                h.heightmap.width(),
+                h.heightmap.height(),
+            );
             renderer.update_heightmap(
                 &gpu.device,
                 &gpu.queue,

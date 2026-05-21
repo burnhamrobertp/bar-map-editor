@@ -446,11 +446,42 @@ fn cmd_import(sd7_path: &Path, output_dir: Option<&Path>) -> Result<()> {
     let out_dir = output_dir.unwrap_or(&default_out);
 
     let start = Instant::now();
-    let project = bar_engine::import_sd7_to_project(sd7_path, out_dir)
-        .with_context(|| format!("Failed to import {}", sd7_path.display()))?;
-
-    let project_name = sanitize_filename(&project.recipe.name);
+    // Extract directly into a .barproj at the user-chosen location so
+    // the post-import save below just writes recipe.json + layout.json
+    // alongside the already-extracted contents. Both GUI and CLI flow
+    // through the same `import_sd7_to_project` to keep identity-field
+    // parsing in one place.
+    let project_name = sanitize_filename(
+        sd7_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("imported_map"),
+    );
     let project_path = out_dir.join(format!("{project_name}.barproj"));
+    let (project, pending_assets, raw_files) =
+        bar_engine::import_sd7_to_project(sd7_path, &project_path)
+            .with_context(|| format!("Failed to import {}", sd7_path.display()))?;
+
+    // Pending binary assets / raw files land under `<proj>/assets/`
+    // so the executor can resolve their `asset_id`s back to disk
+    // paths on next load.
+    if !pending_assets.is_empty() || !raw_files.is_empty() {
+        let assets_dir = project_path.join("assets");
+        std::fs::create_dir_all(&assets_dir).ok();
+        for asset in &pending_assets {
+            let path = assets_dir.join(format!("{}.bin", asset.id.0));
+            let _ = bar_project::write_asset_file(&path, asset.header, &asset.data);
+        }
+        for raw in &raw_files {
+            let dest = assets_dir.join(format!("{}.{}", raw.id.0, raw.extension));
+            if let Some(src) = &raw.source_path {
+                let _ = std::fs::copy(src, &dest);
+            } else {
+                let _ = std::fs::write(&dest, &raw.data);
+            }
+        }
+    }
+
     project
         .save(&project_path)
         .with_context(|| format!("Failed to save project to {}", project_path.display()))?;
@@ -465,10 +496,10 @@ fn cmd_import(sd7_path: &Path, output_dir: Option<&Path>) -> Result<()> {
         "  Map size:  {}×{}",
         project.recipe.output.width, project.recipe.output.height
     );
+    let _ms_resolved = project.recipe.output.map_settings.resolved();
     println!(
         "  Height:    {:.0}..{:.0} world units",
-        project.recipe.output.map_settings.min_height,
-        project.recipe.output.map_settings.max_height
+        _ms_resolved.min_height, _ms_resolved.max_height
     );
     println!("  Project:   {}", project_path.display());
     println!("  Heightmap: {}", out_dir.join("heightmap.png").display());
@@ -528,10 +559,8 @@ fn cmd_preview(
         .context("Failed to build graph from project recipe")?;
 
     let (w, h) = (project.recipe.output.width, project.recipe.output.height);
-    let (min_h, max_h) = (
-        project.recipe.output.map_settings.min_height,
-        project.recipe.output.map_settings.max_height,
-    );
+    let _ms_rs = project.recipe.output.map_settings.resolved();
+    let (min_h, max_h) = (_ms_rs.min_height, _ms_rs.max_height);
 
     // Resolve any project-relative paths in the recipe so the executor can
     // read the on-disk files. Mirrors what the GUI does at apply_project.
@@ -620,8 +649,10 @@ fn cmd_preview(
         pollster::block_on(GpuContext::new_standalone()).context("Failed to create wgpu device")?;
 
     // Set up the renderer at the requested output resolution.
+    // BAR-faithful: non-sRGB target so the GPU doesn't gamma-encode
+    // on write -- matches BAR's pipeline.
     let mut renderer =
-        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.resize(&gpu.device, out_w, out_h);
     renderer.update_heightmap(
         &gpu.device,
@@ -708,13 +739,14 @@ fn cmd_preview(
     // now). Without it the CLI rendered with default zero-water
     // SmfLighting, which made headless debugging useless.
     let ms = &project.recipe.output.map_settings;
+    let ms_rs = ms.resolved();
     let smf_lighting = bar_render::SmfLighting::from(ms);
     let frame = bar_render::PreviewFrame {
         height_scale,
         x_extent,
         z_extent,
         water_y,
-        water_color: ms.water.base_color,
+        water_color: ms_rs.water.base_color,
         // CLI always uses the high-pass (full) shader -- the low-pass is for
         // the GUI's progressive refinement, not relevant headlessly.
         quality_high: true,

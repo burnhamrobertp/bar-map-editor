@@ -1,40 +1,29 @@
 //! sRGB <-> linear conversion (IEC 61966-2-1).
 //!
-//! ## Why this exists
+//! ## Why this exists (UI only)
 //!
-//! Mapinfo colour triples (sun/sky/cloud/fog, ground ambient/diffuse/specular,
-//! water surface/base/min, etc.) are authored as **perceptual sRGB** values --
-//! a float of `0.11` corresponds to "byte 28 on screen", matching the
-//! author's intent in the .lua file. BAR's engine runs with
-//! `GL_FRAMEBUFFER_SRGB` disabled (see `bar-recoil/.../GL/State.h:185`), so
-//! mapinfo floats get written directly into a non-sRGB framebuffer; the
-//! display device then gamma-decodes them on output. The net effect is
-//! "what you typed is what you see."
+//! BME's renderer is end-to-end gamma-incorrect by design: it mirrors
+//! BAR's pipeline, which uploads all textures with non-sRGB internal
+//! formats, runs every shader multiplication in sRGB-perceptual space,
+//! and writes to non-sRGB framebuffers. The display device gamma-
+//! decodes the resulting byte values. The whole pipeline is "wrong"
+//! by modern standards but visually consistent end-to-end, and BME
+//! has to match it so map authors see what their map will look like
+//! in-engine. No sRGB conversion happens anywhere in the render path.
 //!
-//! BME renders into an `Rgba8UnormSrgb` framebuffer which sRGB-encodes
-//! every write. To match BAR's appearance AND keep shader math linear-
-//! correct, every mapinfo colour triple has to be sRGB-decoded at the
-//! boundaries where it leaves the recipe (= shader-uniform upload, UI
-//! colour swatch display). The recipe itself stays in sRGB-perceptual
-//! space so the values round-trip through the file untouched.
+//! These helpers exist purely for **UI colour pickers**. egui's
+//! `color_edit_button_rgb` interprets its input as linear RGB and
+//! sRGB-encodes the swatch for screen display. Mapinfo colour values
+//! are sRGB-perceptual, so without conversion the swatch shows the
+//! wrong colour for what the user typed. The picker callback in
+//! `bar-gui::panels::mapinfo_editor::color_rgb` decodes for the
+//! swatch, then re-encodes the user-edited value before writing back
+//! to the recipe -- the recipe always holds sRGB-perceptual values.
 //!
-//! ## Where to apply
-//!
-//! - **Shader uniforms** (`SmfLighting::from(&MapSettings)`): decode
-//!   every RGB triple to linear; numeric factors / directions are left
-//!   alone.
-//! - **UI colour pickers** (`bar-gui::panels::mapinfo_editor::color_rgb`):
-//!   decode for the egui swatch (it expects linear RGB), re-encode after
-//!   edit so the value persisted to the recipe stays in sRGB-perceptual
-//!   space.
-//! - **Framebuffer clear colours**: pass linear values (wgpu does the
-//!   sRGB encoding on store for `*UnormSrgb` formats); since
-//!   `SmfLighting` already carries linear values after the From impl,
-//!   no extra step is needed -- read straight from `smf_lighting`.
-//!
-//! Anywhere a mapinfo colour value reaches a render or UI consumer,
-//! it MUST go through one of these helpers. Tests below pin the
-//! threshold + reference values so regressions are caught quickly.
+//! Do NOT call these helpers anywhere in the shader-uniform upload
+//! path or texture-format selection. Those must stay in BAR's
+//! perceptual-everywhere space to match the engine's visible
+//! appearance. Tests below pin the maths.
 
 /// sRGB-encoded value in `[0, 1]` -> linear-space value in `[0, 1]`.
 /// Piecewise function from the sRGB spec: linear branch below `0.04045`,

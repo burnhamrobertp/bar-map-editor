@@ -53,6 +53,21 @@ impl BarEditorApp {
                     self.log_error(format!("Failed to copy SMF minimap sidecar: {e}"));
                 }
             }
+            // Copy the SMF grass distribution map (`grassmap.png`,
+            // written by `import_sd7_to_project` when the SMF carries
+            // a `MEH_Vegetation` extra header) into the .barproj so
+            // the grass widget can sample it on reload. Mirrors the
+            // BAR widget's `Spring.GetGrass` fallback path.
+            let grassmap_src = src_dir.join("grassmap.png");
+            if grassmap_src.is_file() {
+                let grassmap_dest = path.join("passthrough").join("grassmap.png");
+                if let Some(parent) = grassmap_dest.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = std::fs::copy(&grassmap_src, &grassmap_dest) {
+                    self.log_error(format!("Failed to copy grass map: {e}"));
+                }
+            }
         }
         let project = self.build_project(&path);
         match project.save(&path) {
@@ -66,6 +81,15 @@ impl BarEditorApp {
                 self.settings.add_recent(&path);
                 self.settings.save();
                 self.project.last_autosave_at = Some(std::time::Instant::now());
+                // `pack_assets_for_save` rewrote in-memory params to
+                // `bar://...` URLs so the on-disk recipe.json is
+                // portable. The live editor session needs absolute
+                // paths back so subsequent evaluations (Test-in-BAR,
+                // Compile, Bundle) can read the files. Without this
+                // step the bundler sees `bar://passthrough/foo` and
+                // tries to open it as a literal filesystem path,
+                // dropping every PassThrough file from the bundle.
+                self.resolve_relative_paths(&path);
             }
             Err(e) => {
                 self.log_error(t!("editor.project.save_failed", error = e.to_string()));
@@ -285,22 +309,37 @@ impl BarEditorApp {
 
         let recipe = Recipe {
             schema_version: bar_project::RECIPE_SCHEMA_VERSION,
-            name: path
-                .file_stem()
-                .map(|s| s.to_string_lossy().to_string())
-                .unwrap_or_else(|| "Untitled".to_string()),
+            // Preserve the imported source name through save; the
+            // .barproj directory stem is only a fallback for fresh
+            // projects that never had a source mapinfo. Without this
+            // check, every save rewrites recipe.json's `name` to the
+            // lowercase directory slug -- silently downgrading the
+            // human-readable engine identifier.
+            name: self
+                .map
+                .recipe_meta
+                .name
+                .clone()
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| {
+                    path.file_stem()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| "Untitled".to_string())
+                }),
             shortname: self.map.recipe_meta.shortname.clone(),
             description: self.map.recipe_meta.description.clone(),
             author: self.map.recipe_meta.author.clone(),
             version: self.map.recipe_meta.version.clone(),
+            tip: self.map.recipe_meta.tip.clone(),
+            depend: self.map.recipe_meta.depend.clone(),
             nodes,
             connections,
             output: OutputConfig {
                 width: self.map.width,
                 height: self.map.height,
                 map_settings: MapSettings {
-                    min_height: self.map.min_height,
-                    max_height: self.map.max_height,
+                    min_height: Some(self.map.min_height),
+                    max_height: Some(self.map.max_height),
                     start_positions: self.map.settings.start_positions.clone(),
                     ..self.map.settings.clone()
                 },

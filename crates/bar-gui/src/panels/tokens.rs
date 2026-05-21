@@ -112,6 +112,48 @@ pub const BTN_MAPSET_NORMAL: Color32 = Color32::from_rgb(95, 75, 125);
 pub const BTN_MAPSET_HOVER: Color32 = Color32::from_rgb(120, 90, 150);
 pub const BTN_MAPSET_PRESS: Color32 = Color32::from_rgb(80, 60, 95);
 
+// Per-tab colours for the seven Map Info action-bar buttons.
+// Each tab gets a distinct hue so the icons can be told apart at
+// a glance even before the user reads the tooltip. Hues are
+// associative (yellow sun for lighting, blue droplet for water,
+// green grass-tint adjacent for resources, etc.). The buttons render
+// without inner-edge rounding so they read as one connected group.
+
+// Identity -- violet (kept from the original combined Map Info colour).
+pub const BTN_TAB_IDENTITY_NORMAL: Color32 = Color32::from_rgb(95, 75, 125);
+pub const BTN_TAB_IDENTITY_HOVER: Color32 = Color32::from_rgb(120, 90, 150);
+pub const BTN_TAB_IDENTITY_PRESS: Color32 = Color32::from_rgb(80, 60, 95);
+
+// Dimensions -- slate / steel (rulers, measurement).
+pub const BTN_TAB_DIMENSIONS_NORMAL: Color32 = Color32::from_rgb(80, 95, 110);
+pub const BTN_TAB_DIMENSIONS_HOVER: Color32 = Color32::from_rgb(105, 120, 140);
+pub const BTN_TAB_DIMENSIONS_PRESS: Color32 = Color32::from_rgb(60, 75, 90);
+
+// Physics -- earthy brown / sienna (gravity, ground).
+pub const BTN_TAB_PHYSICS_NORMAL: Color32 = Color32::from_rgb(110, 75, 55);
+pub const BTN_TAB_PHYSICS_HOVER: Color32 = Color32::from_rgb(135, 95, 70);
+pub const BTN_TAB_PHYSICS_PRESS: Color32 = Color32::from_rgb(90, 60, 45);
+
+// Atmosphere -- soft sky-blue / teal.
+pub const BTN_TAB_ATMOSPHERE_NORMAL: Color32 = Color32::from_rgb(70, 110, 130);
+pub const BTN_TAB_ATMOSPHERE_HOVER: Color32 = Color32::from_rgb(90, 140, 165);
+pub const BTN_TAB_ATMOSPHERE_PRESS: Color32 = Color32::from_rgb(55, 90, 105);
+
+// Lighting -- amber / gold (sun).
+pub const BTN_TAB_LIGHTING_NORMAL: Color32 = Color32::from_rgb(135, 110, 50);
+pub const BTN_TAB_LIGHTING_HOVER: Color32 = Color32::from_rgb(165, 140, 70);
+pub const BTN_TAB_LIGHTING_PRESS: Color32 = Color32::from_rgb(110, 90, 40);
+
+// Water -- deep blue (droplet).
+pub const BTN_TAB_WATER_NORMAL: Color32 = Color32::from_rgb(45, 90, 145);
+pub const BTN_TAB_WATER_HOVER: Color32 = Color32::from_rgb(60, 115, 175);
+pub const BTN_TAB_WATER_PRESS: Color32 = Color32::from_rgb(35, 70, 115);
+
+// Resources -- sand / tan (texture grid).
+pub const BTN_TAB_RESOURCES_NORMAL: Color32 = Color32::from_rgb(125, 105, 75);
+pub const BTN_TAB_RESOURCES_HOVER: Color32 = Color32::from_rgb(150, 130, 95);
+pub const BTN_TAB_RESOURCES_PRESS: Color32 = Color32::from_rgb(100, 85, 60);
+
 pub const BTN_SPAWNS_NORMAL: Color32 = Color32::from_rgb(75, 100, 125);
 pub const BTN_SPAWNS_HOVER: Color32 = Color32::from_rgb(95, 120, 150);
 pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
@@ -119,6 +161,11 @@ pub const BTN_SPAWNS_PRESS: Color32 = Color32::from_rgb(60, 80, 95);
 pub const BTN_MAPEDGE_NORMAL: Color32 = Color32::from_rgb(105, 95, 65);
 pub const BTN_MAPEDGE_HOVER: Color32 = Color32::from_rgb(130, 115, 80);
 pub const BTN_MAPEDGE_PRESS: Color32 = Color32::from_rgb(85, 75, 50);
+
+// Grass action-bar button: green tint to read as "vegetation".
+pub const BTN_GRASS_NORMAL: Color32 = Color32::from_rgb(70, 110, 55);
+pub const BTN_GRASS_HOVER: Color32 = Color32::from_rgb(90, 135, 70);
+pub const BTN_GRASS_PRESS: Color32 = Color32::from_rgb(55, 90, 40);
 
 pub const BTN_COMPILE_NORMAL: Color32 = Color32::from_rgb(38, 95, 115);
 pub const BTN_COMPILE_HOVER: Color32 = Color32::from_rgb(52, 118, 140);

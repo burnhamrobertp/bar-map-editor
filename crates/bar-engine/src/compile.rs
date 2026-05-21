@@ -328,14 +328,15 @@ fn write_fingerprint(
         }
     }
 
+    let rs = recipe.output.map_settings.resolved();
     let fp = Fingerprint {
         recipe_hash,
         map_x,
         map_y,
         tiles_x,
         tiles_y,
-        min_height: recipe.output.map_settings.min_height,
-        max_height: recipe.output.map_settings.max_height,
+        min_height: rs.min_height,
+        max_height: rs.max_height,
         assets,
     };
     pkg.write_fingerprint(&fp)

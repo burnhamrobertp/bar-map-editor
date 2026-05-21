@@ -412,21 +412,67 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
     let (width, height) = scan.map_dims.unwrap_or((256, 256));
     let (min_height, max_height) = scan.height_range.unwrap_or((0.0, 800.0));
     let mut map_settings = MapSettings {
-        min_height,
-        max_height,
+        min_height: Some(min_height),
+        max_height: Some(max_height),
         ..MapSettings::default()
     };
     if let Some(lua) = scan.mapinfo_lua.as_deref() {
         crate::mapinfo::apply_mapinfo_overrides(lua, &mut map_settings);
     }
 
+    // SMF grass-map fallback: if mapinfo didn't specify a custom
+    // `grassDistTGA` and the scan materialised the SMF's vegetation
+    // header into a `grassmap.png` (see `extract.rs::scan_work_dir`),
+    // point the widget at that file. Mirrors BAR's widget
+    // `Spring.GetGrass` fallback (`map_grass_gl4.lua:856-892`).
+    let has_grassmap_png = scan
+        .passthrough_files
+        .iter()
+        .any(|(_, rel)| rel.to_string_lossy().eq_ignore_ascii_case("grassmap.png"));
+    if has_grassmap_png
+        && map_settings
+            .custom_grass
+            .dist_tga
+            .as_deref()
+            .map(str::is_empty)
+            .unwrap_or(true)
+    {
+        map_settings.custom_grass.dist_tga = Some("grassmap.png".to_string());
+    }
+
+    // Identity fields parsed straight from mapinfo.lua. Without these
+    // the Edit Map Info -> Identity tab comes up empty on every
+    // imported project. This path (work-dir scan -> scan_to_project)
+    // is the GUI's "Import .sd7" flow; the CLI's
+    // `bar_engine::import_sd7_to_project` now also routes through
+    // here so the two stay in sync.
+    let mapinfo_lua = scan.mapinfo_lua.as_deref().unwrap_or("");
+    let recipe_shortname = crate::mapinfo::parse_mapinfo_string(mapinfo_lua, "shortname");
+    let recipe_description =
+        crate::mapinfo::parse_mapinfo_string(mapinfo_lua, "description").unwrap_or_default();
+    let recipe_author = crate::mapinfo::parse_mapinfo_string(mapinfo_lua, "author");
+    let recipe_version = crate::mapinfo::parse_mapinfo_string(mapinfo_lua, "version");
+    let recipe_tip = crate::mapinfo::parse_mapinfo_string(mapinfo_lua, "tip");
+    let recipe_depend = crate::mapinfo::parse_mapinfo_string_list(mapinfo_lua, "depend")
+        .unwrap_or_else(|| vec!["Map Helper v1".to_string()]);
+    // The engine builds the in-game archive identifier as
+    // `name .. " " .. version` from mapinfo.lua. If we seed `name`
+    // from the SD7 filename (e.g. "onyx_cauldron_2.2.3") instead of
+    // the mapinfo's `name` field (e.g. "Onyx Cauldron"), the bundler
+    // emits "onyx_cauldron_2.2.3 2.2.3" and the engine fails to find
+    // its own map archive on test-in-BAR.
+    let recipe_name = crate::mapinfo::parse_mapinfo_string(mapinfo_lua, "name")
+        .unwrap_or_else(|| scan.map_name.clone());
+
     let recipe = Recipe {
         schema_version: RECIPE_SCHEMA_VERSION,
-        name: scan.map_name.clone(),
-        shortname: None,
-        description: String::new(),
-        author: None,
-        version: None,
+        name: recipe_name,
+        shortname: recipe_shortname,
+        description: recipe_description,
+        author: recipe_author,
+        version: recipe_version,
+        tip: recipe_tip,
+        depend: recipe_depend,
         nodes,
         connections,
         output: OutputConfig {
@@ -580,8 +626,8 @@ mod tests {
         let mut scan = empty_scan("heights");
         scan.height_range = Some((100.0, 900.0));
         let (p, _, _) = scan_to_project(&scan);
-        assert_eq!(p.recipe.output.map_settings.min_height, 100.0);
-        assert_eq!(p.recipe.output.map_settings.max_height, 900.0);
+        assert_eq!(p.recipe.output.map_settings.min_height, Some(100.0));
+        assert_eq!(p.recipe.output.map_settings.max_height, Some(900.0));
     }
 
     #[test]
@@ -611,6 +657,7 @@ mod tests {
             z: 200.0,
             angle: 1.57,
             taken_damage: 0,
+            source: crate::recipe::FeatureSource::Smf,
         }];
         let (p, _, _) = scan_to_project(&scan);
         assert_eq!(p.recipe.features.len(), 1);

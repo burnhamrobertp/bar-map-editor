@@ -256,8 +256,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                     let n = app.map_settings_mut().start_positions.len();
                     ui.label(format!("{n} spawn(s)"));
                     if ui.button("Clear all").clicked() {
+                        app.push_undo("Clear start positions");
                         app.map_settings_mut().start_positions.clear();
-                        app.mark_dirty();
                     }
                 }
                 InspectorMode::Sculpt => {
@@ -286,26 +286,43 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 
     app.dialog.show_inspector = open;
     if let Some(idx) = to_remove {
+        app.push_undo("Remove start position");
         app.map_settings_mut().start_positions.remove(idx);
         if app.dragging_spawn() == Some(idx) {
             app.set_dragging_spawn(None);
         }
-        app.mark_dirty();
     }
+    // Spawn drag undo handling: snapshot pre-drag state on
+    // drag-start, push it on drag-stop. One drag = one undo entry,
+    // consistent with the schema-driven field renderer.
+    let was_dragging = app.dragging_spawn().is_some();
     match new_drag {
         Some(usize::MAX) => app.set_dragging_spawn(None),
-        Some(i) => app.set_dragging_spawn(Some(i)),
+        Some(i) => {
+            if app.dialog.spawn_drag_in_progress.is_none() {
+                let snap = app.snapshot("Move start position");
+                app.dialog.spawn_drag_in_progress = Some(snap);
+            }
+            app.set_dragging_spawn(Some(i));
+        }
         None => {}
     }
     if app.dragging_spawn().is_some() && !ctx.input(|i| i.pointer.primary_down()) {
         app.set_dragging_spawn(None);
     }
-    if app.dragging_spawn().is_some() {
+    let dragging_now = app.dragging_spawn().is_some();
+    if was_dragging && !dragging_now {
+        if let Some(snap) = app.dialog.spawn_drag_in_progress.take() {
+            app.history.push(snap);
+            app.mark_dirty();
+        }
+    }
+    if dragging_now {
         app.mark_dirty();
     }
     if let Some(p) = spawn_to_add {
+        app.push_undo("Add start position");
         app.map_settings_mut().start_positions.push(p);
-        app.mark_dirty();
     }
 
     // Apply queued sculpt dabs.

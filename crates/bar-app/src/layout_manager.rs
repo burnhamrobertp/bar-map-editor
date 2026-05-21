@@ -110,6 +110,7 @@ impl LayoutManager {
     /// Per-frame update. Drives eval scheduling, animation, and viewport
     /// rendering for whichever layout is currently active.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         ctx: &egui::Context,
@@ -119,6 +120,11 @@ impl LayoutManager {
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         executor: &Arc<dyn NodeExecutor + Send + Sync>,
         feature_catalog: Option<&bar_engine::FeatureCatalog>,
+        // engine_dir: path to the active BAR engine version
+        // (`<install>/data/engine/<ver>/`) used to source engine-shipped
+        // water assets (foam + caustics). `None` when no BAR install
+        // was detected; the renderer falls back to inert defaults.
+        engine_dir: Option<&std::path::Path>,
     ) {
         if app.project.take_graph_reset() {
             self.reset(gpu_context);
@@ -173,16 +179,25 @@ impl LayoutManager {
                     render_state,
                     executor,
                     feature_catalog,
+                    engine_dir,
                 );
             }
             bar_gui::Layout::Preview => {
-                self.update_preview(ctx, app, gpu_context, render_state, feature_catalog);
+                self.update_preview(
+                    ctx,
+                    app,
+                    gpu_context,
+                    render_state,
+                    feature_catalog,
+                    engine_dir,
+                );
             }
         }
     }
 
     // ── Sculpt3D ─────────────────────────────────────────────────────────────
 
+    #[allow(clippy::too_many_arguments)]
     fn update_sculpt3d(
         &mut self,
         ctx: &egui::Context,
@@ -191,6 +206,7 @@ impl LayoutManager {
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         executor: &Arc<dyn NodeExecutor + Send + Sync>,
         feature_catalog: Option<&bar_engine::FeatureCatalog>,
+        engine_dir: Option<&std::path::Path>,
     ) {
         let Some(ref mut slot) = self.sculpt3d else {
             return;
@@ -218,7 +234,11 @@ impl LayoutManager {
                 .or(app.project.pending_map_data_dir.as_deref());
             crate::viewport::sync_skybox(
                 asset_dir,
-                &app.map_settings().atmosphere.skybox,
+                app.map_settings()
+                    .atmosphere
+                    .skybox
+                    .as_deref()
+                    .unwrap_or(""),
                 &mut slot.core,
                 gpu,
             );
@@ -252,6 +272,32 @@ impl LayoutManager {
                 &mut slot.core,
                 gpu,
             );
+            crate::viewport::sync_light_emission_tex(
+                asset_dir,
+                &app.map_settings().resources.light_emission_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_detail_normal_tex(
+                asset_dir,
+                &app.map_settings().resources.detail_normal_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_basic_splat_tex(
+                asset_dir,
+                &app.map_settings().resources.splat_detail_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_caustics(engine_dir, &mut slot.core, gpu);
+            // Grass widget (mapinfo `custom.grassConfig`). Build the
+            // widget config from the recipe synchronously; the
+            // sync_map_grass call kicks off async asset loading
+            // when it's enabled.
+            let grass_widget =
+                bar_render::widgets::map_grass::MapGrassWidget::from_settings(app.map_settings());
+            crate::viewport::sync_map_grass(asset_dir, grass_widget, &mut slot.core, gpu);
         }
 
         // Force refresh: bump session_id so any in-flight result is rejected.
@@ -378,6 +424,7 @@ impl LayoutManager {
         gpu_context: &Option<GpuContext>,
         render_state: &Option<eframe::egui_wgpu::RenderState>,
         feature_catalog: Option<&bar_engine::FeatureCatalog>,
+        engine_dir: Option<&std::path::Path>,
     ) {
         let Some(ref mut slot) = self.preview else {
             return;
@@ -397,7 +444,11 @@ impl LayoutManager {
                 .or(app.project.pending_map_data_dir.as_deref());
             crate::viewport::sync_skybox(
                 asset_dir,
-                &app.map_settings().atmosphere.skybox,
+                app.map_settings()
+                    .atmosphere
+                    .skybox
+                    .as_deref()
+                    .unwrap_or(""),
                 &mut slot.core,
                 gpu,
             );
@@ -431,6 +482,32 @@ impl LayoutManager {
                 &mut slot.core,
                 gpu,
             );
+            crate::viewport::sync_light_emission_tex(
+                asset_dir,
+                &app.map_settings().resources.light_emission_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_detail_normal_tex(
+                asset_dir,
+                &app.map_settings().resources.detail_normal_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_basic_splat_tex(
+                asset_dir,
+                &app.map_settings().resources.splat_detail_tex,
+                &mut slot.core,
+                gpu,
+            );
+            crate::viewport::sync_caustics(engine_dir, &mut slot.core, gpu);
+            // Grass widget (mapinfo `custom.grassConfig`). Build the
+            // widget config from the recipe synchronously; the
+            // sync_map_grass call kicks off async asset loading
+            // when it's enabled.
+            let grass_widget =
+                bar_render::widgets::map_grass::MapGrassWidget::from_settings(app.map_settings());
+            crate::viewport::sync_map_grass(asset_dir, grass_widget, &mut slot.core, gpu);
         }
 
         // Feature instances: rebuild when dirty or heightmap changes.
@@ -766,6 +843,30 @@ fn apply_preview_result(
 
         if let Some(ref gpu) = gpu_context {
             if let Some(ref mut renderer) = core.terrain_renderer {
+                // Bake a coast-distance + invwaterdepth field from the
+                // raw heightmap and push it as the renderer's coastmap.
+                // Engine bakes its equivalent via a multi-pass shader;
+                // we do a chamfer distance transform CPU-side. Cost
+                // is O(N) over heightmap texels -- fast enough to run
+                // synchronously on each heightmap update.
+                let water_threshold = if result.height_scale > 1e-6 {
+                    result.water_y / result.height_scale
+                } else {
+                    0.0
+                };
+                let coastmap = bar_data::bake_coastmap(
+                    heightmap.data(),
+                    heightmap.width(),
+                    heightmap.height(),
+                    water_threshold,
+                );
+                renderer.update_coastmap(
+                    &gpu.device,
+                    &gpu.queue,
+                    &coastmap,
+                    heightmap.width(),
+                    heightmap.height(),
+                );
                 renderer.update_heightmap(
                     &gpu.device,
                     &gpu.queue,

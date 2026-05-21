@@ -39,6 +39,16 @@ impl BarEditorApp {
         self.project.path = None;
         self.project.loaded_name = None;
         self.project.is_dirty = false;
+        // Compile tracking is per-project. Crossing a project
+        // boundary without clearing these leaks "this project has
+        // been compiled" state from the previous one, which makes
+        // the Test-in-BAR chain skip the Compile step on a fresh
+        // import even though the new project's `compiled/` dir
+        // doesn't exist yet. Time fields aren't persisted (Instant
+        // is monotonic-clock; never reaches disk), so the only way
+        // they could be set after a fresh load is via this leak.
+        self.project.compile_dirty = true;
+        self.project.compiled_at = None;
         self.map.settings = bar_project::MapSettings::default();
         self.map.width = 513;
         self.map.height = 513;
@@ -73,9 +83,19 @@ impl BarEditorApp {
         // across a project switch — the user expects the new project
         // to open with no dialogs up.
         self.dialog.show_inspector = false;
-        self.dialog.show_mapinfo_editor = false;
+        self.dialog.show_identity_editor = false;
+        self.dialog.show_dimensions_editor = false;
+        self.dialog.show_physics_editor = false;
+        self.dialog.show_atmosphere_editor = false;
+        self.dialog.show_lighting_editor = false;
+        self.dialog.show_water_editor = false;
+        self.dialog.show_resources_editor = false;
+        self.dialog.show_grass_editor = false;
         self.dialog.show_map_edge_editor = false;
-        self.map_edge = crate::panels::map_edge_editor::MapEdgePanelState::default();
+        self.dialog.show_start_boxes_editor = false;
+        self.dialog.field_edit_in_progress = None;
+        self.dialog.spawn_drag_in_progress = None;
+        self.map_edge = crate::panels::action_bar_modals::map_edge::MapEdgePanelState::default();
         self.dialog.confirm_dialog = None;
         self.dialog.pending_action = None;
         self.selection.pending_group_delete = None;
@@ -246,12 +266,21 @@ impl BarEditorApp {
     }
 
     pub(crate) fn save_as(&mut self) {
-        if let Some(path) = self
+        self.save_as_with_suggested_name(None);
+    }
+
+    /// Same as `save_as` but pre-populates the dialog's filename
+    /// field. Used by the .sd7 import flow to suggest a sensible
+    /// project name derived from the source archive.
+    pub(crate) fn save_as_with_suggested_name(&mut self, suggested: Option<&str>) {
+        let mut dialog = self
             .make_dialog()
             .set_title("Save Project As")
-            .add_filter("BAR Map Editor Project", &["barproj"])
-            .save_file()
-        {
+            .add_filter("BAR Map Editor Project", &["barproj"]);
+        if let Some(name) = suggested {
+            dialog = dialog.set_file_name(name);
+        }
+        if let Some(path) = dialog.save_file() {
             self.save_project(path);
         }
     }
@@ -350,13 +379,26 @@ impl BarEditorApp {
         self.map.height = project.recipe.output.height;
         self.map.settings = project.recipe.output.map_settings.clone();
         self.map.recipe_meta = RecipeMeta {
+            // Preserve the source's human-readable `mapinfo.name`
+            // through the live editor session. Without this the
+            // bundler falls back to the .barproj directory slug and
+            // emits e.g. `name = "onyx_cauldron"` instead of the
+            // author's `"Onyx Cauldron"`.
+            name: Some(project.recipe.name.clone()).filter(|s| !s.is_empty()),
             shortname: project.recipe.shortname.clone(),
             description: project.recipe.description.clone(),
             author: project.recipe.author.clone(),
             version: project.recipe.version.clone(),
+            tip: project.recipe.tip.clone(),
+            depend: project.recipe.depend.clone(),
         };
-        self.map.min_height = self.map.settings.min_height;
-        self.map.max_height = self.map.settings.max_height;
+        // Shadow fields take the resolved value -- engine default
+        // when unset -- so the UI always has something concrete to
+        // bind to. Editing the shadow flips the underlying setting
+        // to `Some(value)` via `app::project_export` (and friends).
+        let rs = self.map.settings.resolved();
+        self.map.min_height = rs.min_height;
+        self.map.max_height = rs.max_height;
         self.map.features = project.recipe.features.clone();
         if !self.map.features.is_empty() {
             self.project.features_changed = true;
@@ -684,9 +726,16 @@ impl BarEditorApp {
         let name = scan.map_name.clone();
         let status = t!("editor.project.opened", name = name);
         let (project, pending_assets, raw_files) = bar_project::scan_to_project(&scan);
-        self.apply_project(project, None, name, status);
-        // Write pending binary assets to a temp dir so executors can read
-        // them before the user has saved the project to a .barproj directory.
+        self.apply_project(project, None, name.clone(), status);
+
+        // Write pending binary assets to a temp dir + inject their
+        // `asset_path` params on the matching graph nodes. This MUST
+        // happen before the Save-As prompt below, because the save
+        // flow's `pack_assets_for_save` migrates asset files from
+        // wherever `asset_path` points to into `<proj>/assets/`. With
+        // no `asset_path` injected, pack-for-save sees no asset to
+        // copy and the saved `.barproj` has no heightmap binary, so
+        // the reloaded project comes up with flat terrain.
         let temp_dir = std::env::temp_dir().join("bar-editor-assets");
         if !pending_assets.is_empty() {
             for asset in &pending_assets {
@@ -749,8 +798,25 @@ impl BarEditorApp {
         // any FC node that lacks them, so the brush can write strokes
         // immediately without a separate mint/ensure step.
 
-        // Imported project hasn't been saved yet.
-        self.project.is_dirty = true;
+        // Now that `asset_path` is injected everywhere, prompt the
+        // user to commit the import to a `.barproj` on disk. Pre-
+        // populates with the SD7 stem minus any trailing `_<version>`
+        // suffix so "onyx_cauldron_2.2.2.sd7" suggests
+        // "onyx_cauldron.barproj". The user can edit before
+        // confirming or cancel to keep the project in-memory only
+        // (legacy behaviour).
+        let suggested = format!("{}.barproj", strip_trailing_version(&name));
+        self.save_as_with_suggested_name(Some(&suggested));
+
+        // Only mark dirty if the auto-Save-As prompt above didn't
+        // commit the import to disk (user cancelled the dialog).
+        // `save_project` clears the dirty flag on success and sets
+        // `project.path`, so absence of `project.path` after the
+        // Save-As call means "unsaved import" and we mark dirty so
+        // the title bar's `*` indicator reflects that.
+        if self.project.path.is_none() {
+            self.project.is_dirty = true;
+        }
     }
 
     /// Pick a default label for a new entity of the given base type
@@ -1063,13 +1129,75 @@ impl BarEditorApp {
     }
 }
 
+/// Strip a trailing `_<version>` or `_v<version>` suffix from a map
+/// slug so the .sd7 import flow can suggest a version-free .barproj
+/// name. Versions are detected as the last `_`-prefixed run containing
+/// only digits, dots, and an optional leading `v`. Examples:
+///   "onyx_cauldron_2.2.2"     -> "onyx_cauldron"
+///   "delta_siege_dry_v5.7.1"  -> "delta_siege_dry"
+///   "tundra_v2"               -> "tundra"
+///   "kolmog"                  -> "kolmog"            (unchanged)
+///   "twin_lakes_park_redux_1.2.2" -> "twin_lakes_park_redux"
+fn strip_trailing_version(slug: &str) -> &str {
+    let Some(idx) = slug.rfind('_') else {
+        return slug;
+    };
+    let tail = &slug[idx + 1..];
+    if tail.is_empty() {
+        return slug;
+    }
+    let after_v = tail.strip_prefix('v').unwrap_or(tail);
+    let is_version = !after_v.is_empty() && after_v.chars().all(|c| c.is_ascii_digit() || c == '.');
+    if is_version {
+        &slug[..idx]
+    } else {
+        slug
+    }
+}
+
+#[cfg(test)]
+mod strip_trailing_version_tests {
+    use super::strip_trailing_version;
+
+    #[test]
+    fn strips_dotted_version() {
+        assert_eq!(
+            strip_trailing_version("onyx_cauldron_2.2.2"),
+            "onyx_cauldron"
+        );
+    }
+
+    #[test]
+    fn strips_v_prefixed_version() {
+        assert_eq!(
+            strip_trailing_version("delta_siege_dry_v5.7.1"),
+            "delta_siege_dry"
+        );
+    }
+
+    #[test]
+    fn strips_simple_v_version() {
+        assert_eq!(strip_trailing_version("tundra_v2"), "tundra");
+    }
+
+    #[test]
+    fn leaves_slug_with_no_version_alone() {
+        assert_eq!(strip_trailing_version("kolmog"), "kolmog");
+    }
+
+    #[test]
+    fn leaves_slug_with_non_version_tail_alone() {
+        assert_eq!(strip_trailing_version("foo_bar_baz"), "foo_bar_baz");
+    }
+}
+
 #[cfg(test)]
 mod session_reset_tests {
     use std::time::Instant;
 
     use eframe::egui;
 
-    use crate::app::{BarEditorApp, BrushTool, MapInfoTab, ValidationFilter};
+    use crate::app::{BarEditorApp, BrushTool, ValidationFilter};
 
     /// Stuff a default app with as many transient session-state fields
     /// as the helper is meant to clear. Used by every test below so
@@ -1087,9 +1215,9 @@ mod session_reset_tests {
         app.validation.findings = vec![];
         app.validation.filter = ValidationFilter::Error;
         app.dialog.show_inspector = true;
-        app.dialog.show_mapinfo_editor = true;
+        app.dialog.show_identity_editor = true;
+        app.dialog.show_atmosphere_editor = true;
         app.dialog.show_map_edge_editor = true;
-        app.validation.mapinfo_tab = MapInfoTab::Atmosphere;
         app.dialog.toast = Some(("hi".into(), Instant::now()));
         app.dialog.status_message = Some("from previous project".into());
         app.preview.run_requested = true;
@@ -1115,9 +1243,9 @@ mod session_reset_tests {
         assert!(!app.dialog.show_validation_panel);
         assert!(matches!(app.validation.filter, ValidationFilter::All));
         assert!(!app.dialog.show_inspector);
-        assert!(!app.dialog.show_mapinfo_editor);
+        assert!(!app.dialog.show_identity_editor);
+        assert!(!app.dialog.show_atmosphere_editor);
         assert!(!app.dialog.show_map_edge_editor);
-        assert!(matches!(app.validation.mapinfo_tab, MapInfoTab::Identity));
         assert!(app.dialog.toast.is_none());
         assert!(app.dialog.status_message.is_none());
         assert!(!app.preview.run_requested);

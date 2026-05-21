@@ -3,13 +3,16 @@
 //! per-model diffuse textures (M4).
 //!
 //! Each loaded S3O has its own GPU vertex/index buffer and its own diffuse
-//! `Rgba8UnormSrgb` texture. Models without a usable diffuse fall back to a
+//! `Rgba8Unorm` texture (BAR-faithful: no GPU gamma decode on sample,
+//! matches the engine's perceptual-everywhere pipeline). Models without a
+//! usable diffuse fall back to a
 //! shared 1x1 white texture so they still draw. Placeholder cubes (used for
 //! unknown feature types) also bind the default white texture.
 //!
 //! All draws share one pipeline and one render pass (LoadOp::Load so the
 //! terrain depth buffer correctly occludes features).
 
+use crate::samplers::make_filtered_sampler;
 use std::collections::HashMap;
 
 use bar_data::S3oVertex;
@@ -411,7 +414,7 @@ impl FeatureRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -450,7 +453,7 @@ impl FeatureRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -476,16 +479,7 @@ impl FeatureRenderer {
         let default_shading_view =
             default_shading.create_view(&wgpu::TextureViewDescriptor::default());
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("feature_sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            address_mode_w: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let sampler = make_filtered_sampler(device, "feature_sampler", wgpu::AddressMode::Repeat);
 
         let placeholder_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("feature_placeholder_bg"),
@@ -572,7 +566,7 @@ impl FeatureRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });

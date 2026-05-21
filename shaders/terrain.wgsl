@@ -98,6 +98,12 @@ struct CameraUniform {
     /// colour. The map-edge extension widget uses it as the haze
     /// target colour.
     fog_color: vec4<f32>,
+    /// Terrain detail-path runtime gates. .x = SMF_BLEND_NORMALS
+    /// (`detailNormalTex`) present; .y = basic
+    /// SMF_DETAIL_TEXTURE_SPLATTING (`splatDetailTex` singular)
+    /// active; .zw reserved. Engine compiles each path in via
+    /// `#define`; we gate at runtime to keep a single pipeline.
+    terrain_detail_params: vec4<f32>,
 }
 
 // ── Debug toggles ──────────────────────────────────────────────────────
@@ -190,6 +196,29 @@ const DBG_VISUALIZE_SPLAT_DETAIL: bool = false;
 /// real content lands via `update_grass_shading_tex`.
 @group(1) @binding(14) var grass_shading_tex: texture_2d<f32>;
 
+/// Self-illumination texture (mapinfo `lightEmissionTex`). Engine path
+/// `SMF_LIGHT_EMISSION` -- sampled at spec UV, alpha-gated additive
+/// blend per `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`. Glow
+/// is unshadowed by design (e.g. lava cracks, industrial lighting).
+/// Defaults to 1x1 (0,0,0,0); `custom_fog_params.w` gates whether
+/// the apply-emission stage runs at all.
+@group(1) @binding(15) var light_emission_tex: texture_2d<f32>;
+
+/// SMF_BLEND_NORMALS texture (mapinfo `detailNormalTex`,
+/// `SMFFragProg.glsl:299-307`). Tangent-space normal perturbation;
+/// alpha gates the blend weight. Default decodes to identity normal
+/// with alpha 0, so the blend is a no-op. `terrain_detail_params.x`
+/// gates whether the stage runs at all.
+@group(1) @binding(16) var detail_normal_tex: texture_2d<f32>;
+
+/// Basic SMF_DETAIL_TEXTURE_SPLATTING texture (mapinfo
+/// `splatDetailTex` singular, `SMFFragProg.glsl:80-85, 159-169`).
+/// Per-channel sample (R, G, B, A) of one of four signed detail
+/// contributions at world-XZ scaled coordinates, dot-product weighted
+/// by the splat distribution texture. `terrain_detail_params.y`
+/// gates whether the stage runs at all.
+@group(1) @binding(17) var splat_detail_tex: texture_2d<f32>;
+
 /// Planar-reflection texture -- rendered in a pre-pass with the camera mirrored
 /// through the water plane. Sampled in the water fragment branch.
 @group(2) @binding(0) var reflection_texture: texture_2d<f32>;
@@ -247,30 +276,12 @@ fn pass_clip_plane(world_pos: vec3<f32>) -> bool {
     return dot(camera.clip_plane.xyz, world_pos) + camera.clip_plane.w >= 0.0;
 }
 
-/// Apply the mapinfo `custom.fog` height-based tint to a fragment colour.
-/// Returns `color` unchanged when the fog is disabled or the fragment is
-/// above the ceiling. Inside the fog region the colour is *multiplicatively
-/// tinted* toward `fog_color`: at the ceiling `tint = vec3(1)` (no change),
-/// at full attenuation `tint = fog_color` (dims and colour-shifts). This
-/// matches the in-game behaviour where the fog absorbs light selectively
-/// per channel rather than blending the fragment toward a bright fog
-/// colour (which is what a plain `mix(...)` would do and what made the
-/// previous version of this pass look milky/cloudy at depth).
-fn apply_custom_fog(color: vec3<f32>, world_pos: vec3<f32>) -> vec3<f32> {
-    if (camera.custom_fog_params.x < 0.5) {
-        return color;
-    }
-    let elmo_y = world_pos.y
-        / max(camera.height_scale, 1e-4)
-        * camera.height_range_elmos;
-    let below = camera.custom_fog_params.y - elmo_y;
-    if (below <= 0.0) {
-        return color;
-    }
-    let f = clamp(below * camera.custom_fog_color_atten.w, 0.0, 1.0);
-    let tint = mix(vec3<f32>(1.0), camera.custom_fog_color_atten.xyz, f);
-    return color * tint;
-}
+// `apply_custom_fog` lives in `shaders/widgets/custom_fog.wgsl` and is
+// concatenated into this shader source by `bar-render::renderer.rs::new`.
+// See that file for the height-fog widget rationale -- the mapinfo
+// `custom.fog` block is a BAR LuaUI widget contract, not an engine-
+// shader contract, so the implementation is segmented away from the
+// engine-native paths.
 
 struct VertexInput {
     @location(0) position: vec3<f32>,
@@ -664,7 +675,10 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
     let view_dir = normalize(camera.camera_pos - in.world_position);
-    let shadow_coeff = sample_shadow(in.world_position);
+    // Per-map shadow strength modulation (mapinfo `lighting.groundShadowDensity`).
+    // `SMFFragProg.glsl:371`: shadow_coeff = mix(1.0, raw, density). The
+    // density is packed into `ground_specular.w` (see `SmfLighting::to_uniform_slots`).
+    let shadow_coeff = mix(1.0, sample_shadow(in.world_position), camera.ground_specular.w);
 
     var color: vec3<f32>;
     if (camera.has_texture != 0u && in.uv.y <= 1.5) {
@@ -738,6 +752,56 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         detail_contrib = detail_sample - vec3<f32>(0.5);
     }
 
+    // Tangent-space basis built once from the surface normal (engine
+    // `SMFFragProg.glsl:273-279`). Shared by `SMF_BLEND_NORMALS` and
+    // the splat-detail-normal path so both perturbations rotate
+    // against the same basis -- matches engine behaviour where
+    // stnMatrix is computed once and reused across both stages.
+    let stn_t_tangent = normalize(cross(normal, vec3<f32>(-1.0, 0.0, 0.0)));
+    let stn_s_tangent = cross(normal, stn_t_tangent);
+    let stn = mat3x3<f32>(stn_s_tangent, stn_t_tangent, normal);
+
+    // SMF_BLEND_NORMALS perturbation
+    // (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:299-307`). Sample
+    // `detailNormalTex` at the world-XZ normalised UV, sign-decode
+    // .xyz as a tangent-space normal, rotate into world space via
+    // `stn`, mix toward the surface normal by alpha weight. Empty
+    // alpha = identity (engine's `mix(normal, x, 0) = normal`).
+    if (in.uv.y <= 1.5 && camera.terrain_detail_params.x > 0.5) {
+        let dn_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let dn_sample = textureSample(detail_normal_tex, detail_sam, dn_uv);
+        let dn_ts = (dn_sample.xyz * 2.0) - 1.0;
+        normal = normalize(mix(normal, stn * dn_ts, dn_sample.a));
+    }
+
+    // Basic SMF_DETAIL_TEXTURE_SPLATTING colour path (engine
+    // `SMFFragProg.glsl:80-85, 159-169`). Mutually exclusive with the
+    // normal-splat path -- the engine only compiles this in when
+    // `SMF_DETAIL_NORMAL_TEXTURE_SPLATTING` is undefined. We mirror
+    // by also gating on `splat_params.z < 0.5` (the
+    // `advanced_splat_enabled` flag) so a map that somehow ships both
+    // upload paths still picks normal-splat.
+    if (in.uv.y <= 1.5
+        && camera.terrain_detail_params.y > 0.5
+        && camera.splat_params.z < 0.5)
+    {
+        let bsp_world = in.world_position.xz * camera.splat_params.xy;
+        let bsp_r = textureSample(splat_detail_tex, detail_sam, bsp_world * camera.splat_tex_scales.x).r;
+        let bsp_g = textureSample(splat_detail_tex, detail_sam, bsp_world * camera.splat_tex_scales.y).g;
+        let bsp_b = textureSample(splat_detail_tex, detail_sam, bsp_world * camera.splat_tex_scales.z).b;
+        let bsp_a = textureSample(splat_detail_tex, detail_sam, bsp_world * camera.splat_tex_scales.w).a;
+        let bsp_details = vec4<f32>(bsp_r, bsp_g, bsp_b, bsp_a) * 2.0 - 1.0;
+        let bsp_distr_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let bsp_cofac = textureSample(splat_distr_tex, detail_sam, bsp_distr_uv) * camera.splat_tex_mults;
+        detail_contrib = vec3<f32>(dot(bsp_details, bsp_cofac));
+    }
+
     // Advanced splat-detail-normal path (engine
     // `SMF_DETAIL_NORMAL_TEXTURE_SPLATTING`). Active for Aurelia and
     // most modern BAR maps. Four detail-normal textures get sampled at
@@ -803,21 +867,15 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
 
         if (DBG_SPLAT_NORMAL_PERTURB) {
-            // Normal perturbation. Engine builds a tangent basis from the
-            // surface normal (`SMFFragProg.glsl::main` for SMF_BLEND_NORMALS):
-            //   tTangent = normalize(cross(normal, vec3(-1, 0, 0)))
-            //   sTangent = cross(normal, tTangent)
-            //   stnMatrix = mat3(sTangent, tTangent, normal)
-            // The tangent-space splat normal is rotated into world space
-            // via `stnMatrix`, then mixed with the surface normal by
-            // `splatDetailStrength.x = clamp(dot(splatCofac, vec4(1)), 0, 1)`.
-            // y = 0.01 floor prevents the perturbed normal from pointing
-            // sideways when all cofacs happen to be zero.
+            // Normal perturbation: rotate the tangent-space splat normal
+            // into world space via the shared `stn` matrix built above
+            // (engine `SMFFragProg.glsl:273-279`). Mixed with the
+            // surface normal by `splatDetailStrength.x = clamp(dot(
+            // splatCofac, vec4(1)), 0, 1)`. y = 0.01 floor prevents
+            // the perturbed normal from pointing sideways when all
+            // cofacs happen to be zero.
             splat_normal.y = max(splat_normal.y, 0.01);
             let s_strength_x = clamp(splat_cofac.r + splat_cofac.g + splat_cofac.b + splat_cofac.a, 0.0, 1.0);
-            let t_tangent = normalize(cross(normal, vec3<f32>(-1.0, 0.0, 0.0)));
-            let s_tangent = cross(normal, t_tangent);
-            let stn = mat3x3<f32>(s_tangent, t_tangent, normal);
             let world_perturbed = normalize(stn * splat_normal.xyz);
             normal = normalize(mix(normal, world_perturbed, s_strength_x));
         }
@@ -942,6 +1000,21 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // `detail_contrib` is zero when no detail texture is loaded (default
     // 1x1 grey - 0.5 = 0), so this stays a no-op for maps without one.
     var lit_color = (color + detail_contrib) * shade_int + spec_term;
+
+    // SMF_LIGHT_EMISSION apply-emission stage
+    // (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`): unshadowed
+    // glow that overrides the shaded fragment via alpha-gated blend.
+    // `custom_fog_params.w` carries the `light_emission_tex_enabled`
+    // flag from `SmfLighting`; when zero we skip the sample entirely
+    // so maps without an emission texture pay nothing for the stage.
+    if (camera.custom_fog_params.w > 0.5) {
+        let emit_uv = vec2<f32>(
+            in.world_position.x / (2.0 * camera.x_extent) + 0.5,
+            1.0 - (in.world_position.z / (2.0 * camera.z_extent) + 0.5),
+        );
+        let emit_sample = textureSample(light_emission_tex, detail_sam, emit_uv);
+        lit_color = lit_color * (1.0 - emit_sample.a) + emit_sample.rgb;
+    }
 
     // Debug viz: short-circuit the shader and output diagnostic channels.
     //   R = cos_specular  (red: where half_dir aligns with normal)

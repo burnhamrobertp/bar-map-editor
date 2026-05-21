@@ -40,6 +40,10 @@ pub enum ExportStatus {
     All,
     /// One specific Bundler is exporting; others remain idle.
     One(NodeId),
+    /// "Test in BAR" pressed -- the bundle pipeline is running to
+    /// produce a .sdd into the BAR install. Distinguished from `All`
+    /// so the spinner draws on the BAR button instead of Bundle.
+    TestInBar,
 }
 
 impl ExportStatus {

@@ -94,24 +94,42 @@ pub(crate) fn confirm_key_display_name(key: &str) -> String {
 pub struct DialogState {
     pub show_validation_panel: bool,
     pub show_inspector: bool,
-    pub show_mapinfo_editor: bool,
-    /// Open state for the dedicated Map Edge panel (action-bar button
-    /// with the dashed-frame icon). Houses the `grassShadingTex`
-    /// picker / preview today; future map-edge knobs (curvature bend,
-    /// atmosphere fog tuning) will land in the same panel.
+    // ── Action-bar modals ────────────────────────────────────────
+    // Each `show_<name>_editor` toggles its own modal in
+    // `panels::action_bar_modals`. They used to share a single
+    // `show_mapinfo_editor` + `MapInfoTab`, but the tab strip is
+    // gone -- every action-bar button now opens / closes its own
+    // modal directly.
+    pub show_identity_editor: bool,
+    pub show_dimensions_editor: bool,
+    pub show_physics_editor: bool,
+    pub show_atmosphere_editor: bool,
+    pub show_lighting_editor: bool,
+    pub show_water_editor: bool,
+    pub show_resources_editor: bool,
+    pub show_grass_editor: bool,
     pub show_map_edge_editor: bool,
-    /// True while the map-info editor modal is in an active session.
-    /// Used by `panels::mapinfo_editor::draw` to detect the
-    /// closed-to-open transition so it can capture a pre-edit
-    /// snapshot exactly once per session (rather than every frame).
-    /// Cleared when the modal closes.
-    pub(crate) mapinfo_editor_session_active: bool,
-    /// Snapshot captured the moment the map-info editor opened. Pushed
-    /// onto the undo stack the first time any field is dirtied during
-    /// this session (so opening + closing the modal without edits
-    /// doesn't bloat undo history). Discarded if the user closes the
-    /// modal without changing anything.
-    pub(crate) mapinfo_editor_pending_undo: Option<crate::undo::Snapshot>,
+    /// Snapshot captured the moment a `render_field` widget began
+    /// editing (drag started or text input gained focus). Pushed
+    /// onto the undo stack when the same widget commits (drag
+    /// stopped, lost focus, or atomic change like a checkbox
+    /// toggle). One slot is enough because only one widget can be
+    /// in active-edit state at a time -- if the user clicks a
+    /// different field, that field's `gained_focus` fires AFTER the
+    /// previous field's `lost_focus`, so the slot is empty before
+    /// the next edit starts. See `panels::field_editor` for the
+    /// state machine.
+    pub(crate) field_edit_in_progress: Option<crate::undo::Snapshot>,
+    /// Pre-drag snapshot for a spawn marker the user is currently
+    /// dragging on the canvas inspector. Mirrors
+    /// `field_edit_in_progress` -- one drag = one undo entry,
+    /// captured at drag-start and pushed at drag-stop.
+    pub(crate) spawn_drag_in_progress: Option<crate::undo::Snapshot>,
+    /// Whether the Start Boxes modal is currently open. Modal lets
+    /// the user add / remove / edit team spawn positions via the
+    /// same schema-driven render pipeline that the rest of the
+    /// map-settings UI uses.
+    pub show_start_boxes_editor: bool,
     pub show_settings: bool,
     pub show_about: bool,
     /// True for one frame after the user accepts an unsaved-changes

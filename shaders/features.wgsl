@@ -45,6 +45,14 @@ struct CameraUniform {
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
+/// Skybox cubemap shared with the terrain pipeline (group 0 layout
+/// is identical -- see `crates/bar-render/src/features.rs:297`). Used
+/// as the engine's `reflectTex` for the env-cubemap reflection mix
+/// (`bar-recoil/cont/.../shaders/GLSL/ModelFragProg.glsl:90-92, 103`).
+/// Defaults to a 1x1 black cubemap when no skybox is loaded; the
+/// `skybox_params.x` flag in `camera` indicates presence.
+@group(0) @binding(1) var skybox_tex: texture_cube<f32>;
+@group(0) @binding(2) var skybox_sam: sampler;
 @group(1) @binding(0) var diffuse_tex:  texture_2d<f32>;
 @group(1) @binding(1) var shading_tex:  texture_2d<f32>;
 @group(1) @binding(2) var tex_samp:     sampler;
@@ -166,10 +174,9 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
     //   .r => self-illumination / emissive, added to the lighting multiplier
     //         so the textured RGB takes the boost (so the glow ends up the
     //         feature's own colour, not a white wash).
-    //   .g => specular intensity multiplier. Engine multiplies spec by
-    //         `extraColor.g * 4.0` and additionally mixes env reflection by
-    //         the same channel; we don't have env reflection so we just
-    //         apply the spec multiplier.
+    //   .g => spec / env-reflection mix factor. Engine path:
+    //         `specular *= (extraColor.g * 4.0)` (line 97) and
+    //         `reflection = mix(light, reflectTex, extraColor.g)` (line 103).
     // Without these, the emissive crystal / glow-mushroom features that BAR
     // ships on Azurite Shores etc. render as dead matte geometry instead of
     // the cyan / purple halos seen in-engine.
@@ -180,9 +187,45 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
     let emissive  = vec3<f32>(shading_sample.r);
     let spec_mult = shading_sample.g * 4.0;
 
+    // Engine env-cubemap reflection (`ModelFragProg.glsl:90-92, 103`):
+    // reflect view direction off the surface normal, sample the
+    // skybox cubemap, then mix that into the lit term by
+    // `shading_sample.g`. Chrome / metal surfaces with high `.g`
+    // pick up the sky reflection; matte surfaces with `.g = 0` stay
+    // on the diffuse lighting term. Gated on the same
+    // `skybox_params.x` flag the terrain uses -- when no cubemap is
+    // uploaded the 1x1 black default produces zero contribution,
+    // matching the engine's behaviour when `reflectTex` is empty.
+    let cam_to_frag = in.world_pos - camera.camera_pos;
+    let reflect_dir = reflect(cam_to_frag, normal);
+    let env_refl    = textureSample(skybox_tex, skybox_sam, reflect_dir).rgb;
+    let reflection_term = mix(lit, env_refl, shading_sample.g) + emissive;
+
+    // Engine team-color replacement (`ModelFragProg.glsl:108`):
+    // `mix(diffuse.rgb, teamColor.rgb, diffuse.a)`. Map-baked features
+    // (trees, wrecks, rocks) almost always ship `diffuse.a = 0` so
+    // the mix is a no-op; the path matters only for unit / variant
+    // models that use texture1.a as a team-colour mask. Default
+    // teamColor is a neutral grey -- the editor has no team
+    // selection today; if a future feature surfaces one, lift this
+    // to a uniform.
+    let team_color = vec3<f32>(0.5, 0.5, 0.5);
+    let team_diffuse_rgb = mix(diffuse_sample.rgb, team_color, diffuse_sample.a);
+
     // Tint is (1,1,1,1) for loaded models so the texture passes through
     // untouched; selected features get a yellow tint; placeholders use the
     // catalog-known / unknown colors.
-    let rgb = diffuse_sample.rgb * in.tint.rgb * (lit + emissive) + spec_term * spec_mult;
+    let rgb = team_diffuse_rgb * in.tint.rgb * reflection_term + spec_term * spec_mult;
     return vec4<f32>(rgb, shading_sample.a * in.tint.a);
 }
+
+// Dynamic point/spot lights (`ModelFragProg.glsl:42-77`) are
+// **deliberately deferred**. The engine exposes `Spring.AddMapLight`
+// / `AddModelLight` Lua APIs, but a sweep of BAR's repos
+// (`bar-game`, `bar-chobby`, `bar-lobby`, `bar-maps-sources`, plus
+// the installed LuaUI tree) found zero callers -- no BAR gameplay,
+// widget, or map drives the engine's dynamic-light path today. The
+// editor preview shows only static map content, so this shader
+// stage would have no source to drive it. Land the path when (a)
+// BAR starts using dynamic lights or (b) BME adds in-editor light-
+// emitter authoring.

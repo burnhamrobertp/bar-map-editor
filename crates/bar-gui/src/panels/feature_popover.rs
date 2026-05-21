@@ -150,15 +150,10 @@ fn draw_body(
     ui.horizontal(|ui| {
         ui.strong(t!("editor.feature_popover.feature_lights.title"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let icon_size = egui::vec2(16.0, 16.0);
-            let (rect, resp) = ui.allocate_exact_size(icon_size, egui::Sense::hover());
-            let color = if resp.hovered() {
-                egui::Color32::from_rgb(220, 220, 240)
-            } else {
-                egui::Color32::from_rgb(160, 160, 180)
-            };
-            icons::paint_info_icon(ui.painter(), rect, color);
-            resp.on_hover_text(t!("editor.feature_popover.feature_lights.info_tooltip"));
+            crate::panels::field_editor::info_icon(
+                ui,
+                &t!("editor.feature_popover.feature_lights.info_tooltip"),
+            );
         });
     });
     ui.add_space(4.0);

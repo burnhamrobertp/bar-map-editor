@@ -3,6 +3,7 @@ use glam::Mat4;
 use wgpu::util::DeviceExt;
 
 use crate::camera::Camera;
+use crate::samplers::make_filtered_sampler;
 use crate::terrain::{
     generate_flat_grid, generate_map_edge_extension, generate_terrain_skirts_and_cap,
     generate_water_plane, TerrainVertex,
@@ -11,32 +12,39 @@ use bar_data::{ColorBuffer, Heightmap};
 
 // ── Texture-format conventions ────────────────────────────────────────────
 //
-// Maps each map-authored texture role to the wgpu format it must use. The
-// distinction between sRGB and linear formats is load-bearing: sRGB
-// formats trigger automatic gamma decode on sample, which is correct for
-// COLOUR textures (BAR mapinfo authors values in perceptual sRGB) but
-// destroys data textures (normal maps, weight masks) whose channels are
-// numerical not perceptual.
+// Maps each map-authored texture role to the wgpu format it must use.
 //
 // Engine reference: BAR runs with `GL_FRAMEBUFFER_SRGB` disabled
-// (`bar-recoil/.../GL/State.h:185`), so its samplers don't gamma-decode
-// anything -- every texture, colour or data, reaches BAR's shader as
-// `byte/255` directly. In BME we use an sRGB framebuffer (correct), so
-// we have to pick the format per-texture: sRGB format for things BAR
-// would have authored as perceptual colour, linear for things BAR would
-// have used as direct numerical inputs.
+// (`bar-recoil/.../GL/State.h:185`) and uploads textures without the
+// sRGB flag, so its samplers return raw `byte/255` to the shader for
+// every texture -- colour or data. BAR's shaders do all their math in
+// this sRGB-perceptual space and write to a non-sRGB framebuffer; the
+// display device gamma-decodes the bytes on output. The pipeline is
+// gamma-incorrect by modern standards, but consistent end-to-end.
 //
-// Changing any of these requires checking the engine shader's sample
-// pattern -- look for `* 2 - 1` decode (data, needs linear) or direct
-// `* multiplier` use (data, needs linear). Mix factors are data;
-// per-pixel diffuse / albedo / shading textures are colour.
+// BME mirrors BAR's pipeline so map authors see what they'll see
+// in-engine: every colour texture uses a non-sRGB format (no GPU
+// decode on sample), every data texture too, every render target /
+// framebuffer uses non-sRGB (no GPU encode on write). The named
+// constants below pin this convention per texture role so an
+// accidental sRGB format choice surfaces immediately in the
+// format-convention tests at the bottom of this file.
 
-/// Colour textures (sampled as perceptual sRGB by BAR; we use sRGB so
-/// the GPU gamma-decodes back to linear before the shader sees them).
-/// Marker constant; the inline texture-creation sites still spell
-/// `Rgba8UnormSrgb` for now. Pinned by the format-convention test.
+/// Colour textures (mapinfo-authored perceptual sRGB values, treated
+/// as linear by every shader that multiplies them with lighting
+/// uniforms). Stored without the sRGB flag so the GPU returns raw
+/// byte/255 -- matches BAR's `glTexImage2D` upload that omits the
+/// sRGB internal-format variant. Marker constant; the inline
+/// `create_texture` call sites spell `Rgba8Unorm` directly. Pinned by
+/// the format-convention test below.
 #[allow(dead_code)]
-const COLOUR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8UnormSrgb;
+const COLOUR_TEX_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
+
+/// BC1-compressed colour textures (the SMT terrain atlas). Same
+/// reasoning as `COLOUR_TEX_FORMAT`: BAR uploads BC1 without the
+/// `_SRGB` variant, samples return raw byte/255 to the shader.
+#[allow(dead_code)]
+const COLOUR_TEX_FORMAT_BC1: wgpu::TextureFormat = wgpu::TextureFormat::Bc1RgbaUnorm;
 
 /// Splat detail-normal textures: RGB carries tangent-space normal
 /// coordinates decoded via `(sample * 2 - 1)` in `SMFFragProg.glsl:183`;
@@ -158,9 +166,16 @@ struct CameraUniform {
     // `fogColor` uniform every fog-aware shader (sky / projectiles /
     // map_edge_extension2 / etc.) reads. rgb = colour, w reserved.
     fog_color: [f32; 4],
+    // Terrain detail-path enable flags. Engine compiles each path in
+    // via a `#define`; we gate at runtime so a single pipeline serves
+    // every map.
+    //   x = detail_normal_enabled (SMF_BLEND_NORMALS)
+    //   y = basic_splat_enabled   (SMF_DETAIL_TEXTURE_SPLATTING)
+    //   z, w = reserved
+    terrain_detail_params: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<CameraUniform>() == 528);
+const _: () = assert!(std::mem::size_of::<CameraUniform>() == 544);
 
 /// Clip-plane value that passes every fragment. Used by the main pass.
 const NO_CLIP: [f32; 4] = [0.0, 0.0, 0.0, 1.0];
@@ -197,6 +212,12 @@ pub struct SmfLighting {
     pub ground_ambient: [f32; 3],
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
+    /// Per-map shadow strength. Engine modulates the shadow sample as
+    /// `shadow_coeff = mix(1.0, raw_shadow, density)` -- see
+    /// `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:371` -- so at density=0
+    /// shadows disappear entirely, at density=1 the raw sample passes
+    /// through. Default 0.8 (`MapInfo.cpp::ReadLight`).
+    pub ground_shadow_density: f32,
     pub specular_exponent: f32,
     // Water absorption colors (used by `smf_water_absorb` for underwater
     // ground shading -- not the water surface itself)
@@ -217,18 +238,50 @@ pub struct SmfLighting {
     pub water_fresnel_power: f32,
     pub water_reflection_distortion: f32,
     pub water_perlin_amplitude: f32,
-    // Height-based "custom" fog (mapinfo's `custom.fog` block). Applied as
-    // a final post-pass in the terrain and water shaders -- not part of
-    // the engine SMF/BumpWater pipeline but matches in-game appearance
-    // because BAR ships a widget that renders it.
-    pub custom_fog_enabled: bool,
-    pub custom_fog_color: [f32; 3],
-    pub custom_fog_height_elmos: f32,
-    pub custom_fog_atten: f32,
+    /// 7-tap blur base offset (pixels). Engine path
+    /// `opt_blurreflection` (`BumpWaterFS.glsl:234-244`); the shader
+    /// divides by viewport height to produce a UV-space offset.
+    /// Default 2.0 (`MapInfo.cpp:261`).
+    pub water_blur_base: f32,
+    /// 7-tap blur geometric exponent. Default 1.5
+    /// (`MapInfo.cpp:262`).
+    pub water_blur_exponent: f32,
+    /// Caustic-sample UV scale (mapinfo `water.causticsResolution`).
+    /// Default 75.0 -- `BumpWaterFS:326` uses
+    /// `texture2D(caustic, uv * CausticsResolution)`.
+    pub caustics_resolution: f32,
+    /// Caustic blend strength (mapinfo `water.causticsStrength`).
+    /// Default 0.08 -- multiplied into the caustic colour before
+    /// adding to the underwater fragment.
+    pub caustics_strength: f32,
+    /// `GetShorewaves` inputs from mapinfo `water.*`. Engine
+    /// reference `BumpWaterFS:186-220`. Defaults from
+    /// `MapInfo.cpp:269-272`.
+    pub wave_offset_factor: f32,
+    pub wave_foam_distortion: f32,
+    pub wave_foam_intensity: f32,
+    pub wave_length: f32,
+    /// True once `update_foam_assets` has uploaded the engine-shipped
+    /// foam + waverand textures AND `update_coastmap` has uploaded
+    /// the per-map coast-distance field. Gates the shader's foam
+    /// stage so machines without a BAR install don't render garbage.
+    pub foam_enabled: bool,
+    /// Height-based "custom" fog widget state. Applied as a final
+    /// post-pass in the terrain shader -- not engine-native, but
+    /// driven by the per-map `mapinfo.custom.fog` block that BAR's
+    /// game-side widget reads. Owned by
+    /// `crates/bar-render/src/widgets/custom_fog.rs` so widget
+    /// effects stay segmented from engine pipeline state.
+    pub custom_fog: crate::widgets::custom_fog::CustomFogWidget,
     // Atmosphere / sky parameters (`atmosphere = { ... }` in mapinfo).
     // Drive the procedural sky shader so each map has its authored sky
     // rather than a hardcoded one.
     pub sun_color: [f32; 3],
+    /// Sun intensity from mapinfo `light.sunDir.w`. Packed into the
+    /// uniform's `sun_color.w` so the sky shader can multiply its sun-
+    /// corona term by it (matches `ModernSky.cpp:82` ->
+    /// `ModernSkyFS.glsl:88` upstream). Default 1.0.
+    pub sun_intensity: f32,
     pub sky_color: [f32; 3],
     pub sky_dir: [f32; 3],
     pub cloud_density: f32,
@@ -258,6 +311,33 @@ pub struct SmfLighting {
     /// map-edge extension shader between sampling the dedicated
     /// border texture vs falling back to the playable albedo.
     pub grass_shading_tex_enabled: bool,
+    /// True when a `lightEmissionTex` has been uploaded. Gates the
+    /// engine's `SMF_LIGHT_EMISSION` apply-emission stage in the
+    /// terrain shader (`SMFFragProg.glsl:392-401`). When false, the
+    /// emission blend is skipped entirely; the bound texture is still
+    /// the inert 1x1 `(0,0,0,0)` default so it costs nothing to
+    /// sample, but the explicit gate keeps the data-flow obvious.
+    pub light_emission_tex_enabled: bool,
+    /// True when a `detailNormalTex` has been uploaded. Gates the
+    /// engine's `SMF_BLEND_NORMALS` path (`SMFFragProg.glsl:299-307`)
+    /// in the terrain shader: surface normal is mixed toward the
+    /// alpha-weighted tangent-space normal sampled from the texture.
+    /// When false, the normal passes through unmodified.
+    pub detail_normal_tex_enabled: bool,
+    /// True when basic 4-texture color splatting is active (engine
+    /// `SMF_DETAIL_TEXTURE_SPLATTING && !SMF_DETAIL_NORMAL_TEXTURE_SPLATTING`,
+    /// `SMFFragProg.glsl:80-85, 159-169`). Mutually exclusive with the
+    /// normal-splat path; modern BAR maps use the normal-splat
+    /// variant, but older / community maps that set
+    /// `splatDetailTex` (singular, color-only) without the four
+    /// normal-splat textures need this fallback.
+    pub basic_splat_enabled: bool,
+    /// True once the 32-frame caustic texture array has been uploaded
+    /// by `update_caustics`. Gates the engine's caustics block in
+    /// `water.wgsl` (`BumpWaterFS:324-334`). Default false so the
+    /// path is a no-op when no BAR install is detected -- the
+    /// renderer stays usable without engine assets.
+    pub caustic_array_enabled: bool,
     /// 1.0 when the legacy `detailTex` should apply to the playable
     /// area, 0.0 when it shouldn't. Engine-side, `detailTex` is only
     /// applied to the playable area by `SMFFragProg` when the map is
@@ -314,6 +394,11 @@ fn bar_render_smf_with_runtime_overrides(
     sky_reflect_mod_enabled: bool,
     specular_tex_enabled: bool,
     grass_shading_tex_enabled: bool,
+    light_emission_tex_enabled: bool,
+    detail_normal_tex_enabled: bool,
+    basic_splat_enabled: bool,
+    caustic_array_enabled: bool,
+    foam_enabled: bool,
     elmo_per_render_xz: [f32; 2],
 ) -> SmfLighting {
     smf.skybox_enabled = skybox_enabled;
@@ -321,6 +406,11 @@ fn bar_render_smf_with_runtime_overrides(
     smf.sky_reflect_mod_enabled = sky_reflect_mod_enabled;
     smf.specular_tex_enabled = specular_tex_enabled;
     smf.grass_shading_tex_enabled = grass_shading_tex_enabled;
+    smf.light_emission_tex_enabled = light_emission_tex_enabled;
+    smf.detail_normal_tex_enabled = detail_normal_tex_enabled;
+    smf.basic_splat_enabled = basic_splat_enabled;
+    smf.caustic_array_enabled = caustic_array_enabled;
+    smf.foam_enabled = foam_enabled;
     smf.elmo_per_render_xz = elmo_per_render_xz;
     smf
 }
@@ -334,37 +424,42 @@ impl From<&bar_project::MapSettings> for SmfLighting {
     /// CLI to drift (it shipped default zero-water for a while, which
     /// in turn made headless debugging meaningless).
     fn from(ms: &bar_project::MapSettings) -> Self {
-        let l = &ms.lighting;
-        let w = &ms.water;
+        // Resolve once at the top: every Option<T> on the recipe gets
+        // replaced with its effective value (user-explicit -> source
+        // mapinfo -> engine default) so the renderer never has to
+        // branch on `Option`. See `engine_defaults.rs` for the table.
+        let rs = ms.resolved();
+        let l = &rs.lighting;
+        let w = &rs.water;
+        let atm = &rs.atmosphere;
         Self {
             sun_dir: l.sun_dir,
-            // RGB colour triples are stored in mapinfo as sRGB / perceptual.
-            // For most fields we sRGB-decode at this boundary so the
-            // sRGB-encoding framebuffer reproduces the same bytes that
-            // BAR's non-sRGB pipeline produces. But the *lighting
-            // multipliers* below (ground_ambient/diffuse/specular,
-            // sun_color) are used in shader math as multiplicative
-            // shading terms (`ambient + diffuse * cos_theta`). In BAR's
-            // gamma-incorrect pipeline these multiply albedo IN
-            // sRGB-perceptual space; decoding them to linear before
-            // multiplication darkens the visible result by ~30% because
-            // linear math compresses mid-tone products. Use the raw
-            // perceptual values here to match BAR's apparent lighting
-            // brightness. (The extension shader uses hemispheric
-            // lighting `dot * 0.5 + 1.0` and doesn't read these
-            // uniforms, so this revert doesn't undo the original
-            // extension-area brightness fix.)
+            // Engine-faithful colour pipeline: mapinfo colour triples
+            // pass through to the shader as raw sRGB-perceptual values.
+            // BAR runs with `GL_FRAMEBUFFER_SRGB` disabled
+            // (`bar-recoil/.../GL/State.h:185`) and samples colour
+            // textures as raw byte / 255 -- so every multiplication in
+            // BAR's terrain / water shaders happens in sRGB-perceptual
+            // space. To match BAR's visible output, BME does the same:
+            // no sRGB decode at this boundary, color textures are
+            // uploaded as linear formats (no GPU decode on sample),
+            // framebuffer is non-sRGB (no encode on write). The
+            // pipeline is gamma-incorrect by modern graphics
+            // standards, but the editor's purpose is engine-fidelity
+            // for map authors who tune their maps to look right
+            // in-game.
             ground_ambient: l.ground_ambient,
             ground_diffuse: l.ground_diffuse,
             ground_specular: l.ground_specular,
+            ground_shadow_density: l.ground_shadow_density,
             specular_exponent: l.spec_exponent,
-            water_absorb: crate::color::srgb_to_linear_rgb(w.absorb),
-            water_base: crate::color::srgb_to_linear_rgb(w.base_color),
-            water_min: crate::color::srgb_to_linear_rgb(w.min_color),
-            water_surface_color: crate::color::srgb_to_linear_rgb(w.surface_color),
+            water_absorb: w.absorb,
+            water_base: w.base_color,
+            water_min: w.min_color,
+            water_surface_color: w.surface_color,
             water_surface_alpha: w.surface_alpha,
-            water_diffuse_color: crate::color::srgb_to_linear_rgb(w.diffuse_color),
-            water_specular_color: crate::color::srgb_to_linear_rgb(w.specular_color),
+            water_diffuse_color: w.diffuse_color,
+            water_specular_color: w.specular_color,
             water_ambient_factor: w.ambient_factor,
             water_diffuse_factor: w.diffuse_factor,
             water_specular_factor: w.specular_factor,
@@ -374,20 +469,22 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             water_fresnel_power: w.fresnel_power,
             water_reflection_distortion: w.reflection_distortion,
             water_perlin_amplitude: w.perlin_amplitude,
-            custom_fog_enabled: ms.custom_fog.enabled,
-            custom_fog_color: crate::color::srgb_to_linear_rgb(ms.custom_fog.color),
-            custom_fog_height_elmos: ms.custom_fog.height_elmos,
-            custom_fog_atten: ms.custom_fog.atten,
-            // sun_color is used as a multiplier in `modern_sky.wgsl` for
-            // the procedural sky (not relevant on maps with a cubemap
-            // skybox like Onyx). Treated like the ground-lighting
-            // multipliers: raw perceptual values to match BAR's apparent
-            // brightness.
-            sun_color: ms.atmosphere.sun_color,
-            sky_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.sky_color),
-            sky_dir: ms.atmosphere.sky_dir,
-            cloud_density: ms.atmosphere.cloud_density,
-            cloud_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.cloud_color),
+            water_blur_base: w.blur_base,
+            water_blur_exponent: w.blur_exponent,
+            caustics_resolution: w.caustics_resolution,
+            caustics_strength: w.caustics_strength,
+            wave_offset_factor: w.wave_offset_factor,
+            wave_foam_distortion: w.wave_foam_distortion,
+            wave_foam_intensity: w.wave_foam_intensity,
+            wave_length: w.wave_length,
+            foam_enabled: false,
+            custom_fog: crate::widgets::custom_fog::CustomFogWidget::from_settings(ms),
+            sun_color: atm.sun_color,
+            sun_intensity: l.sun_intensity,
+            sky_color: atm.sky_color,
+            sky_dir: atm.sky_dir,
+            cloud_density: atm.cloud_density,
+            cloud_color: atm.cloud_color,
             // MapSettings doesn't carry runtime upload state; the
             // renderer overrides this flag in `sync_to_frame` based
             // on whether a real cubemap is uploaded.
@@ -395,6 +492,10 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             sky_reflect_mod_enabled: false,
             specular_tex_enabled: false,
             grass_shading_tex_enabled: false,
+            light_emission_tex_enabled: false,
+            detail_normal_tex_enabled: false,
+            basic_splat_enabled: false,
+            caustic_array_enabled: false,
             // Apply legacy detailTex only when the map has no splat
             // distribution texture -- matches engine routing of
             // detailTex to the playable area only in that case.
@@ -403,8 +504,11 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             } else {
                 0.0
             },
-            splat_tex_scales: ms.resources.splat_tex_scales,
-            splat_tex_mults: ms.resources.splat_tex_mults,
+            // Engine defaults: identity on both. The recipe stores
+            // `None` when the source mapinfo's `splats` block was
+            // absent; fall through to those defaults at render time.
+            splat_tex_scales: ms.resources.splat_tex_scales.unwrap_or([1.0; 4]),
+            splat_tex_mults: ms.resources.splat_tex_mults.unwrap_or([1.0; 4]),
             // `advanced_splat_enabled` is a renderer-runtime flag,
             // overridden in `sync_to_frame` based on which textures
             // were actually uploaded. Map-settings can't know that.
@@ -413,9 +517,9 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             // Same: host computes this from map dimensions and sets
             // it via update_heightmap / sync_to_frame.
             elmo_per_render_xz: [1.0, 1.0],
-            atmosphere_fog_start: ms.atmosphere.fog_start,
-            atmosphere_fog_end: ms.atmosphere.fog_end,
-            atmosphere_fog_color: crate::color::srgb_to_linear_rgb(ms.atmosphere.fog_color),
+            atmosphere_fog_start: atm.fog_start,
+            atmosphere_fog_end: atm.fog_end,
+            atmosphere_fog_color: atm.fog_color,
         }
     }
 }
@@ -427,6 +531,7 @@ impl Default for SmfLighting {
             ground_ambient: [0.5, 0.5, 0.5],
             ground_diffuse: [0.5, 0.5, 0.5],
             ground_specular: [0.1, 0.1, 0.1],
+            ground_shadow_density: 0.8,
             // Engine default is 100.0 (MapInfo.cpp::ReadLight). Our 10.0
             // produced a much broader, dimmer spec lobe than engine on any
             // map that didn't override `specularExponent` in mapinfo.lua.
@@ -447,11 +552,18 @@ impl Default for SmfLighting {
             water_fresnel_power: 4.0,
             water_reflection_distortion: 1.0,
             water_perlin_amplitude: 0.9,
-            custom_fog_enabled: false,
-            custom_fog_color: [0.0, 0.0, 0.0],
-            custom_fog_height_elmos: 0.0,
-            custom_fog_atten: 0.0,
+            water_blur_base: 2.0,
+            water_blur_exponent: 1.5,
+            caustics_resolution: 75.0,
+            caustics_strength: 0.08,
+            wave_offset_factor: 0.0,
+            wave_foam_distortion: 0.05,
+            wave_foam_intensity: 0.5,
+            wave_length: 0.15,
+            foam_enabled: false,
+            custom_fog: crate::widgets::custom_fog::CustomFogWidget::default(),
             sun_color: [1.0, 1.0, 1.0],
+            sun_intensity: 1.0,
             sky_color: [0.1, 0.15, 0.7],
             sky_dir: [0.0, 0.0, -1.0],
             cloud_density: 0.5,
@@ -460,6 +572,10 @@ impl Default for SmfLighting {
             sky_reflect_mod_enabled: false,
             specular_tex_enabled: false,
             grass_shading_tex_enabled: false,
+            light_emission_tex_enabled: false,
+            detail_normal_tex_enabled: false,
+            basic_splat_enabled: false,
+            caustic_array_enabled: false,
             detail_strength: 1.0,
             splat_tex_scales: [1.0, 1.0, 1.0, 1.0],
             splat_tex_mults: [1.0, 1.0, 1.0, 1.0],
@@ -496,7 +612,11 @@ impl SmfLighting {
                 self.ground_specular[0],
                 self.ground_specular[1],
                 self.ground_specular[2],
-                0.0,
+                // `.w` carries mapinfo `lighting.groundShadowDensity`.
+                // Shader reads it at the shadow-coeff modulation site to
+                // mirror `SMFFragProg.glsl:371`: `shadow_coeff = mix(1,
+                // raw_shadow, density)`.
+                self.ground_shadow_density,
             ],
             water_absorb: [
                 self.water_absorb[0],
@@ -511,28 +631,43 @@ impl SmfLighting {
                 0.0,
             ],
             water_min_color: [self.water_min[0], self.water_min[1], self.water_min[2], 0.0],
-            custom_fog_color_atten: [
-                self.custom_fog_color[0],
-                self.custom_fog_color[1],
-                self.custom_fog_color[2],
-                self.custom_fog_atten,
+            // Widget half of the uniform: custom-fog colour + atten
+            // (owned by `widgets::custom_fog`). The `.zw` lanes of
+            // `custom_fog_params` are non-widget runtime flags that
+            // happen to share the slot for layout-density reasons;
+            // see below.
+            custom_fog_color_atten: self.custom_fog.pack_color_atten(),
+            custom_fog_params: {
+                let xy = self.custom_fog.pack_params_xy();
+                [
+                    xy[0],
+                    xy[1],
+                    // Repurposed: gates the map-edge extension
+                    // between sampling `grassShadingTex` (when set)
+                    // and falling back to the playable albedo
+                    // (when unset). Belongs in a future dedicated
+                    // `extension_params` uniform; packed here for
+                    // now to avoid touching the layout.
+                    if self.grass_shading_tex_enabled {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                    // Gates the engine's `SMF_LIGHT_EMISSION` apply-
+                    // emission stage in `terrain.wgsl`.
+                    if self.light_emission_tex_enabled {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ]
+            },
+            sun_color: [
+                self.sun_color[0],
+                self.sun_color[1],
+                self.sun_color[2],
+                self.sun_intensity,
             ],
-            custom_fog_params: [
-                if self.custom_fog_enabled { 1.0 } else { 0.0 },
-                self.custom_fog_height_elmos,
-                // Repurposed: gates the map-edge extension between
-                // sampling `grassShadingTex` (when set) and falling
-                // back to the playable albedo (when unset). Belongs
-                // in a future dedicated `extension_params` uniform;
-                // packed here for now to avoid touching the layout.
-                if self.grass_shading_tex_enabled {
-                    1.0
-                } else {
-                    0.0
-                },
-                0.0,
-            ],
-            sun_color: [self.sun_color[0], self.sun_color[1], self.sun_color[2], 1.0],
             sky_color_density: [
                 self.sky_color[0],
                 self.sky_color[1],
@@ -586,6 +721,20 @@ impl SmfLighting {
                 self.atmosphere_fog_color[2],
                 1.0,
             ],
+            terrain_detail_params: [
+                // .x = SMF_BLEND_NORMALS texture present
+                if self.detail_normal_tex_enabled {
+                    1.0
+                } else {
+                    0.0
+                },
+                // .y = basic SMF_DETAIL_TEXTURE_SPLATTING active (engine
+                // path uses splatDetailTex singular, not the four
+                // splat-detail-normal textures).
+                if self.basic_splat_enabled { 1.0 } else { 0.0 },
+                0.0,
+                0.0,
+            ],
         }
     }
 }
@@ -614,6 +763,9 @@ struct SmfUniformSlots {
     /// Mapinfo `atmosphere.fogColor` packed for `CameraUniform::fog_color`.
     atmosphere_fog_color: [f32; 4],
     splat_params: [f32; 4],
+    /// Detail-path enable flags. .x = detail_normal_enabled, .y =
+    /// basic_splat_enabled. zw reserved.
+    terrain_detail_params: [f32; 4],
 }
 
 /// Per-map water surface parameters consumed by the BumpWater port in
@@ -633,9 +785,23 @@ struct WaterParamsUniform {
     factors: [f32; 4],
     /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = unused
     fresnel: [f32; 4],
+    /// x = blurBase (pixels), y = blurExponent, zw reserved. Drives
+    /// the 7-tap reflection blur in `water.wgsl` -- the shader divides
+    /// `x` by viewport height to get a UV-space offset.
+    blur: [f32; 4],
+    /// x = causticsResolution (UV scale), y = causticsStrength
+    /// (intensity multiplier), z = caustics_enabled (0 = off, 1 = on
+    /// once the 32-frame caustic array is uploaded), w = foam_enabled
+    /// (set once `update_foam_assets` + `update_coastmap` have both
+    /// run).
+    caustics: [f32; 4],
+    /// x = waveOffsetFactor, y = waveFoamDistortion, z =
+    /// waveFoamIntensity, w = waveLength. Engine `BumpWaterFS:186-220`
+    /// inputs.
+    foam: [f32; 4],
 }
 
-const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 80);
+const _: () = assert!(std::mem::size_of::<WaterParamsUniform>() == 128);
 
 impl From<&SmfLighting> for WaterParamsUniform {
     fn from(l: &SmfLighting) -> Self {
@@ -676,6 +842,25 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 l.water_fresnel_max,
                 l.water_fresnel_power.max(0.01),
                 0.0,
+            ],
+            blur: [l.water_blur_base, l.water_blur_exponent, 0.0, 0.0],
+            caustics: [
+                l.caustics_resolution,
+                l.caustics_strength,
+                // Enabled gate -- the override fn flips this after
+                // `update_caustics` has populated the 32-frame array.
+                if l.caustic_array_enabled { 1.0 } else { 0.0 },
+                // Foam-stage gate. The override fn sets this true
+                // once both the engine-shipped foam+waverand
+                // textures and the per-map coastmap have been
+                // uploaded.
+                if l.foam_enabled { 1.0 } else { 0.0 },
+            ],
+            foam: [
+                l.wave_offset_factor,
+                l.wave_foam_distortion,
+                l.wave_foam_intensity,
+                l.wave_length,
             ],
         }
     }
@@ -732,16 +917,26 @@ pub struct TerrainRenderer {
     splat_detail_normal_4: wgpu::Texture,
     splat_distr_texture: wgpu::Texture,
     advanced_splat_enabled: bool,
-    /// `skyReflectModTex` upload state. 1x1 black default produces
-    /// zero reflection mix; replaced by `update_sky_reflect_mod` when
-    /// the map specifies one.
+    /// `skyReflectModTex` upload state. The 1x1 black default is
+    /// **never sampled** by the shader -- the cubemap-mix branch in
+    /// `terrain.wgsl` is gated behind `skybox_params.z > 0.5`
+    /// (the `sky_reflect_mod_enabled` flag), so maps without this
+    /// texture fall through to no env-reflection at all, matching the
+    /// engine's `#ifdef SMF_SKY_REFLECTIONS` compile-out
+    /// (`bar-recoil/rts/Map/SMF/SMFRenderState.cpp:117`). The 1x1
+    /// placeholder exists only so the bind group always has a valid
+    /// texture view; it's inert under the gate.
     sky_reflect_mod_texture: wgpu::Texture,
     sky_reflect_mod_enabled: bool,
-    /// `specularTex` upload state. 1x1 black default produces zero
-    /// per-pixel spec; replaced by `update_specular_tex` when the map
-    /// specifies one. The `specular_tex_enabled` flag is what gates the
-    /// shader's spec-tex path (SMF_SPECULAR_LIGHTING) -- when off, the
-    /// global `ground_specular` / spec exponent are used instead.
+    /// `specularTex` upload state. The 1x1 black default is **never
+    /// sampled** by the shader: the per-pixel branch in `terrain.wgsl`
+    /// is gated behind `skybox_params.w > 0.5` (the
+    /// `specular_tex_enabled` flag), and the `#else` path uses the
+    /// global `ground_specular.xyz` colour and `sun_dir_exp.w`
+    /// exponent uniforms. That mirrors the engine's
+    /// `#ifdef SMF_SPECULAR_LIGHTING ... #else ...` split in
+    /// `SMFFragProg.glsl:403-416`. The placeholder exists only to
+    /// keep the bind group valid; it's inert under the gate.
     specular_tex_texture: wgpu::Texture,
     specular_tex_enabled: bool,
     /// `grassShadingTex` upload state. 1x1 grey default; replaced by
@@ -751,6 +946,30 @@ pub struct TerrainRenderer {
     /// the playable albedo instead.
     grass_shading_tex_texture: wgpu::Texture,
     grass_shading_tex_enabled: bool,
+    /// `lightEmissionTex` upload state. 1x1 `(0,0,0,0)` default so the
+    /// emission blend collapses to identity (no glow) until a real
+    /// texture is uploaded. Engine path `SMF_LIGHT_EMISSION`
+    /// (`SMFFragProg.glsl:392-401`). `light_emission_enabled` gates
+    /// the shader's apply-emission stage so even a stale texture
+    /// from a prior map doesn't keep glowing after a switch.
+    light_emission_tex_texture: wgpu::Texture,
+    light_emission_tex_enabled: bool,
+    /// `detailNormalTex` upload state. Default is 1x1
+    /// `(0.5, 0.5, 1.0, 0.0)` -- decoded as tangent-space normal
+    /// `(0, 0, 1)` with alpha 0, so the blend in
+    /// `SMFFragProg.glsl:299-307` is `mix(normal, ..., 0) = normal`
+    /// and produces no perturbation. `detail_normal_tex_enabled`
+    /// gates the shader stage at runtime.
+    detail_normal_tex_texture: wgpu::Texture,
+    detail_normal_tex_enabled: bool,
+    /// Basic `splatDetailTex` upload state (singular -- different
+    /// texture from the four `splatDetailNormalTex1..4`). Used by
+    /// the engine's `SMF_DETAIL_TEXTURE_SPLATTING` path when the
+    /// map sets the basic-splat key but NOT the normal-splat keys.
+    /// Mutually exclusive with the normal-splat path; default 1x1
+    /// mid-grey produces zero contribution after `(2*sample - 1)`.
+    basic_splat_tex_texture: wgpu::Texture,
+    basic_splat_enabled: bool,
     has_albedo: bool,
     // ── Group 2: planar reflection (b0/b1) + planar refraction (b2/b3) + water params (b4) ──────
     water_planes_bind_group_layout: wgpu::BindGroupLayout,
@@ -761,6 +980,35 @@ pub struct TerrainRenderer {
     refraction_depth_sampler: wgpu::Sampler,
     water_planes_bind_group: wgpu::BindGroup,
     water_planes_bind_group_dummy: wgpu::BindGroup,
+    /// 32-layer caustic-animation texture array. Engine
+    /// `BumpWaterFS:324-334` cycles one frame per game step;
+    /// `water.wgsl` reproduces that by indexing the layer with
+    /// `(camera.time * 30.0) as i32 % 32`. Default 1x1x1 (black) so
+    /// the binding stays valid even when no BAR install was found at
+    /// startup -- the `caustic_array_enabled` flag gates the shader
+    /// stage so no caustic contribution lands in that case.
+    caustic_array_texture: wgpu::Texture,
+    caustic_sampler: wgpu::Sampler,
+    caustic_array_enabled: bool,
+    /// Engine-shipped foam tile (`bitmaps/foam.jpg`) + wave
+    /// randomisation tile (`bitmaps/shorewaverand.png`). Both come
+    /// from BAR's `bitmaps.sdz`; loaded once at app startup by
+    /// `bar-app::viewport::sync_foam_assets`. 1x1 placeholders sit
+    /// here until the upload lands.
+    foam_texture: wgpu::Texture,
+    waverand_texture: wgpu::Texture,
+    foam_assets_enabled: bool,
+    /// Per-map coastmap baked from the heightmap by
+    /// `bar_data::coastmap::bake_coastmap`. Encodes refined / raw
+    /// distance to coast plus invwaterdepth in RGB. Re-baked on
+    /// every `update_heightmap` call. Default 1x1 (0,0,0,255) so
+    /// the shader gate keeps foam off until a real heightmap loads.
+    coastmap_texture: wgpu::Texture,
+    coastmap_enabled: bool,
+    /// Map-grass widget pipeline (BAR `map_grass_gl4` widget port,
+    /// driven by mapinfo `custom.grassConfig`). Self-contained
+    /// instance-rendered pass between water and gamma encode.
+    pub map_grass: crate::widgets::map_grass::MapGrassPipeline,
     /// Per-map water surface uniform (BumpWater inputs). Re-uploaded each
     /// frame in `render_internal` from the current `SmfLighting`.
     water_params_buffer: wgpu::Buffer,
@@ -793,6 +1041,25 @@ pub struct TerrainRenderer {
     water_index_offset: u32,
     /// Grid resolution used when building the flat terrain mesh.
     grid_n: u32,
+    // ── Gamma-encode post-process pass ──────────────────────────────────────
+    /// Fullscreen pipeline that samples `output_texture` (BAR's perceptual
+    /// pixels) and writes `pow(c, 2.2)` into `display_texture`. egui samples
+    /// the display texture, the sRGB swapchain re-encodes back to the raw
+    /// perceptual byte, and the display gamma decodes to V^2.2 -- the
+    /// in-engine appearance. Without this pass the sRGB swapchain leaves
+    /// the displayed intensity at V (too bright, washed-out highlights).
+    gamma_pipeline: wgpu::RenderPipeline,
+    gamma_bgl: wgpu::BindGroupLayout,
+    gamma_sampler: wgpu::Sampler,
+    gamma_bind_group: Option<wgpu::BindGroup>,
+    /// Single-float uniform driving `gamma_encode.wgsl`'s pow exponent.
+    /// Live-tunable via the viewport debug overlay so the right value
+    /// can be dialled in against an in-engine reference. Padded to 16
+    /// bytes for std140.
+    gamma_uniform_buffer: wgpu::Buffer,
+    display_texture: Option<wgpu::Texture>,
+    display_view: Option<wgpu::TextureView>,
+    output_format: wgpu::TextureFormat,
     // ── Output targets ──────────────────────────────────────────────────────
     depth_texture: Option<wgpu::TextureView>,
     depth_format: wgpu::TextureFormat,
@@ -1091,14 +1358,31 @@ impl TerrainRenderer {
         queue: &wgpu::Queue,
         output_format: wgpu::TextureFormat,
     ) -> Self {
-        // Assemble WGSL from Recoil ports + original shaders. Concatenation
-        // gives the same effect as #include; WGSL has no preprocessor.
+        // Assemble WGSL from Recoil ports + widget overlays + composer
+        // shaders. Concatenation gives the same effect as #include;
+        // WGSL has no preprocessor.
+        //
+        // Order:
+        // - `recoil/*` -- engine-native ports (sky / SMF helpers).
+        // - `widgets/*` -- BAR-widget effects driven by mapinfo
+        //   `custom.*` blocks. Must come BEFORE the composer shaders
+        //   that call into them (WGSL doesn't forward-reference
+        //   functions; it does forward-reference module-scope
+        //   `var`s, which is why widgets can use `camera.*` even
+        //   though that binding is declared later in `terrain.wgsl`).
+        // - `water.wgsl` + `terrain.wgsl` -- composer shaders that
+        //   declare bindings and call into the recoil + widget pools.
+        //
+        // See `feedback_no_game_widget_porting.md` memory for the
+        // widget-effect in-scope rule.
         let modern_sky_source = include_str!("../../../shaders/recoil/modern_sky.wgsl");
         let smf_ground_source = include_str!("../../../shaders/recoil/smf_ground.wgsl");
+        let custom_fog_source = include_str!("../../../shaders/widgets/custom_fog.wgsl");
         let water_source = include_str!("../../../shaders/water.wgsl");
         let terrain_source = include_str!("../../../shaders/terrain.wgsl");
-        let shader_source =
-            format!("{modern_sky_source}\n{smf_ground_source}\n{water_source}\n{terrain_source}");
+        let shader_source = format!(
+            "{modern_sky_source}\n{smf_ground_source}\n{custom_fog_source}\n{water_source}\n{terrain_source}",
+        );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain_shader"),
             source: wgpu::ShaderSource::Wgsl(shader_source.into()),
@@ -1327,6 +1611,56 @@ impl TerrainRenderer {
                         },
                         count: None,
                     },
+                    // Self-illumination texture (mapinfo `lightEmissionTex`,
+                    // engine path `SMF_LIGHT_EMISSION` -- see
+                    // `bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`).
+                    // Sampled at `specTexCoords`; alpha gates the blend
+                    // (`fragColor = fragColor * (1 - emit.a) + emit.rgb`)
+                    // so the glow is unshadowed and overrides whatever's
+                    // underneath. Defaults to 1x1 (0,0,0,0) so the blend
+                    // is a no-op for maps that don't ship an emission
+                    // texture.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // SMF_BLEND_NORMALS texture (mapinfo `detailNormalTex`,
+                    // `SMFFragProg.glsl:299-307`). Sampled at
+                    // `normTexCoords`; alpha gates a tangent-space-to-
+                    // world-space normal mix. Default decodes to identity
+                    // normal with alpha 0 so the blend is a no-op.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    // Basic SMF_DETAIL_TEXTURE_SPLATTING texture (mapinfo
+                    // `splatDetailTex` singular, `SMFFragProg.glsl:80-85,
+                    // 159-169`). Sampled per-channel at world-XZ scaled
+                    // coordinates; mutually exclusive with the
+                    // normal-splat path. Default mid-grey produces zero
+                    // contribution after the `(2*s - 1)` sign decode.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 17,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -1402,6 +1736,60 @@ impl TerrainRenderer {
                         binding: 6,
                         visibility: wgpu::ShaderStages::FRAGMENT,
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::NonFiltering),
+                        count: None,
+                    },
+                    // 32-layer caustic animation. Filtered sample;
+                    // layer index picked by the shader from
+                    // `camera.time`. Engine path
+                    // `BumpWaterFS:324-334` (`uniform sampler2D
+                    // caustic`).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 7,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2Array,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 8,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                    // Shore-foam textures + coastmap. All three share
+                    // the caustic sampler (bilinear, repeat). Engine
+                    // path `BumpWaterFS:186-220` (`GetShorewaves`).
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 9,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 10,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 11,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
                         count: None,
                     },
                 ],
@@ -1618,6 +2006,7 @@ impl TerrainRenderer {
             // live camera.
             fog_dists: [smf.atmosphere_fog[0], smf.atmosphere_fog[1], 0.0, 0.0],
             fog_color: smf.atmosphere_fog_color,
+            terrain_detail_params: smf.terrain_detail_params,
         };
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -1643,7 +2032,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1655,16 +2044,8 @@ impl TerrainRenderer {
             dimension: Some(wgpu::TextureViewDimension::Cube),
             ..Default::default()
         });
-        let skybox_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("skybox_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            address_mode_w: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let skybox_sampler =
+            make_filtered_sampler(device, "skybox_sampler", wgpu::AddressMode::ClampToEdge);
 
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("camera_bind_group"),
@@ -1685,21 +2066,8 @@ impl TerrainRenderer {
             ],
         });
 
-        let albedo_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("albedo_sampler"),
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            // Linear mip interpolation so the map-edge extension's
-            // mirrored sampling reads cleanly at oblique angles without
-            // sparkle. Other consumers (playable albedo) already had
-            // chain-aware mip selection in their textures; this sampler
-            // is shared, so flipping to Linear lifts quality everywhere
-            // without a behavioural change for the playable area.
-            mipmap_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
+        let albedo_sampler =
+            make_filtered_sampler(device, "albedo_sampler", wgpu::AddressMode::ClampToEdge);
 
         let white: [u8; 4] = [255, 255, 255, 255];
         let albedo_texture = device.create_texture_with_data(
@@ -1714,7 +2082,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1741,7 +2109,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1749,27 +2117,14 @@ impl TerrainRenderer {
             &mid_grey,
         );
         // Shared sampler for the detail / splat-detail-normal / splat
-        // distribution / sky-reflection-mask textures. Trilinear with 16x
-        // anisotropy. Matches engine behaviour:
-        //   - `GL_LINEAR_MIPMAP_LINEAR` -> wgpu `mipmap_filter: Linear` +
-        //     min/mag/`Linear` for the in-mip and inter-mip filtering steps.
-        //   - `GL_TEXTURE_MAX_ANISOTROPY_EXT` defaults to 16 in BAR
-        //     -> wgpu `anisotropy_clamp: 16`. wgpu silently caps to the
-        //     adapter's max anisotropy support (most desktop drivers do 16).
-        // Without anisotropy + mips, the splat-detail-normal textures
-        // sampled at world-space elmo scales alias into per-fragment normal
-        // noise at oblique angles, which lit every shadowed surface as
-        // grain.
-        let detail_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("detail_sampler"),
-            address_mode_u: wgpu::AddressMode::Repeat,
-            address_mode_v: wgpu::AddressMode::Repeat,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
-            anisotropy_clamp: 16,
-            ..Default::default()
-        });
+        // distribution / sky-reflection-mask textures. See
+        // `crate::samplers::make_filtered_sampler` for the rationale --
+        // without anisotropy + mips, splat-detail-normal textures
+        // sampled at world-space elmo scales alias into per-fragment
+        // normal noise at oblique angles, which lit every shadowed
+        // surface as grain.
+        let detail_sampler =
+            make_filtered_sampler(device, "detail_sampler", wgpu::AddressMode::Repeat);
 
         // Default splat textures: 1x1 (127, 127, 127, 127). The shader
         // does `sample * 2 - 1` so 127/255 ≈ 0.498 → centered ≈ -0.004,
@@ -1873,12 +2228,90 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
             wgpu::util::TextureDataOrder::LayerMajor,
             &grass_shading_tex_default_data,
+        );
+
+        // 1x1 mid-grey default for SMF_BLEND_NORMALS' `detailNormalTex`.
+        // Engine decodes `(dtSample.xyz * 2 - 1)`; (0.5, 0.5, 1.0)
+        // decodes to (0, 0, 1) = identity tangent-space normal. Alpha
+        // 0 makes the blend weight zero, so the surface normal passes
+        // through unchanged even if a future code path ever samples
+        // this default while the gate is off.
+        let detail_normal_tex_default_data: [u8; 4] = [127, 127, 255, 0];
+        let detail_normal_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_normal_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &detail_normal_tex_default_data,
+        );
+
+        // 1x1 mid-grey default for basic `splatDetailTex` (singular).
+        // Engine signs samples via `(s * 2 - 1)`; mid-grey produces 0
+        // contribution per channel. Path is also gated at runtime so
+        // this default is inert when the basic-splat flag is off.
+        let basic_splat_tex_default_data: [u8; 4] = [127, 127, 127, 255];
+        let basic_splat_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("basic_splat_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &basic_splat_tex_default_data,
+        );
+
+        // 1x1 (0, 0, 0, 0) default for lightEmissionTex. Engine blend is
+        // `fragColor = fragColor * (1 - emit.a) + emit.rgb`; with alpha
+        // zero the blend collapses to identity (no glow). Maps that
+        // ship a real emission texture get it via
+        // `update_light_emission_tex`.
+        let light_emission_tex_default_data: [u8; 4] = [0, 0, 0, 0];
+        let light_emission_tex_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light_emission_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &light_emission_tex_default_data,
         );
 
         let texture_bind_group = {
@@ -1895,6 +2328,11 @@ impl TerrainRenderer {
             let specv = specular_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             let gstv =
                 grass_shading_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let letv =
+                light_emission_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let dntv =
+                detail_normal_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
+            let bspv = basic_splat_tex_default.create_view(&wgpu::TextureViewDescriptor::default());
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("texture_bind_group"),
                 layout: &texture_bind_group_layout,
@@ -1959,6 +2397,18 @@ impl TerrainRenderer {
                         binding: 14,
                         resource: wgpu::BindingResource::TextureView(&gstv),
                     },
+                    wgpu::BindGroupEntry {
+                        binding: 15,
+                        resource: wgpu::BindingResource::TextureView(&letv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 16,
+                        resource: wgpu::BindingResource::TextureView(&dntv),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 17,
+                        resource: wgpu::BindingResource::TextureView(&bspv),
+                    },
                 ],
             })
         };
@@ -1986,7 +2436,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2018,7 +2468,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2073,10 +2523,125 @@ impl TerrainRenderer {
             ..Default::default()
         });
 
+        // Default 1x1x1 black caustic array. Stays bound until
+        // `update_caustics` replaces it with the real 32-frame
+        // animation pulled from `bitmaps.sdz`. The `caustic_array_enabled`
+        // flag in `WaterParams` keeps the shader stage off in the
+        // meantime so this default produces zero visual contribution.
+        let caustic_default = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("caustic_array_default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        // Single-layer placeholder writes one black texel so the
+        // texture isn't undefined; D2Array view with depth=1 is valid
+        // for the binding type.
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &caustic_default,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8, 0, 0, 0],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        let caustic_default_view = caustic_default.create_view(&wgpu::TextureViewDescriptor {
+            label: Some("caustic_array_default_view"),
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
+        let caustic_sampler =
+            make_filtered_sampler(device, "caustic_sampler", wgpu::AddressMode::Repeat);
+
+        // Defaults for foam + waverand + coastmap. All 1x1 inert
+        // until `update_foam_assets` and `update_coastmap` flip their
+        // gates on.
+        let foam_default_data: [u8; 4] = [0, 0, 0, 255];
+        let foam_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("foam_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &foam_default_data,
+        );
+        let waverand_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("waverand_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &foam_default_data,
+        );
+        let coastmap_default = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("coastmap_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &foam_default_data,
+        );
+
         let make_water_planes_bg =
             |refl_view: &wgpu::TextureView,
              refr_view: &wgpu::TextureView,
-             refr_depth_view: &wgpu::TextureView| {
+             refr_depth_view: &wgpu::TextureView,
+             caust_view: &wgpu::TextureView,
+             foam_view: &wgpu::TextureView,
+             waverand_view: &wgpu::TextureView,
+             coastmap_view: &wgpu::TextureView| {
                 device.create_bind_group(&wgpu::BindGroupDescriptor {
                     label: Some("water_planes_bind_group"),
                     layout: &water_planes_bind_group_layout,
@@ -2109,18 +2674,51 @@ impl TerrainRenderer {
                             binding: 6,
                             resource: wgpu::BindingResource::Sampler(&refraction_depth_sampler),
                         },
+                        wgpu::BindGroupEntry {
+                            binding: 7,
+                            resource: wgpu::BindingResource::TextureView(caust_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 8,
+                            resource: wgpu::BindingResource::Sampler(&caustic_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 9,
+                            resource: wgpu::BindingResource::TextureView(foam_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 10,
+                            resource: wgpu::BindingResource::TextureView(waverand_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 11,
+                            resource: wgpu::BindingResource::TextureView(coastmap_view),
+                        },
                     ],
                 })
             };
+        let foam_default_view = foam_default.create_view(&wgpu::TextureViewDescriptor::default());
+        let waverand_default_view =
+            waverand_default.create_view(&wgpu::TextureViewDescriptor::default());
+        let coastmap_default_view =
+            coastmap_default.create_view(&wgpu::TextureViewDescriptor::default());
         let water_planes_bind_group = make_water_planes_bg(
             &reflection_default_view,
             &refraction_default_view,
             &refraction_depth_default_view,
+            &caustic_default_view,
+            &foam_default_view,
+            &waverand_default_view,
+            &coastmap_default_view,
         );
         let water_planes_bind_group_dummy = make_water_planes_bg(
             &reflection_default_view,
             &refraction_default_view,
             &refraction_depth_default_view,
+            &caustic_default_view,
+            &foam_default_view,
+            &waverand_default_view,
+            &coastmap_default_view,
         );
 
         let water_normal_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -2270,6 +2868,126 @@ impl TerrainRenderer {
             &shadow.receiver_bgl,
         );
 
+        // ── Gamma-encode post-process pipeline ──────────────────────────
+        // Samples `output_texture` (perceptual) and writes pow(c, 2.2) to
+        // `display_texture`. See shaders/gamma_encode.wgsl for the full
+        // chain rationale.
+        let gamma_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gamma_encode_shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/gamma_encode.wgsl").into(),
+            ),
+        });
+        let gamma_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gamma_encode_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        // Seed the uniform with a sensible starting exponent so the very
+        // first frame after resize -- before any UI tick has called
+        // `set_gamma_exponent` -- already runs with a non-zero pow().
+        // 1.5 is the current empirical sweet-spot pick; the slider in
+        // the viewport debug overlay can dial it from there.
+        let gamma_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("gamma_encode_uniform"),
+            size: 16,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &gamma_uniform_buffer,
+            0,
+            bytemuck::bytes_of(&[1.5_f32, 0.0, 0.0, 0.0]),
+        );
+        let gamma_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("gamma_encode_sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let gamma_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("gamma_encode_layout"),
+                bind_group_layouts: &[&gamma_bgl],
+                push_constant_ranges: &[],
+            });
+        let gamma_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gamma_encode_pipeline"),
+            layout: Some(&gamma_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &gamma_shader,
+                entry_point: Some("vs_gamma"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gamma_shader,
+                entry_point: Some("fs_gamma"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // Map-grass widget pipeline. Self-contained: owns its blade
+        // mesh, blade-color texture, instance buffer, and bind group.
+        // The bind group is wired to the heightmap view on each
+        // `update_heightmap` call.
+        let map_grass = crate::widgets::map_grass::MapGrassPipeline::new(
+            device,
+            queue,
+            &camera_bind_group_layout,
+            &shadow.receiver_bgl,
+            output_format,
+            depth_format,
+        );
+
         Self {
             render_pipeline,
             sky_pipeline,
@@ -2304,6 +3022,12 @@ impl TerrainRenderer {
             specular_tex_texture: specular_tex_default,
             specular_tex_enabled: false,
             grass_shading_tex_texture: grass_shading_tex_default,
+            light_emission_tex_texture: light_emission_tex_default,
+            light_emission_tex_enabled: false,
+            detail_normal_tex_texture: detail_normal_tex_default,
+            detail_normal_tex_enabled: false,
+            basic_splat_tex_texture: basic_splat_tex_default,
+            basic_splat_enabled: false,
             grass_shading_tex_enabled: false,
             has_albedo: false,
             water_planes_bind_group_layout,
@@ -2312,6 +3036,15 @@ impl TerrainRenderer {
             refraction_depth_sampler,
             water_planes_bind_group,
             water_planes_bind_group_dummy,
+            caustic_array_texture: caustic_default,
+            caustic_sampler,
+            caustic_array_enabled: false,
+            foam_texture: foam_default,
+            waverand_texture: waverand_default,
+            foam_assets_enabled: false,
+            coastmap_texture: coastmap_default,
+            coastmap_enabled: false,
+            map_grass,
             water_params_buffer,
             last_water_params: WaterParamsUniform::default(),
             water_normal_texture,
@@ -2326,6 +3059,14 @@ impl TerrainRenderer {
             num_indices: 0,
             water_index_offset: 0,
             grid_n: 512,
+            gamma_pipeline,
+            gamma_bgl,
+            gamma_sampler,
+            gamma_bind_group: None,
+            gamma_uniform_buffer,
+            display_texture: None,
+            display_view: None,
+            output_format,
             depth_texture: None,
             depth_format,
             output_texture: None,
@@ -2603,6 +3344,20 @@ impl TerrainRenderer {
                 });
             self.heightmap_texture = tex;
             self.normal_map_texture = nm_tex;
+            // Rebuild the grass widget's bind group so its vertex
+            // shader can sample the new heightmap to anchor blade
+            // bases on the terrain surface. The FS reads
+            // `grass_shading_tex` (= `$grass` in BAR's widget; per-
+            // map override or minimap fallback) for the
+            // MAPCOLORFACTOR / MAPCOLORBASE blends.
+            let hm_view = self
+                .heightmap_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let grass_color_mod_view = self
+                .grass_shading_tex_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass
+                .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
         }
     }
 
@@ -2673,7 +3428,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2707,7 +3462,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2762,7 +3517,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2824,7 +3579,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -2862,7 +3617,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Bc1RgbaUnormSrgb,
+                format: wgpu::TextureFormat::Bc1RgbaUnorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3050,6 +3805,15 @@ impl TerrainRenderer {
         let gstv = self
             .grass_shading_tex_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let letv = self
+            .light_emission_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let dntv = self
+            .detail_normal_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let bspv = self
+            .basic_splat_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("texture_bind_group"),
             layout: &self.texture_bind_group_layout,
@@ -3113,6 +3877,18 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 14,
                     resource: wgpu::BindingResource::TextureView(&gstv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::TextureView(&letv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: wgpu::BindingResource::TextureView(&dntv),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 17,
+                    resource: wgpu::BindingResource::TextureView(&bspv),
                 },
             ],
         });
@@ -3276,7 +4052,7 @@ impl TerrainRenderer {
             mip_level_count: mip_count,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -3304,6 +4080,22 @@ impl TerrainRenderer {
         self.grass_shading_tex_texture = tex;
         self.grass_shading_tex_enabled = true;
         self.rebuild_material_bind_group(device);
+        // The grass widget's bind group at binding 4 holds a
+        // TextureView captured from the OLD grass_shading_tex
+        // (the 1x1 grey default at first build). Replacing the
+        // texture variable doesn't update the bind group's view --
+        // we have to rebuild explicitly. Skip if the heightmap
+        // hasn't been built yet (no grass to draw anyway).
+        if self.heightmap_texture.size().width > 1 {
+            let hm_view = self
+                .heightmap_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let grass_color_mod_view = self
+                .grass_shading_tex_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass
+                .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
+        }
     }
 
     /// Reset grassShadingTex to the 1x1 grey default; extension shader
@@ -3322,7 +4114,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3330,6 +4122,513 @@ impl TerrainRenderer {
             &grey,
         );
         self.grass_shading_tex_enabled = false;
+        self.rebuild_material_bind_group(device);
+        // See `update_grass_shading_tex` for why the grass widget
+        // bind group needs an explicit rebuild on texture swap.
+        if self.heightmap_texture.size().width > 1 {
+            let hm_view = self
+                .heightmap_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            let grass_color_mod_view = self
+                .grass_shading_tex_texture
+                .create_view(&wgpu::TextureViewDescriptor::default());
+            self.map_grass
+                .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
+        }
+    }
+
+    /// Replace the 32-frame caustic animation. Each frame is one RGBA8
+    /// image with `(width, height)`; all frames must share the same
+    /// dimensions. The renderer creates a fresh `texture_2d_array`
+    /// with 32 layers and uploads them sequentially, then rebuilds
+    /// the water-planes bind group so the next render sees the new
+    /// texture. Engine path `BumpWaterFS:324-334` (`uniform sampler2D
+    /// caustic`); we map "engine swaps texture per game step" onto
+    /// "shader picks layer index from `(time * 30) % 32`".
+    ///
+    /// `frames` must contain exactly 32 entries -- the engine hardcodes
+    /// 32 frames. Returns silently on mismatched count so a partial
+    /// install can't take the renderer down.
+    pub fn update_caustics(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        frames: &[(Vec<u8>, u32, u32)],
+    ) {
+        if frames.len() != 32 {
+            tracing::warn!(
+                got = frames.len(),
+                "caustic update expects 32 frames, ignoring",
+            );
+            return;
+        }
+        let (_, width, height) = frames[0];
+        if frames.iter().any(|(_, w, h)| *w != width || *h != height) {
+            tracing::warn!("caustic frames must all share dimensions, ignoring upload",);
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("caustic_array"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 32,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (layer, (rgba, _, _)) in frames.iter().enumerate() {
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: 0,
+                        z: layer as u32,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(width * 4),
+                    rows_per_image: Some(height),
+                },
+                wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        self.caustic_array_texture = texture;
+        self.caustic_array_enabled = true;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Replace the engine-shipped foam + waverand textures
+    /// (`bitmaps/foam.jpg` and `bitmaps/shorewaverand.png`). Both
+    /// uploaded together because they're a fused asset bundle and
+    /// the shader gate sees them as a pair.
+    #[allow(clippy::too_many_arguments)]
+    pub fn update_foam_assets(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        foam: &[u8],
+        foam_w: u32,
+        foam_h: u32,
+        waverand: &[u8],
+        waverand_w: u32,
+        waverand_h: u32,
+    ) {
+        self.foam_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("foam_tex"),
+                size: wgpu::Extent3d {
+                    width: foam_w,
+                    height: foam_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            foam,
+        );
+        self.waverand_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("waverand_tex"),
+                size: wgpu::Extent3d {
+                    width: waverand_w,
+                    height: waverand_h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            waverand,
+        );
+        self.foam_assets_enabled = true;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Replace the per-map coastmap. `rgba` is the output of
+    /// `bar_data::coastmap::bake_coastmap` at `(width, height)`
+    /// matching the heightmap dimensions.
+    pub fn update_coastmap(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.coastmap_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("coastmap"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.coastmap_enabled = true;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Reset caustics to the 1x1x1 black default. The shader gate
+    /// stays off until `update_caustics` runs again.
+    pub fn clear_caustics(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("caustic_array_default"),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &[0u8, 0, 0, 0],
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4),
+                rows_per_image: Some(1),
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.caustic_array_texture = texture;
+        self.caustic_array_enabled = false;
+        self.rebuild_water_planes_bind_group(device);
+    }
+
+    /// Rebuild the water-planes bind group against the current caustic
+    /// texture. Called by `update_caustics` / `clear_caustics`; the
+    /// reflection / refraction views are preserved from the last
+    /// reflection-pass setup (`resize_render_target`).
+    fn rebuild_water_planes_bind_group(&mut self, device: &wgpu::Device) {
+        // If the reflection/refraction views haven't been set yet
+        // (no water-bearing map loaded), point at the same dummy
+        // bind group -- nothing draws water in that state anyway.
+        let Some(refl_view) = self.reflection_view.as_ref() else {
+            return;
+        };
+        let Some(refr_view) = self.refraction_view.as_ref() else {
+            return;
+        };
+        let refr_depth_view = self
+            .refraction_texture
+            .as_ref()
+            .map(|t| t.create_view(&wgpu::TextureViewDescriptor::default()));
+        let _ = refr_depth_view; // depth view comes from the depth attachment, not the colour tex
+
+        // The actual refraction-depth view lives behind
+        // `self.refraction_depth_view`; we reuse the existing bind
+        // group's depth view by reading from the same field used in
+        // `resize_render_target`.
+        let Some(refr_depth_sample) = self.refraction_depth_view.as_ref() else {
+            return;
+        };
+        let caustic_view = self
+            .caustic_array_texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                label: Some("caustic_array_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+        let foam_view = self
+            .foam_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let waverand_view = self
+            .waverand_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let coastmap_view = self
+            .coastmap_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("water_planes_bind_group"),
+            layout: &self.water_planes_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(refl_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.reflection_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(refr_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::Sampler(&self.refraction_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: self.water_params_buffer.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::TextureView(refr_depth_sample),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 6,
+                    resource: wgpu::BindingResource::Sampler(&self.refraction_depth_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&caustic_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&self.caustic_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&foam_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&waverand_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&coastmap_view),
+                },
+            ],
+        });
+    }
+
+    /// Replace the `lightEmissionTex` 2D texture. Sets
+    /// `light_emission_tex_enabled` on so the terrain shader's apply-
+    /// emission stage actually runs. Engine path `SMF_LIGHT_EMISSION`
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:392-401`); unshadowed
+    /// glow, alpha-gated additive blend.
+    pub fn update_light_emission_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.light_emission_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light_emission_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.light_emission_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the `detailNormalTex` 2D texture. Flips
+    /// `detail_normal_tex_enabled` on so the next frame's terrain
+    /// shader runs the engine's `SMF_BLEND_NORMALS` perturbation
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:299-307`).
+    pub fn update_detail_normal_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.detail_normal_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_normal_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.detail_normal_tex_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset `detailNormalTex` to the inert default (identity normal,
+    /// alpha 0) so the SMF_BLEND_NORMALS blend is a no-op.
+    pub fn clear_detail_normal_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let identity: [u8; 4] = [127, 127, 255, 0];
+        self.detail_normal_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("detail_normal_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &identity,
+        );
+        self.detail_normal_tex_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Replace the basic `splatDetailTex` (singular). Flips
+    /// `basic_splat_enabled` on so the next frame's terrain shader
+    /// runs the engine's basic 4-channel colour splat path
+    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:80-85, 159-169`).
+    /// Mutually exclusive with the normal-splat path -- a map that
+    /// sets both will see the normal-splat path win.
+    pub fn update_basic_splat_tex(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        rgba: &[u8],
+        width: u32,
+        height: u32,
+    ) {
+        self.basic_splat_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("basic_splat_tex"),
+                size: wgpu::Extent3d {
+                    width,
+                    height,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            rgba,
+        );
+        self.basic_splat_enabled = true;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset basic `splatDetailTex` to the 1x1 mid-grey default so the
+    /// basic-splat colour contribution is zero.
+    pub fn clear_basic_splat_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let grey: [u8; 4] = [127, 127, 127, 255];
+        self.basic_splat_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("basic_splat_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &grey,
+        );
+        self.basic_splat_enabled = false;
+        self.rebuild_material_bind_group(device);
+    }
+
+    /// Reset `lightEmissionTex` to the 1x1 `(0,0,0,0)` default so the
+    /// emission blend collapses to identity (no glow contribution).
+    pub fn clear_light_emission_tex(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        let zero: [u8; 4] = [0, 0, 0, 0];
+        self.light_emission_tex_texture = device.create_texture_with_data(
+            queue,
+            &wgpu::TextureDescriptor {
+                label: Some("light_emission_tex_default"),
+                size: wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            },
+            wgpu::util::TextureDataOrder::LayerMajor,
+            &zero,
+        );
+        self.light_emission_tex_enabled = false;
         self.rebuild_material_bind_group(device);
     }
 
@@ -3467,7 +4766,7 @@ impl TerrainRenderer {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: wgpu::TextureFormat::Rgba8Unorm,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -3490,6 +4789,15 @@ impl TerrainRenderer {
 
     pub fn set_brush_cursor(&mut self, cursor: Option<(f32, f32, f32)>) {
         self.brush_cursor = cursor;
+    }
+
+    /// Live-tune the gamma post-pass exponent. See
+    /// `shaders/gamma_encode.wgsl` for the rationale; the viewport
+    /// debug overlay surfaces this as a slider so the right value can
+    /// be dialled visually against an in-engine reference.
+    pub fn set_gamma_exponent(&self, queue: &wgpu::Queue, exponent: f32) {
+        let padded = [exponent, 0.0, 0.0, 0.0];
+        queue.write_buffer(&self.gamma_uniform_buffer, 0, bytemuck::bytes_of(&padded));
     }
 
     fn brush_cursor_uniform(&self) -> [f32; 4] {
@@ -3518,14 +4826,60 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
-        self.output_view = Some(texture.create_view(&wgpu::TextureViewDescriptor::default()));
+        let output_view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+
+        // Gamma-encoded copy of the perceptual render target. egui samples
+        // this view, not the raw output; sRGB swapchain re-encoding then
+        // cancels back to V^2.2 on display (matches BAR's in-game
+        // appearance). Same dimensions, same format -- only the contents
+        // are pre-darkened by the gamma post-pass.
+        let display = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("terrain_display"),
+            size: wgpu::Extent3d {
+                width,
+                height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.output_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let display_view = display.create_view(&wgpu::TextureViewDescriptor::default());
+        let gamma_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("gamma_encode_bg"),
+            layout: &self.gamma_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&output_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.gamma_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: self.gamma_uniform_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
+        self.output_view = Some(output_view);
         self.output_texture = Some(texture);
+        self.display_view = Some(display_view);
+        self.display_texture = Some(display);
+        self.gamma_bind_group = Some(gamma_bg);
 
         let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("terrain_depth"),
@@ -3554,7 +4908,7 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -3587,7 +4941,7 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -3625,6 +4979,22 @@ impl TerrainRenderer {
         let refraction_depth_sample_view =
             refraction_depth.create_view(&wgpu::TextureViewDescriptor::default());
 
+        let caustic_view = self
+            .caustic_array_texture
+            .create_view(&wgpu::TextureViewDescriptor {
+                label: Some("caustic_array_view"),
+                dimension: Some(wgpu::TextureViewDimension::D2Array),
+                ..Default::default()
+            });
+        let foam_view = self
+            .foam_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let waverand_view = self
+            .waverand_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let coastmap_view = self
+            .coastmap_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
             layout: &self.water_planes_bind_group_layout,
@@ -3656,6 +5026,26 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 6,
                     resource: wgpu::BindingResource::Sampler(&self.refraction_depth_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 7,
+                    resource: wgpu::BindingResource::TextureView(&caustic_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 8,
+                    resource: wgpu::BindingResource::Sampler(&self.caustic_sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 9,
+                    resource: wgpu::BindingResource::TextureView(&foam_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 10,
+                    resource: wgpu::BindingResource::TextureView(&waverand_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 11,
+                    resource: wgpu::BindingResource::TextureView(&coastmap_view),
                 },
             ],
         });
@@ -3708,6 +5098,14 @@ impl TerrainRenderer {
             self.sky_reflect_mod_enabled,
             self.specular_tex_enabled,
             self.grass_shading_tex_enabled,
+            self.light_emission_tex_enabled,
+            self.detail_normal_tex_enabled,
+            self.basic_splat_enabled,
+            self.caustic_array_enabled,
+            // Foam needs BOTH the engine-shipped foam/waverand
+            // textures AND the per-map coastmap to have landed
+            // before the shader stage produces anything sensible.
+            self.foam_assets_enabled && self.coastmap_enabled,
             self.elmo_per_render_xz,
         );
         self.x_extent = f.x_extent;
@@ -3858,6 +5256,7 @@ impl TerrainRenderer {
                 0.0,
             ],
             fog_color: smf.atmosphere_fog_color,
+            terrain_detail_params: smf.terrain_detail_params,
         };
 
         // ── Pass 0: shadow map ──────────────────────────────────────────────
@@ -4244,7 +5643,77 @@ impl TerrainRenderer {
             water_pass.draw_indexed(self.water_index_offset..self.num_indices, 0, 0..1);
         }
 
+        // ── Grass widget pass ────────────────────────────────────────────
+        // BAR `map_grass_gl4` widget port (mapinfo
+        // `custom.grassConfig`). Renders after water + features so
+        // blades alpha-blend over the terrain composite. Reuses the
+        // main encoder + same color/depth attachments; the pipeline
+        // disables depth-write so alpha-tested blade edges don't
+        // cast hard depth silhouettes.
+        if self.map_grass.ready_to_draw() {
+            let mut grass_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("map_grass_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: output_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            grass_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            self.map_grass
+                .draw(&mut grass_pass, self.shadow.receiver_bind_group());
+        }
+
         queue.submit(std::iter::once(encoder.finish()));
+
+        // ── Gamma-encode post-pass ───────────────────────────────────────
+        // Sample the perceptual render target and write pow(c, 2.2) into
+        // `display_texture`. egui binds the display view (see
+        // `output_view()`), the sRGB swapchain re-encodes the gamma-
+        // darkened pixels back to BAR's raw perceptual bytes, and the
+        // display gamma decodes to V^2.2 -- the engine appearance. This
+        // runs after every main-pass write so cross-pass intermediates
+        // (refraction / reflection) stay perceptual for their samplers.
+        if let (Some(display_view), Some(gamma_bg)) =
+            (self.display_view.as_ref(), self.gamma_bind_group.as_ref())
+        {
+            let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("gamma_encode_encoder"),
+            });
+            {
+                let mut rp = enc.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("gamma_encode_pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: display_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rp.set_pipeline(&self.gamma_pipeline);
+                rp.set_bind_group(0, gamma_bg, &[]);
+                rp.draw(0..3, 0..1);
+            }
+            queue.submit(std::iter::once(enc.finish()));
+        }
     }
 
     // ── Accessors ───────────────────────────────────────────────────────────
@@ -4268,8 +5737,107 @@ impl TerrainRenderer {
         (self.height_scale, self.x_extent, self.z_extent)
     }
 
+    /// Total vertical span of the heightmap in elmos. Needed by
+    /// widget callers (grass + others) to convert elmo-space
+    /// quantities into render-space units via
+    /// `height_scale / height_range_elmos`.
+    pub fn height_range_elmos(&self) -> f32 {
+        self.height_range_elmos
+    }
+
+    /// Sync the grass widget's per-map assets in one shot. Uploads
+    /// the blade-colour texture, regenerates the instance buffer
+    /// from `dist_mask`, and rebuilds the bind group against the
+    /// current heightmap view. The caller passes the BAR-widget
+    /// config; we read the playable map dimensions from
+    /// `mesh_extents()` to translate distribution-mask coordinates
+    /// to world elmos.
+    pub fn sync_grass_assets(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        widget: crate::widgets::map_grass::MapGrassWidget,
+        dist_mask: &[u8],
+        mask_w: u32,
+        mask_h: u32,
+        blade_color_mips: &[(Vec<u8>, u32, u32)],
+    ) {
+        let enabled = self.map_grass.set_config(device, queue, widget.clone());
+        if !enabled {
+            self.map_grass.clear_blade_color(device, queue);
+            self.map_grass.update_instances(device, &[]);
+            return;
+        }
+        self.map_grass
+            .update_blade_color(device, queue, blade_color_mips);
+        let hm_view = self
+            .heightmap_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        // `mapGrassColorModTex = "$grass"` in `map_grass_gl4.lua:112`
+        // resolves to `MAP_BASE_GRASS_TEX` (`LuaOpenGLUtils.cpp:74`)
+        // which is `grassShadingTex` (`SMFReadMap.h:104`). Confirmed
+        // empirically via diagnostic shader edit -- displaying the
+        // raw mapColor sample on blade silhouettes shows the same
+        // darkened-minimap content as the per-map grassShadingTex
+        // file. BME's `grass_shading_tex_texture` is the matching
+        // source; using `albedo_texture` here would over-saturate
+        // because the engine's blend math is tuned for a downgraded
+        // colour map.
+        let grass_color_mod_view = self
+            .grass_shading_tex_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.map_grass
+            .rebuild_bind_group(device, &hm_view, &grass_color_mod_view);
+        // The blade mesh is authored in elmos and the instance
+        // buffer stores raw mapinfo `grassMaxSize` in elmos too.
+        // Render-space conversion happens in the vertex shader
+        // against the camera uniform's `height_scale /
+        // height_range_elmos` -- always current, so the instance
+        // buffer doesn't go stale if terrain dimensions arrive
+        // after grass assets do.
+        let instances = crate::widgets::map_grass::generate_instances(
+            &widget,
+            dist_mask,
+            mask_w,
+            mask_h,
+            self.x_extent,
+            self.z_extent,
+        );
+        // Cache the mask + extents so later `set_config` calls can
+        // regenerate the instance buffer in place when the user
+        // tweaks `grassMinSize`, `grassMaxSize`, or `patchPlacement
+        // Jitter` via the editor (each of those bakes into the
+        // per-patch instance data).
+        self.map_grass.cache_mask_for_regen(
+            dist_mask,
+            mask_w,
+            mask_h,
+            self.x_extent,
+            self.z_extent,
+        );
+        self.map_grass.update_instances(device, &instances);
+    }
+
+    /// Clear the grass widget state -- used on map switch when the
+    /// new map has no `custom.grassConfig` block.
+    pub fn clear_grass_assets(&mut self, device: &wgpu::Device, queue: &wgpu::Queue) {
+        self.map_grass.set_config(
+            device,
+            queue,
+            crate::widgets::map_grass::MapGrassWidget::default(),
+        );
+        self.map_grass.clear_blade_color(device, queue);
+        self.map_grass.update_instances(device, &[]);
+        self.map_grass.invalidate_cached_mask();
+    }
+
+    /// Display-bound texture view. This is the gamma-encoded copy of the
+    /// perceptual render target, written by the gamma post-pass at the end
+    /// of `render_internal`. egui samples this view so the sRGB swapchain
+    /// re-encoding cancels back to BAR's raw perceptual bytes, landing the
+    /// final display intensity at V^2.2 -- matching the engine.
     pub fn output_view(&self) -> Option<&wgpu::TextureView> {
-        self.output_view.as_ref()
+        self.display_view.as_ref()
     }
 
     pub fn depth_texture_view(&self) -> Option<&wgpu::TextureView> {
@@ -4327,8 +5895,14 @@ impl TerrainRenderer {
 
     /// Copy the rendered output back to a CPU RGBA8 buffer. Used by the
     /// headless CLI preview command. Returns `None` if no render has occurred.
+    ///
+    /// Reads the gamma-encoded display target so the resulting PNG matches
+    /// what the editor viewport shows -- without this, the PNG would be
+    /// the raw perceptual buffer (too bright when viewed in any sRGB-aware
+    /// image viewer, the same mismatch the gamma post-pass corrects for
+    /// the editor's sRGB swapchain).
     pub fn read_pixels(&self, device: &wgpu::Device, queue: &wgpu::Queue) -> Option<Vec<u8>> {
-        let texture = self.output_texture.as_ref()?;
+        let texture = self.display_texture.as_ref()?;
         let w = self.width;
         let h = self.height;
         let bytes_per_pixel = 4u32;
@@ -4394,11 +5968,15 @@ impl TerrainRenderer {
 mod tests {
     #[test]
     fn terrain_shader_wgsl_parses() {
+        // Concat order must mirror `TerrainRenderer::new` -- widget
+        // overlays sit between the engine-native helpers and the
+        // composer shaders so callers can resolve their functions.
         let modern_sky = include_str!("../../../shaders/recoil/modern_sky.wgsl");
         let smf_ground = include_str!("../../../shaders/recoil/smf_ground.wgsl");
+        let custom_fog = include_str!("../../../shaders/widgets/custom_fog.wgsl");
         let water = include_str!("../../../shaders/water.wgsl");
         let terrain = include_str!("../../../shaders/terrain.wgsl");
-        let combined = format!("{modern_sky}\n{smf_ground}\n{water}\n{terrain}");
+        let combined = format!("{modern_sky}\n{smf_ground}\n{custom_fog}\n{water}\n{terrain}");
         let module = naga::front::wgsl::parse_str(&combined);
         assert!(
             module.is_ok(),
@@ -4456,26 +6034,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn gamma_encode_shader_wgsl_parses() {
+        let s = include_str!("../../../shaders/gamma_encode.wgsl");
+        let module = naga::front::wgsl::parse_str(s);
+        assert!(
+            module.is_ok(),
+            "gamma_encode shader failed to parse: {:?}",
+            module.err()
+        );
+    }
+
     // ── Texture-format convention tests ────────────────────────────────
     //
-    // Each map-authored texture is either a COLOUR (perceptual sRGB by
-    // BAR convention) or DATA (numerical values BAR samples at face
-    // value). Picking the wrong wgpu format silently corrupts the
-    // texture content: sRGB format gamma-decodes data channels;
-    // non-sRGB format on a colour texture skips the decode we rely on
-    // for linear math. These tests pin the convention so an accidental
-    // change to one of the named constants surfaces immediately.
+    // Engine-faithful pipeline: BAR uploads every texture without the
+    // sRGB flag (`bar-recoil/.../GL/State.h:185`), so its samplers
+    // return raw `byte/255` to the shader and the shader's math runs
+    // in sRGB-perceptual space throughout. BME mirrors this: every
+    // texture uses a non-sRGB wgpu format so the GPU passes bytes
+    // through unchanged. Pinned here so an accidental sRGB choice
+    // surfaces immediately.
 
     #[test]
-    fn colour_textures_use_srgb_format() {
-        // Colour textures must use the sRGB variant so that author-
-        // perceptual values (sky/cloud albedo, grass texture, etc.)
-        // are auto-decoded to linear before shader math.
+    fn colour_textures_use_linear_format() {
+        // BAR-faithful: colour textures use the non-sRGB Rgba8Unorm
+        // variant so the GPU returns raw byte/255 to the shader.
+        // The shader's lighting math then operates on perceptual
+        // values throughout, matching BAR's gamma-incorrect but
+        // visually-consistent appearance.
         assert_eq!(
             super::COLOUR_TEX_FORMAT,
-            wgpu::TextureFormat::Rgba8UnormSrgb,
-            "colour textures must use sRGB so authored perceptual \
-             values decode correctly for linear shader math"
+            wgpu::TextureFormat::Rgba8Unorm,
+            "colour textures must use the non-sRGB variant -- BAR's \
+             samplers return byte/255 and all shader math stays in \
+             sRGB-perceptual space"
+        );
+    }
+
+    #[test]
+    fn bc1_colour_textures_use_linear_format() {
+        // Same reasoning for the BC1-compressed SMT terrain atlas.
+        assert_eq!(
+            super::COLOUR_TEX_FORMAT_BC1,
+            wgpu::TextureFormat::Bc1RgbaUnorm,
+            "BC1 colour textures must use the non-sRGB variant -- \
+             same gamma-incorrect-but-consistent reasoning as \
+             COLOUR_TEX_FORMAT"
         );
     }
 
@@ -4546,57 +6150,46 @@ mod tests {
     }
 
     #[test]
-    fn smf_lighting_decodes_display_colours_to_linear() {
-        // End-to-end check that `SmfLighting::from(&MapSettings)` runs
-        // sRGB->linear on the *display-output* colour triples (those
-        // used directly in the framebuffer or as fade targets). Onyx
-        // Cauldron's `fog_color = [0.11, 0.13, 0.15]` is the canonical
-        // reference: perceptual 0.11 should decode to linear ~0.0114
-        // (well below the byte-rounding precision needed to land at
-        // byte 28 after re-encoding for the sRGB framebuffer).
+    fn smf_lighting_passes_colours_through_in_perceptual_space() {
+        // Engine-faithful pipeline: `SmfLighting::from(&MapSettings)`
+        // passes every mapinfo colour triple through unchanged. BAR's
+        // shaders treat textures and uniforms as sRGB-perceptual values
+        // (no GPU decode on sample, no framebuffer encode on write), so
+        // BME's shader receives the raw perceptual values too. Pin the
+        // convention here -- any future "fix" to sRGB-decode at the
+        // boundary will silently re-darken the playable area and shift
+        // the colour balance.
         let mut ms = bar_project::MapSettings::default();
-        ms.atmosphere.fog_color = [0.11, 0.13, 0.15];
-        ms.water.base_color = [0.5, 0.68, 0.68];
+        ms.atmosphere.fog_color = Some([0.11, 0.13, 0.15]);
+        ms.atmosphere.sun_color = Some([1.0, 0.92, 0.78]);
+        ms.atmosphere.sky_color = Some([0.43, 0.58, 0.64]);
+        ms.atmosphere.cloud_color = Some([0.9, 0.9, 0.9]);
+        ms.lighting.ground_ambient = Some([0.56, 0.55, 0.55]);
+        ms.lighting.ground_diffuse = Some([0.75, 0.75, 0.8]);
+        ms.lighting.ground_specular = Some([0.5, 0.5, 0.5]);
+        ms.water.absorb = Some([0.011, 0.011, 0.015]);
+        ms.water.base_color = Some([0.5, 0.68, 0.68]);
+        ms.water.min_color = Some([0.022, 0.0035, 0.035]);
+        ms.water.surface_color = Some([0.5, 0.6, 0.65]);
+        ms.water.diffuse_color = Some([1.0, 1.0, 1.0]);
+        ms.water.specular_color = Some([0.65, 0.65, 0.7]);
+        ms.custom_fog.color = [0.3, 0.4, 0.5];
 
         let smf = super::SmfLighting::from(&ms);
 
-        for (label, authored, decoded) in [
-            ("fog_color[0]", 0.11, smf.atmosphere_fog_color[0]),
-            ("fog_color[1]", 0.13, smf.atmosphere_fog_color[1]),
-            ("fog_color[2]", 0.15, smf.atmosphere_fog_color[2]),
-            ("water_base[0]", 0.5, smf.water_base[0]),
-            ("water_base[1]", 0.68, smf.water_base[1]),
-        ] {
-            let expected = crate::color::srgb_to_linear(authored);
-            assert!(
-                (decoded - expected).abs() < 1e-5,
-                "{label}: authored {authored} -> decoded {decoded}, expected linear {expected}"
-            );
-        }
-    }
-
-    #[test]
-    fn smf_lighting_keeps_lighting_multipliers_in_perceptual_space() {
-        // Lighting multipliers (`ground_ambient/diffuse/specular`,
-        // `sun_color`) are NOT sRGB-decoded -- they're used as
-        // shader-side multipliers and BAR's gamma-incorrect pipeline
-        // treats them as sRGB-perceptual values multiplied with the
-        // (also gamma-incorrect-sampled) albedo. Decoding them to
-        // linear darkens the visible terrain by ~30% because mid-tone
-        // products compress in linear space. Pin the convention here
-        // so a well-meaning future contributor doesn't "fix" them
-        // back to gamma-correct and re-darken the playable area.
-        let mut ms = bar_project::MapSettings::default();
-        ms.lighting.ground_ambient = [0.56, 0.55, 0.55];
-        ms.lighting.ground_diffuse = [0.75, 0.75, 0.8];
-        ms.lighting.ground_specular = [0.5, 0.5, 0.5];
-        ms.atmosphere.sun_color = [1.0, 0.92, 0.78];
-
-        let smf = super::SmfLighting::from(&ms);
-
-        assert_eq!(smf.ground_ambient, ms.lighting.ground_ambient);
-        assert_eq!(smf.ground_diffuse, ms.lighting.ground_diffuse);
-        assert_eq!(smf.ground_specular, ms.lighting.ground_specular);
-        assert_eq!(smf.sun_color, ms.atmosphere.sun_color);
+        assert_eq!(Some(smf.atmosphere_fog_color), ms.atmosphere.fog_color);
+        assert_eq!(Some(smf.sun_color), ms.atmosphere.sun_color);
+        assert_eq!(Some(smf.sky_color), ms.atmosphere.sky_color);
+        assert_eq!(Some(smf.cloud_color), ms.atmosphere.cloud_color);
+        assert_eq!(Some(smf.ground_ambient), ms.lighting.ground_ambient);
+        assert_eq!(Some(smf.ground_diffuse), ms.lighting.ground_diffuse);
+        assert_eq!(Some(smf.ground_specular), ms.lighting.ground_specular);
+        assert_eq!(Some(smf.water_absorb), ms.water.absorb);
+        assert_eq!(Some(smf.water_base), ms.water.base_color);
+        assert_eq!(Some(smf.water_min), ms.water.min_color);
+        assert_eq!(Some(smf.water_surface_color), ms.water.surface_color);
+        assert_eq!(Some(smf.water_diffuse_color), ms.water.diffuse_color);
+        assert_eq!(Some(smf.water_specular_color), ms.water.specular_color);
+        assert_eq!(smf.custom_fog.color, ms.custom_fog.color);
     }
 }
