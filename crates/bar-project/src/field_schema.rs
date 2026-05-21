@@ -409,7 +409,6 @@ mod tests {
     struct TestState {
         f: Option<f32>,
         u: Option<u32>,
-        b: Option<bool>,
         c: Option<[f32; 3]>,
     }
 
@@ -510,8 +509,11 @@ mod tests {
 
     #[test]
     fn soft_violation_reports_warning_not_error() {
-        let mut state = TestState::default();
-        state.f = Some(2.5); // inside hard (0..10), outside soft (0..1)
+        // f inside hard (0..10), outside soft (0..1)
+        let state = TestState {
+            f: Some(2.5),
+            ..Default::default()
+        };
         let spec = f_spec();
         let finding = validate_field(&spec, &state).expect("finding expected");
         assert_eq!(finding.severity, Severity::Warning);
@@ -524,8 +526,10 @@ mod tests {
         // Simulate a value that bypassed `commit` (e.g. loaded from
         // recipe.json that was edited by hand). The validator
         // catches the out-of-hard-range value.
-        let mut state = TestState::default();
-        state.f = Some(50.0);
+        let state = TestState {
+            f: Some(50.0),
+            ..Default::default()
+        };
         let spec = f_spec();
         let finding = validate_field(&spec, &state).expect("finding expected");
         assert_eq!(finding.severity, Severity::Error);
@@ -533,8 +537,10 @@ mod tests {
 
     #[test]
     fn nan_treated_as_hard_violation() {
-        let mut state = TestState::default();
-        state.f = Some(f32::NAN);
+        let state = TestState {
+            f: Some(f32::NAN),
+            ..Default::default()
+        };
         let spec = f_spec();
         let finding = validate_field(&spec, &state).expect("NaN should emit finding");
         assert_eq!(finding.severity, Severity::Error);
@@ -552,10 +558,11 @@ mod tests {
 
     #[test]
     fn validate_with_schema_walks_all_specs() {
-        let mut state = TestState::default();
-        state.f = Some(50.0); // hard violation -- Error
-        state.u = Some(50); // within hard -- no finding
-        state.c = Some([1.5, 0.5, 0.5]); // colour soft violation -- Warning
+        let state = TestState {
+            f: Some(50.0),            // hard violation -- Error
+            u: Some(50),              // within hard -- no finding
+            c: Some([1.5, 0.5, 0.5]), // colour soft violation -- Warning
+        };
         let schema = vec![f_spec(), u_spec(), color_spec()];
         let findings = validate_with_schema(&schema, &state);
         assert_eq!(findings.len(), 2);
