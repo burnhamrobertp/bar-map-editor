@@ -239,6 +239,14 @@ pub struct SmfMap {
     pub minimap_dxt1: Vec<u8>,
     /// Feature placements read from or written to the SMF feature section.
     pub features: Vec<SmfFeaturePlacement>,
+    /// Built-in vegetation map stored as a `MEH_Vegetation` extra header
+    /// (`SMFFormat.h:103`). `mapx/4 * mapy/4` bytes, one byte per
+    /// quarter-resolution cell: 0 = no grass, 1+ = grass present at
+    /// that cell. Used by BAR's `map_grass_gl4` widget as the
+    /// distribution-mask fallback when no per-map `grassDistTGA` is
+    /// specified in mapinfo (`map_grass_gl4.lua:857-892`). Empty
+    /// when the SMF has no vegetation extra header.
+    pub grass_map: Vec<u8>,
 }
 
 impl SmfMap {
@@ -262,6 +270,7 @@ impl SmfMap {
             tile_indices: Vec::new(),
             minimap_dxt1: Vec::new(),
             features: Vec::new(),
+            grass_map: Vec::new(),
         })
     }
 
@@ -412,6 +421,56 @@ impl SmfMap {
             }
         }
 
+        // Vegetation extra header (`SMFFormat.h::MEH_Vegetation = 1`),
+        // mirroring `SMFMapFile.cpp::ReadGrassMap`. Walk every extra
+        // header after the main SMF header; for each one read its
+        // `(size, type)` 8-byte preamble, and if `type == 1` follow
+        // its 4-byte file-offset to read `mapx/4 * mapy/4` bytes of
+        // grass-density data. Other extra-header types get skipped
+        // by `(size - 8)` bytes. Non-fatal: a malformed extra-header
+        // chain just leaves `grass_map` empty.
+        let mut grass_map: Vec<u8> = Vec::new();
+        if header.num_extra_headers > 0 {
+            let grass_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(SmfHeader::SIZE as u64))?;
+                for _ in 0..header.num_extra_headers {
+                    let size = read_i32(reader)?;
+                    let ty = read_i32(reader)?;
+                    const MEH_VEGETATION: i32 = 1;
+                    if ty == MEH_VEGETATION {
+                        let pos = read_i32(reader)?;
+                        let after_pos = reader.stream_position()?;
+                        let map_x = header.map_x.max(0) as usize;
+                        let map_y = header.map_y.max(0) as usize;
+                        let grass_size = (map_x / 4) * (map_y / 4);
+                        if grass_size > 0 && pos > 0 {
+                            reader.seek(SeekFrom::Start(pos as u64))?;
+                            grass_map = vec![0u8; grass_size];
+                            reader.read_exact(&mut grass_map)?;
+                        }
+                        reader.seek(SeekFrom::Start(after_pos))?;
+                        // Skip rest of this header (matches engine's
+                        // `size - 8 - 4` since we already consumed
+                        // the 4-byte `pos`).
+                        let rest = (size as i64) - 8 - 4;
+                        if rest > 0 {
+                            reader.seek(SeekFrom::Current(rest))?;
+                        }
+                    } else {
+                        let rest = (size as i64) - 8;
+                        if rest > 0 {
+                            reader.seek(SeekFrom::Current(rest))?;
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = grass_result {
+                tracing::warn!(error = %e, "SMF extra-header chain unreadable; grass map skipped");
+                grass_map.clear();
+            }
+        }
+
         Ok(Self {
             header,
             heightmap,
@@ -421,6 +480,7 @@ impl SmfMap {
             tile_indices,
             minimap_dxt1,
             features,
+            grass_map,
         })
     }
 

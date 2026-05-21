@@ -257,11 +257,13 @@ fn decode_face(dds: &Dds, src: &[u8], w: u32, h: u32) -> Result<Vec<u8>, SkyboxE
         }
     }
 
-    // Block-compressed path: BC1 / BC2 / BC3. We reuse the BC1 tile
-    // decoder from `smt` for BC1, since SMT tiles are also BC1. BC2/BC3
-    // have an extra alpha block but otherwise identical colour layout;
-    // for the skybox we only need the RGB channels, so we treat all
-    // three as BC1 with a stride of 8 / 16 bytes per block.
+    // Block-compressed path: BC1 / BC2 / BC3. Reuses the BC1 tile
+    // decoder from `smt` for the colour block (SMT tiles are BC1).
+    // BC2/BC3 wrap the BC1 colour block with an 8-byte explicit alpha
+    // block that has to be decoded separately. Alpha matters here
+    // because non-skybox callers (grass blade textures, feature
+    // textures with cutouts) ship as BC3 and lose their silhouettes
+    // if alpha gets forced to 255.
     let is_bc3 = matches!(
         dds.get_d3d_format(),
         Some(D3DFormat::DXT3) | Some(D3DFormat::DXT5)
@@ -276,11 +278,30 @@ fn decode_face(dds: &Dds, src: &[u8], w: u32, h: u32) -> Result<Vec<u8>, SkyboxE
     for by in 0..blocks_h {
         for bx in 0..blocks_w {
             let bi = (by * blocks_w + bx) as usize;
-            let block_off = bi * block_stride + colour_off;
+            let block_base = bi * block_stride;
+            let block_off = block_base + colour_off;
             let block: [u8; 8] = src[block_off..block_off + 8]
                 .try_into()
                 .map_err(|_| SkyboxError::UnsupportedFormat)?;
             let pixels4x4 = crate::smt::decode_dxt1_block(&block);
+            // BC3 alpha block: 2 endpoint bytes + 6 index bytes (16
+            // x 3-bit indices). Engine encodes grass cutouts in BC3.
+            let alpha4x4: [u8; 16] = if is_bc3 {
+                let alpha_block: [u8; 8] = src[block_base..block_base + 8]
+                    .try_into()
+                    .map_err(|_| SkyboxError::UnsupportedFormat)?;
+                decode_bc3_alpha_block(&alpha_block)
+            } else {
+                // BC1: `decode_dxt1_block` already returns alpha=0
+                // for the 1-bit-transparent palette entry when
+                // c0 <= c1, alpha=255 otherwise. Just pass through
+                // by reading pixels4x4's alpha channel below.
+                let mut a = [255u8; 16];
+                for (i, slot) in a.iter_mut().enumerate() {
+                    *slot = pixels4x4[i][3];
+                }
+                a
+            };
             for py in 0..4u32 {
                 let dy = by * 4 + py;
                 if dy >= h {
@@ -291,15 +312,53 @@ fn decode_face(dds: &Dds, src: &[u8], w: u32, h: u32) -> Result<Vec<u8>, SkyboxE
                     if dx >= w {
                         continue;
                     }
-                    let src_pixel = pixels4x4[(py * 4 + px) as usize];
+                    let idx = (py * 4 + px) as usize;
+                    let src_pixel = pixels4x4[idx];
                     let dst_i = (dy * w + dx) as usize * 4;
                     out[dst_i] = src_pixel[0];
                     out[dst_i + 1] = src_pixel[1];
                     out[dst_i + 2] = src_pixel[2];
-                    out[dst_i + 3] = 255;
+                    out[dst_i + 3] = alpha4x4[idx];
                 }
             }
         }
     }
     Ok(out)
+}
+
+/// Decode a BC3 / DXT5 alpha block (8 bytes) into 16 alpha values.
+/// Format: two 8-bit endpoint alphas followed by 16 x 3-bit indices
+/// into an 8-entry interpolated palette. When `a0 > a1`, the palette
+/// fully interpolates 6 intermediate values; otherwise it uses 4
+/// intermediates plus explicit 0 and 255 entries.
+fn decode_bc3_alpha_block(block: &[u8; 8]) -> [u8; 16] {
+    let a0 = block[0];
+    let a1 = block[1];
+    let mut palette = [0u8; 8];
+    palette[0] = a0;
+    palette[1] = a1;
+    if a0 > a1 {
+        for i in 1..7 {
+            palette[i + 1] = (((7 - i) as u16 * a0 as u16 + i as u16 * a1 as u16) / 7) as u8;
+        }
+    } else {
+        for i in 1..5 {
+            palette[i + 1] = (((5 - i) as u16 * a0 as u16 + i as u16 * a1 as u16) / 5) as u8;
+        }
+        palette[6] = 0;
+        palette[7] = 255;
+    }
+    // Pack the 6 index bytes into a u64 so 3-bit reads are clean.
+    let indices: u64 = (block[2] as u64)
+        | ((block[3] as u64) << 8)
+        | ((block[4] as u64) << 16)
+        | ((block[5] as u64) << 24)
+        | ((block[6] as u64) << 32)
+        | ((block[7] as u64) << 40);
+    let mut out = [0u8; 16];
+    for (i, slot) in out.iter_mut().enumerate() {
+        let idx = ((indices >> (i * 3)) & 0x7) as usize;
+        *slot = palette[idx];
+    }
+    out
 }
