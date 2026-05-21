@@ -18,167 +18,120 @@ use crate::recipe::MapSettings;
 /// touched here (the SMF header + `parse_mapinfo_smf_heights` already handle
 /// those upstream).
 pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
-    // Top-level scalars on `MapSettings`.
-    if let Some(v) = parse_mapinfo_number(lua, "gravity") {
-        settings.gravity = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "tidalStrength") {
-        settings.tidal_strength = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "maxMetal") {
-        settings.max_metal = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "extractorRadius") {
-        settings.extractor_radius = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "mapHardness") {
-        settings.map_hardness = v as u32;
+    // SMF heights live inside the `smf = { minheight = ..., maxheight = ... }`
+    // sub-table. Use the dedicated parser so we walk into the
+    // sub-table rather than catching unrelated top-level keys.
+    if let Some((min_h, max_h)) = parse_mapinfo_smf_heights(lua) {
+        settings.min_height = Some(min_h);
+        settings.max_height = Some(max_h);
     }
 
-    // Water table — keys mirror `rts/Map/MapInfo.cpp` (the engine's
-    // BumpWater shader sources these per-map).
+    // Top-level scalars on `MapSettings`. All Option-valued: a field
+    // is only `Some` when the source mapinfo actually had it; the
+    // emitter then writes only those, and the renderer falls through
+    // to engine defaults via `MapSettings::resolved()`.
+    settings.gravity = parse_mapinfo_number(lua, "gravity");
+    settings.tidal_strength = parse_mapinfo_number(lua, "tidalStrength");
+    settings.max_metal = parse_mapinfo_number(lua, "maxMetal");
+    settings.extractor_radius = parse_mapinfo_number(lua, "extractorRadius");
+    settings.map_hardness = parse_mapinfo_number(lua, "mapHardness").map(|v| v as u32);
+    settings.void_water = parse_mapinfo_bool(lua, "voidWater");
+    settings.void_ground = parse_mapinfo_bool(lua, "voidGround");
+    settings.auto_show_metal = parse_mapinfo_bool(lua, "autoShowMetal");
+    // Engine convention: mapinfo has `notDeformable` (inverse flag) so
+    // omission means deformable=true. Invert when reading so the
+    // recipe carries the positive `deformable` form throughout.
+    settings.deformable = parse_mapinfo_bool(lua, "notDeformable").map(|v| !v);
+
+    // replace = { ... }: parse just enough to know whether the
+    // source declared the key (so we can re-emit it). Real maps
+    // almost always have an empty replace table; non-empty cases
+    // (string-keyed archive overrides) are rare and parsed as a
+    // best-effort flat key/value list.
+    if let Some(body) = extract_table_body(lua, "replace") {
+        settings.replace = crate::recipe::ReplaceTable {
+            declared: true,
+            entries: parse_replace_entries(&body),
+        };
+    }
+
+    // terrainTypes = { [N] = { name, hardness, receiveTracks,
+    // moveSpeeds = { tank, kbot, hover, ship } } }
+    if let Some(entries) = parse_terrain_types(lua) {
+        settings.terrain_types = entries;
+    }
+
+    // Water table.
     let water = &mut settings.water;
-    if let Some(v) = parse_mapinfo_vec3(lua, "basecolor") {
-        water.base_color = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "absorb") {
-        water.absorb = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "mincolor") {
-        water.min_color = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "damage") {
-        water.damage = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "surfaceColor") {
-        water.surface_color = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "surfaceAlpha") {
-        water.surface_alpha = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "diffuseColor") {
-        water.diffuse_color = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "specularColor") {
-        water.specular_color = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "ambientFactor") {
-        water.ambient_factor = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "diffuseFactor") {
-        water.diffuse_factor = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "specularFactor") {
-        water.specular_factor = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "specularPower") {
-        water.specular_power = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "fresnelMin") {
-        water.fresnel_min = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "fresnelMax") {
-        water.fresnel_max = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "fresnelPower") {
-        water.fresnel_power = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "reflectionDistortion") {
-        water.reflection_distortion = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "perlinAmplitude") {
-        water.perlin_amplitude = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "blurBase") {
-        water.blur_base = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "blurExponent") {
-        water.blur_exponent = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "causticsResolution") {
-        water.caustics_resolution = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "causticsStrength") {
-        water.caustics_strength = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "waveOffsetFactor") {
-        water.wave_offset_factor = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "waveFoamDistortion") {
-        water.wave_foam_distortion = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "waveFoamIntensity") {
-        water.wave_foam_intensity = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "waveLength") {
-        water.wave_length = v;
-    }
+    water.base_color = parse_mapinfo_vec3(lua, "basecolor");
+    water.absorb = parse_mapinfo_vec3(lua, "absorb");
+    water.min_color = parse_mapinfo_vec3(lua, "mincolor");
+    water.damage = parse_mapinfo_number(lua, "damage");
+    water.surface_color = parse_mapinfo_vec3(lua, "surfaceColor");
+    water.surface_alpha = parse_mapinfo_number(lua, "surfaceAlpha");
+    water.diffuse_color = parse_mapinfo_vec3(lua, "diffuseColor");
+    water.specular_color = parse_mapinfo_vec3(lua, "specularColor");
+    water.ambient_factor = parse_mapinfo_number(lua, "ambientFactor");
+    water.diffuse_factor = parse_mapinfo_number(lua, "diffuseFactor");
+    water.specular_factor = parse_mapinfo_number(lua, "specularFactor");
+    water.specular_power = parse_mapinfo_number(lua, "specularPower");
+    water.fresnel_min = parse_mapinfo_number(lua, "fresnelMin");
+    water.fresnel_max = parse_mapinfo_number(lua, "fresnelMax");
+    water.fresnel_power = parse_mapinfo_number(lua, "fresnelPower");
+    water.reflection_distortion = parse_mapinfo_number(lua, "reflectionDistortion");
+    water.perlin_amplitude = parse_mapinfo_number(lua, "perlinAmplitude");
+    water.blur_base = parse_mapinfo_number(lua, "blurBase");
+    water.blur_exponent = parse_mapinfo_number(lua, "blurExponent");
+    water.caustics_resolution = parse_mapinfo_number(lua, "causticsResolution");
+    water.caustics_strength = parse_mapinfo_number(lua, "causticsStrength");
+    water.wave_offset_factor = parse_mapinfo_number(lua, "waveOffsetFactor");
+    water.wave_foam_distortion = parse_mapinfo_number(lua, "waveFoamDistortion");
+    water.wave_foam_intensity = parse_mapinfo_number(lua, "waveFoamIntensity");
+    water.wave_length = parse_mapinfo_number(lua, "waveLength");
+    water.force_rendering = parse_mapinfo_bool(lua, "forceRendering");
+    water.has_water_plane = parse_mapinfo_bool(lua, "hasWaterPlane");
+    water.num_tiles = parse_mapinfo_number(lua, "numTiles").map(|v| v.max(1.0) as u32);
+    water.perlin_start_freq = parse_mapinfo_number(lua, "perlinStartFreq");
+    water.perlin_lacunarity = parse_mapinfo_number(lua, "perlinLacunarity");
+    water.plane_color = parse_mapinfo_vec3(lua, "planeColor");
+    water.repeat_x = parse_mapinfo_number(lua, "repeatX");
+    water.repeat_y = parse_mapinfo_number(lua, "repeatY");
+    water.shore_waves = parse_mapinfo_bool(lua, "shoreWaves");
+    water.normal_texture = parse_mapinfo_string(lua, "normalTexture");
 
     // Lighting table.
     let lighting = &mut settings.lighting;
-    // Engine reads `sunDir` as a `float4` (`bar-recoil/rts/Map/MapInfo.cpp:207`)
-    // with `.w` as sun intensity, packed into `sunColor.w` for the sky shader
-    // (`ModernSky.cpp:82`). Older / simpler mapinfo files write a 3-vector;
-    // engine treats the 4th as 1.0 by default.
     if let Some(v) = parse_mapinfo_vec4(lua, "sunDir") {
-        lighting.sun_dir = [v[0], v[1], v[2]];
-        lighting.sun_intensity = v[3];
+        lighting.sun_dir = Some([v[0], v[1], v[2]]);
+        lighting.sun_intensity = Some(v[3]);
     } else if let Some(v) = parse_mapinfo_vec3(lua, "sunDir") {
-        lighting.sun_dir = v;
+        lighting.sun_dir = Some(v);
     }
-    if let Some(v) = parse_mapinfo_vec3(lua, "groundAmbientColor") {
-        lighting.ground_ambient = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "groundDiffuseColor") {
-        lighting.ground_diffuse = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "groundSpecularColor") {
-        lighting.ground_specular = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "specularExponent") {
-        lighting.spec_exponent = v;
-    }
-    // Per-map shadow strength. Engine: `lightTable.GetFloat("groundShadowDensity",
-    // 0.8f)` then `std::clamp(..., 0, 1)` (`bar-recoil/rts/Map/MapInfo.cpp:214,223`).
-    if let Some(v) = parse_mapinfo_number(lua, "groundShadowDensity") {
-        lighting.ground_shadow_density = v.clamp(0.0, 1.0);
-    }
+    lighting.ground_ambient = parse_mapinfo_vec3(lua, "groundAmbientColor");
+    lighting.ground_diffuse = parse_mapinfo_vec3(lua, "groundDiffuseColor");
+    lighting.ground_specular = parse_mapinfo_vec3(lua, "groundSpecularColor");
+    lighting.spec_exponent = parse_mapinfo_number(lua, "specularExponent");
+    lighting.ground_shadow_density =
+        parse_mapinfo_number(lua, "groundShadowDensity").map(|v| v.clamp(0.0, 1.0));
+    lighting.unit_shadow_density =
+        parse_mapinfo_number(lua, "unitShadowDensity").map(|v| v.clamp(0.0, 1.0));
+    lighting.unit_ambient = parse_mapinfo_vec3(lua, "unitAmbientColor");
+    lighting.unit_diffuse = parse_mapinfo_vec3(lua, "unitDiffuseColor");
+    lighting.unit_specular = parse_mapinfo_vec3(lua, "unitSpecularColor");
 
-    // Atmosphere table (procedural sky + standard distance fog inputs).
+    // Atmosphere table.
     let atm = &mut settings.atmosphere;
-    if let Some(v) = parse_mapinfo_number(lua, "minWind") {
-        atm.min_wind = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "maxWind") {
-        atm.max_wind = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "fogStart") {
-        atm.fog_start = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "fogEnd") {
-        atm.fog_end = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "fogColor") {
-        atm.fog_color = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "sunColor") {
-        atm.sun_color = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "skyColor") {
-        atm.sky_color = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "skyDir") {
-        atm.sky_dir = v;
-    }
-    if let Some(v) = parse_mapinfo_number(lua, "cloudDensity") {
-        atm.cloud_density = v;
-    }
-    if let Some(v) = parse_mapinfo_vec3(lua, "cloudColor") {
-        atm.cloud_color = v;
-    }
-    if let Some(v) = parse_mapinfo_string(lua, "skyBox") {
-        atm.skybox = v;
-    }
+    atm.min_wind = parse_mapinfo_number(lua, "minWind");
+    atm.max_wind = parse_mapinfo_number(lua, "maxWind");
+    atm.fog_start = parse_mapinfo_number(lua, "fogStart");
+    atm.fog_end = parse_mapinfo_number(lua, "fogEnd");
+    atm.fog_color = parse_mapinfo_vec3(lua, "fogColor");
+    atm.sun_color = parse_mapinfo_vec3(lua, "sunColor");
+    atm.sky_color = parse_mapinfo_vec3(lua, "skyColor");
+    atm.sky_dir = parse_mapinfo_vec3(lua, "skyDir");
+    atm.cloud_density = parse_mapinfo_number(lua, "cloudDensity");
+    atm.cloud_color = parse_mapinfo_vec3(lua, "cloudColor");
+    atm.skybox = parse_mapinfo_string(lua, "skyBox");
 
     // Resources block (`resources = { detailTex = "...", ... }`).
     // Only `detailTex` is wired at the renderer side currently; the
@@ -229,19 +182,22 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     // `splats = { texScales = {...}, texMults = {...} }`. Note this is
     // a SIBLING of `resources`, not nested inside it.
     if let Some(body) = extract_table_body(lua, "splats") {
-        if let Some(v) = parse_mapinfo_vec4(&body, "texScales") {
-            settings.resources.splat_tex_scales = v;
-        }
-        if let Some(v) = parse_mapinfo_vec4(&body, "texMults") {
-            settings.resources.splat_tex_mults = v;
-        }
+        settings.resources.splat_tex_scales = parse_mapinfo_vec4(&body, "texScales");
+        settings.resources.splat_tex_mults = parse_mapinfo_vec4(&body, "texMults");
     }
 
     // Height-based custom fog (`custom = { fog = { ... } }` in mapinfo).
     // Not engine-stock; in-game it's a widget that tints fragments below
     // `height` by `color`. We bake the same behaviour into our terrain /
     // water shaders so previews match what the player sees.
-    if let Some(fog) = parse_custom_fog(lua, settings.max_height) {
+    // `custom.fog.height` can be either an absolute value or a
+    // percentage of the map's max height. We need the resolved max
+    // height here so percentage strings ("40%") can be turned into
+    // absolute elmos before storing.
+    let max_h = settings
+        .max_height
+        .unwrap_or(crate::engine_defaults::MAP_MAX_HEIGHT);
+    if let Some(fog) = parse_custom_fog(lua, max_h) {
         settings.custom_fog = fog;
     }
 
@@ -252,6 +208,273 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     if let Some(grass) = parse_custom_grass(lua) {
         settings.custom_grass = grass;
     }
+
+    // Volumetric clouds widget config (`custom = { clouds = { ... } }`).
+    if let Some(clouds) = parse_custom_clouds(lua) {
+        settings.custom_clouds = clouds;
+    }
+
+    // Sound / EFX preset (top-level `sound = { preset, passfilter,
+    // reverb }`).
+    if let Some(sound) = parse_sound(lua) {
+        settings.sound = sound;
+    }
+
+    // Team start positions (`teams = { [N] = { startPos = { x, z } } }`).
+    // Without this, BME's emitter falls through to corner defaults
+    // and commanders spawn in the wrong place on re-bundled maps.
+    if let Some(spawns) = parse_team_start_positions(lua) {
+        settings.start_positions = spawns;
+    }
+}
+
+/// Parse `replace = { ["key"] = "value", ... }` entries. Returns
+/// an empty Vec when the body is empty (the engine's empty-`{}`
+/// case). Quote style is normalised to double-quoted on emit.
+fn parse_replace_entries(body: &str) -> Vec<(String, String)> {
+    let mut entries = Vec::new();
+    // Lines of the form `["foo"] = "bar",` or `foo = "bar",`.
+    for line in body.lines() {
+        let line = line.split("--").next().unwrap_or("").trim();
+        if line.is_empty() {
+            continue;
+        }
+        // Strip `[ ... ]` wrappers around the key, if present.
+        let eq = match line.find('=') {
+            Some(i) => i,
+            None => continue,
+        };
+        let raw_key = line[..eq]
+            .trim()
+            .trim_start_matches('[')
+            .trim_end_matches(']');
+        let key = raw_key.trim().trim_matches(|c| c == '"' || c == '\'');
+        let raw_val = line[eq + 1..]
+            .trim()
+            .trim_end_matches(',')
+            .trim_end_matches(';')
+            .trim();
+        let val = raw_val.trim_matches(|c| c == '"' || c == '\'');
+        if !key.is_empty() {
+            entries.push((key.to_string(), val.to_string()));
+        }
+    }
+    entries
+}
+
+/// Walk a `terrainTypes = { [N] = { ... } }` block.
+fn parse_terrain_types(lua: &str) -> Option<Vec<crate::recipe::TerrainTypeEntry>> {
+    let body = extract_table_body(lua, "terrainTypes")?;
+    let bytes = body.as_bytes();
+    let mut i = 0usize;
+    let mut out: Vec<crate::recipe::TerrainTypeEntry> = Vec::new();
+    while i < bytes.len() {
+        if bytes[i] != b'[' {
+            i += 1;
+            continue;
+        }
+        let key_start = i + 1;
+        let mut j = key_start;
+        while j < bytes.len() && bytes[j] != b']' {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            break;
+        }
+        let idx_str = body[key_start..j].trim();
+        let idx: u32 = match idx_str.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                i = j + 1;
+                continue;
+            }
+        };
+        i = j + 1;
+        while i < bytes.len() && bytes[i] != b'{' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let entry_start = i + 1;
+        let mut depth: i32 = 1;
+        let mut k = entry_start;
+        while k < bytes.len() && depth > 0 {
+            match bytes[k] {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                _ => {}
+            }
+            k += 1;
+        }
+        let entry_body = &body[entry_start..k.saturating_sub(1)];
+        // Inside an entry we'll have `name = "..."`, `hardness = N`,
+        // `receiveTracks = bool`, plus `moveSpeeds = { ... }`. The
+        // last is a sub-table that we extract separately.
+        let move_speeds_body = extract_table_body(entry_body, "moveSpeeds");
+        let mut move_speeds: Vec<(String, f32)> = Vec::new();
+        if let Some(ms) = move_speeds_body {
+            let normalised = ms.replace(',', "\n");
+            for line in normalised.lines() {
+                let l = line.split("--").next().unwrap_or("").trim();
+                if l.is_empty() {
+                    continue;
+                }
+                let eq = match l.find('=') {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let key = l[..eq].trim().to_string();
+                let val_str = l[eq + 1..]
+                    .trim()
+                    .trim_end_matches(',')
+                    .trim_end_matches(';')
+                    .trim();
+                if let Ok(v) = val_str.parse::<f32>() {
+                    move_speeds.push((key, v));
+                }
+            }
+        }
+        out.push(crate::recipe::TerrainTypeEntry {
+            index: idx,
+            name: parse_mapinfo_string(entry_body, "name"),
+            hardness: parse_mapinfo_number(entry_body, "hardness"),
+            receive_tracks: parse_mapinfo_bool(entry_body, "receiveTracks"),
+            move_speeds,
+        });
+        i = k;
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
+}
+
+/// Parse `teams = { [N] = { startPos = { x = ..., z = ... } } }`
+/// out of mapinfo.lua. Returns one `[x, z]` per team index found,
+/// in order. Returns `None` when the block is absent.
+///
+/// Engine spawn coordinates are spring world units (elmos); the
+/// recipe stores them verbatim so a re-bundle round-trips the
+/// author's authored positions.
+pub fn parse_team_start_positions(lua: &str) -> Option<Vec<[u32; 2]>> {
+    let teams_body = extract_table_body(lua, "teams")?;
+    // Each entry: `[N] = { startPos = { x = X, z = Z } }` (or `Z` /
+    // y-as-z variants). Walk the body byte by byte, find `[N]` keys,
+    // then extract that team's startPos sub-table.
+    let bytes = teams_body.as_bytes();
+    let mut i = 0usize;
+    let mut out: Vec<(u32, [u32; 2])> = Vec::new();
+    while i < bytes.len() {
+        // Find next `[` at this depth (depth 0).
+        if bytes[i] != b'[' {
+            i += 1;
+            continue;
+        }
+        // Parse the integer index inside the brackets.
+        let key_start = i + 1;
+        let mut j = key_start;
+        while j < bytes.len() && bytes[j] != b']' {
+            j += 1;
+        }
+        if j >= bytes.len() {
+            break;
+        }
+        let idx_str = &teams_body[key_start..j].trim();
+        let idx: u32 = match idx_str.parse() {
+            Ok(v) => v,
+            Err(_) => {
+                i = j + 1;
+                continue;
+            }
+        };
+        // After `]`, expect ` = { ... }`. Scan to the next `{`.
+        i = j + 1;
+        while i < bytes.len() && bytes[i] != b'{' {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        // Walk to matching `}` at depth 1.
+        let team_body_start = i + 1;
+        let mut depth: i32 = 1;
+        let mut k = team_body_start;
+        while k < bytes.len() && depth > 0 {
+            match bytes[k] {
+                b'{' => depth += 1,
+                b'}' => depth -= 1,
+                _ => {}
+            }
+            k += 1;
+        }
+        let team_body = &teams_body[team_body_start..k.saturating_sub(1)];
+        // startPos = { x = X, z = Z } -- usually on a single line, so
+        // normalise commas to newlines first so the line-oriented
+        // `parse_mapinfo_number` can find each named entry.
+        if let Some(sp_body) = extract_table_body(team_body, "startPos") {
+            let normalised = sp_body.replace(',', "\n");
+            let x = parse_mapinfo_number(&normalised, "x");
+            // Engine accepts both `z` and `y` for the second axis on
+            // some maps; prefer `z` (the modern form).
+            let z = parse_mapinfo_number(&normalised, "z")
+                .or_else(|| parse_mapinfo_number(&normalised, "y"));
+            if let (Some(xv), Some(zv)) = (x, z) {
+                out.push((idx, [xv.max(0.0) as u32, zv.max(0.0) as u32]));
+            }
+        }
+        i = k;
+    }
+    if out.is_empty() {
+        return None;
+    }
+    out.sort_by_key(|(idx, _)| *idx);
+    Some(out.into_iter().map(|(_, pos)| pos).collect())
+}
+
+/// Pull the `custom.clouds = { ... }` block out of mapinfo.lua.
+/// Returns `None` when absent; returns `Some` with every present
+/// sub-field set to `Some(v)` so round-trip preserves the source.
+pub fn parse_custom_clouds(lua: &str) -> Option<crate::recipe::CustomCloudsSettings> {
+    let custom_body = extract_table_body(lua, "custom")?;
+    let clouds_body = extract_table_body(&custom_body, "clouds")?;
+    Some(crate::recipe::CustomCloudsSettings {
+        speed: parse_mapinfo_number(&clouds_body, "speed"),
+        color: parse_mapinfo_vec3(&clouds_body, "color"),
+        height: parse_mapinfo_number(&clouds_body, "height"),
+        bottom: parse_mapinfo_number(&clouds_body, "bottom"),
+        fade_alt: parse_mapinfo_number(&clouds_body, "fade_alt"),
+        scale: parse_mapinfo_number(&clouds_body, "scale"),
+        opacity: parse_mapinfo_number(&clouds_body, "opacity"),
+        clamp_to_map: parse_mapinfo_bool(&clouds_body, "clamp_to_map"),
+        sun_penetration: parse_mapinfo_number(&clouds_body, "sun_penetration"),
+    })
+}
+
+/// Pull the top-level `sound = { ... }` block out of mapinfo.lua.
+/// Returns `None` when absent. Models only `preset` + `passfilter`
+/// (reverb is unused on real maps).
+pub fn parse_sound(lua: &str) -> Option<crate::recipe::SoundSettings> {
+    let sound_body = extract_table_body(lua, "sound")?;
+    let preset = parse_mapinfo_string(&sound_body, "preset");
+    let (passfilter_gainlf, passfilter_gainhf) =
+        if let Some(pf) = extract_table_body(&sound_body, "passfilter") {
+            (
+                parse_mapinfo_number(&pf, "gainlf"),
+                parse_mapinfo_number(&pf, "gainhf"),
+            )
+        } else {
+            (None, None)
+        };
+    if preset.is_none() && passfilter_gainlf.is_none() && passfilter_gainhf.is_none() {
+        return None;
+    }
+    Some(crate::recipe::SoundSettings {
+        preset,
+        passfilter_gainlf,
+        passfilter_gainhf,
+    })
 }
 
 /// Parse a string field of the form `key = "value"` or `key = 'value'`.
@@ -300,6 +523,70 @@ pub fn parse_mapinfo_string(lua: &str, key: &str) -> Option<String> {
     None
 }
 
+/// Parse a Lua-table-of-strings field: `key = { "foo", "bar" }`. Used
+/// for `depend = { "Map Helper v1" }` and friends. Returns `None` if
+/// the key isn't found; returns `Some(vec![])` if the table is empty.
+/// Items can be quoted with `"` or `'`; whitespace and newlines
+/// between items are tolerated. Comments (`--` to end of line) inside
+/// the table are stripped.
+pub fn parse_mapinfo_string_list(lua: &str, key: &str) -> Option<Vec<String>> {
+    let lower = lua.to_ascii_lowercase();
+    let lower_key = key.to_ascii_lowercase();
+    let mut search_from = 0;
+    while let Some(off) = lower[search_from..].find(&lower_key) {
+        let key_start = search_from + off;
+        search_from = key_start + 1;
+        if key_start > 0 {
+            let prev = lua.as_bytes()[key_start - 1];
+            if prev.is_ascii_alphanumeric() || prev == b'_' {
+                continue;
+            }
+        }
+        let line_start = lua[..key_start].rfind('\n').map(|p| p + 1).unwrap_or(0);
+        if lua[line_start..key_start].contains("--") {
+            continue;
+        }
+        let bytes = lua.as_bytes();
+        let mut idx = key_start + key.len();
+        while idx < lua.len() && (bytes[idx] as char).is_whitespace() {
+            idx += 1;
+        }
+        if idx >= lua.len() || bytes[idx] != b'=' {
+            continue;
+        }
+        idx += 1;
+        while idx < lua.len() && (bytes[idx] as char).is_whitespace() {
+            idx += 1;
+        }
+        if idx >= lua.len() || bytes[idx] != b'{' {
+            continue;
+        }
+        idx += 1;
+        let close = lua[idx..].find('}')?;
+        let body = &lua[idx..idx + close];
+        // Strip line comments before extracting strings.
+        let cleaned: String = body
+            .lines()
+            .map(|line| match line.find("--") {
+                Some(p) => &line[..p],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut out = Vec::new();
+        let mut rest = cleaned.as_str();
+        while let Some(q_pos) = rest.find(['"', '\'']) {
+            let quote = rest.as_bytes()[q_pos] as char;
+            let after_open = q_pos + 1;
+            let close_off = rest[after_open..].find(quote)?;
+            out.push(rest[after_open..after_open + close_off].to_string());
+            rest = &rest[after_open + close_off + 1..];
+        }
+        return Some(out);
+    }
+    None
+}
+
 /// Pull the `custom.fog = { color = {…}, height = …, fogatten = … }` block
 /// out of `mapinfo.lua`. `max_h_elmos` is the map's MaxHeight from the SMF
 /// header; we need it to resolve `height = "40%"` style percentage strings
@@ -334,43 +621,46 @@ pub fn parse_custom_grass(lua: &str) -> Option<crate::recipe::CustomGrassSetting
     let custom_body = extract_table_body(lua, "custom")?;
     let grass_body = extract_table_body(&custom_body, "grassConfig")?;
 
-    let mut settings = crate::recipe::CustomGrassSettings::default();
-    if let Some(s) = parse_mapinfo_string(&grass_body, "grassDistTGA") {
-        settings.dist_tga = s;
-    }
-    if settings.dist_tga.is_empty() {
+    let mut settings = crate::recipe::CustomGrassSettings {
+        dist_tga: parse_mapinfo_string(&grass_body, "grassDistTGA"),
+        ..Default::default()
+    };
+    if settings
+        .dist_tga
+        .as_deref()
+        .map(str::is_empty)
+        .unwrap_or(true)
+    {
         // No distribution mask -> widget would generate zero blades.
         // Treat the block as if it weren't present so the renderer
         // gate stays off.
         return None;
     }
-    if let Some(s) = parse_mapinfo_string(&grass_body, "grassBladeColorTex") {
-        settings.blade_color_tex = s;
-    }
-    if let Some(v) = parse_mapinfo_number(&grass_body, "grassMaxSize") {
-        settings.max_size = v;
-    }
-    if let Some(v) = parse_mapinfo_number(&grass_body, "grassMinSize") {
-        settings.min_size = v;
-    }
-    if let Some(v) = parse_mapinfo_number(&grass_body, "patchResolution") {
-        settings.patch_resolution = v.max(1.0) as u32;
-    }
-    if let Some(v) = parse_mapinfo_number(&grass_body, "patchPlacementJitter") {
-        settings.patch_placement_jitter = v.clamp(0.0, 1.0);
-    }
+    settings.blade_color_tex = parse_mapinfo_string(&grass_body, "grassBladeColorTex");
+    settings.max_size = parse_mapinfo_number(&grass_body, "grassMaxSize");
+    settings.min_size = parse_mapinfo_number(&grass_body, "grassMinSize");
+    settings.patch_resolution =
+        parse_mapinfo_number(&grass_body, "patchResolution").map(|v| v.max(1.0) as u32);
+    settings.patch_placement_jitter =
+        parse_mapinfo_number(&grass_body, "patchPlacementJitter").map(|v| v.clamp(0.0, 1.0));
 
-    // The grass-shader scalars hide inside a nested `grassShaderParams = {
-    // ... }` sub-table -- parse that body separately and pull out the two
-    // keys BME actually consumes.
+    // Grass-shader scalars live in a nested `grassShaderParams =
+    // { ... }` sub-table. Each key mirrors the BAR widget verbatim
+    // (`map_grass_gl4.lua:93-110`); values stay in engine units
+    // (elmos for distances, dimensionless for factors).
     if let Some(shader_body) = extract_table_body(&grass_body, "grassShaderParams") {
-        if let Some(v) = parse_mapinfo_number(&shader_body, "MAPCOLORFACTOR") {
-            settings.map_color_factor = v;
-        }
-        if let Some(v) = parse_mapinfo_number(&shader_body, "MAPCOLORBASE") {
-            settings.map_color_base = v;
-        }
+        settings.map_color_factor = parse_mapinfo_number(&shader_body, "MAPCOLORFACTOR");
+        settings.map_color_base = parse_mapinfo_number(&shader_body, "MAPCOLORBASE");
+        settings.alpha_threshold = parse_mapinfo_number(&shader_body, "ALPHATHRESHOLD");
+        settings.shadow_factor = parse_mapinfo_number(&shader_body, "SHADOWFACTOR");
+        settings.grass_brightness = parse_mapinfo_number(&shader_body, "GRASSBRIGHTNESS");
+        settings.fade_start = parse_mapinfo_number(&shader_body, "FADESTART");
+        settings.fade_end = parse_mapinfo_number(&shader_body, "FADEEND");
+        settings.wind_strength = parse_mapinfo_number(&shader_body, "WINDSTRENGTH");
+        settings.wind_scale = parse_mapinfo_number(&shader_body, "WINDSCALE");
+        settings.wind_sample_scale = parse_mapinfo_number(&shader_body, "WINDSAMPLESCALE");
     }
+    settings.grass_wind_mult = parse_mapinfo_number(&grass_body, "grassWindMult");
 
     Some(settings)
 }
@@ -567,16 +857,57 @@ pub fn parse_mapinfo_smf_heights(lua: &str) -> Option<(f32, f32)> {
 /// Parse a top-level numeric field from `mapinfo.lua` — e.g. `gravity = 130`,
 /// `tidalStrength = 18`, `mapHardness = 100`. Returns `None` if not found
 /// or unparseable. Handles inline `--` comments on the value line.
-pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {
-    let pat = format!("{}=", key);
+/// Parse a Lua boolean field: `key = true` / `key = false`. Case-
+/// insensitive on the key, returns `None` when the key is missing or
+/// the value isn't a recognisable boolean literal.
+pub fn parse_mapinfo_bool(lua: &str, key: &str) -> Option<bool> {
+    let key_lower = key.to_ascii_lowercase();
     for line in lua.lines() {
         let no_comment = match line.find("--") {
             Some(i) => &line[..i],
             None => line,
         };
-        let trimmed = no_comment.trim();
-        let stripped = trimmed.strip_prefix(key).map(|rest| rest.trim_start());
-        let rest = match stripped {
+        let trimmed = no_comment.trim().to_ascii_lowercase();
+        let stripped = trimmed
+            .strip_prefix(&key_lower)
+            .map(|rest| rest.trim_start());
+        let value_str = match stripped {
+            Some(r) if r.starts_with('=') => &r[1..],
+            _ => continue,
+        };
+        let value = value_str
+            .trim()
+            .trim_end_matches(',')
+            .trim_end_matches(';')
+            .trim();
+        match value {
+            "true" => return Some(true),
+            "false" => return Some(false),
+            _ => {}
+        }
+    }
+    None
+}
+
+pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {
+    // Case-insensitive key match: BAR's Lua mapinfo loader lowercases
+    // every key on read, so authors freely mix `mapHardness` /
+    // `maphardness` / `MapHardness`. Without case folding here, the
+    // emit-then-parse round-trip can drop fields whose emitter and
+    // parser disagree on casing.
+    let key_lower = key.to_ascii_lowercase();
+    let pat = format!("{key_lower}=");
+    for line in lua.lines() {
+        let no_comment = match line.find("--") {
+            Some(i) => &line[..i],
+            None => line,
+        };
+        let trimmed_orig = no_comment.trim();
+        let trimmed = trimmed_orig.to_ascii_lowercase();
+        let stripped = trimmed
+            .strip_prefix(&key_lower)
+            .map(|rest| rest.trim_start());
+        let value_str_lower = match stripped {
             Some(r) if r.starts_with('=') => &r[1..],
             _ => {
                 if !trimmed.starts_with(&pat) {
@@ -585,7 +916,7 @@ pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {
                 &trimmed[pat.len()..]
             }
         };
-        let value = rest
+        let value = value_str_lower
             .trim()
             .trim_end_matches(',')
             .trim_end_matches(';')
@@ -843,52 +1174,47 @@ sunDir = { -0.64, 0.66, -0.57 },
 "#;
         let mut settings = MapSettings::default();
         apply_mapinfo_overrides(lua, &mut settings);
-        assert_eq!(settings.gravity, 130.0);
-        assert_eq!(settings.tidal_strength, 18.0);
-        assert!((settings.water.fresnel_min - 0.1).abs() < 1e-6);
-        assert!((settings.water.fresnel_max - 0.5).abs() < 1e-6);
-        assert_eq!(settings.water.base_color, [0.05, 0.7, 0.6]);
-        assert_eq!(settings.lighting.sun_dir, [-0.64, 0.66, -0.57]);
-        // 3-element sunDir leaves intensity at its default 1.0.
-        assert!((settings.lighting.sun_intensity - 1.0).abs() < 1e-6);
+        assert_eq!(settings.gravity, Some(130.0));
+        assert_eq!(settings.tidal_strength, Some(18.0));
+        assert!((settings.water.fresnel_min.unwrap() - 0.1).abs() < 1e-6);
+        assert!((settings.water.fresnel_max.unwrap() - 0.5).abs() < 1e-6);
+        assert_eq!(settings.water.base_color, Some([0.05, 0.7, 0.6]));
+        assert_eq!(settings.lighting.sun_dir, Some([-0.64, 0.66, -0.57]));
+        // 3-element sunDir leaves intensity unset (None -> resolved to 1.0).
+        assert_eq!(settings.lighting.sun_intensity, None);
     }
 
     #[test]
     fn ground_shadow_density_parses_and_clamps() {
-        // Engine reads then clamps to [0, 1] (`MapInfo.cpp:214, 223`).
         let lua = "groundShadowDensity = 0.65,";
         let mut s = MapSettings::default();
         apply_mapinfo_overrides(lua, &mut s);
-        assert!((s.lighting.ground_shadow_density - 0.65).abs() < 1e-6);
+        assert!((s.lighting.ground_shadow_density.unwrap() - 0.65).abs() < 1e-6);
 
-        // Out-of-range values clamp.
         let lua_high = "groundShadowDensity = 1.4,";
         let mut s_high = MapSettings::default();
         apply_mapinfo_overrides(lua_high, &mut s_high);
-        assert_eq!(s_high.lighting.ground_shadow_density, 1.0);
+        assert_eq!(s_high.lighting.ground_shadow_density, Some(1.0));
 
         let lua_low = "groundShadowDensity = -0.1,";
         let mut s_low = MapSettings::default();
         apply_mapinfo_overrides(lua_low, &mut s_low);
-        assert_eq!(s_low.lighting.ground_shadow_density, 0.0);
+        assert_eq!(s_low.lighting.ground_shadow_density, Some(0.0));
 
-        // Missing key leaves the engine default (0.8) untouched.
+        // Missing key leaves the field as None (resolves to engine
+        // default 0.8 at read time).
         let mut s_default = MapSettings::default();
         apply_mapinfo_overrides("", &mut s_default);
-        assert!((s_default.lighting.ground_shadow_density - 0.8).abs() < 1e-6);
+        assert_eq!(s_default.lighting.ground_shadow_density, None);
     }
 
     #[test]
     fn four_element_sun_dir_picks_up_intensity() {
-        // Mirrors the engine's `light.sunDir = lightTable.GetFloat4("sunDir", ...)`
-        // path (`bar-recoil/rts/Map/MapInfo.cpp:207`). The 4th component is
-        // packed into `sunColor.w` by `ModernSky.cpp:82` and multiplied into
-        // the sun corona by `ModernSkyFS.glsl:88`.
         let lua = "sunDir = { -0.64, 0.66, -0.57, 0.75 },";
         let mut settings = MapSettings::default();
         apply_mapinfo_overrides(lua, &mut settings);
-        assert_eq!(settings.lighting.sun_dir, [-0.64, 0.66, -0.57]);
-        assert!((settings.lighting.sun_intensity - 0.75).abs() < 1e-6);
+        assert_eq!(settings.lighting.sun_dir, Some([-0.64, 0.66, -0.57]));
+        assert!((settings.lighting.sun_intensity.unwrap() - 0.75).abs() < 1e-6);
     }
 
     #[test]
@@ -907,7 +1233,7 @@ local mapinfo = {
 }
 "#;
         let mut settings = MapSettings {
-            max_height: 261.0,
+            max_height: Some(261.0),
             ..MapSettings::default()
         };
         apply_mapinfo_overrides(lua, &mut settings);
@@ -951,21 +1277,21 @@ custom = {
 }
 "#;
         let mut settings = MapSettings {
-            max_height: 1000.0,
+            max_height: Some(1000.0),
             ..MapSettings::default()
         };
         apply_mapinfo_overrides(lua, &mut settings);
         assert_eq!(
-            settings.custom_grass.dist_tga,
-            "maps/Onyx Cauldron 2.0_grassDist.tga"
+            settings.custom_grass.dist_tga.as_deref(),
+            Some("maps/Onyx Cauldron 2.0_grassDist.tga")
         );
         assert_eq!(
-            settings.custom_grass.blade_color_tex,
-            "maps/grass_field_mixed.dds.cached.dds"
+            settings.custom_grass.blade_color_tex.as_deref(),
+            Some("maps/grass_field_mixed.dds.cached.dds")
         );
-        assert!((settings.custom_grass.max_size - 2.0).abs() < 1e-6);
-        assert!((settings.custom_grass.map_color_factor - 0.2).abs() < 1e-6);
-        assert!((settings.custom_grass.map_color_base - 0.6).abs() < 1e-6);
+        assert!((settings.custom_grass.max_size.unwrap() - 2.0).abs() < 1e-6);
+        assert!((settings.custom_grass.map_color_factor.unwrap() - 0.2).abs() < 1e-6);
+        assert!((settings.custom_grass.map_color_base.unwrap() - 0.6).abs() < 1e-6);
         // The neighbouring fog block must still parse correctly.
         assert!(settings.custom_fog.enabled);
     }
@@ -1001,19 +1327,44 @@ custom = {
 },
 "#;
         let mut settings = MapSettings {
-            max_height: 980.0,
+            max_height: Some(980.0),
             ..MapSettings::default()
         };
         apply_mapinfo_overrides(lua, &mut settings);
         assert_eq!(
-            settings.custom_grass.dist_tga,
-            "maps/Onyx Cauldron 2.0_grassDist.tga"
+            settings.custom_grass.dist_tga.as_deref(),
+            Some("maps/Onyx Cauldron 2.0_grassDist.tga")
         );
         assert_eq!(
-            settings.custom_grass.blade_color_tex,
-            "maps/grass_field_mixed.dds.cached.dds"
+            settings.custom_grass.blade_color_tex.as_deref(),
+            Some("maps/grass_field_mixed.dds.cached.dds")
         );
         assert!(settings.custom_fog.enabled);
+    }
+
+    #[test]
+    fn parses_onyx_style_team_start_positions() {
+        // Source format Onyx Cauldron uses: numeric-indexed teams
+        // table, each entry has a `startPos = { x, z }` sub-table.
+        let lua = r#"
+teams = {
+    [0] = {startPos = {x = 1778, z = 1695}},
+    [1] = {startPos = {x = 6482, z = 6628}},
+},
+"#;
+        let mut settings = MapSettings::default();
+        apply_mapinfo_overrides(lua, &mut settings);
+        assert_eq!(settings.start_positions.len(), 2);
+        assert_eq!(settings.start_positions[0], [1778, 1695]);
+        assert_eq!(settings.start_positions[1], [6482, 6628]);
+    }
+
+    #[test]
+    fn teams_block_absent_leaves_start_positions_empty() {
+        let lua = "name = \"Test\"";
+        let mut settings = MapSettings::default();
+        apply_mapinfo_overrides(lua, &mut settings);
+        assert!(settings.start_positions.is_empty());
     }
 
     #[test]
@@ -1028,7 +1379,12 @@ custom = {
 "#;
         let mut settings = MapSettings::default();
         apply_mapinfo_overrides(lua, &mut settings);
-        assert!(settings.custom_grass.dist_tga.is_empty());
+        assert!(settings
+            .custom_grass
+            .dist_tga
+            .as_deref()
+            .map(str::is_empty)
+            .unwrap_or(true));
     }
 
     #[test]
@@ -1053,16 +1409,16 @@ atmosphere = {
         let mut settings = MapSettings::default();
         apply_mapinfo_overrides(lua, &mut settings);
         let a = &settings.atmosphere;
-        assert_eq!(a.min_wind, 3.0);
-        assert_eq!(a.max_wind, 16.0);
-        assert!((a.fog_start - 0.8).abs() < 1e-6);
-        assert_eq!(a.fog_color, [0.8, 0.6, 0.5]);
-        assert_eq!(a.sun_color, [1.0, 0.7, 0.7]);
-        assert_eq!(a.sky_color, [0.2, 0.25, 0.05]);
-        assert_eq!(a.sky_dir, [0.0, 0.0, -1.0]);
-        assert!((a.cloud_density - 0.25).abs() < 1e-6);
-        assert_eq!(a.cloud_color, [0.95, 0.85, 0.75]);
-        assert_eq!(a.skybox, "cleardesert.dds");
+        assert_eq!(a.min_wind, Some(3.0));
+        assert_eq!(a.max_wind, Some(16.0));
+        assert!((a.fog_start.unwrap() - 0.8).abs() < 1e-6);
+        assert_eq!(a.fog_color, Some([0.8, 0.6, 0.5]));
+        assert_eq!(a.sun_color, Some([1.0, 0.7, 0.7]));
+        assert_eq!(a.sky_color, Some([0.2, 0.25, 0.05]));
+        assert_eq!(a.sky_dir, Some([0.0, 0.0, -1.0]));
+        assert!((a.cloud_density.unwrap() - 0.25).abs() < 1e-6);
+        assert_eq!(a.cloud_color, Some([0.95, 0.85, 0.75]));
+        assert_eq!(a.skybox.as_deref(), Some("cleardesert.dds"));
     }
 
     #[test]
@@ -1106,9 +1462,11 @@ splats = {
         assert_eq!(r.splat_detail_normal_tex_2, "dirt_267_highpass_dnts.dds");
         assert_eq!(r.splat_detail_normal_tex_3, "rugged_rock.dds");
         assert_eq!(r.splat_detail_normal_tex_4, "torturedrock.dds");
-        assert!((r.splat_tex_scales[0] - 0.0032).abs() < 1e-6);
-        assert!((r.splat_tex_scales[3] - 0.0055).abs() < 1e-6);
-        assert!((r.splat_tex_mults[2] - 1.0).abs() < 1e-6);
+        let scales = r.splat_tex_scales.unwrap();
+        assert!((scales[0] - 0.0032).abs() < 1e-6);
+        assert!((scales[3] - 0.0055).abs() < 1e-6);
+        let mults = r.splat_tex_mults.unwrap();
+        assert!((mults[2] - 1.0).abs() < 1e-6);
     }
 
     #[test]

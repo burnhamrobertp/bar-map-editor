@@ -42,7 +42,7 @@ pub struct Finding {
 }
 
 impl Finding {
-    fn err(category: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn err(category: &str, message: impl Into<String>) -> Self {
         Self {
             severity: Severity::Error,
             category: category.to_string(),
@@ -50,7 +50,7 @@ impl Finding {
             message: message.into(),
         }
     }
-    fn warn(category: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn warn(category: &str, message: impl Into<String>) -> Self {
         Self {
             severity: Severity::Warning,
             category: category.to_string(),
@@ -59,7 +59,7 @@ impl Finding {
         }
     }
     #[allow(dead_code)]
-    fn info(category: &str, message: impl Into<String>) -> Self {
+    pub(crate) fn info(category: &str, message: impl Into<String>) -> Self {
         Self {
             severity: Severity::Info,
             category: category.to_string(),
@@ -69,7 +69,7 @@ impl Finding {
     }
     /// Tag this finding to a specific field inside its category. Used by
     /// the Map Settings modal to draw a per-control outline.
-    fn on_field(mut self, field: &str) -> Self {
+    pub(crate) fn on_field(mut self, field: &str) -> Self {
         self.field = Some(field.to_string());
         self
     }
@@ -200,8 +200,9 @@ fn check_dimensions(map_w: u32, map_h: u32, out: &mut Vec<Finding>) {
 /// `min_height` < `max_height` and the spread can't be zero. A map
 /// with min == max is unplayable and confuses the engine.
 fn check_height_range(settings: &MapSettings, out: &mut Vec<Finding>) {
-    let min = settings.min_height;
-    let max = settings.max_height;
+    let rs = settings.resolved();
+    let min = rs.min_height;
+    let max = rs.max_height;
     if !(min.is_finite() && max.is_finite()) {
         out.push(
             Finding::err("dimensions", "Min / max height must be finite numbers.")
@@ -302,16 +303,14 @@ fn check_start_positions(settings: &MapSettings, map_w: u32, map_h: u32, out: &m
 /// Sanity-check the physics block: things that crash the engine or
 /// produce nonsensical gameplay if zero/negative.
 fn check_physics(settings: &MapSettings, out: &mut Vec<Finding>) {
-    if settings.gravity <= 0.0 {
+    let rs = settings.resolved();
+    if rs.gravity <= 0.0 {
         out.push(
-            Finding::err(
-                "physics",
-                format!("Gravity {} must be > 0.", settings.gravity),
-            )
-            .on_field("gravity"),
+            Finding::err("physics", format!("Gravity {} must be > 0.", rs.gravity))
+                .on_field("gravity"),
         );
     }
-    if settings.map_hardness == 0 {
+    if rs.map_hardness == 0 {
         out.push(
             Finding::warn(
                 "physics",
@@ -320,44 +319,38 @@ fn check_physics(settings: &MapSettings, out: &mut Vec<Finding>) {
             .on_field("map_hardness"),
         );
     }
-    if settings.tidal_strength < 0.0 {
+    if rs.tidal_strength < 0.0 {
         out.push(
             Finding::err(
                 "physics",
-                format!(
-                    "Tidal strength {} can't be negative.",
-                    settings.tidal_strength
-                ),
+                format!("Tidal strength {} can't be negative.", rs.tidal_strength),
             )
             .on_field("tidal_strength"),
         );
     }
-    if settings.max_metal < 0.0 {
+    if rs.max_metal < 0.0 {
         out.push(
             Finding::err(
                 "physics",
-                format!("Max metal {} can't be negative.", settings.max_metal),
+                format!("Max metal {} can't be negative.", rs.max_metal),
             )
             .on_field("max_metal"),
         );
     }
-    if settings.extractor_radius <= 0.0 {
+    if rs.extractor_radius <= 0.0 {
         out.push(
             Finding::err(
                 "physics",
-                format!(
-                    "Extractor radius {} must be > 0.",
-                    settings.extractor_radius
-                ),
+                format!("Extractor radius {} must be > 0.", rs.extractor_radius),
             )
             .on_field("extractor_radius"),
         );
     }
-    if settings.water_damage < 0.0 {
+    if rs.water_damage < 0.0 {
         out.push(
             Finding::err(
                 "physics",
-                format!("Water damage {} can't be negative.", settings.water_damage),
+                format!("Water damage {} can't be negative.", rs.water_damage),
             )
             .on_field("water_damage"),
         );
@@ -367,7 +360,8 @@ fn check_physics(settings: &MapSettings, out: &mut Vec<Finding>) {
 /// Atmosphere block: wind range ordering and fog range ordering. Engine
 /// silently accepts inverted ranges but the visual result is wrong.
 fn check_atmosphere(settings: &MapSettings, out: &mut Vec<Finding>) {
-    let atm = &settings.atmosphere;
+    let rs = settings.resolved();
+    let atm = &rs.atmosphere;
     if atm.min_wind > atm.max_wind {
         out.push(
             Finding::err(
@@ -435,7 +429,8 @@ fn check_atmosphere(settings: &MapSettings, out: &mut Vec<Finding>) {
 /// Lighting block: sun direction must not be the zero vector and the
 /// specular exponent must be positive (engine clamps but warn).
 fn check_lighting(settings: &MapSettings, out: &mut Vec<Finding>) {
-    let lit = &settings.lighting;
+    let rs = settings.resolved();
+    let lit = &rs.lighting;
     let sun_mag2 = lit.sun_dir[0] * lit.sun_dir[0]
         + lit.sun_dir[1] * lit.sun_dir[1]
         + lit.sun_dir[2] * lit.sun_dir[2];
@@ -482,7 +477,8 @@ fn check_lighting(settings: &MapSettings, out: &mut Vec<Finding>) {
 
 /// Water block — non-negative damage, colours in range.
 fn check_water(settings: &MapSettings, out: &mut Vec<Finding>) {
-    let w = &settings.water;
+    let rs = settings.resolved();
+    let w = &rs.water;
     if w.damage < 0.0 {
         out.push(
             Finding::err(
@@ -843,8 +839,8 @@ mod tests {
         let mut graph = empty_graph();
         graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "b"));
         let settings = MapSettings {
-            min_height: 100.0,
-            max_height: 50.0,
+            min_height: Some(100.0),
+            max_height: Some(50.0),
             ..MapSettings::default()
         };
         let f = validate_project(&graph, &settings, 257, 257);
@@ -1063,7 +1059,7 @@ mod tests {
     #[test]
     fn physics_flags_zero_gravity() {
         let (graph, mut settings) = quiet_setup();
-        settings.gravity = 0.0;
+        settings.gravity = Some(0.0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "physics", Some("gravity"), Severity::Error),
@@ -1075,7 +1071,7 @@ mod tests {
     #[test]
     fn physics_flags_zero_hardness_as_warning() {
         let (graph, mut settings) = quiet_setup();
-        settings.map_hardness = 0;
+        settings.map_hardness = Some(0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "physics", Some("map_hardness"), Severity::Warning),
@@ -1087,7 +1083,7 @@ mod tests {
     #[test]
     fn physics_flags_negative_tidal_strength() {
         let (graph, mut settings) = quiet_setup();
-        settings.tidal_strength = -1.0;
+        settings.tidal_strength = Some(-1.0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "physics", Some("tidal_strength"), Severity::Error),
@@ -1099,8 +1095,8 @@ mod tests {
     #[test]
     fn atmosphere_flags_inverted_wind_range() {
         let (graph, mut settings) = quiet_setup();
-        settings.atmosphere.min_wind = 30.0;
-        settings.atmosphere.max_wind = 5.0;
+        settings.atmosphere.min_wind = Some(30.0);
+        settings.atmosphere.max_wind = Some(5.0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("max_wind"), Severity::Error),
@@ -1112,7 +1108,7 @@ mod tests {
     #[test]
     fn atmosphere_flags_negative_min_wind() {
         let (graph, mut settings) = quiet_setup();
-        settings.atmosphere.min_wind = -1.0;
+        settings.atmosphere.min_wind = Some(-1.0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("min_wind"), Severity::Error),
@@ -1124,8 +1120,8 @@ mod tests {
     #[test]
     fn atmosphere_flags_inverted_fog_range() {
         let (graph, mut settings) = quiet_setup();
-        settings.atmosphere.fog_start = 0.9;
-        settings.atmosphere.fog_end = 0.1;
+        settings.atmosphere.fog_start = Some(0.9);
+        settings.atmosphere.fog_end = Some(0.1);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("fog_end"), Severity::Error),
@@ -1137,7 +1133,7 @@ mod tests {
     #[test]
     fn atmosphere_flags_out_of_range_fog_color() {
         let (graph, mut settings) = quiet_setup();
-        settings.atmosphere.fog_color = [1.5, 0.0, 0.0];
+        settings.atmosphere.fog_color = Some([1.5, 0.0, 0.0]);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "atmosphere", Some("fog_color"), Severity::Warning),
@@ -1149,7 +1145,7 @@ mod tests {
     #[test]
     fn lighting_flags_zero_sun_dir() {
         let (graph, mut settings) = quiet_setup();
-        settings.lighting.sun_dir = [0.0, 0.0, 0.0];
+        settings.lighting.sun_dir = Some([0.0, 0.0, 0.0]);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "lighting", Some("sun_dir"), Severity::Error),
@@ -1161,7 +1157,7 @@ mod tests {
     #[test]
     fn lighting_flags_zero_specular_exponent() {
         let (graph, mut settings) = quiet_setup();
-        settings.lighting.spec_exponent = 0.0;
+        settings.lighting.spec_exponent = Some(0.0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "lighting", Some("spec_exponent"), Severity::Error),
@@ -1173,7 +1169,7 @@ mod tests {
     #[test]
     fn water_flags_negative_damage() {
         let (graph, mut settings) = quiet_setup();
-        settings.water.damage = -10.0;
+        settings.water.damage = Some(-10.0);
         let f = validate_project(&graph, &settings, 257, 257);
         assert!(
             has_finding(&f, "water", Some("damage"), Severity::Error),

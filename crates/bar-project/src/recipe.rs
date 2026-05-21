@@ -26,6 +26,13 @@ fn default_schema_version() -> u32 {
     1
 }
 
+/// Default `depend` list for new / pre-migration recipes. Every
+/// BAR map references `Map Helper v1` to get the common mapconfig
+/// loaders, so the default is the conservative thing.
+fn default_depend() -> Vec<String> {
+    vec!["Map Helper v1".to_string()]
+}
+
 /// A complete pipeline recipe — the on-disk format for the editor's graphs.
 ///
 /// Identity fields (`name`, `shortname`, `description`, `author`,
@@ -62,6 +69,18 @@ pub struct Recipe {
     /// bundler falls back to `"1.0"`.
     #[serde(default)]
     pub version: Option<String>,
+    /// Optional short tooltip text shown by the lobby when the user
+    /// hovers the map name. Free-form; typically a sentence or two.
+    /// Becomes mapinfo's `tip` field.
+    #[serde(default)]
+    pub tip: Option<String>,
+    /// Archives this map's content depends on. Becomes mapinfo's
+    /// `depend = { ... }` table. Almost universally
+    /// `["Map Helper v1"]` for BAR maps -- the helper archive
+    /// supplies the boilerplate gadgets and includes mapconfig
+    /// authors rely on. Empty vec writes no `depend` entry.
+    #[serde(default = "default_depend")]
+    pub depend: Vec<String>,
     /// Node definitions, keyed by stable string IDs.
     pub nodes: Vec<RecipeNode>,
     /// Connections between node ports.
@@ -89,6 +108,32 @@ pub struct PlacedFeature {
     pub angle: f32,
     #[serde(default)]
     pub taken_damage: i16,
+    /// Where this feature originated -- and therefore where it must
+    /// land on re-export. SMF-native placements go in the SMF feature
+    /// section (capped at 31-char names by the engine reader at
+    /// `SMFMapFile.h:62`). FeaturePlacer-set features go in
+    /// `mapconfig/featureplacer/set.lua` (no length limit; spawned at
+    /// runtime by the FP_featureplacer gadget). Conflating the two
+    /// is what causes the engine's SMF feature reader to truncate
+    /// long names mid-string and crash on the resulting garbled type.
+    #[serde(default)]
+    pub source: FeatureSource,
+}
+
+/// Where a `PlacedFeature` came from at import time. Determines the
+/// destination on re-export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureSource {
+    /// Stored in the source SMF's feature section. Re-exported to the
+    /// same section -- names MUST fit in 31 chars (engine constraint).
+    #[default]
+    Smf,
+    /// Stored in `mapconfig/featureplacer/set.lua`, spawned at runtime
+    /// by the FP_featureplacer gadget. Re-exported to set.lua; engine
+    /// never reads it through the SMF feature section, so name length
+    /// is unconstrained.
+    FeaturePlacerSet,
 }
 
 /// A node in the recipe, identified by a stable string key.
@@ -140,41 +185,43 @@ pub struct OutputConfig {
 /// The bundler generates `mapinfo.lua` from `Recipe` + this struct on every
 /// SD7 export; nothing else may produce a mapinfo.lua (a PassThrough or
 /// FileReference with that destination is rejected at validation time).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MapSettings {
-    /// Minimum height in Spring world units.
-    pub min_height: f32,
-    /// Maximum height in Spring world units.
-    pub max_height: f32,
-    /// Map hardness (100 = default).
-    pub map_hardness: u32,
-    /// Gravity constant.
-    pub gravity: f32,
-    /// Water damage per second.
-    pub water_damage: f32,
+    /// Heights and physics scalars are `Option<T>` so the recipe
+    /// captures "user-set / present in source mapinfo" vs "fall
+    /// through to engine default" without a hidden equality check.
+    /// See `engine_defaults.rs` for the values `None` resolves to.
+    pub min_height: Option<f32>,
+    pub max_height: Option<f32>,
+    pub map_hardness: Option<u32>,
+    pub gravity: Option<f32>,
+    pub water_damage: Option<f32>,
 
     /// Detail Normal Texture Set (DNTS) — paths to tiling textures for each terrain type.
     /// Up to 4 entries (one per splat channel).
     #[serde(default)]
     pub detail_textures: Vec<DetailTexture>,
 
-    /// Whether the map is deformable.
-    pub deformable: bool,
-    /// `voidWater` — when true, water doesn't render at all; the
-    /// area below sea level is just empty space. Useful for sky-
-    /// island maps.
-    pub void_water: bool,
-    /// `voidGround` — when true, the ground texture is replaced by
-    /// transparency outside the heightmap's positive range. Niche;
-    /// off by default.
-    pub void_ground: bool,
-    /// Tidal strength.
-    pub tidal_strength: f32,
-    /// Maximum metal extraction value.
-    pub max_metal: f32,
-    /// Extractor radius.
-    pub extractor_radius: f32,
+    pub deformable: Option<bool>,
+    pub void_water: Option<bool>,
+    pub void_ground: Option<bool>,
+    pub tidal_strength: Option<f32>,
+    pub max_metal: Option<f32>,
+    pub extractor_radius: Option<f32>,
+    /// Engine `autoShowMetal`. Toggles the F4 "metal map" overlay
+    /// being shown by default at game start.
+    pub auto_show_metal: Option<bool>,
+    /// Engine `replace = { ... }` table -- string-keyed table of
+    /// archive-name replacements. Almost always empty on real maps;
+    /// modelled here so an empty `{}` survives round-trip.
+    #[serde(default)]
+    pub replace: ReplaceTable,
+    /// Engine `terrainTypes` table. Per-type-index movement / hardness
+    /// data the engine reads for each terrain type. Empty when the
+    /// source mapinfo didn't define any.
+    #[serde(default)]
+    pub terrain_types: Vec<TerrainTypeEntry>,
 
     /// Atmosphere settings.
     #[serde(default)]
@@ -191,10 +238,18 @@ pub struct MapSettings {
     pub custom_fog: CustomFogSettings,
 
     /// Grass widget configuration (mapinfo `custom.grassConfig`).
-    /// Read by BAR's LuaUI `map_grass_gl4` widget; an empty
-    /// `dist_tga` means the widget is disabled for this map.
     #[serde(default)]
     pub custom_grass: CustomGrassSettings,
+
+    /// Volumetric-cloud widget settings (mapinfo `custom.clouds`).
+    /// Drives the in-game cloud renderer; round-trips through the
+    /// recipe so re-bundles preserve the source's authored values.
+    #[serde(default)]
+    pub custom_clouds: CustomCloudsSettings,
+
+    /// EFX audio reverb / passfilter / preset (mapinfo `sound`).
+    #[serde(default)]
+    pub sound: SoundSettings,
 
     /// Per-map asset filenames from mapinfo `resources = { ... }`.
     #[serde(default)]
@@ -204,6 +259,119 @@ pub struct MapSettings {
     /// If empty, auto-generated at 25%/75% corners.
     #[serde(default)]
     pub start_positions: Vec<[u32; 2]>,
+}
+
+/// Volumetric clouds widget configuration (mapinfo `custom.clouds`).
+/// Authored per-map; the in-game widget reads each field at runtime.
+/// Every field is `Option<T>` so an unset cloud key in the source
+/// stays unset on round-trip (the widget falls back to its own
+/// defaults).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CustomCloudsSettings {
+    pub speed: Option<f32>,
+    pub color: Option<[f32; 3]>,
+    pub height: Option<f32>,
+    pub bottom: Option<f32>,
+    pub fade_alt: Option<f32>,
+    pub scale: Option<f32>,
+    pub opacity: Option<f32>,
+    pub clamp_to_map: Option<bool>,
+    pub sun_penetration: Option<f32>,
+}
+
+/// Engine `replace = { [key] = "value" }` map. Almost always empty
+/// on real maps; modelled as `Option<HashMap>` so an empty `{}` from
+/// the source round-trips as a `Some(empty)` rather than a `None`.
+/// Distinguishes "source had no replace block" from "source had an
+/// empty replace block" -- the latter still emits `replace = {}` in
+/// the bundle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReplaceTable {
+    /// Whether the source declared a `replace = ...` key at all.
+    /// Drives whether we emit the (often empty) block on bundle.
+    pub declared: bool,
+    /// The key-value entries inside the table (rare in real maps).
+    pub entries: Vec<(String, String)>,
+}
+
+/// One entry from the `terrainTypes` table. The engine indexes these
+/// by terrain-type-id (0-255) to drive per-type movement / damage /
+/// track-receiving behaviour. Real maps usually define a small number
+/// of explicit entries plus a fall-through default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TerrainTypeEntry {
+    /// Terrain-type index (the `[N] =` key inside the table).
+    pub index: u32,
+    pub name: Option<String>,
+    pub hardness: Option<f32>,
+    pub receive_tracks: Option<bool>,
+    /// Per-unit-type movespeed multipliers (`moveSpeeds = { tank = 1.0,
+    /// kbot = 1.0, hover = 1.0, ship = 1.0 }`). Stored as a list so
+    /// the round-trip preserves declaration order; engine consumes by
+    /// key name.
+    pub move_speeds: Vec<(String, f32)>,
+}
+
+/// EFX audio settings (mapinfo `sound = { preset, passfilter, reverb }`).
+/// Preserves the per-map EFX preset + passfilter so audio rendering
+/// round-trips. The reverb sub-block (a dozen-plus OpenAL EFX
+/// parameters) is rare on real maps -- most leave it as a comment
+/// block -- so we don't model it field-by-field; it's an acceptable
+/// round-trip loss until a map demands it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SoundSettings {
+    pub preset: Option<String>,
+    pub passfilter_gainlf: Option<f32>,
+    pub passfilter_gainhf: Option<f32>,
+}
+
+/// Fully-resolved view of MapSettings -- every `Option<T>` replaced by
+/// its effective value via the per-field engine default. The renderer
+/// and the validator both consume this so they never need to branch on
+/// `Option`. The bundler emits only the original `Option`-valued
+/// fields when `Some`.
+#[derive(Debug, Clone)]
+pub struct ResolvedMapSettings {
+    pub min_height: f32,
+    pub max_height: f32,
+    pub map_hardness: u32,
+    pub gravity: f32,
+    pub water_damage: f32,
+    pub deformable: bool,
+    pub void_water: bool,
+    pub void_ground: bool,
+    pub tidal_strength: f32,
+    pub max_metal: f32,
+    pub extractor_radius: f32,
+    pub atmosphere: ResolvedAtmosphere,
+    pub lighting: ResolvedLighting,
+    pub water: ResolvedWater,
+    pub custom_grass: ResolvedGrassSettings,
+}
+
+impl MapSettings {
+    pub fn resolved(&self) -> ResolvedMapSettings {
+        use crate::engine_defaults as ed;
+        ResolvedMapSettings {
+            min_height: self.min_height.unwrap_or(ed::MAP_MIN_HEIGHT),
+            max_height: self.max_height.unwrap_or(ed::MAP_MAX_HEIGHT),
+            map_hardness: self.map_hardness.unwrap_or(ed::MAP_HARDNESS),
+            gravity: self.gravity.unwrap_or(ed::MAP_GRAVITY),
+            water_damage: self.water_damage.unwrap_or(0.0),
+            deformable: self.deformable.unwrap_or(!ed::MAP_NOT_DEFORMABLE),
+            void_water: self.void_water.unwrap_or(ed::MAP_VOID_WATER),
+            void_ground: self.void_ground.unwrap_or(ed::MAP_VOID_GROUND),
+            tidal_strength: self.tidal_strength.unwrap_or(ed::MAP_TIDAL_STRENGTH),
+            max_metal: self.max_metal.unwrap_or(ed::MAP_MAX_METAL),
+            extractor_radius: self.extractor_radius.unwrap_or(ed::MAP_EXTRACTOR_RADIUS),
+            atmosphere: self.atmosphere.resolved(),
+            lighting: self.lighting.resolved(),
+            water: self.water.resolved(),
+            custom_grass: self.custom_grass.resolved(),
+        }
+    }
 }
 
 /// Detail texture entry for DNTS.
@@ -228,9 +396,24 @@ fn default_tex_scale() -> f32 {
 /// instead of a single hard-coded one. `skybox` is the asset name for a
 /// cubemap DDS; not currently rendered, but stored so it round-trips
 /// through `.barproj` and is available when cubemap skybox support lands.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AtmosphereSettings {
+    pub min_wind: Option<f32>,
+    pub max_wind: Option<f32>,
+    pub fog_start: Option<f32>,
+    pub fog_end: Option<f32>,
+    pub fog_color: Option<[f32; 3]>,
+    pub sun_color: Option<[f32; 3]>,
+    pub sky_color: Option<[f32; 3]>,
+    pub sky_dir: Option<[f32; 3]>,
+    pub cloud_density: Option<f32>,
+    pub cloud_color: Option<[f32; 3]>,
+    pub skybox: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedAtmosphere {
     pub min_wind: f32,
     pub max_wind: f32,
     pub fog_start: f32,
@@ -241,28 +424,24 @@ pub struct AtmosphereSettings {
     pub sky_dir: [f32; 3],
     pub cloud_density: f32,
     pub cloud_color: [f32; 3],
-    /// Filename of the cubemap DDS for skybox rendering (mapinfo's
-    /// `skyBox = "..."`). Empty when the map uses the procedural sky.
-    /// Stored but not yet sampled by the renderer.
     pub skybox: String,
 }
 
-impl Default for AtmosphereSettings {
-    fn default() -> Self {
-        Self {
-            min_wind: 5.0,
-            max_wind: 25.0,
-            fog_start: 0.1,
-            fog_end: 1.0,
-            fog_color: [0.7, 0.7, 0.8],
-            // Sky defaults from `mapgenerator/mapinfo_template.lua` in the
-            // engine -- the values a freshly-generated BAR map gets.
-            sun_color: [1.0, 1.0, 1.0],
-            sky_color: [0.1, 0.15, 0.7],
-            sky_dir: [0.0, 0.0, -1.0],
-            cloud_density: 0.5,
-            cloud_color: [1.0, 1.0, 1.0],
-            skybox: String::new(),
+impl AtmosphereSettings {
+    pub fn resolved(&self) -> ResolvedAtmosphere {
+        use crate::engine_defaults as ed;
+        ResolvedAtmosphere {
+            min_wind: self.min_wind.unwrap_or(ed::ATMOSPHERE_MIN_WIND),
+            max_wind: self.max_wind.unwrap_or(ed::ATMOSPHERE_MAX_WIND),
+            fog_start: self.fog_start.unwrap_or(ed::ATMOSPHERE_FOG_START),
+            fog_end: self.fog_end.unwrap_or(ed::ATMOSPHERE_FOG_END),
+            fog_color: self.fog_color.unwrap_or(ed::ATMOSPHERE_FOG_COLOR),
+            sun_color: self.sun_color.unwrap_or(ed::ATMOSPHERE_SUN_COLOR),
+            sky_color: self.sky_color.unwrap_or(ed::ATMOSPHERE_SKY_COLOR),
+            sky_dir: self.sky_dir.unwrap_or(ed::ATMOSPHERE_SKY_DIR),
+            cloud_density: self.cloud_density.unwrap_or(ed::ATMOSPHERE_CLOUD_DENSITY),
+            cloud_color: self.cloud_color.unwrap_or(ed::ATMOSPHERE_CLOUD_COLOR),
+            skybox: self.skybox.clone().unwrap_or_default(),
         }
     }
 }
@@ -302,14 +481,12 @@ pub struct ResourcesSettings {
     /// constant 0.
     pub splat_detail_normal_diffuse_alpha: bool,
     /// Per-channel UV scale for splat-detail sampling (mapinfo
-    /// `splats.texScales`). Multiplied against the world XZ before
-    /// the texture sample so each detail layer can tile at its own
-    /// rate. Aurelia: `{0.0032, 0.0063, 0.0044, 0.0055}`.
-    pub splat_tex_scales: [f32; 4],
+    /// `splats.texScales`). `None` = source mapinfo didn't carry a
+    /// `splats` block, so the runtime falls back to engine defaults
+    /// (1.0 per channel). Aurelia: `{0.0032, 0.0063, 0.0044, 0.0055}`.
+    pub splat_tex_scales: Option<[f32; 4]>,
     /// Per-channel mix multiplier (mapinfo `splats.texMults`).
-    /// Used only by the basic splat path (`SMF_DETAIL_TEXTURE_SPLATTING`);
-    /// stored here for completeness so it round-trips through .barproj.
-    pub splat_tex_mults: [f32; 4],
+    pub splat_tex_mults: Option<[f32; 4]>,
     /// Per-pixel reflection-strength mask (mapinfo `skyReflectModTex`).
     /// When set, the terrain shader samples this 2D texture to decide
     /// where the skybox cubemap reflects on the surface. Pixels with
@@ -360,28 +537,63 @@ pub struct ResourcesSettings {
 }
 
 /// Lighting configuration for mapinfo.lua.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct LightingSettings {
+    pub sun_dir: Option<[f32; 3]>,
+    pub sun_intensity: Option<f32>,
+    pub ground_ambient: Option<[f32; 3]>,
+    pub ground_diffuse: Option<[f32; 3]>,
+    pub ground_specular: Option<[f32; 3]>,
+    pub spec_exponent: Option<f32>,
+    pub ground_shadow_density: Option<f32>,
+    /// Per-unit-model shadow strength (mapinfo `unitShadowDensity`).
+    /// Mirror of ground_shadow_density but applied to unit models;
+    /// engine reads from `lightTable.GetFloat("unitShadowDensity")`.
+    pub unit_shadow_density: Option<f32>,
+    pub unit_ambient: Option<[f32; 3]>,
+    pub unit_diffuse: Option<[f32; 3]>,
+    pub unit_specular: Option<[f32; 3]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedLighting {
     pub sun_dir: [f32; 3],
-    /// Sun intensity multiplier. Mapinfo stores this as the 4th component
-    /// of `sunDir` (`light.sunDir = float4(x, y, z, intensity)` per
-    /// `bar-recoil/rts/Map/MapInfo.cpp:207`). The engine packs it into
-    /// `sunColor.w` and the sky shader multiplies the sun-corona term by
-    /// it (`ModernSkyFS.glsl:88` / `ModernSky.cpp:82`). Defaults to 1.0;
-    /// maps that dim the sun set this between 0 and 1.
     pub sun_intensity: f32,
     pub ground_ambient: [f32; 3],
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
     pub spec_exponent: f32,
-    /// Per-map shadow strength (mapinfo `lighting.groundShadowDensity`).
-    /// Engine math: `shadow_coeff = mix(1.0, raw_shadow_sample, density)`
-    /// (`bar-recoil/rts/Map/SMF/SMFFragProg.glsl:371`). Default 0.8 per
-    /// `MapInfo.cpp::ReadLight`, clamped to `[0, 1]`. At 0 the terrain
-    /// ignores the shadow map entirely; at 1 the raw shadow sample
-    /// passes through.
     pub ground_shadow_density: f32,
+    pub unit_shadow_density: f32,
+    pub unit_ambient: [f32; 3],
+    pub unit_diffuse: [f32; 3],
+    pub unit_specular: [f32; 3],
+}
+
+impl LightingSettings {
+    pub fn resolved(&self) -> ResolvedLighting {
+        use crate::engine_defaults as ed;
+        ResolvedLighting {
+            sun_dir: self.sun_dir.unwrap_or(ed::LIGHTING_SUN_DIR),
+            sun_intensity: self.sun_intensity.unwrap_or(ed::LIGHTING_SUN_INTENSITY),
+            ground_ambient: self.ground_ambient.unwrap_or(ed::LIGHTING_GROUND_AMBIENT),
+            ground_diffuse: self.ground_diffuse.unwrap_or(ed::LIGHTING_GROUND_DIFFUSE),
+            ground_specular: self.ground_specular.unwrap_or(ed::LIGHTING_GROUND_SPECULAR),
+            spec_exponent: self.spec_exponent.unwrap_or(ed::LIGHTING_SPEC_EXPONENT),
+            ground_shadow_density: self
+                .ground_shadow_density
+                .unwrap_or(ed::LIGHTING_GROUND_SHADOW_DENSITY),
+            // Engine `unitShadowDensity` default mirrors ground_shadow_density
+            // when omitted (`MapInfo.cpp::ReadLight`).
+            unit_shadow_density: self
+                .unit_shadow_density
+                .unwrap_or(ed::LIGHTING_GROUND_SHADOW_DENSITY),
+            unit_ambient: self.unit_ambient.unwrap_or(ed::LIGHTING_GROUND_AMBIENT),
+            unit_diffuse: self.unit_diffuse.unwrap_or(ed::LIGHTING_GROUND_DIFFUSE),
+            unit_specular: self.unit_specular.unwrap_or(ed::LIGHTING_GROUND_SPECULAR),
+        }
+    }
 }
 
 /// Height-based "custom" fog (mapinfo's `custom.fog = { color, height, fogatten }`
@@ -418,83 +630,100 @@ impl Default for CustomFogSettings {
 
 /// Grass widget configuration (mapinfo `custom.grassConfig`). Driven
 /// by BAR's `map_grass_gl4` LuaUI widget (`bar-game/luaui/Widgets/
-/// map_grass_gl4.lua`). When `dist_tga` is empty the widget is
-/// considered disabled for the map -- BAR's widget similarly
-/// requires this asset to be present before it generates any
-/// blades. Defaults match the widget's `grassConfig` block
-/// (`map_grass_gl4.lua:87-110`).
+/// map_grass_gl4.lua`). When `dist_tga` is `None` or empty the widget
+/// is considered disabled for the map -- BAR's widget similarly
+/// requires this asset to be present before it generates any blades.
 ///
-/// Polish-level sub-fields (`grassShaderParams.{WINDSTRENGTH,
-/// FADESTART, FADEEND, ALPHATHRESHOLD, WINDSCALE}`) are not
-/// surfaced here -- they're shader-side defaults that the widget
-/// hardcodes per map type, never authored at the map level. BME
-/// inherits the same hardcoded values.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Every field is `Option<T>`: `None` means "not set in source mapinfo
+/// and not edited by the user", which the renderer/emitter resolves
+/// to the engine default at the point of use via [`resolved`]. The
+/// emitter writes a field to the bundled mapinfo only when it is
+/// `Some`, so a round-tripped map never carries values the original
+/// author didn't explicitly set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CustomGrassSettings {
-    /// Path (inside the map archive) to the 8-bit greyscale
-    /// distribution mask. Each non-zero texel spawns a grass blade;
-    /// the byte value scales the blade size. Empty string disables
-    /// the widget.
-    pub dist_tga: String,
-    /// Path to the RGBA blade texture sampled by the fragment shader.
-    pub blade_color_tex: String,
-    /// Maximum blade height for a `dist_tga` byte of 254. Default
-    /// 1.7 per the widget's `grassConfig.grassMaxSize`. Aurelia /
-    /// Onyx typically override to ~2.0.
-    pub max_size: f32,
-    /// Minimum blade size for a non-zero `dist_tga` byte.
-    pub min_size: f32,
-    /// Linear distance between candidate grass patches in elmos.
-    /// Default 32 per the widget; lower = denser grass at higher
-    /// vertex cost.
-    pub patch_resolution: u32,
-    /// Per-patch placement jitter (fraction of `patch_resolution`).
-    /// 0.66 by default; produces a natural scattered look without
-    /// patch overlap.
-    pub patch_placement_jitter: f32,
-    /// `grassShaderParams.MAPCOLORFACTOR` -- how strongly the
-    /// terrain albedo tints the blade colour (multiplicative blend).
-    /// Default 0.6.
-    pub map_color_factor: f32,
-    /// `grassShaderParams.MAPCOLORBASE` -- additional terrain-
-    /// albedo blend strength toward the blade base. Default 1.0.
-    pub map_color_base: f32,
+    pub dist_tga: Option<String>,
+    pub blade_color_tex: Option<String>,
+    pub max_size: Option<f32>,
+    pub min_size: Option<f32>,
+    pub patch_resolution: Option<u32>,
+    pub patch_placement_jitter: Option<f32>,
+    pub map_color_factor: Option<f32>,
+    pub map_color_base: Option<f32>,
+    pub alpha_threshold: Option<f32>,
+    pub shadow_factor: Option<f32>,
+    pub grass_brightness: Option<f32>,
+    pub fade_start: Option<f32>,
+    pub fade_end: Option<f32>,
+    pub wind_strength: Option<f32>,
+    pub wind_scale: Option<f32>,
+    pub wind_sample_scale: Option<f32>,
+    pub grass_wind_mult: Option<f32>,
 }
 
-impl Default for CustomGrassSettings {
-    fn default() -> Self {
-        Self {
-            dist_tga: String::new(),
-            blade_color_tex: String::new(),
-            max_size: 1.7,
-            min_size: 0.4,
-            patch_resolution: 32,
-            patch_placement_jitter: 0.66,
-            map_color_factor: 0.6,
-            map_color_base: 1.0,
+/// Fully-resolved grass settings: every `Option<T>` field of
+/// [`CustomGrassSettings`] is replaced by its effective value
+/// (user-explicit -> source-mapinfo-parsed -> engine default).
+/// Produced by [`CustomGrassSettings::resolved`]; consumed by the
+/// renderer at the top of each frame so render code never branches
+/// on `Option`.
+#[derive(Debug, Clone)]
+pub struct ResolvedGrassSettings {
+    pub dist_tga: String,
+    pub blade_color_tex: String,
+    pub max_size: f32,
+    pub min_size: f32,
+    pub patch_resolution: u32,
+    pub patch_placement_jitter: f32,
+    pub map_color_factor: f32,
+    pub map_color_base: f32,
+    pub alpha_threshold: f32,
+    pub shadow_factor: f32,
+    pub grass_brightness: f32,
+    pub fade_start: f32,
+    pub fade_end: f32,
+    pub wind_strength: f32,
+    pub wind_scale: f32,
+    pub wind_sample_scale: f32,
+    pub grass_wind_mult: f32,
+}
+
+impl CustomGrassSettings {
+    pub fn resolved(&self) -> ResolvedGrassSettings {
+        use crate::engine_defaults as ed;
+        ResolvedGrassSettings {
+            dist_tga: self.dist_tga.clone().unwrap_or_default(),
+            blade_color_tex: self.blade_color_tex.clone().unwrap_or_default(),
+            max_size: self.max_size.unwrap_or(ed::GRASS_MAX_SIZE),
+            min_size: self.min_size.unwrap_or(ed::GRASS_MIN_SIZE),
+            patch_resolution: self.patch_resolution.unwrap_or(ed::GRASS_PATCH_RESOLUTION),
+            patch_placement_jitter: self
+                .patch_placement_jitter
+                .unwrap_or(ed::GRASS_PATCH_PLACEMENT_JITTER),
+            map_color_factor: self.map_color_factor.unwrap_or(ed::GRASS_MAP_COLOR_FACTOR),
+            map_color_base: self.map_color_base.unwrap_or(ed::GRASS_MAP_COLOR_BASE),
+            alpha_threshold: self.alpha_threshold.unwrap_or(ed::GRASS_ALPHA_THRESHOLD),
+            shadow_factor: self.shadow_factor.unwrap_or(ed::GRASS_SHADOW_FACTOR),
+            grass_brightness: self.grass_brightness.unwrap_or(ed::GRASS_BRIGHTNESS),
+            fade_start: self.fade_start.unwrap_or(ed::GRASS_FADE_START),
+            fade_end: self.fade_end.unwrap_or(ed::GRASS_FADE_END),
+            wind_strength: self.wind_strength.unwrap_or(ed::GRASS_WIND_STRENGTH),
+            wind_scale: self.wind_scale.unwrap_or(ed::GRASS_WIND_SCALE),
+            wind_sample_scale: self
+                .wind_sample_scale
+                .unwrap_or(ed::GRASS_WIND_SAMPLE_SCALE),
+            grass_wind_mult: self.grass_wind_mult.unwrap_or(ed::GRASS_WIND_MULT),
         }
     }
-}
 
-impl Default for LightingSettings {
-    fn default() -> Self {
-        Self {
-            sun_dir: [0.0, 1.0, 2.0],
-            sun_intensity: 1.0,
-            ground_ambient: [0.5, 0.5, 0.5],
-            ground_diffuse: [0.5, 0.5, 0.5],
-            ground_specular: [0.1, 0.1, 0.1],
-            // Engine default (MapInfo.cpp::ReadLight). Previously 10.0 here,
-            // which made the spec lobe broad enough that any map shipping
-            // `groundSpecularColor >= 0.3` without overriding `specularExponent`
-            // would wash out to white at near-overhead camera angles (Ascendancy:
-            // groundSpecularColor=0.5, no exponent override). Maps that
-            // intentionally want a broad/dim lobe still override this in
-            // mapinfo.lua.
-            spec_exponent: 100.0,
-            ground_shadow_density: 0.8,
-        }
+    /// True when the widget should render: a non-empty distribution mask
+    /// is the BAR widget's minimum requirement (`map_grass_gl4.lua:857-892`).
+    pub fn is_enabled(&self) -> bool {
+        self.dist_tga
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
     }
 }
 
@@ -502,9 +731,60 @@ impl Default for LightingSettings {
 /// `rts/Map/MapInfo.cpp` (where the engine's BumpWater shader gets its
 /// per-map values from). Keys we don't parse from mapinfo yet still have
 /// reasonable defaults so a freshly-created project renders sensibly.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WaterSettings {
+    pub damage: Option<f32>,
+    pub absorb: Option<[f32; 3]>,
+    pub base_color: Option<[f32; 3]>,
+    pub min_color: Option<[f32; 3]>,
+    pub surface_color: Option<[f32; 3]>,
+    pub surface_alpha: Option<f32>,
+    pub diffuse_color: Option<[f32; 3]>,
+    pub specular_color: Option<[f32; 3]>,
+    pub ambient_factor: Option<f32>,
+    pub diffuse_factor: Option<f32>,
+    pub specular_factor: Option<f32>,
+    pub specular_power: Option<f32>,
+    pub fresnel_min: Option<f32>,
+    pub fresnel_max: Option<f32>,
+    pub fresnel_power: Option<f32>,
+    pub reflection_distortion: Option<f32>,
+    pub perlin_amplitude: Option<f32>,
+    pub blur_base: Option<f32>,
+    pub blur_exponent: Option<f32>,
+    pub caustics_resolution: Option<f32>,
+    pub caustics_strength: Option<f32>,
+    pub wave_offset_factor: Option<f32>,
+    pub wave_foam_distortion: Option<f32>,
+    pub wave_foam_intensity: Option<f32>,
+    pub wave_length: Option<f32>,
+    /// Engine `water.forceRendering`. Forces the water draw pass even
+    /// when the camera is fully above the water plane.
+    pub force_rendering: Option<bool>,
+    /// `water.hasWaterPlane`. When true the engine draws a flat
+    /// infinite water plane behind the map edges.
+    pub has_water_plane: Option<bool>,
+    /// `water.numTiles`. Tile-count multiplier for the water bump
+    /// normal-map sample frequency.
+    pub num_tiles: Option<u32>,
+    pub perlin_start_freq: Option<f32>,
+    pub perlin_lacunarity: Option<f32>,
+    pub plane_color: Option<[f32; 3]>,
+    /// `water.repeatX` / `water.repeatY`. Optional fixed-pixel UV
+    /// repeat counts that override the engine's screen-space default.
+    pub repeat_x: Option<f32>,
+    pub repeat_y: Option<f32>,
+    /// `water.shoreWaves`. Engine toggle for the foam ring along
+    /// shorelines.
+    pub shore_waves: Option<bool>,
+    /// `water.normalTexture`. Filename of a 2D bump-normal tile
+    /// override; engine falls back to its built-in pattern when unset.
+    pub normal_texture: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedWater {
     pub damage: f32,
     pub absorb: [f32; 3],
     pub base_color: [f32; 3],
@@ -522,100 +802,74 @@ pub struct WaterSettings {
     pub fresnel_power: f32,
     pub reflection_distortion: f32,
     pub perlin_amplitude: f32,
-    /// Per-tap vertical offset for the engine's 7-tap `opt_blurreflection`
-    /// path (in pixels, divided by screen height in the shader define
-    /// `BlurBase = vec2(0, blurBase / viewSizeY)`, see
-    /// `bar-recoil/rts/Rendering/Env/BumpWater.cpp:442`). Default 2.0
-    /// per `MapInfo.cpp:261`.
     pub blur_base: f32,
-    /// Geometric-progression factor between successive blur taps
-    /// (`BlurExponent` in `BumpWaterFS:234-244`). Default 1.5 per
-    /// `MapInfo.cpp:262`.
     pub blur_exponent: f32,
-    /// Per-frag UV scale for the caustic animation sample (mapinfo
-    /// `water.causticsResolution`, default 75.0 per `MapInfo.cpp:273`).
-    /// `BumpWaterFS:326`: `texture2D(caustic, texCoords[0].pq *
-    /// CausticsResolution)`. Multiplies the engine's UV-space caustic
-    /// tile rate -- higher = finer tiling, more "shimmer".
     pub caustics_resolution: f32,
-    /// Caustic-pattern intensity multiplier (mapinfo
-    /// `water.causticsStrength`, default 0.08 per `MapInfo.cpp:274`).
-    /// Engine blends the caustic colour into underwater fragments by
-    /// `* CausticsStrength` -- 0 disables, ~0.1 is the typical
-    /// in-engine subtle shimmer.
     pub caustics_strength: f32,
-    /// `BumpWaterFS:186-220` GetShorewaves inputs from mapinfo
-    /// `water.*`. Default 0.0 per `MapInfo.cpp:269` (engine disables
-    /// foam-wave temporal offset by default; some maps crank it up
-    /// to add a hand-drawn-style shore animation).
     pub wave_offset_factor: f32,
-    /// Default 0.05 (`MapInfo.cpp:271`). Scales how much the water
-    /// surface normal distorts the foam texture sample UV.
     pub wave_foam_distortion: f32,
-    /// Default 0.5 (`MapInfo.cpp:272`). Multiplier on the foam
-    /// texture sample brightness before the rest of the foam math.
     pub wave_foam_intensity: f32,
-    /// Default 0.15 (`MapInfo.cpp:270`). Shader uses `1/waveLength`
-    /// as the inverse wave-band reciprocal; controls how rapidly the
-    /// foam fades from shoreline outward.
     pub wave_length: f32,
+    pub force_rendering: bool,
+    pub has_water_plane: bool,
+    pub num_tiles: u32,
+    pub perlin_start_freq: f32,
+    pub perlin_lacunarity: f32,
+    pub plane_color: [f32; 3],
+    pub repeat_x: f32,
+    pub repeat_y: f32,
+    pub shore_waves: bool,
+    pub normal_texture: String,
 }
 
-impl Default for WaterSettings {
-    fn default() -> Self {
-        Self {
-            damage: 0.0,
-            absorb: [0.0, 0.0, 0.0],
-            base_color: [0.6, 0.6, 0.8],
-            min_color: [0.0, 0.0, 0.0],
-            // From `rts/Map/MapInfo.cpp:250-266`.
-            surface_color: [0.75, 0.8, 0.85],
-            surface_alpha: 0.55,
-            diffuse_color: [1.0, 1.0, 1.0],
-            specular_color: [1.0, 1.0, 1.0],
-            ambient_factor: 1.0,
-            diffuse_factor: 1.0,
-            specular_factor: 1.0,
-            specular_power: 20.0,
-            fresnel_min: 0.2,
-            fresnel_max: 0.8,
-            fresnel_power: 4.0,
-            reflection_distortion: 1.0,
-            perlin_amplitude: 0.9,
-            blur_base: 2.0,
-            blur_exponent: 1.5,
-            caustics_resolution: 75.0,
-            caustics_strength: 0.08,
-            wave_offset_factor: 0.0,
-            wave_foam_distortion: 0.05,
-            wave_foam_intensity: 0.5,
-            wave_length: 0.15,
-        }
-    }
-}
-
-impl Default for MapSettings {
-    fn default() -> Self {
-        Self {
-            min_height: 0.0,
-            max_height: 800.0,
-            map_hardness: 100,
-            gravity: 130.0,
-            water_damage: 0.0,
-            detail_textures: Vec::new(),
-            deformable: true,
-            void_water: false,
-            void_ground: false,
-            tidal_strength: 0.0,
-            max_metal: 0.02,
-            extractor_radius: 500.0,
-            atmosphere: AtmosphereSettings::default(),
-            lighting: LightingSettings::default(),
-            water: WaterSettings::default(),
-            custom_fog: CustomFogSettings::default(),
-            custom_grass: CustomGrassSettings::default(),
-            resources: ResourcesSettings::default(),
-            start_positions: Vec::new(),
+impl WaterSettings {
+    pub fn resolved(&self) -> ResolvedWater {
+        use crate::engine_defaults as ed;
+        ResolvedWater {
+            damage: self.damage.unwrap_or(ed::WATER_DAMAGE),
+            absorb: self.absorb.unwrap_or(ed::WATER_ABSORB),
+            base_color: self.base_color.unwrap_or(ed::WATER_BASE_COLOR),
+            min_color: self.min_color.unwrap_or(ed::WATER_MIN_COLOR),
+            surface_color: self.surface_color.unwrap_or(ed::WATER_SURFACE_COLOR),
+            surface_alpha: self.surface_alpha.unwrap_or(ed::WATER_SURFACE_ALPHA),
+            diffuse_color: self.diffuse_color.unwrap_or(ed::WATER_DIFFUSE_COLOR),
+            specular_color: self.specular_color.unwrap_or(ed::WATER_SPECULAR_COLOR),
+            ambient_factor: self.ambient_factor.unwrap_or(ed::WATER_AMBIENT_FACTOR),
+            diffuse_factor: self.diffuse_factor.unwrap_or(ed::WATER_DIFFUSE_FACTOR),
+            specular_factor: self.specular_factor.unwrap_or(ed::WATER_SPECULAR_FACTOR),
+            specular_power: self.specular_power.unwrap_or(ed::WATER_SPECULAR_POWER),
+            fresnel_min: self.fresnel_min.unwrap_or(ed::WATER_FRESNEL_MIN),
+            fresnel_max: self.fresnel_max.unwrap_or(ed::WATER_FRESNEL_MAX),
+            fresnel_power: self.fresnel_power.unwrap_or(ed::WATER_FRESNEL_POWER),
+            reflection_distortion: self
+                .reflection_distortion
+                .unwrap_or(ed::WATER_REFLECTION_DISTORTION),
+            perlin_amplitude: self.perlin_amplitude.unwrap_or(ed::WATER_PERLIN_AMPLITUDE),
+            blur_base: self.blur_base.unwrap_or(ed::WATER_BLUR_BASE),
+            blur_exponent: self.blur_exponent.unwrap_or(ed::WATER_BLUR_EXPONENT),
+            caustics_resolution: self
+                .caustics_resolution
+                .unwrap_or(ed::WATER_CAUSTICS_RESOLUTION),
+            caustics_strength: self
+                .caustics_strength
+                .unwrap_or(ed::WATER_CAUSTICS_STRENGTH),
+            // Shore-foam params don't have engine constants documented
+            // here yet -- treat unset as zero so the foam pass stays
+            // dormant for maps that didn't enable it.
+            wave_offset_factor: self.wave_offset_factor.unwrap_or(0.0),
+            wave_foam_distortion: self.wave_foam_distortion.unwrap_or(0.05),
+            wave_foam_intensity: self.wave_foam_intensity.unwrap_or(0.5),
+            wave_length: self.wave_length.unwrap_or(0.15),
+            force_rendering: self.force_rendering.unwrap_or(false),
+            has_water_plane: self.has_water_plane.unwrap_or(false),
+            num_tiles: self.num_tiles.unwrap_or(4),
+            perlin_start_freq: self.perlin_start_freq.unwrap_or(8.0),
+            perlin_lacunarity: self.perlin_lacunarity.unwrap_or(3.0),
+            plane_color: self.plane_color.unwrap_or([0.0, 0.5, 0.5]),
+            repeat_x: self.repeat_x.unwrap_or(0.0),
+            repeat_y: self.repeat_y.unwrap_or(0.0),
+            shore_waves: self.shore_waves.unwrap_or(true),
+            normal_texture: self.normal_texture.clone().unwrap_or_default(),
         }
     }
 }
@@ -859,6 +1113,8 @@ impl Recipe {
             description: "A basic ridged noise terrain with blur smoothing".to_string(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "base_terrain".to_string(),
@@ -977,6 +1233,8 @@ mod tests {
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![RecipeNode {
                 key: "noise".to_string(),
                 node_type: NodeType::PerlinNoise,
@@ -1003,6 +1261,8 @@ mod tests {
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "noise".to_string(),
@@ -1036,6 +1296,8 @@ mod tests {
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "dupe".to_string(),
@@ -1167,6 +1429,8 @@ mod tests {
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "noise".to_string(),
@@ -1222,6 +1486,8 @@ mod tests {
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 make_subout("sub_terrain", "Output"), // was "Heightmap" before recompute ran
                 make_subout("sub_texture", "Texture"), // was "Color"
@@ -1276,6 +1542,8 @@ mod tests {
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "hm".to_string(),
