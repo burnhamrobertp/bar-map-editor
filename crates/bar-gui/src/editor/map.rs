@@ -25,8 +25,15 @@ pub type SmfLightingSnapshot = bar_render::SmfLighting;
 
 /// Recipe identity block: the values that show up in the Map Info /
 /// About dialog and end up in the `.barproj` recipe header.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct RecipeMeta {
+    /// Human-readable map name (`mapinfo.name`). The engine builds the
+    /// archive identifier from `name .. " " .. version`, so this is
+    /// the value players see and which the script's `MapName=` must
+    /// match. When `None`, the bundler falls back to the `.barproj`
+    /// directory stem -- only sensible for fresh projects that never
+    /// had a source mapinfo to import a real name from.
+    pub name: Option<String>,
     /// Optional shortname (`mapinfo.shortname`). Omitted from mapinfo.lua when `None`.
     pub shortname: Option<String>,
     /// Free-form description (`mapinfo.description`). Empty string is omitted.
@@ -36,6 +43,26 @@ pub struct RecipeMeta {
     /// Optional version string. Omitted from mapinfo.lua when `None`.
     /// When set, becomes part of the Spring archive identity: `name .. " " .. version`.
     pub version: Option<String>,
+    /// Optional short tooltip text shown by the lobby on hover.
+    /// Becomes mapinfo's `tip`. Omitted when `None`.
+    pub tip: Option<String>,
+    /// Archive dependencies (`mapinfo.depend`). Default is
+    /// `["Map Helper v1"]`; rarely changed.
+    pub depend: Vec<String>,
+}
+
+impl Default for RecipeMeta {
+    fn default() -> Self {
+        Self {
+            name: None,
+            shortname: None,
+            description: String::new(),
+            author: None,
+            version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
+        }
+    }
 }
 
 /// Project map metadata + UI shadow state. See module docs.

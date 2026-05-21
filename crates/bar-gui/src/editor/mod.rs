@@ -24,5 +24,5 @@ pub(crate) use props_panel::{
     PendingPropsOpen, PropsPanelState, PropsTarget, PROPS_OPEN_DELAY_MS, PROPS_OPEN_MOVE_TOLERANCE,
 };
 pub(crate) use selection::SelectionState;
-pub(crate) use validation::{MapInfoTab, ValidationFilter, ValidationState};
+pub(crate) use validation::{ValidationFilter, ValidationState};
 pub(crate) use visuals::VisualsState;
