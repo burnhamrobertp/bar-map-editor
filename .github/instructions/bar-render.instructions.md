@@ -182,6 +182,30 @@ binary `CameraUniform` layout. The runtime upload flags
 overridden in `sync_to_frame` based on which assets the renderer has
 actually uploaded.
 
+## Sampler convention
+
+Every world-space filtered sampler routes through
+`crate::samplers::make_filtered_sampler(device, label, address_mode)`.
+This guarantees a single workspace-wide filtering story:
+linear min/mag/mip + `anisotropy_clamp: 16`, mirroring BAR's
+engine-wide `Springsettings.cfg::MaxTexAniso = 16` applied via
+`Bitmap.cpp:1746`.
+
+**Use the helper for**: terrain albedo, splat detail textures,
+feature model textures, grass blade + grass shading textures,
+water caustics, skybox cubemap -- anything that binds a textured
+world-space asset.
+
+**Don't use the helper for**: samplers where any filter must be
+`Nearest` (depth-comparison shadow PCF, mipmap-Nearest lookups
+like water reflection / refraction, full-screen post-passes like
+gamma encode, or 1×1 placeholder textures without mip chains).
+
+If you find yourself writing `device.create_sampler` directly for
+a world-space asset, the helper is what you want -- skipping it
+leads to ad-hoc divergence where one texture looks crisp at
+oblique angles and the texture next to it looks smeared.
+
 ## Asset upload paths
 
 Map-authored textures from mapinfo `resources = { ... }` and
