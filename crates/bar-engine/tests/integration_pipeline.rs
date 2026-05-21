@@ -101,6 +101,8 @@ fn test_complex_recipe_with_combiners() {
         description: String::new(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes: vec![
             RecipeNode {
                 key: "perlin".to_string(),
@@ -214,6 +216,8 @@ fn test_recipe_with_erosion_pipeline() {
         description: "Tests hydraulic erosion in pipeline".to_string(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes: vec![
             RecipeNode {
                 key: "noise".to_string(),
@@ -316,6 +320,8 @@ fn test_mask_operations_pipeline() {
         description: "Tests mask threshold, invert, blur, and apply".to_string(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes: vec![
             RecipeNode {
                 key: "terrain".to_string(),

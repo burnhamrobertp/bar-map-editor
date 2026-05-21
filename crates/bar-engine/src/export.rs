@@ -378,12 +378,17 @@ pub fn export_sd7_directory(
     Ok(())
 }
 
-/// Generate a mapinfo.lua using configurable settings.
+/// Generate a mapinfo.lua using configurable settings. Legacy
+/// export-path emitter (the codec at `targets/spring_smf.rs` is the
+/// modern path that emits only user-explicit fields). This one
+/// resolves Option overrides up front for compatibility with the
+/// older formatting block.
 fn generate_mapinfo(name: &str, map_x: u32, map_y: u32, settings: &MapSettings) -> String {
-    let deformable_str = if settings.deformable { "false" } else { "true" };
-    let atm = &settings.atmosphere;
-    let lit = &settings.lighting;
-    let wat = &settings.water;
+    let rs = settings.resolved();
+    let deformable_str = if rs.deformable { "false" } else { "true" };
+    let atm = &rs.atmosphere;
+    let lit = &rs.lighting;
+    let wat = &rs.water;
 
     // World-space dimensions (elmos) = squares × squareSize
     let world_x = map_x * 8;
@@ -497,14 +502,14 @@ fn generate_mapinfo(name: &str, map_x: u32, map_y: u32, settings: &MapSettings) 
 
 return mapinfo
 "#,
-        hardness = settings.map_hardness,
+        hardness = rs.map_hardness,
         deformable = deformable_str,
-        gravity = settings.gravity,
-        tidal = settings.tidal_strength,
-        max_metal = settings.max_metal,
-        extractor_radius = settings.extractor_radius,
-        min_height = settings.min_height,
-        max_height = settings.max_height,
+        gravity = rs.gravity,
+        tidal = rs.tidal_strength,
+        max_metal = rs.max_metal,
+        extractor_radius = rs.extractor_radius,
+        min_height = rs.min_height,
+        max_height = rs.max_height,
         atm_min_wind = atm.min_wind,
         atm_max_wind = atm.max_wind,
         atm_fog_start = atm.fog_start,
@@ -612,12 +617,23 @@ pub fn export_with_target(
     let dims = codec.compute_dimensions(&config, width, height);
 
     // Create export plan
+    let display_name = {
+        let trimmed = recipe.name.trim();
+        if trimmed.is_empty() {
+            map_name.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
     let plan = ExportPlan {
         map_name: map_name.to_string(),
+        display_name,
         shortname: recipe.shortname.clone(),
         description: recipe.description.clone(),
         author: recipe.author.clone(),
         version: recipe.version.clone(),
+        tip: recipe.tip.clone(),
+        depend: recipe.depend.clone(),
         dimensions: dims,
         settings: settings.clone(),
         features: recipe.features.clone(),

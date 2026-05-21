@@ -55,6 +55,32 @@ pub fn execute_bundlers(
     filter_label: Option<&str>,
     project_dir: Option<&Path>,
 ) -> Result<Vec<BundlerResult>> {
+    execute_bundlers_with_format(
+        graph,
+        outputs,
+        recipe,
+        output_dir,
+        filter_label,
+        project_dir,
+        None,
+    )
+}
+
+/// Like `execute_bundlers`, but lets the caller override the archive
+/// format. Used by the "Test in BAR" flow to ship a `.sdd` directory
+/// (no 7-Zip compression) for iteration -- a typical Onyx-sized map
+/// takes ~10s to 7z-compress; writing the same content as a directory
+/// is well under a second. The engine accepts both `.sd7` and `.sdd`
+/// from the `maps/` directory transparently.
+pub fn execute_bundlers_with_format(
+    graph: &GraphEngine,
+    outputs: &NodeOutputs,
+    recipe: &Recipe,
+    output_dir: &Path,
+    filter_label: Option<&str>,
+    project_dir: Option<&Path>,
+    archive_format_override: Option<ArchiveFormat>,
+) -> Result<Vec<BundlerResult>> {
     let bundler_ids = find_bundler_nodes(graph);
     let mut results = Vec::new();
 
@@ -68,9 +94,16 @@ pub fn execute_bundlers(
             }
         }
 
-        let result =
-            execute_single_bundler(graph, outputs, bundler_id, recipe, output_dir, project_dir)
-                .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
+        let result = execute_single_bundler(
+            graph,
+            outputs,
+            bundler_id,
+            recipe,
+            output_dir,
+            project_dir,
+            archive_format_override,
+        )
+        .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
 
         results.push(result);
     }
@@ -86,6 +119,7 @@ fn execute_single_bundler(
     recipe: &Recipe,
     output_dir: &Path,
     project_dir: Option<&Path>,
+    archive_format_override: Option<ArchiveFormat>,
 ) -> Result<BundlerResult> {
     let width = recipe.output.width;
     let height = recipe.output.height;
@@ -94,21 +128,59 @@ fn execute_single_bundler(
     let params = &node.params;
 
     // bar-editor only emits the BAR map format: spring-smf packed
-    // as a 7z (.sd7). No params here vary that — `target` /
-    // `archive_format` were dropped from Bundler's defaults along
-    // with the matching properties UI.
+    // as a 7z (.sd7) by default; the "Test in BAR" path overrides
+    // to `Directory` so iteration skips 7z compression.
     let target_id = "spring-smf".to_string();
-    let archive_format = ArchiveFormat::SevenZip;
+    let archive_format = archive_format_override.unwrap_or(ArchiveFormat::SevenZip);
 
+    // Map identity convention: `<recipe.name>_<recipe.version>` with
+    // spaces -> underscores, lowercased. Matches BAR's archive
+    // naming (e.g. `onyx_cauldron_2.2.2.sd7`) so the produced
+    // artifact's filename mirrors its mapinfo MapName -- avoids the
+    // confusion of "what is final_composition.sd7?" when the recipe
+    // says the map is called "Onyx Cauldron". A `map_name` param
+    // explicitly set on the bundler node still overrides this for
+    // edge cases.
+    // For the canonical `.sd7` distribution artifact the slug is
+    // `<name>_<version>` so downloads stay sortable side by side. The
+    // `.sdd` fast-iteration artifact (Test-in-BAR) drops the version
+    // so each test overwrites the previous instead of piling up
+    // versioned directories in `<install>/maps/`. The mapinfo's
+    // `name`/`version` -- which the engine uses to resolve the
+    // archive at script time -- stays the same in both cases.
+    let include_version = archive_format != ArchiveFormat::Directory;
     let map_name = match params.get("map_name") {
-        Some(ParamValue::String(s)) => s.clone(),
-        _ => node.label.to_lowercase().replace(' ', "_"),
+        Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => default_map_name_from_recipe(recipe, &node.label, include_version),
+    };
+    // mapinfo.lua's `name = "..."` field (and thus the engine's
+    // archive identifier) must be the human-readable recipe name,
+    // not the filesystem slug. Fall back to the slug only when the
+    // recipe has no name set yet.
+    let display_name = {
+        let trimmed = recipe.name.trim();
+        if trimmed.is_empty() {
+            map_name.clone()
+        } else {
+            trimmed.to_string()
+        }
     };
 
-    let output_path_template = match params.get("output_path") {
+    let mut output_path_template = match params.get("output_path") {
         Some(ParamValue::String(s)) => s.clone(),
         _ => "{name}.sd7".to_string(),
     };
+    // When the host forces a directory output (Test-in-BAR fast
+    // path), rewrite the extension so the result lands in
+    // `{name}.sdd/` -- the engine accepts both `.sd7` and `.sdd`
+    // from `maps/`, and using a different extension keeps the
+    // fast-iteration artifact from masking the canonical compiled
+    // SD7 on disk.
+    if archive_format_override == Some(ArchiveFormat::Directory) {
+        if let Some(stem) = output_path_template.strip_suffix(".sd7") {
+            output_path_template = format!("{stem}.sdd");
+        }
+    }
 
     // Collect layers from bundler's connected inputs
     let layers = collect_bundler_layers(graph, outputs, bundler_id);
@@ -140,10 +212,13 @@ fn execute_single_bundler(
     // Create export plan
     let plan = ExportPlan {
         map_name: map_name.clone(),
+        display_name: display_name.clone(),
         shortname: recipe.shortname.clone(),
         description: recipe.description.clone(),
         author: recipe.author.clone(),
         version: recipe.version.clone(),
+        tip: recipe.tip.clone(),
+        depend: recipe.depend.clone(),
         dimensions: dims,
         settings: settings.clone(),
         features: recipe.features.clone(),
@@ -176,7 +251,32 @@ fn execute_single_bundler(
     // Copy file references into staging.
     // mapinfo.lua is special: if the codec already generated one, merge
     // the original's unknown keys into it rather than overwriting.
+    //
+    // Two BME-internal artifacts must never reach the bundle:
+    //  * `_bme_smf_minimap.png` -- the SMF-embedded minimap sidecar
+    //    the editor extracts for preview rendering. The engine reads
+    //    the minimap from the SMF binary directly; the sidecar exists
+    //    only to feed BME's renderer between import and re-compile.
+    //  * `grassmap.png` -- BME materialises the SMF's MEH_Vegetation
+    //    distribution mask into a PNG so the editor's grass widget
+    //    can sample it without re-parsing the SMF binary every frame.
+    //    Maps that ship an explicit `grassDistTGA` already have their
+    //    own dist mask under `maps/`; the materialised PNG would
+    //    shadow it. Skip both.
+    let is_bme_internal_artifact = |bundle_path: &str| -> bool {
+        let trimmed = bundle_path.trim_start_matches("./");
+        trimmed.eq_ignore_ascii_case(bar_project::SMF_MINIMAP_SIDE_CAR)
+            || trimmed.eq_ignore_ascii_case("grassmap.png")
+    };
     for file_ref in &file_refs {
+        if is_bme_internal_artifact(&file_ref.bundle_path) {
+            tracing::debug!(
+                "[{}] Skipping BME-internal artifact from bundle: {}",
+                node.label,
+                file_ref.bundle_path
+            );
+            continue;
+        }
         let src = Path::new(&file_ref.path);
         let dest = staging_dir.join(&file_ref.bundle_path);
         if let Some(parent) = dest.parent() {
@@ -228,7 +328,48 @@ fn execute_single_bundler(
         .replace("{target}", &target_id);
     let final_output_path = output_dir.join(&resolved_output_name);
 
-    // Package
+    // Package. For Directory format, wipe any prior contents first so
+    // stale files from previous bundles don't ghost into the new
+    // archive (the DirectoryPackager copies on top without clearing,
+    // which is fine for fresh outputs but wrong on repeat runs of
+    // the Test-in-BAR fast path).
+    if matches!(archive_format, ArchiveFormat::Directory) && final_output_path.exists() {
+        let _ = std::fs::remove_dir_all(&final_output_path);
+    }
+    // Also remove sibling archives with the same base name but a
+    // different extension (e.g. a stale `final_composition.sd7`
+    // left over from before BME switched to `.sdd` output). The
+    // engine matches archives by mapinfo MapName, not filename --
+    // two archives in `maps/` claiming the same map produces
+    // unpredictable load order. Clean them up so the *current*
+    // output is unambiguously the one the engine picks.
+    if let (Some(parent), Some(stem)) = (
+        final_output_path.parent(),
+        final_output_path.file_stem().and_then(|s| s.to_str()),
+    ) {
+        for ext in ["sd7", "sdz", "sdd"] {
+            let sibling = parent.join(format!("{stem}.{ext}"));
+            if sibling == final_output_path || !sibling.exists() {
+                continue;
+            }
+            let result = if sibling.is_dir() {
+                std::fs::remove_dir_all(&sibling)
+            } else {
+                std::fs::remove_file(&sibling)
+            };
+            match result {
+                Ok(()) => tracing::debug!(
+                    path = %sibling.display(),
+                    "Bundler: removed stale sibling archive"
+                ),
+                Err(e) => tracing::warn!(
+                    path = %sibling.display(),
+                    err = %e,
+                    "Bundler: failed to remove stale sibling archive"
+                ),
+            }
+        }
+    }
     let packager = create_packager(&archive_format);
     let layout = &config.packaging.layout;
     packager.package(&staging_dir, &final_output_path, layout)?;
@@ -243,9 +384,26 @@ fn execute_single_bundler(
         final_output_path.display()
     );
 
+    // Spring archive ID is `display_name .. " " .. version` from
+    // mapinfo.lua. Some authored maps put the version inside the
+    // `name` field too ("Onyx Cauldron 2.2.3"); naive concatenation
+    // produces a doubled "Onyx Cauldron 2.2.3 2.2.3" the engine
+    // can't resolve, so strip a matching trailing version (with
+    // either space or underscore separator) before joining.
     let map_internal_name = match plan.version.as_deref().filter(|v| !v.is_empty()) {
-        Some(v) => format!("{} {}", plan.map_name, v),
-        None => plan.map_name.clone(),
+        Some(v) => {
+            let mut base = plan.display_name.as_str();
+            for sep in [' ', '_'] {
+                if let Some(trimmed) = base.strip_suffix(v) {
+                    if let Some(stripped) = trimmed.strip_suffix(sep) {
+                        base = stripped;
+                        break;
+                    }
+                }
+            }
+            format!("{} {}", base, v)
+        }
+        None => plan.display_name.clone(),
     };
 
     Ok(BundlerResult {
@@ -367,6 +525,149 @@ fn collect_bundler_files(
     }
 
     files
+}
+
+/// Re-emit only `mapinfo.lua` into an existing bundle directory
+/// without re-running the graph or rewriting any heavy artifacts
+/// (SMF / SMT / passthrough file copies). Used by the Test-in-BAR
+/// fast-iteration path when the only change since the last
+/// successful bundle was to mapinfo-affecting settings (atmosphere,
+/// lighting, water, grass, physics scalars, identity, etc.).
+///
+/// Preserves the merge-with-original behaviour the full bundler
+/// performs: if `<project_dir>/passthrough/mapinfo.lua` exists, its
+/// unknown keys are merged into the freshly generated file so
+/// hand-authored fields aren't lost.
+///
+/// `bundle_dir` must be an existing `.sdd` directory previously
+/// produced by [`execute_bundlers_with_format`] with
+/// [`ArchiveFormat::Directory`] -- the heavy artifacts there are
+/// assumed to still be current.
+pub fn regenerate_mapinfo_in_bundle(
+    graph: &GraphEngine,
+    recipe: &Recipe,
+    bundle_dir: &Path,
+    project_dir: Option<&Path>,
+) -> Result<()> {
+    let bundler_ids = find_bundler_nodes(graph);
+    let bundler_id = bundler_ids
+        .first()
+        .copied()
+        .ok_or_else(|| anyhow::anyhow!("Graph has no Bundler node"))?;
+    let node = graph
+        .get_node(bundler_id)
+        .ok_or_else(|| anyhow::anyhow!("Bundler node missing from graph"))?;
+    let params = &node.params;
+
+    // Same map_name resolution as the full bundler for the
+    // Directory (Test-in-BAR) path: no version suffix.
+    let map_name = match params.get("map_name") {
+        Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
+        _ => default_map_name_from_recipe(recipe, &node.label, false),
+    };
+    let display_name = {
+        let trimmed = recipe.name.trim();
+        if trimmed.is_empty() {
+            map_name.clone()
+        } else {
+            trimmed.to_string()
+        }
+    };
+
+    let registry = TargetRegistry::new();
+    let config = registry
+        .get_target("spring-smf")
+        .ok_or_else(|| anyhow::anyhow!("Missing spring-smf target config"))?
+        .clone();
+    let dims = registry
+        .get_codec(&config.codec)
+        .ok_or_else(|| anyhow::anyhow!("Missing spring-smf codec"))?
+        .compute_dimensions(&config, recipe.output.width, recipe.output.height);
+
+    let plan = ExportPlan {
+        map_name: map_name.clone(),
+        display_name,
+        shortname: recipe.shortname.clone(),
+        description: recipe.description.clone(),
+        author: recipe.author.clone(),
+        version: recipe.version.clone(),
+        tip: recipe.tip.clone(),
+        depend: recipe.depend.clone(),
+        dimensions: dims.clone(),
+        settings: recipe.output.map_settings.clone(),
+        features: recipe.features.clone(),
+        project_dir: project_dir.map(|p| p.to_path_buf()),
+    };
+
+    let codec = crate::targets::SpringSmfCodec;
+    let map_x = (recipe.output.width - 1) / 64;
+    let map_y = (recipe.output.height - 1) / 64;
+    let generated = codec.generate_mapinfo(&map_name, map_x, map_y, &plan);
+
+    // Preserve hand-authored / unknown keys from the project's
+    // passthrough mapinfo.lua, mirroring the merge the full bundler
+    // performs after the codec write step.
+    let final_lua = project_dir
+        .map(|p| p.join("passthrough").join("mapinfo.lua"))
+        .filter(|p| p.is_file())
+        .and_then(|p| std::fs::read_to_string(&p).ok())
+        .map(|original| crate::targets::spring_smf::merge_mapinfo_lua(&generated, &original))
+        .unwrap_or(generated);
+
+    let dest = bundle_dir.join("mapinfo.lua");
+    std::fs::write(&dest, final_lua)
+        .with_context(|| format!("Failed to write {}", dest.display()))?;
+    Ok(())
+}
+
+/// Slug-ify the recipe's name + version into a BAR-style archive
+/// filename stem. Example: name="Onyx Cauldron", version="2.2.3"
+/// -> "onyx_cauldron_2.2.3". Falls back to a sanitised version of
+/// `node_label` (the bundler node's display name) when the recipe
+/// hasn't been given a name yet -- keeps fresh projects from
+/// writing literal `_.sd7` files.
+fn default_map_name_from_recipe(
+    recipe: &Recipe,
+    node_label: &str,
+    include_version: bool,
+) -> String {
+    let raw_name = recipe.name.trim();
+    let base = if raw_name.is_empty() {
+        node_label
+    } else {
+        raw_name
+    };
+    let version = recipe
+        .version
+        .as_deref()
+        .map(str::trim)
+        .filter(|v| !v.is_empty());
+    // Strip the version from the name if it's already there so the
+    // filename doesn't end up "onyx_cauldron_2.2.3_2.2.3".
+    let base = match version {
+        Some(v) => {
+            let mut trimmed = base;
+            for sep in [' ', '_'] {
+                if let Some(without_v) = trimmed.strip_suffix(v) {
+                    if let Some(without_sep) = without_v.strip_suffix(sep) {
+                        trimmed = without_sep;
+                        break;
+                    }
+                }
+            }
+            trimmed
+        }
+        None => base,
+    };
+    let slug = base
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_whitespace() { '_' } else { c })
+        .collect::<String>();
+    match version {
+        Some(v) if include_version => format!("{slug}_{v}"),
+        _ => slug,
+    }
 }
 
 #[cfg(test)]
