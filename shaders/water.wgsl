@@ -287,37 +287,73 @@ fn water_shallow_scale(world_pos: vec3<f32>) -> f32 {
     return clamp(depth * 33.0 / max(camera.height_scale, 1e-4), 0.0, 1.0);
 }
 
+/// Hash → smoothed value noise → fbm chain, used by `shade_lava`
+/// for the molten-flow / vein pattern. Procedural rather than
+/// texture-sampled because the existing water normal map is encoded
+/// around 0.5 with small deltas, so length-based vein extraction
+/// from it saturates and the surface reads as a flat colour.
+fn lava_hash(p: vec2<f32>) -> f32 {
+    let h = dot(p, vec2<f32>(127.1, 311.7));
+    return fract(sin(h) * 43758.5453);
+}
+
+fn lava_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (vec2<f32>(3.0) - 2.0 * f);
+    return mix(
+        mix(lava_hash(i), lava_hash(i + vec2<f32>(1.0, 0.0)), u.x),
+        mix(
+            lava_hash(i + vec2<f32>(0.0, 1.0)),
+            lava_hash(i + vec2<f32>(1.0, 1.0)),
+            u.x,
+        ),
+        u.y,
+    );
+}
+
+fn lava_fbm(p: vec2<f32>) -> f32 {
+    var f = 0.0;
+    var amp = 0.5;
+    var pp = p;
+    for (var i: i32 = 0; i < 5; i = i + 1) {
+        f = f + amp * lava_noise(pp);
+        pp = pp * 2.0;
+        amp = amp * 0.5;
+    }
+    return f;
+}
+
 /// Shade a lava-plane fragment. Engine treats `mapinfo.water.damage > 0`
 /// as lava; in-game the result is rendered as actual molten material
 /// rather than a red-tinted version of the BumpWater surface (no
 /// reflection, no refraction, no caustics, self-illuminated). We mirror
 /// that: an opaque emissive base in the user-chosen surface colour with
-/// a slow-scrolling vein pattern sourced from the normal map.
+/// a domain-warped fbm carving hot veins out of darker cooled crust.
 fn shade_lava(world_pos: vec3<f32>) -> vec4<f32> {
+    let t = camera.time * 0.10;
+    // Render-space XZ sits in roughly [-0.5, 0.5] across the map; *60
+    // gives ~60 fbm cells across the map's longer axis, with 5 octaves
+    // of detail layered on top -- big enough that crust patches read
+    // at oblique angles, small enough that hot veins still read at
+    // overhead views.
+    let xz = world_pos.xz * 60.0;
+    // Two slow flow vectors deform the detail noise so the lava reads
+    // as molten currents dragging crust across hotter veins beneath
+    // (domain warp).
+    let flow_x = lava_fbm(xz * 0.3 + vec2<f32>(t, t * 0.5));
+    let flow_y = lava_fbm(xz * 0.3 - vec2<f32>(t * 0.7, t * 0.3));
+    let warp = vec2<f32>(flow_x, flow_y) * 2.5;
+    let n = lava_fbm(xz + warp + vec2<f32>(t * 0.3, 0.0));
+
     let base = water_params.surface_color_alpha.rgb;
-    // Two slowly-scrolling samples of the normal texture, used as a
-    // flow / vein pattern. Time multiplier is ~20x slower than the
-    // water-octave normal so the lava reads as sluggishly molten
-    // rather than wave-like.
-    let t = camera.time * 0.05;
-    let uv_a = world_pos.xz * 0.020 + vec2<f32>(t * 0.7, t * 0.5);
-    let uv_b = world_pos.xz * 0.012 - vec2<f32>(t * 0.4, t * 0.6);
-    let n_a = textureSample(water_normal_tex, water_normal_sam, uv_a).rgb;
-    let n_b = textureSample(water_normal_tex, water_normal_sam, uv_b).rgb;
-    // Combine the two layers into a single 0..1 vein intensity. The
-    // bright / dark smoothsteps carve narrow glowing veins out of a
-    // cooled-over crust so the surface looks alive.
-    let veins  = clamp(length(n_a.xy + n_b.xy) * 0.7, 0.0, 1.0);
-    let bright = smoothstep(0.45, 0.95, veins);
-    let dark   = smoothstep(0.0, 0.30, veins);
-    let glow_color  = base + vec3<f32>(0.35, 0.20, 0.05);
-    let crust_color = base * 0.30;
-    var col = mix(crust_color, base, dark);
-    col = mix(col, glow_color, bright);
-    // Slight overall brightness lift so the surface reads as emissive
-    // rather than lit -- engine doesn't run the lava plane through the
-    // standard lighting pipeline.
-    col = col * 1.15;
+    let crust = base * 0.15;
+    let mid = base;
+    let glow = base + vec3<f32>(0.40, 0.25, 0.05);
+
+    var col = mix(crust, mid, smoothstep(0.30, 0.55, n));
+    col = mix(col, glow, smoothstep(0.60, 0.85, n));
+
     // Distance fog still applies (the lava plane sits in the
     // atmosphere); reuse the same gate `shade_water` does.
     if camera.fog_dists.y > 0.0 {
