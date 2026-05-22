@@ -67,6 +67,11 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     water.absorb = parse_mapinfo_vec3(lua, "absorb");
     water.min_color = parse_mapinfo_vec3(lua, "mincolor");
     water.damage = parse_mapinfo_number(lua, "damage");
+    // Engine treats any positive `mapinfo.water.damage` as lava. BME
+    // tracks the choice explicitly so the editor can show distinct
+    // water/lava forms and the exporter can force damage = 0 in
+    // water mode regardless of the stored value.
+    water.is_lava = water.damage.map(|d| d > 0.0);
     water.surface_color = parse_mapinfo_vec3(lua, "surfaceColor");
     water.surface_alpha = parse_mapinfo_number(lua, "surfaceAlpha");
     water.diffuse_color = parse_mapinfo_vec3(lua, "diffuseColor");

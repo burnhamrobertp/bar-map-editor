@@ -530,7 +530,12 @@ return mapinfo
         spc_g = lit.ground_specular[1],
         spc_b = lit.ground_specular[2],
         spec_exp = lit.spec_exponent,
-        water_damage = wat.damage,
+        // Water mode forces damage to zero -- the BAR engine reads
+        // any positive `mapinfo.water.damage` as lava, so storing
+        // a stale lava value while the user is in water mode would
+        // turn the exported map into lava on Test-in-BAR. Lava mode
+        // emits the stored value as-is.
+        water_damage = if wat.is_lava { wat.damage } else { 0.0 },
         abs_r = wat.absorb[0],
         abs_g = wat.absorb[1],
         abs_b = wat.absorb[2],

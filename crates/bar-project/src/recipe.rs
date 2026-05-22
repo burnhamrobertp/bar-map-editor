@@ -742,6 +742,13 @@ impl CustomGrassSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WaterSettings {
+    /// Water vs lava toggle. In BAR, `mapinfo.water.damage > 0` is what
+    /// flips the engine's "water" volume into lava behaviour at
+    /// runtime -- there's no separate `lava = true` flag. BME models
+    /// the choice explicitly here so the editor UI can present
+    /// distinct forms for the two modes and so the exporter can force
+    /// `damage = 0` in water mode regardless of what's stored.
+    pub is_lava: Option<bool>,
     pub damage: Option<f32>,
     pub absorb: Option<[f32; 3]>,
     pub base_color: Option<[f32; 3]>,
@@ -793,6 +800,8 @@ pub struct WaterSettings {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedWater {
+    /// Water vs lava mode. See [`WaterSettings::is_lava`].
+    pub is_lava: bool,
     pub damage: f32,
     pub absorb: [f32; 3],
     pub base_color: [f32; 3],
@@ -834,6 +843,10 @@ impl WaterSettings {
     pub fn resolved(&self) -> ResolvedWater {
         use crate::engine_defaults as ed;
         ResolvedWater {
+            // Default to water (false) when unset. Importer overrides
+            // this from `damage > 0` so existing lava maps land in
+            // lava mode at SD7-import time.
+            is_lava: self.is_lava.unwrap_or(false),
             damage: self.damage.unwrap_or(ed::WATER_DAMAGE),
             absorb: self.absorb.unwrap_or(ed::WATER_ABSORB),
             base_color: self.base_color.unwrap_or(ed::WATER_BASE_COLOR),

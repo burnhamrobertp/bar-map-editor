@@ -15,7 +15,11 @@
 //! - [`FOG_SPECS`]          -- distance fog from `AtmosphereSettings`
 //! - [`CLOUDS_SPECS`]       -- `MapSettings::custom_clouds` widget settings
 //! - [`LIGHTING_SPECS`]     -- `MapSettings::lighting` (includes `atmosphere.sun_color`)
-//! - [`WATER_SPECS`]        -- `MapSettings::water`
+//! - [`WATER_SPECS`]        -- `MapSettings::water` in water mode (no damage)
+//! - [`LAVA_SPECS`]         -- curated `MapSettings::water` subset rendered
+//!   in lava mode (damage + underwater / surface / surface-lighting only).
+//!   Shares field IDs with `WATER_SPECS` by design; the modal picks which
+//!   list to render from `WaterSettings::is_lava`.
 //! - [`GRASS_SPECS`]        -- `MapSettings::custom_grass`
 //!
 //! Each array is `&'static [FieldSpec<MapSettings>]`. Most specs are
@@ -843,31 +847,14 @@ pub static LIGHTING_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Water (core fields; the extra fields like force_rendering /
-// has_water_plane / etc. can be added incrementally)
+// Water (water-mode visual fields only; damage lives in LAVA_SPECS
+// because BAR treats `mapinfo.water.damage > 0` as lava and BME
+// only surfaces that field on the lava form. Core fields here; the
+// extra fields like force_rendering / has_water_plane / etc. can
+// be added incrementally.)
 // ──────────────────────────────────────────────────────────────────
 
 pub static WATER_SPECS: &[FieldSpec<MapSettings>] = &[
-    FieldSpec {
-        id: "water.damage",
-        label: "Damage / sec",
-        description: None,
-        kind: FieldKind::F32 {
-            hard: (0.0, 10000.0),
-            soft: Some((0.0, 1000.0)),
-            unit: "/s",
-        },
-        default: DefaultValue::F32(ed::WATER_DAMAGE),
-        get: |s| FieldValue::F32(s.water.damage),
-        set: |s, v| {
-            if let FieldValue::F32(x) = v {
-                s.water.damage = x;
-            }
-        },
-        category: categories::WATER,
-        group: "Damage",
-        blocks_export: false,
-    },
     FieldSpec {
         id: "water.absorb",
         label: "Absorb",
@@ -1511,6 +1498,179 @@ pub static WATER_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
+// Lava (curated subset of WaterSettings rendered when
+// `WaterSettings::is_lava == true`. Damage gates the engine's
+// water-vs-lava behaviour and is required >= 1; the rest are the
+// underwater-volume / surface / surface-lighting fields that still
+// make sense on lava. Water-only physics -- Fresnel, perlin wave
+// normals, shore foam, refraction blur, caustics, sun specular,
+// flat plane -- are intentionally absent.)
+// ──────────────────────────────────────────────────────────────────
+
+pub static LAVA_SPECS: &[FieldSpec<MapSettings>] = &[
+    FieldSpec {
+        id: "water.damage",
+        label: "Damage / sec",
+        description: Some("Continuous damage applied to units immersed in the lava volume."),
+        kind: FieldKind::F32 {
+            hard: (1.0, 10000.0),
+            soft: Some((1.0, 1000.0)),
+            unit: "/s",
+        },
+        default: DefaultValue::F32(1.0),
+        get: |s| FieldValue::F32(s.water.damage),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.damage = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Damage",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.absorb",
+        label: "Absorb",
+        description: Some("Per-elmo light attenuation through the lava volume."),
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::WATER_ABSORB),
+        get: |s| FieldValue::Color(s.water.absorb),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.water.absorb = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Underwater colour",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.base_color",
+        label: "Base colour (shallow)",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::WATER_BASE_COLOR),
+        get: |s| FieldValue::Color(s.water.base_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.water.base_color = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Underwater colour",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.min_color",
+        label: "Min colour (deep)",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::WATER_MIN_COLOR),
+        get: |s| FieldValue::Color(s.water.min_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.water.min_color = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Underwater colour",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.surface_color",
+        label: "Surface colour",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::WATER_SURFACE_COLOR),
+        get: |s| FieldValue::Color(s.water.surface_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.water.surface_color = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Surface",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.surface_alpha",
+        label: "Surface alpha",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 1.0),
+            soft: Some((0.0, 1.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_SURFACE_ALPHA),
+        get: |s| FieldValue::F32(s.water.surface_alpha),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.surface_alpha = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Surface",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.diffuse_color",
+        label: "Diffuse colour",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::WATER_DIFFUSE_COLOR),
+        get: |s| FieldValue::Color(s.water.diffuse_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.water.diffuse_color = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Surface lighting",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.ambient_factor",
+        label: "Ambient factor",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 2.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_AMBIENT_FACTOR),
+        get: |s| FieldValue::F32(s.water.ambient_factor),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.ambient_factor = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Surface lighting",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.diffuse_factor",
+        label: "Diffuse factor",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 4.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_DIFFUSE_FACTOR),
+        get: |s| FieldValue::F32(s.water.diffuse_factor),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.diffuse_factor = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Surface lighting",
+        blocks_export: false,
+    },
+];
+
+// ──────────────────────────────────────────────────────────────────
 // Grass (CustomGrassSettings; reached through MapSettings.custom_grass)
 // ──────────────────────────────────────────────────────────────────
 
@@ -1894,6 +2054,9 @@ mod tests {
         for s in WATER_SPECS {
             assert_eq!(s.category, categories::WATER);
         }
+        for s in LAVA_SPECS {
+            assert_eq!(s.category, categories::WATER);
+        }
         for s in GRASS_SPECS {
             assert_eq!(s.category, categories::GRASS);
         }
@@ -1912,6 +2075,7 @@ mod tests {
             .chain(CLOUDS_SPECS.iter())
             .chain(LIGHTING_SPECS.iter())
             .chain(WATER_SPECS.iter())
+            .chain(LAVA_SPECS.iter())
             .chain(GRASS_SPECS.iter())
         {
             // Initial read should be None for Option fields, empty
