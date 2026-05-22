@@ -219,6 +219,7 @@ impl ExportCodec for SpringSmfCodec {
                 sq_y,
                 &plan.settings,
                 &plan.features,
+                plan.project_dir.as_deref(),
                 &smf_path,
             )?;
             written.files.push(format!("maps/{}.smf", map_name));
@@ -316,6 +317,7 @@ impl SpringSmfCodec {
         map_y: u32,
         settings: &MapSettings,
         features: &[PlacedFeature],
+        project_dir: Option<&Path>,
         path: &Path,
     ) -> Result<()> {
         let mut smf =
@@ -388,8 +390,21 @@ impl SpringSmfCodec {
         smf.metalmap.resize(mm_size, 0);
         smf.typemap.resize(mm_size, 0);
 
-        // Generate minimap: 1024×1024 top-down view, DXT1 compressed with 9 mip levels
-        let minimap_rgba = if let Some(ref texture) = layers.texture {
+        // Generate minimap: 1024x1024 top-down view, DXT1 compressed with 9 mip levels.
+        // User-chosen minimap_override file (from `MapSettings.minimap`,
+        // resolved against `<project>/passthrough/`) wins over the
+        // terrain-derived fallback so authored maps preserve their
+        // hand-drawn minimap art instead of getting auto-regenerated
+        // from the texture layer on every bundle.
+        let override_rgba = settings
+            .minimap
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .zip(project_dir)
+            .and_then(|(name, dir)| load_minimap_override(dir, name));
+        let minimap_rgba = if let Some(rgba) = override_rgba {
+            rgba
+        } else if let Some(ref texture) = layers.texture {
             texture.resize(1024, 1024).to_rgba8()
         } else {
             let minimap_tex = generate_fallback_texture(heightmap, 1024, 1024);
@@ -1212,6 +1227,37 @@ pub fn merge_mapinfo_lua(generated: &str, original: &str) -> String {
 
 /// Generate a height-based fallback texture when no diffuse texture layer is provided.
 /// Low areas are dark green, mid areas are brown/tan, high areas are gray/white.
+/// Resolve and decode a user-supplied minimap image to a flat 1024x1024
+/// RGBA buffer in the layout the DXT1 minimap encoder expects. Returns
+/// `None` if the file can't be found (in either `passthrough/` or the
+/// project root) or fails to decode -- the caller falls back to the
+/// terrain-derived auto-minimap in that case.
+fn load_minimap_override(project_dir: &Path, filename: &str) -> Option<Vec<u8>> {
+    let path = bar_project::find_file_in_dir(&project_dir.join("passthrough"), filename)
+        .or_else(|| bar_project::find_file_in_dir(project_dir, filename))?;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let (rgba, w, h) = if ext == "dds" {
+        bar_data::load_dds_2d(&path).ok()?
+    } else {
+        let bytes = std::fs::read(&path).ok()?;
+        let fmt = image::ImageFormat::from_extension(&ext)?;
+        let img = image::load_from_memory_with_format(&bytes, fmt).ok()?;
+        let rgba = img.to_rgba8();
+        let (w, h) = rgba.dimensions();
+        (rgba.into_raw(), w, h)
+    };
+    if w == 1024 && h == 1024 {
+        return Some(rgba);
+    }
+    let buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(w, h, rgba)?;
+    let resized = image::imageops::resize(&buf, 1024, 1024, image::imageops::FilterType::Triangle);
+    Some(resized.into_raw())
+}
+
 fn generate_fallback_texture(
     heightmap: &bar_data::Heightmap,
     tex_w: u32,
@@ -1658,6 +1704,7 @@ mod tests {
                 passfilter_gainhf: Some(1.0),
             },
             resources: Default::default(),
+            minimap: None,
             start_positions: Vec::new(),
         }
     }

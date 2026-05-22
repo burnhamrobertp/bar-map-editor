@@ -261,47 +261,51 @@ fn scan_work_dir(
     // cap is also just a memory-budget choice, not an engine constraint.
     const MAX_OTHER_RES: u32 = 512;
 
-    let (heightmap_data, heightmap_res) = smf_data
+    // Each plane keeps its native SMF aspect ratio. The cap clamps the
+    // larger axis at MAX_*_RES; the shorter axis is scaled proportionally
+    // so the asset stays at the source ratio (rectangular maps no longer
+    // lose half their data to a min(w,h) square crop).
+    let (heightmap_data, heightmap_w, heightmap_h) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.heightmap_size();
-            // Use the native SMF heightmap resolution directly (only capped
-            // at MAX_HM_RES). We used to `largest_pow2_leq` here, which
-            // rounded e.g. 2049 -> 2048 and cost one row/col of native
-            // data. With f32 storage the asset header carries the actual
-            // dimensions, so non-power-of-2 sizes work fine downstream.
-            let target = w.min(h).min(MAX_HM_RES);
-            let pixels = downsample_f32_to_f32_bytes(smf.heightmap.data(), w, h, target);
-            (pixels, target)
+            let (tw, th) = scale_to_cap(w, h, MAX_HM_RES);
+            let pixels = downsample_f32_to_f32_bytes(smf.heightmap.data(), w, h, tw, th);
+            (pixels, tw, th)
         })
         .unwrap_or_default();
 
-    let (metalmap_data, metalmap_res) = smf_data
+    let (metalmap_data, metalmap_w, metalmap_h) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.metalmap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_OTHER_RES));
-            let pixels = downsample_u8_to_square(&smf.metalmap, w, h, target);
-            (pixels, target)
+            let (tw, th) = scale_to_cap(w, h, MAX_OTHER_RES);
+            // Max-preserving reducer (not nearest-neighbour) so single-
+            // pixel metal spots survive the downsample. Plain NN was
+            // dropping ~89% of them on Onyx-sized maps.
+            let pixels = downsample_u8_max_to_rect(&smf.metalmap, w, h, tw, th);
+            (pixels, tw, th)
         })
         .unwrap_or_default();
 
-    let (typemap_data, typemap_res) = smf_data
+    let (typemap_data, typemap_w, typemap_h) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.typemap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_OTHER_RES));
-            let pixels = downsample_u8_to_square(&smf.typemap, w, h, target);
-            (pixels, target)
+            let (tw, th) = scale_to_cap(w, h, MAX_OTHER_RES);
+            let pixels = downsample_u8_to_rect(&smf.typemap, w, h, tw, th);
+            (pixels, tw, th)
         })
         .unwrap_or_default();
 
-    // Assemble SMT texture as raw RGB bytes for PaintedTexture.
+    // Assemble SMT texture as raw RGB bytes for PaintedTexture. The
+    // larger axis caps at TEX_RES; the shorter axis scales proportionally
+    // so non-square maps keep their full source aspect ratio.
     progress("Reading texture tiles");
     const TEX_RES: u32 = 2048;
-    let (texture_data, texture_res) =
+    let (texture_data, texture_w, texture_h) =
         if let (Some(smt_path), Some(smf)) = (smt_abs.as_ref(), smf_data.as_ref()) {
-            let result: Option<(Vec<u8>, u32)> = (|| {
+            let result: Option<(Vec<u8>, u32, u32)> = (|| {
                 let file = std::fs::File::open(smt_path).ok()?;
                 let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file)).ok()?;
                 let (tiles_x, tiles_y) = smf.header.tile_grid_size();
@@ -310,8 +314,7 @@ fn scan_work_dir(
                 }
                 let src_w = tiles_x * TILE_SIZE;
                 let src_h = tiles_y * TILE_SIZE;
-                let out_w = TEX_RES.min(src_w).max(1);
-                let out_h = TEX_RES.min(src_h).max(1);
+                let (out_w, out_h) = scale_to_cap(src_w, src_h, TEX_RES);
                 let rgba = crate::executor::assemble_texture_preview(
                     &tiles,
                     &smf.tile_indices,
@@ -320,13 +323,12 @@ fn scan_work_dir(
                     out_w,
                     out_h,
                 );
-                // Drop the alpha channel; PaintedTexture expects RGB (3 bytes/pixel).
                 let rgb: Vec<u8> = rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-                Some((rgb, TEX_RES))
+                Some((rgb, out_w, out_h))
             })();
             result.unwrap_or_default()
         } else {
-            (Vec::new(), 0)
+            (Vec::new(), 0, 0)
         };
 
     // Features: merge SMF-embedded features with Lua FeaturePlacer placements.
@@ -423,13 +425,17 @@ fn scan_work_dir(
         height_range,
         passthrough_files,
         heightmap_data,
-        heightmap_res,
+        heightmap_w,
+        heightmap_h,
         metalmap_data,
-        metalmap_res,
+        metalmap_w,
+        metalmap_h,
         typemap_data,
-        typemap_res,
+        typemap_w,
+        typemap_h,
         texture_data,
-        texture_res,
+        texture_w,
+        texture_h,
         tile_indices,
         features,
         mapinfo_lua,
@@ -437,6 +443,7 @@ fn scan_work_dir(
 }
 
 /// Largest power of 2 that is <= `n`. Returns 1 for n == 0.
+#[cfg(test)]
 fn largest_pow2_leq(n: u32) -> u32 {
     if n == 0 {
         return 1;
@@ -446,6 +453,24 @@ fn largest_pow2_leq(n: u32) -> u32 {
         p *= 2;
     }
     p
+}
+
+/// Scale `(w, h)` so the larger axis sits at `cap`, preserving aspect
+/// ratio; if the source is already within `cap` returns it unchanged.
+/// Returns at least `(1, 1)` even when one source axis is zero so
+/// downstream allocators never see empty dimensions.
+fn scale_to_cap(w: u32, h: u32, cap: u32) -> (u32, u32) {
+    if w == 0 || h == 0 {
+        return (1, 1);
+    }
+    let larger = w.max(h);
+    if larger <= cap {
+        return (w, h);
+    }
+    let scale = cap as f64 / larger as f64;
+    let tw = ((w as f64 * scale).round() as u32).max(1);
+    let th = ((h as f64 * scale).round() as u32).max(1);
+    (tw, th)
 }
 
 /// Bilinear downsample of an f32 [0,1] `w x h` grid into a `res x res` u8 grid.
@@ -494,12 +519,14 @@ fn write_grassmap_png(data: &[u8], w: u32, h: u32, path: &Path) -> Result<()> {
         .with_context(|| format!("Failed to write grass map PNG: {}", path.display()))
 }
 
-fn downsample_f32_to_f32_bytes(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8> {
-    let mut out = Vec::with_capacity((res * res) as usize * 4);
-    for oy in 0..res {
-        for ox in 0..res {
-            let fx = (ox as f32 + 0.5) / res as f32 * w as f32 - 0.5;
-            let fy = (oy as f32 + 0.5) / res as f32 * h as f32 - 0.5;
+/// Bilinear downsample of an f32 [0,1] `w x h` grid into a `tw x th` f32
+/// grid, returned as little-endian f32 bytes for asset storage.
+fn downsample_f32_to_f32_bytes(data: &[f32], w: u32, h: u32, tw: u32, th: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((tw as usize) * (th as usize) * 4);
+    for oy in 0..th {
+        for ox in 0..tw {
+            let fx = (ox as f32 + 0.5) / tw as f32 * w as f32 - 0.5;
+            let fy = (oy as f32 + 0.5) / th as f32 * h as f32 - 0.5;
             let x0 = (fx as i32).clamp(0, w as i32 - 1) as u32;
             let y0 = (fy as i32).clamp(0, h as i32 - 1) as u32;
             let x1 = (x0 + 1).min(w - 1);
@@ -520,14 +547,47 @@ fn downsample_f32_to_f32_bytes(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8
     out
 }
 
-/// Nearest-neighbor downsample of a u8 `w x h` grid into a `res x res` square.
-fn downsample_u8_to_square(data: &[u8], w: u32, h: u32, res: u32) -> Vec<u8> {
-    let mut out = Vec::with_capacity((res * res) as usize);
-    for oy in 0..res {
-        for ox in 0..res {
-            let sx = (ox as u64 * w as u64 / res as u64).min(w as u64 - 1) as u32;
-            let sy = (oy as u64 * h as u64 / res as u64).min(h as u64 - 1) as u32;
+/// Nearest-neighbor downsample of a u8 `w x h` grid into a `tw x th` u8 grid.
+fn downsample_u8_to_rect(data: &[u8], w: u32, h: u32, tw: u32, th: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((tw as usize) * (th as usize));
+    for oy in 0..th {
+        for ox in 0..tw {
+            let sx = (ox as u64 * w as u64 / tw as u64).min(w as u64 - 1) as u32;
+            let sy = (oy as u64 * h as u64 / th as u64).min(h as u64 - 1) as u32;
             out.push(data[(sy * w + sx) as usize]);
+        }
+    }
+    out
+}
+
+/// Max-preserving downsample of a u8 `w x h` grid into a `tw x th` grid.
+/// For each output pixel, scans the corresponding source-pixel block and
+/// keeps the highest value rather than picking one corner. Used for the
+/// SMF metalmap so single-pixel high-metal spots survive the 1536x1536
+/// -> 512x512 reduction Onyx Cauldron (and similar) requires. With plain
+/// nearest-neighbour, each spot pixel had only a ~11% chance of being
+/// the sampled one and the other ~89% were silently dropped, which
+/// broke BAR's in-game metal-spot indicator widget on every round-tripped
+/// map.
+fn downsample_u8_max_to_rect(data: &[u8], w: u32, h: u32, tw: u32, th: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((tw as usize) * (th as usize));
+    for oy in 0..th {
+        let sy0 = (oy as u64 * h as u64 / th as u64) as u32;
+        let sy1 = (((oy + 1) as u64 * h as u64 / th as u64) as u32).clamp(sy0 + 1, h);
+        for ox in 0..tw {
+            let sx0 = (ox as u64 * w as u64 / tw as u64) as u32;
+            let sx1 = (((ox + 1) as u64 * w as u64 / tw as u64) as u32).clamp(sx0 + 1, w);
+            let mut best = 0u8;
+            for sy in sy0..sy1 {
+                let row = (sy * w) as usize;
+                for sx in sx0..sx1 {
+                    let v = data[row + sx as usize];
+                    if v > best {
+                        best = v;
+                    }
+                }
+            }
+            out.push(best);
         }
     }
     out
@@ -713,15 +773,51 @@ mod tests {
     #[test]
     fn downsample_u8_output_size() {
         let data = vec![128u8; 4 * 4];
-        let out = downsample_u8_to_square(&data, 4, 4, 2);
+        let out = downsample_u8_to_rect(&data, 4, 4, 2, 2);
         assert_eq!(out.len(), 4);
     }
 
     #[test]
     fn downsample_u8_uniform_preserves_value() {
         let data = vec![42u8; 8 * 8];
-        let out = downsample_u8_to_square(&data, 8, 8, 4);
+        let out = downsample_u8_to_rect(&data, 8, 8, 4, 4);
         assert!(out.iter().all(|&v| v == 42));
+    }
+
+    #[test]
+    fn downsample_u8_rect_keeps_non_square_shape() {
+        let data = vec![1u8; 8 * 4];
+        let out = downsample_u8_to_rect(&data, 8, 4, 4, 2);
+        assert_eq!(out.len(), 4 * 2);
+        assert!(out.iter().all(|&v| v == 1));
+    }
+
+    #[test]
+    fn downsample_f32_rect_keeps_non_square_shape() {
+        let data = vec![0.5f32; 8 * 4];
+        let out = downsample_f32_to_f32_bytes(&data, 8, 4, 4, 2);
+        assert_eq!(out.len(), 4 * 2 * 4);
+        let decoded: Vec<f32> = out
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(decoded.len(), 8);
+        assert!(decoded.iter().all(|&v| (v - 0.5).abs() < 1e-5));
+    }
+
+    #[test]
+    fn scale_to_cap_preserves_aspect_ratio_above_cap() {
+        // 16384x4096 (4:1) with cap=8192 should land at 8192x2048.
+        assert_eq!(scale_to_cap(16384, 4096, 8192), (8192, 2048));
+        // 4096x16384 (1:4) with cap=8192 -> 2048x8192.
+        assert_eq!(scale_to_cap(4096, 16384, 8192), (2048, 8192));
+    }
+
+    #[test]
+    fn scale_to_cap_passes_through_below_cap() {
+        // Non-power-of-2 below the cap should pass through unchanged.
+        assert_eq!(scale_to_cap(4097, 8192, 8192), (4097, 8192));
+        assert_eq!(scale_to_cap(513, 1025, 8192), (513, 1025));
     }
 
     #[test]
