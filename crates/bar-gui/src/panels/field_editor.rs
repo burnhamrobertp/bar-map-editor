@@ -96,10 +96,11 @@ pub fn process_intent(app: &mut BarEditorApp, label: &str, intent: FieldIntent) 
     }
 }
 
-/// Outline the field row matching the validation severity. Mirrors
-/// `mapinfo_editor::outline_finding` so the visual language across
-/// modals stays identical even though that function isn't reused
-/// directly (this module needs a slightly different API shape).
+/// Outline the field row matching the validation severity AND
+/// attach a hover tooltip explaining the finding. Tooltip text is
+/// driven entirely by severity (the finding's per-field message is
+/// intentionally generic at this surface; users open the validation
+/// sidebar for the full text).
 fn outline_severity<R>(
     ui: &mut egui::Ui,
     severity: Option<Severity>,
@@ -113,12 +114,30 @@ fn outline_severity<R>(
         Severity::Warning => egui::Color32::from_rgb(220, 180, 60),
         Severity::Info => egui::Color32::from_rgb(80, 140, 220),
     };
-    egui::Frame::group(ui.style())
+    let tooltip = match sev {
+        Severity::Error => "Provided value is invalid",
+        Severity::Warning => "Provided value is outside reference range",
+        // Info findings don't currently outline fields, but keep the
+        // arm exhaustive in case we widen the contract later.
+        Severity::Info => "",
+    };
+    let result = egui::Frame::group(ui.style())
         .stroke(egui::Stroke::new(1.5, colour))
         .corner_radius(2.0)
         .inner_margin(egui::Margin::symmetric(2, 1))
-        .show(ui, body)
-        .inner
+        .show(ui, body);
+    if !tooltip.is_empty() {
+        // `interact` upgrades the frame's hover-only response so the
+        // tooltip fires anywhere inside the bordered area, not just
+        // on the individual widgets within.
+        let resp = ui.interact(
+            result.response.rect,
+            result.response.id.with("severity_tooltip"),
+            egui::Sense::hover(),
+        );
+        resp.on_hover_text(tooltip);
+    }
+    result.inner
 }
 
 /// Draw the label + optional info-icon tooltip target.
@@ -147,12 +166,26 @@ pub fn info_icon(ui: &mut egui::Ui, tooltip: &str) {
     resp.on_hover_text(tooltip);
 }
 
+/// Top-tier section heading inside an action-bar modal. Uses
+/// egui's heading font size *and* the strong (full-brightness) text
+/// colour so it dominates the visual hierarchy. Without
+/// `.strong()`, the dark theme paints `heading()` text at the
+/// faded body colour, which ended up DIMMER than the group
+/// sub-heading below (rendered with `.strong()` at normal size).
+/// Calling this helper keeps the three tiers progressively less
+/// prominent: section heading > group sub-heading > field label.
+pub fn section_heading(ui: &mut egui::Ui, text: &str) {
+    ui.add(egui::Label::new(
+        egui::RichText::new(text).heading().strong(),
+    ));
+}
+
 /// Draw a section heading row with an info icon at the right
 /// carrying `tooltip` as hover text. Replaces the
 /// `heading + paragraph` pattern that used to clutter the modals.
 pub fn heading_with_info(ui: &mut egui::Ui, heading: &str, tooltip: &str) {
     ui.horizontal(|ui| {
-        ui.heading(heading);
+        section_heading(ui, heading);
         info_icon(ui, tooltip);
     });
 }
@@ -281,6 +314,13 @@ where
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
     let mut intent = FieldIntent::None;
+    // Captures whether the user cleared the DragValue's text buffer
+    // before blurring. Egui's default parser rejects empty input as
+    // a no-op and reverts the field to its prior value, but we
+    // want that gesture to mean "drop the override, fall back to
+    // engine default". `custom_parser` runs during the lost-focus
+    // commit so the Cell is true by the time `ui.add` returns.
+    let cleared = std::cell::Cell::new(false);
 
     ui.horizontal(|ui| {
         draw_label(ui, spec.label, spec.description);
@@ -288,25 +328,30 @@ where
             if !unit.is_empty() {
                 ui.label(egui::RichText::new(unit).weak());
             }
-            // Always-editable DragValue. When the recipe value is
-            // None, the displayed number is the engine default and a
-            // small "default" hint sits to its left; the first
-            // user-driven change writes through `commit` which
-            // promotes the recipe to `Some(value)`. Right-click reverts
-            // the field back to `None` (fall through to engine
-            // default).
             let resp = ui.add(
                 egui::DragValue::new(&mut value)
                     .range(hard.0..=hard.1)
-                    .speed((hard.1 - hard.0) / 1000.0),
+                    .speed((hard.1 - hard.0) / 1000.0)
+                    .custom_parser(|s| {
+                        let trimmed = s.trim();
+                        if trimmed.is_empty() {
+                            cleared.set(true);
+                            None
+                        } else {
+                            trimmed.parse::<f64>().ok()
+                        }
+                    }),
             );
             if resp.drag_started() || resp.gained_focus() {
                 intent = FieldIntent::EditStarted;
             }
-            if (value - displayed).abs() > f32::EPSILON {
+            if resp.lost_focus() && cleared.get() {
+                spec.commit(state, FieldValue::F32(None));
+                intent = FieldIntent::EditAtomic;
+            } else if (value - displayed).abs() > f32::EPSILON {
                 spec.commit(state, FieldValue::F32(Some(value)));
             }
-            if resp.drag_stopped() || resp.lost_focus() {
+            if intent != FieldIntent::EditAtomic && (resp.drag_stopped() || resp.lost_focus()) {
                 intent = FieldIntent::EditCommitted;
             }
             if resp.secondary_clicked() {
@@ -341,6 +386,7 @@ where
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
     let mut intent = FieldIntent::None;
+    let cleared = std::cell::Cell::new(false);
 
     ui.horizontal(|ui| {
         draw_label(ui, spec.label, spec.description);
@@ -348,14 +394,29 @@ where
             if !unit.is_empty() {
                 ui.label(egui::RichText::new(unit).weak());
             }
-            let resp = ui.add(egui::DragValue::new(&mut value).range(hard.0..=hard.1));
+            let resp = ui.add(
+                egui::DragValue::new(&mut value)
+                    .range(hard.0..=hard.1)
+                    .custom_parser(|s| {
+                        let trimmed = s.trim();
+                        if trimmed.is_empty() {
+                            cleared.set(true);
+                            None
+                        } else {
+                            trimmed.parse::<f64>().ok()
+                        }
+                    }),
+            );
             if resp.drag_started() || resp.gained_focus() {
                 intent = FieldIntent::EditStarted;
             }
-            if value != displayed {
+            if resp.lost_focus() && cleared.get() {
+                spec.commit(state, FieldValue::U32(None));
+                intent = FieldIntent::EditAtomic;
+            } else if value != displayed {
                 spec.commit(state, FieldValue::U32(Some(value)));
             }
-            if resp.drag_stopped() || resp.lost_focus() {
+            if intent != FieldIntent::EditAtomic && (resp.drag_stopped() || resp.lost_focus()) {
                 intent = FieldIntent::EditCommitted;
             }
             if resp.secondary_clicked() {
@@ -524,19 +585,28 @@ where
     let mut started = false;
     let mut stopped = false;
     let mut secondary = false;
+    // Per-channel "cleared" flags. Any channel being cleared +
+    // blurred reverts the whole vector to None -- there's no
+    // sensible "partial None" representation for a vec3/vec4.
+    let cleared = std::cell::Cell::new(false);
 
     ui.horizontal(|ui| {
         draw_label(ui, spec.label, spec.description);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Always-editable channel drags. When the recipe value is
-            // None, displayed numbers are the engine default and the
-            // first change promotes the field. Right-click any
-            // channel reverts the whole vector to None.
             for slot in arr.iter_mut().take(N) {
                 let resp = ui.add(
                     egui::DragValue::new(slot)
                         .range(hard.0..=hard.1)
-                        .speed((hard.1 - hard.0) / 1000.0),
+                        .speed((hard.1 - hard.0) / 1000.0)
+                        .custom_parser(|s| {
+                            let trimmed = s.trim();
+                            if trimmed.is_empty() {
+                                cleared.set(true);
+                                None
+                            } else {
+                                trimmed.parse::<f64>().ok()
+                            }
+                        }),
                 );
                 if resp.drag_started() || resp.gained_focus() {
                     started = true;
@@ -558,21 +628,8 @@ where
         });
     });
 
-    if any_changed {
-        let new_value = if N == 3 {
-            FieldValue::Vec3(Some([arr[0], arr[1], arr[2]]))
-        } else {
-            FieldValue::Vec4(Some([arr[0], arr[1], arr[2], arr[3]]))
-        };
-        spec.commit(state, new_value);
-    }
-    if started {
-        intent = FieldIntent::EditStarted;
-    }
-    if stopped {
-        intent = FieldIntent::EditCommitted;
-    }
-    if secondary {
+    let reverting = stopped && cleared.get();
+    if reverting || secondary {
         let none_value = if N == 3 {
             FieldValue::Vec3(None)
         } else {
@@ -580,6 +637,21 @@ where
         };
         spec.commit(state, none_value);
         intent = FieldIntent::EditAtomic;
+    } else if any_changed {
+        let new_value = if N == 3 {
+            FieldValue::Vec3(Some([arr[0], arr[1], arr[2]]))
+        } else {
+            FieldValue::Vec4(Some([arr[0], arr[1], arr[2], arr[3]]))
+        };
+        spec.commit(state, new_value);
+    }
+    if intent == FieldIntent::None {
+        if started {
+            intent = FieldIntent::EditStarted;
+        }
+        if stopped {
+            intent = FieldIntent::EditCommitted;
+        }
     }
     intent
 }

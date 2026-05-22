@@ -9,7 +9,8 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, modal_frame, render_specs, FieldFindings,
 };
-use crate::panels::field_editor::heading_with_info;
+use crate::panels::field_editor::{heading_with_info, section_heading};
+use crate::panels::file_picker::FilePickerField;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_atmosphere_editor {
@@ -34,61 +35,41 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 }
 
 /// Skybox: a DDS cubemap picked from disk and copied into the
-/// project's `passthrough/maps/` directory. The schema's
-/// `OptionText` kind would only get a plain TextEdit; this gives
-/// the user a Browse... button + a Clear button alongside.
+/// project's `passthrough/maps/` directory. Goes through the
+/// shared [`FilePickerField`] so the filename, Browse, and Clear
+/// affordances stay consistent with the other texture-picker rows.
 fn draw_skybox(ui: &mut egui::Ui, app: &mut BarEditorApp) {
-    ui.heading("Skybox");
+    section_heading(ui, "Skybox");
     let project_path_opt: Option<std::path::PathBuf> = app.project.path.clone();
-    let mut browse_pick: Option<String> = None;
-    let mut clear_clicked = false;
-    ui.horizontal(|ui| {
-        if ui.button("Browse for DDS cubemap...").clicked() {
-            if let Some(picked) = rfd::FileDialog::new()
-                .set_title("Select skybox DDS cubemap")
-                .add_filter("DDS cubemap", &["dds"])
-                .pick_file()
-            {
-                let filename = picked
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string());
-                if let (Some(name), Some(project_dir)) = (filename, project_path_opt.as_deref()) {
-                    let dst_dir = project_dir.join("passthrough").join("maps");
-                    let dst = dst_dir.join(&name);
-                    let copy_result = std::fs::create_dir_all(&dst_dir)
-                        .and_then(|_| std::fs::copy(&picked, &dst));
-                    match copy_result {
-                        Ok(_) => browse_pick = Some(name),
-                        Err(e) => tracing::warn!(err = %e, "Failed to copy skybox DDS"),
-                    }
-                } else if let Some(name) = picked
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string())
-                {
-                    browse_pick = Some(name);
-                }
-            }
-        }
-        let has_skybox = app
-            .map_settings()
-            .atmosphere
-            .skybox
-            .as_deref()
-            .map(|s| !s.is_empty())
-            .unwrap_or(false);
-        if has_skybox && ui.button("Clear").clicked() {
-            clear_clicked = true;
-        }
-    });
-    if let Some(name) = browse_pick {
+    let parent_window = app.parent_window();
+    // The schema stores the bare filename in `atmosphere.skybox`.
+    // Clone it into a scratch String for the picker; on commit, the
+    // picker writes the new basename back into the recipe (or
+    // empties it, which we translate to `None`).
+    let mut filename = app
+        .map_settings()
+        .atmosphere
+        .skybox
+        .clone()
+        .unwrap_or_default();
+    let changed = FilePickerField::new("Cubemap", "passthrough/maps")
+        .extensions(&["dds"])
+        .title("Select skybox DDS cubemap")
+        .allow_clear(true)
+        .hint("(empty = procedural sky)")
+        .show(
+            ui,
+            &mut filename,
+            project_path_opt.as_deref(),
+            parent_window.as_ref(),
+        );
+    if changed {
         app.push_undo("Edit skybox");
-        app.map_settings_mut().atmosphere.skybox = Some(name);
-    }
-    if clear_clicked {
-        app.push_undo("Clear skybox");
-        app.map_settings_mut().atmosphere.skybox = None;
+        app.map_settings_mut().atmosphere.skybox = if filename.is_empty() {
+            None
+        } else {
+            Some(filename)
+        };
     }
 }
 

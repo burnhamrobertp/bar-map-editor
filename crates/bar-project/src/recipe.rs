@@ -255,6 +255,14 @@ pub struct MapSettings {
     #[serde(default)]
     pub resources: ResourcesSettings,
 
+    /// User-chosen minimap source file (basename inside `passthrough/`).
+    /// `None` falls back to the SMF-embedded minimap sidecar on import,
+    /// and to a freshly generated minimap derived from the terrain
+    /// texture on bundle. Not part of mapinfo.lua; the SMF binary
+    /// embeds the minimap as a DXT1 chunk.
+    #[serde(default)]
+    pub minimap: Option<String>,
+
     /// Team start positions as [(x, z)] in Spring world coordinates.
     /// If empty, auto-generated at 25%/75% corners.
     #[serde(default)]

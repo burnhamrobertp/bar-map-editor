@@ -80,35 +80,12 @@
     },
     "welcome": {
       "heading": "BAR - Map Editor",
-      "tagline": "Start from a template, or open / create a project.",
-      "use_this": "Use this →",
-      "or": "Or",
+      "tagline": "Open an existing project, import an SD7, or assemble a map from your own files.",
       "blank_project": "Blank Project",
       "open_project": "Open Project...",
       "import_sd7": "Import SD7...",
+      "assemble_map": "Assemble Map...",
       "recent": "Recent ▾"
-    },
-    "templates": {
-      "plains": {
-        "name": "Plains",
-        "description": "Open low-relief terrain. Cavalry-friendly. Drop, then tune softness."
-      },
-      "mountain_range": {
-        "name": "Mountain Range",
-        "description": "Sharp ridges with thermal-erosion talus. Defensible high ground."
-      },
-      "archipelago": {
-        "name": "Archipelago",
-        "description": "Scattered islands separated by water. Naval-leaning layouts."
-      },
-      "canyon": {
-        "name": "Canyon",
-        "description": "High plateau cut by deep canyons. Tight chokepoints."
-      },
-      "dunes": {
-        "name": "Dunes",
-        "description": "Smooth flowing sand-dune undulations. Open mobile play."
-      }
     },
     "export": {
       "generating": "Generating %{w}x%{h} map..."

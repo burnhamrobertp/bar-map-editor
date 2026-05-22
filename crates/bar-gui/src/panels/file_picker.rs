@@ -1,11 +1,17 @@
 //! Reusable file-picker row.
 //!
-//! A `FilePickerField` is a label + text-input + Browse/Clear buttons
-//! that mediates a `String` value representing a filename inside the
-//! project's `.barproj` directory. When the user picks a file via the
-//! native dialog, the file is copied into a configurable subdirectory
-//! of the project (so the asset is part of the .barproj on next save)
-//! and the basename is stored in the mediated string.
+//! A `FilePickerField` is a label + filename display + Browse/Clear
+//! buttons that mediates a `String` value representing a filename
+//! inside the project's `.barproj` directory. When the user picks a
+//! file via the native dialog, the file is copied into a configurable
+//! subdirectory of the project (so the asset is part of the .barproj
+//! on next save) and the basename is stored in the mediated string.
+//!
+//! There's no text input for typing a path directly: a typed-by-hand
+//! string isn't reachable through Browse / Clear so it would drift
+//! from the actual file on disk. The filename is shown as a plain
+//! label; users edit it via Browse / Clear or by hand-editing the
+//! project's `passthrough/` directory.
 //!
 //! Each call site configures:
 //!   * `label`: the form-field label rendered to the left.
@@ -79,8 +85,8 @@ impl<'a> FilePickerField<'a> {
         self
     }
 
-    /// Render the row. Returns true when any of the three input
-    /// modes (text edit, file pick, clear) changed `value`.
+    /// Render the row. Returns true when Browse or Clear changed
+    /// `value`.
     ///
     /// `parent` is the editor's main-window handle; supplying it parents
     /// the OS file dialog to BME so it behaves as a child window
@@ -147,13 +153,13 @@ impl<'a> FilePickerField<'a> {
                         }
                     }
                 }
-                let resp = ui.add(
-                    egui::TextEdit::singleline(value)
-                        .hint_text(self.hint_text)
-                        .desired_width(240.0),
-                );
-                if resp.changed() {
-                    changed = true;
+                // Filename display. Italic / weak when unset so the
+                // hint reads as placeholder; strong when a real
+                // value is stored.
+                if value.is_empty() {
+                    ui.label(egui::RichText::new(self.hint_text).weak().italics());
+                } else {
+                    ui.label(value.as_str()).on_hover_text(value.as_str());
                 }
             });
         });

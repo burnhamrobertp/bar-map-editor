@@ -423,7 +423,15 @@ pub static ATMOSPHERE_SPECS: &[FieldSpec<MapSettings>] = &[
         id: "atmosphere.skybox",
         label: "Skybox cubemap",
         description: Some("Filename inside passthrough/ -- empty = procedural sky."),
-        kind: FieldKind::OptionText { max_len: Some(256) },
+        // `PassthroughTexture` kind so `render_specs` skips this
+        // field entirely. The atmosphere modal renders its own
+        // Browse / Clear UI below the schema iteration -- without
+        // the skip the field would show up twice (once as a plain
+        // OptionText row from the schema, once as the bespoke
+        // picker block).
+        kind: FieldKind::PassthroughTexture {
+            extensions: &["dds"],
+        },
         default: DefaultValue::Empty,
         get: |s| FieldValue::OptionText(s.atmosphere.skybox.clone()),
         set: |s, v| {

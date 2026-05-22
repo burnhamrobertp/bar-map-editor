@@ -12,50 +12,13 @@ use eframe::egui;
 use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::modal_frame;
 use crate::panels::field_editor::heading_with_info;
+use crate::panels::image_preview::PreviewCache;
 
 /// Per-session preview state for the modal. Lives on `BarEditorApp`
 /// so it survives modal open / close cycles; reset on project switch.
 #[derive(Default)]
 pub struct MapEdgePanelState {
     pub(crate) preview: PreviewCache,
-}
-
-/// Per-session cache of the decoded preview texture so we don't
-/// re-load the file each frame. Keyed by `(project_dir, filename)`
-/// so a project switch or a file swap invalidates the cache.
-#[derive(Default)]
-pub(crate) struct PreviewCache {
-    key: Option<(std::path::PathBuf, String)>,
-    texture: Option<egui::TextureHandle>,
-}
-
-impl PreviewCache {
-    fn ensure(
-        &mut self,
-        ctx: &egui::Context,
-        project_dir: &std::path::Path,
-        filename: &str,
-    ) -> Option<&egui::TextureHandle> {
-        let key = (project_dir.to_path_buf(), filename.to_string());
-        if self.key.as_ref() == Some(&key) {
-            return self.texture.as_ref();
-        }
-        self.key = Some(key);
-        self.texture = decode_preview(project_dir, filename).map(|(rgba, w, h)| {
-            let image = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);
-            ctx.load_texture(
-                "map_edge_grass_shading_preview",
-                image,
-                egui::TextureOptions::LINEAR,
-            )
-        });
-        self.texture.as_ref()
-    }
-
-    fn invalidate(&mut self) {
-        self.key = None;
-        self.texture = None;
-    }
 }
 
 fn resolve_grass_shading_path(
@@ -70,26 +33,6 @@ fn resolve_grass_shading_path(
         .or_else(|| bar_project::find_file_in_dir(project_dir, filename))
 }
 
-fn decode_preview(project_dir: &std::path::Path, filename: &str) -> Option<(Vec<u8>, u32, u32)> {
-    let path = resolve_grass_shading_path(project_dir, filename)?;
-    let ext = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|e| e.to_ascii_lowercase())
-        .unwrap_or_default();
-    if ext == "dds" {
-        if let Ok((rgba, w, h)) = bar_data::load_dds_2d(&path) {
-            return Some((rgba, w, h));
-        }
-    }
-    let bytes = std::fs::read(&path).ok()?;
-    let fmt = image::ImageFormat::from_extension(&ext)?;
-    let img = image::load_from_memory_with_format(&bytes, fmt).ok()?;
-    let rgba = img.to_rgba8();
-    let (w, h) = rgba.dimensions();
-    Some((rgba.into_raw(), w, h))
-}
-
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_map_edge_editor {
         return;
@@ -100,6 +43,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         .path
         .clone()
         .or_else(|| app.project.pending_map_data_dir.clone());
+    let parent_window = app.parent_window();
 
     modal_frame(ctx, &mut open, "Map Edge", "map_edge_editor_modal", |ui| {
         heading_with_info(
@@ -112,89 +56,18 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         );
 
         let mut filename = app.map_settings().resources.grass_shading_tex.clone();
-        let mut text_started = false;
-        let mut text_committed = false;
-        let mut text_changed = false;
-        let mut atomic_change = false;
-
-        ui.horizontal(|ui| {
-            ui.label("File");
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let resp = ui.add(
-                    egui::TextEdit::singleline(&mut filename)
-                        .hint_text("(empty = SMF minimap fallback)")
-                        .desired_width(260.0),
-                );
-                if resp.gained_focus() {
-                    text_started = true;
-                }
-                if resp.changed() {
-                    text_changed = true;
-                }
-                if resp.lost_focus() {
-                    text_committed = true;
-                }
-            });
-        });
-
-        ui.horizontal(|ui| {
-            if ui.button("Browse...").clicked() {
-                if let Some(picked) = rfd::FileDialog::new()
-                    .set_title("Select grass shading texture")
-                    .add_filter("Image", &["dds", "png", "jpg", "jpeg", "tga", "bmp"])
-                    .pick_file()
-                {
-                    let picked_name = picked
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string());
-                    if let (Some(name), Some(project_dir)) =
-                        (picked_name, project_path_opt.as_deref())
-                    {
-                        let dst_dir = project_dir.join("passthrough");
-                        let dst = dst_dir.join(&name);
-                        let copy_result = std::fs::create_dir_all(&dst_dir)
-                            .and_then(|_| std::fs::copy(&picked, &dst));
-                        match copy_result {
-                            Ok(_) => {
-                                filename = name;
-                                atomic_change = true;
-                            }
-                            Err(e) => {
-                                tracing::warn!(err = %e, "Failed to copy grassShadingTex");
-                            }
-                        }
-                    } else if let Some(name) = picked
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .map(|s| s.to_string())
-                    {
-                        filename = name;
-                        atomic_change = true;
-                    }
-                }
-            }
-            if !filename.is_empty() && ui.button("Clear (use minimap)").clicked() {
-                filename.clear();
-                atomic_change = true;
-            }
-        });
-
-        if text_started && app.dialog.field_edit_in_progress.is_none() {
-            let snap = app.snapshot("Edit grassShadingTex");
-            app.dialog.field_edit_in_progress = Some(snap);
-        }
-        if text_changed {
-            app.map_settings_mut().resources.grass_shading_tex = filename.clone();
-            app.map_edge.preview.invalidate();
-        }
-        if text_committed {
-            if let Some(snap) = app.dialog.field_edit_in_progress.take() {
-                app.history.push(snap);
-            }
-            app.mark_dirty();
-        }
-        if atomic_change {
+        if crate::panels::file_picker::FilePickerField::new("File", "passthrough")
+            .extensions(&["dds", "png", "jpg", "jpeg", "tga", "bmp"])
+            .title("Select grass shading texture")
+            .allow_clear(true)
+            .hint("(empty = SMF minimap fallback)")
+            .show(
+                ui,
+                &mut filename,
+                project_path_opt.as_deref(),
+                parent_window.as_ref(),
+            )
+        {
             app.push_undo("Edit grassShadingTex");
             app.map_settings_mut().resources.grass_shading_tex = filename.clone();
             app.map_edge.preview.invalidate();
@@ -216,9 +89,16 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.with_layout(
                 egui::Layout::centered_and_justified(egui::Direction::TopDown),
                 |ui| {
-                    let handle = project_dir_opt
-                        .as_deref()
-                        .and_then(|p| preview_cache.ensure(ctx, p, &active_filename));
+                    let handle = project_dir_opt.as_deref().and_then(|p| {
+                        preview_cache.ensure(
+                            ctx,
+                            p,
+                            &active_filename,
+                            max_side as u32,
+                            "map_edge_grass_shading_preview",
+                            resolve_grass_shading_path,
+                        )
+                    });
                     if let Some(tex) = handle {
                         let [w, h] = tex.size();
                         let aspect = w as f32 / h.max(1) as f32;

@@ -1,10 +1,16 @@
 //! Dimensions modal -- map width / height (in /64 increments, the
-//! engine convention) plus min / max height in elmos.
+//! engine convention), min / max height in elmos, and the minimap
+//! override picker + preview.
 //!
 //! Bespoke: width and height live on `MapState`, not `MapSettings`,
 //! and they're exposed in quantised heightmap-square units rather
 //! than the raw cell count. Min / max height drag through
 //! `MapState::height_range_mut`.
+//!
+//! The minimap field stores a basename inside `passthrough/` (or the
+//! SMF-sidecar `_bme_smf_minimap.png` when unset); the preview decodes
+//! whichever file resolves and downscales to a fixed display size so
+//! opening the modal stays snappy on large source images.
 
 use eframe::egui;
 
@@ -12,13 +18,27 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, drive_text_edit_intent, modal_frame,
 };
+use crate::panels::field_editor::section_heading;
+use crate::panels::file_picker::FilePickerField;
+use crate::panels::image_preview::PreviewCache;
 use crate::t;
+
+#[derive(Default)]
+pub struct DimensionsPanelState {
+    pub(crate) minimap_preview: PreviewCache,
+}
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_dimensions_editor {
         return;
     }
     let mut open = app.dialog.show_dimensions_editor;
+    let project_path_opt: Option<std::path::PathBuf> = app
+        .project
+        .path
+        .clone()
+        .or_else(|| app.project.pending_map_data_dir.clone());
+    let parent_window = app.parent_window();
     modal_frame(
         ctx,
         &mut open,
@@ -27,6 +47,14 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         |ui| {
             draw_size(ui, app);
             draw_height_range(ui, app);
+            ui.add_space(12.0);
+            draw_minimap(
+                ui,
+                app,
+                ctx,
+                project_path_opt.as_deref(),
+                parent_window.as_ref(),
+            );
         },
     );
     app.dialog.show_dimensions_editor = open;
@@ -124,4 +152,89 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     }
     drive_drag_intent(app, &min_resp, "Min height");
     drive_drag_intent(app, &max_resp, "Max height");
+}
+
+/// Minimap override: an optional source file (DDS / PNG / TGA / etc.)
+/// that the bundler embeds into the SMF in place of the auto-generated
+/// terrain-derived minimap. Empty preview falls back to the SMF
+/// sidecar from import, when present.
+fn draw_minimap(
+    ui: &mut egui::Ui,
+    app: &mut BarEditorApp,
+    ctx: &egui::Context,
+    project_dir: Option<&std::path::Path>,
+    parent: Option<&crate::io::dialogs::ParentWindow>,
+) {
+    section_heading(ui, "Minimap");
+
+    let mut filename = app.map_settings().minimap.clone().unwrap_or_default();
+    let changed = FilePickerField::new("File", "passthrough")
+        .extensions(&["dds", "png", "jpg", "jpeg", "tga", "bmp"])
+        .title("Select minimap image")
+        .allow_clear(true)
+        .hint("(empty = generate from terrain)")
+        .show(ui, &mut filename, project_dir, parent);
+    if changed {
+        app.push_undo("Edit minimap");
+        app.map_settings_mut().minimap = if filename.is_empty() {
+            None
+        } else {
+            Some(filename.clone())
+        };
+        app.dimensions.minimap_preview.invalidate();
+    }
+
+    ui.add_space(8.0);
+    ui.label(if filename.is_empty() {
+        "Preview: SMF-embedded minimap (engine default)"
+    } else {
+        "Preview: custom minimap"
+    });
+
+    let max_side = 256.0_f32;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.set_min_size(egui::vec2(max_side + 8.0, max_side + 8.0));
+        ui.with_layout(
+            egui::Layout::centered_and_justified(egui::Direction::TopDown),
+            |ui| {
+                let handle = project_dir.and_then(|p| {
+                    app.dimensions.minimap_preview.ensure(
+                        ctx,
+                        p,
+                        &filename,
+                        max_side as u32,
+                        "dimensions_minimap_preview",
+                        resolve_minimap_path,
+                    )
+                });
+                if let Some(tex) = handle {
+                    let [w, h] = tex.size();
+                    let aspect = w as f32 / h.max(1) as f32;
+                    let display_size = if aspect >= 1.0 {
+                        egui::vec2(max_side, max_side / aspect)
+                    } else {
+                        egui::vec2(max_side * aspect, max_side)
+                    };
+                    ui.image((tex.id(), display_size));
+                } else {
+                    ui.label(
+                        "No preview available. The SMF minimap sidecar is generated \
+                         on .sd7 import and copied into the .barproj on save.",
+                    );
+                }
+            },
+        );
+    });
+}
+
+fn resolve_minimap_path(
+    project_dir: &std::path::Path,
+    filename: &str,
+) -> Option<std::path::PathBuf> {
+    if filename.is_empty() {
+        let sidecar = project_dir.join(bar_project::SMF_MINIMAP_SIDE_CAR);
+        return sidecar.is_file().then_some(sidecar);
+    }
+    bar_project::find_file_in_dir(&project_dir.join("passthrough"), filename)
+        .or_else(|| bar_project::find_file_in_dir(project_dir, filename))
 }

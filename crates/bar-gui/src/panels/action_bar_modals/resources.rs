@@ -12,7 +12,7 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, drive_text_edit_intent, modal_frame,
 };
-use crate::panels::field_editor::heading_with_info;
+use crate::panels::field_editor::{heading_with_info, section_heading};
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_resources_editor {
@@ -34,7 +34,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             text_field_atomic(ui, app, "splatDistrTex", |r| &mut r.splat_distr_tex);
 
             ui.add_space(8.0);
-            ui.heading("Splat detail-normal textures");
+            section_heading(ui, "Splat detail-normal textures");
             text_field_atomic(ui, app, "splatDetailNormalTex1", |r| {
                 &mut r.splat_detail_normal_tex_1
             });
@@ -97,7 +97,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             text_field_atomic(ui, app, "detailTex", |r| &mut r.detail_tex);
 
             ui.add_space(8.0);
-            ui.heading("Per-pixel masks");
+            section_heading(ui, "Per-pixel masks");
             text_field_atomic(ui, app, "specularTex", |r| &mut r.specular_tex);
             text_field_atomic(ui, app, "skyReflectModTex", |r| &mut r.sky_reflect_mod_tex);
         },
