@@ -17,13 +17,16 @@
 //! widget primitive (icons / tokens / file picker / field editor).
 
 pub mod action_bar_modals;
+pub mod assemble_map;
 
 pub mod canvas;
 pub mod dialogs;
+pub mod feature_library;
 pub mod feature_popover;
 pub mod field_editor;
 pub mod file_picker;
 pub mod icons;
+pub mod image_preview;
 pub mod inspector;
 pub mod log;
 pub mod opt_field;

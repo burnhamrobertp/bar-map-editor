@@ -1,0 +1,173 @@
+//! Feature library panel -- type picker for placing map features.
+//!
+//! Lives in the Sculpt3D layout's side panel when the Features
+//! pseudo-layer is active. Hosts a search filter + a two-wide
+//! virtualised grid of S3O thumbnails; selecting a cell arms a
+//! feature placement (the viewport then handles click-to-place /
+//! Esc-to-cancel / Del-to-remove).
+//!
+//! Detail of the selected feature lives in the floating viewport
+//! popover (`panels::feature_popover`), not in the sidebar.
+
+use eframe::egui;
+
+use crate::app::BarEditorApp;
+
+/// Draw the full feature library panel into `ui`. Caller controls
+/// when to show it (today: when the Features pseudo-layer is active
+/// in the Sculpt3D layout).
+pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        ui.strong("Library");
+        if app.selected_feature_type.is_some() {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .small_button("x")
+                    .on_hover_text("Cancel placement")
+                    .clicked()
+                {
+                    app.selected_feature_type = None;
+                }
+            });
+        }
+    });
+    ui.add_space(4.0);
+
+    if app.feature_palette_names.is_empty() {
+        ui.weak("No feature catalog loaded.");
+        ui.weak("Set a game archive in Preferences.");
+        return;
+    }
+
+    // Search filter. The text input replaces the static "Click
+    // terrain to select. Del to remove." hint -- typed letters
+    // narrow the catalog instead of relying on the user to scroll
+    // through hundreds of types.
+    let search_resp = ui.add(
+        egui::TextEdit::singleline(&mut app.feature_filter)
+            .hint_text("Search features...")
+            .desired_width(f32::INFINITY),
+    );
+    crate::panels::widgets::select_all_on_focus(ui, &search_resp, &app.feature_filter);
+    ui.add_space(4.0);
+
+    if let Some(ref sel) = app.selected_feature_type.clone() {
+        ui.label(format!("Placing: {sel}"));
+        ui.weak("Click terrain to place. Esc to cancel.");
+        ui.add_space(4.0);
+    }
+
+    let filter = app.feature_filter.to_lowercase();
+    let names: Vec<String> = if filter.is_empty() {
+        app.feature_palette_names.clone()
+    } else {
+        app.feature_palette_names
+            .iter()
+            .filter(|n| n.to_lowercase().contains(&filter))
+            .cloned()
+            .collect()
+    };
+
+    if names.is_empty() {
+        ui.weak("No features match.");
+        return;
+    }
+
+    // Two-wide virtualised grid: feature types can number in the
+    // hundreds for a full BAR catalog, and rendering every cell every
+    // frame -- with a thumbnail texture each -- would chew through
+    // texture bandwidth. `ScrollArea::show_rows` only invokes the
+    // closure for currently-visible rows.
+    const ROW_HEIGHT: f32 = 96.0;
+    const COLS: usize = 2;
+    let num_rows = names.len().div_ceil(COLS);
+    egui::ScrollArea::vertical()
+        .id_salt("feature_palette_scroll")
+        .auto_shrink([false, false])
+        .show_rows(ui, ROW_HEIGHT, num_rows, |ui, row_range| {
+            let spacing = ui.spacing().item_spacing.x;
+            let item_w = ((ui.available_width() - spacing) / COLS as f32).max(50.0);
+            for row in row_range {
+                ui.horizontal(|ui| {
+                    for col in 0..COLS {
+                        let idx = row * COLS + col;
+                        let Some(name) = names.get(idx) else { break };
+                        draw_feature_cell(ui, app, name, item_w, ROW_HEIGHT - 4.0);
+                    }
+                });
+            }
+        });
+}
+
+/// One cell of the feature palette grid. Renders the S3O thumbnail at
+/// the top + the feature name below; falls back to a placeholder
+/// rectangle when the thumbnail isn't ready yet. Records a thumbnail-
+/// render request so bar-app's per-frame poll picks it up.
+fn draw_feature_cell(
+    ui: &mut egui::Ui,
+    app: &mut BarEditorApp,
+    name: &str,
+    width: f32,
+    height: f32,
+) {
+    let selected = app.selected_feature_type.as_deref() == Some(name);
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    let resp = resp.on_hover_text(name);
+
+    let fill = if selected {
+        egui::Color32::from_rgba_unmultiplied(70, 90, 130, 230)
+    } else if resp.hovered() {
+        egui::Color32::from_rgba_unmultiplied(40, 44, 52, 230)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(28, 30, 36, 200)
+    };
+    ui.painter().rect_filled(rect, 4.0, fill);
+
+    let thumb_size = (height - 22.0).max(16.0);
+    let thumb_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.center().x - thumb_size * 0.5, rect.top() + 2.0),
+        egui::vec2(thumb_size, thumb_size),
+    );
+    let thumb_id = name.to_lowercase();
+    if let Some(handle) = app.feature_thumb_cache.get(&thumb_id) {
+        ui.painter().image(
+            handle.id(),
+            thumb_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else {
+        // Placeholder while waiting for the thumb. Insert a render
+        // request only if the runner isn't already aware -- i.e. the
+        // name is neither cached nor in flight. Idempotency of the
+        // HashSet doesn't help avoid the egui-mutation signal, so the
+        // gate has to be explicit.
+        ui.painter().rect_filled(
+            thumb_rect,
+            3.0,
+            egui::Color32::from_rgba_unmultiplied(50, 55, 65, 200),
+        );
+        if !app.feature_thumb_pending.contains(&thumb_id)
+            && !app.feature_thumb_requests.contains(&thumb_id)
+        {
+            app.feature_thumb_requests.insert(thumb_id);
+        }
+    }
+
+    let font = egui::FontId::proportional(11.0);
+    ui.painter().text(
+        egui::pos2(rect.center().x, rect.bottom() - 11.0),
+        egui::Align2::CENTER_CENTER,
+        name,
+        font,
+        egui::Color32::from_rgba_unmultiplied(230, 230, 240, 240),
+    );
+
+    if resp.clicked() {
+        app.selected_feature_type = if selected {
+            None
+        } else {
+            Some(name.to_string())
+        };
+    }
+}

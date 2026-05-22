@@ -206,6 +206,11 @@ pub struct FeatureRenderer {
     /// Depth-only caster pipeline. Same vertex / instance layout as `pipeline`
     /// so the same per-mesh buffers feed both.
     shadow_pipeline: wgpu::RenderPipeline,
+    /// Unlit pipeline for placeholder cubes. Bypasses the lighting / fog /
+    /// shadow / env-reflection math entirely so the diagnostic markers
+    /// look the same regardless of the map's lighting configuration.
+    /// Shares the camera bind group (group 0) for `view_proj` only.
+    placeholder_pipeline: wgpu::RenderPipeline,
     texture_bind_group_layout: wgpu::BindGroupLayout,
     /// Linear sampler reused across all per-mesh bind groups.
     sampler: wgpu::Sampler,
@@ -217,8 +222,6 @@ pub struct FeatureRenderer {
     /// white fallback there would make every placeholder cube self-illuminate
     /// at 100% brightness. Black RGB, opaque alpha gives the correct no-op.
     default_shading_view: wgpu::TextureView,
-    /// Bind group for the placeholder cube, points at `default_white_view`.
-    placeholder_bind_group: wgpu::BindGroup,
     // Placeholder cube geometry
     placeholder_vb: wgpu::Buffer,
     placeholder_ib: wgpu::Buffer,
@@ -358,6 +361,61 @@ impl FeatureRenderer {
         // Depth-only caster pipeline for the shadow pass. Same vertex /
         // instance layout as the main pipeline; renders to the shadow map's
         // depth attachment with no color target.
+        // Placeholder cubes get their own minimal pipeline: only the camera
+        // uniform (for view_proj), no texture group, no shadow group, and a
+        // dedicated shader that ignores every map-driven lighting input.
+        let placeholder_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("feature_placeholder_shader"),
+            source: wgpu::ShaderSource::Wgsl(
+                include_str!("../../../shaders/placeholder.wgsl").into(),
+            ),
+        });
+        let placeholder_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("feature_placeholder_pipeline_layout"),
+                bind_group_layouts: &[camera_bgl],
+                push_constant_ranges: &[],
+            });
+        let placeholder_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("feature_placeholder_pipeline"),
+            layout: Some(&placeholder_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &placeholder_shader,
+                entry_point: Some("vs_placeholder"),
+                buffers: &[vertex_buffer_layout(), instance_buffer_layout()],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &placeholder_shader,
+                entry_point: Some("fs_placeholder"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: output_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                unclipped_depth: false,
+                conservative: false,
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: depth_format,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("feature_shadow_pipeline"),
             layout: Some(&shadow_pipeline_layout),
@@ -481,26 +539,6 @@ impl FeatureRenderer {
 
         let sampler = make_filtered_sampler(device, "feature_sampler", wgpu::AddressMode::Repeat);
 
-        let placeholder_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("feature_placeholder_bg"),
-            layout: &texture_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&default_white_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    // Black RGB, opaque alpha -- emissive / spec-mult no-op.
-                    resource: wgpu::BindingResource::TextureView(&default_shading_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-        });
-
         let verts = unit_cube_verts();
         let inds = unit_cube_indices();
         let placeholder_vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -517,11 +555,11 @@ impl FeatureRenderer {
         Self {
             pipeline,
             shadow_pipeline,
+            placeholder_pipeline,
             texture_bind_group_layout,
             sampler,
             default_white_view,
             default_shading_view,
-            placeholder_bind_group,
             placeholder_vb,
             placeholder_ib,
             placeholder_instances: None,
@@ -838,10 +876,15 @@ impl FeatureRenderer {
             pass.draw_indexed(0..mesh.num_indices, 0, 0..mesh.instance_count);
         }
 
-        // Draw placeholder boxes for unknown feature types.
+        // Draw placeholder boxes for unknown feature types. These use a
+        // separate unlit pipeline so the diagnostic markers aren't subject
+        // to the map's lighting, fog, or shadow setup -- swapping the
+        // pipeline rebinds only group 0 (camera) and skips the texture +
+        // shadow groups entirely.
         if let Some(ref inst_buf) = self.placeholder_instances {
             if self.placeholder_count > 0 {
-                pass.set_bind_group(1, &self.placeholder_bind_group, &[]);
+                pass.set_pipeline(&self.placeholder_pipeline);
+                pass.set_bind_group(0, camera_bg, &[]);
                 pass.set_vertex_buffer(0, self.placeholder_vb.slice(..));
                 pass.set_vertex_buffer(1, inst_buf.slice(..));
                 pass.set_index_buffer(self.placeholder_ib.slice(..), wgpu::IndexFormat::Uint16);
@@ -872,16 +915,8 @@ impl FeatureRenderer {
             pass.set_index_buffer(mesh.index_buffer.slice(..), wgpu::IndexFormat::Uint32);
             pass.draw_indexed(0..mesh.num_indices, 0, 0..mesh.instance_count);
         }
-        // Placeholder boxes also cast shadows so unknown features have visible
-        // contact with the ground.
-        if let Some(ref inst_buf) = self.placeholder_instances {
-            if self.placeholder_count > 0 {
-                pass.set_bind_group(1, &self.placeholder_bind_group, &[]);
-                pass.set_vertex_buffer(0, self.placeholder_vb.slice(..));
-                pass.set_vertex_buffer(1, inst_buf.slice(..));
-                pass.set_index_buffer(self.placeholder_ib.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..36, 0, 0..self.placeholder_count);
-            }
-        }
+        // Placeholders deliberately do NOT cast shadows: they're editor
+        // diagnostic markers, not real geometry, so a shadow on the
+        // terrain would falsely advertise them as part of the scene.
     }
 }
