@@ -123,6 +123,27 @@ pub struct ViewportCore {
     pub session_id: u64,
     pub started_at: Instant,
     pub feature_drag: Option<FeatureDragState>,
+    /// Active axis lock for the in-flight sun-direction gizmo drag
+    /// (Sculpt view only). `None` while not dragging; set on press
+    /// to whichever ring the cursor landed on, cleared on release.
+    /// While `Some`, the regular Primary-button camera/feature
+    /// handlers short-circuit so the drag rotates the sun direction
+    /// instead.
+    pub sun_drag_axis: Option<bar_gui::overlays::sun::SunGizmoAxis>,
+    /// Whether the sun gizmo is in "revealed" mode (full alpha on
+    /// every ring, no distance fade). Toggled by clicking the sun
+    /// marker. Independent of the drag system: rings can be grabbed
+    /// and rotated in EITHER mode -- this flag controls visibility
+    /// only.
+    pub sun_gizmo_revealed: bool,
+    /// Asset path the metal-spot cache was computed against, plus
+    /// the spot list. `None` means no metalmap is loaded; the
+    /// cache is invalidated whenever the source path changes
+    /// (different project, edited metalmap pointed at a new asset
+    /// file). Re-scanning takes ms even on 1536^2 metalmaps so a
+    /// time-stamp invalidation isn't worth the bookkeeping cost.
+    pub metal_spots_loaded_for: Option<std::path::PathBuf>,
+    pub metal_spots: Vec<bar_project::MetalSpot>,
     /// Timestamp of the most recent rotation-gesture mutation. Used to
     /// coalesce a continuous wheel-rotation flurry into a single undo
     /// entry: the first event after a quiet gap (>= `ROTATE_GESTURE_GAP`)
@@ -292,6 +313,10 @@ impl ViewportCore {
             session_id,
             started_at: Instant::now(),
             feature_drag: None,
+            sun_drag_axis: None,
+            sun_gizmo_revealed: false,
+            metal_spots_loaded_for: None,
+            metal_spots: Vec::new(),
             last_rotate_at: None,
             skybox_loaded_for: None,
             detail_loaded_for: None,
@@ -1548,6 +1573,22 @@ fn draw_viewport_body(
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
             }
+            // Apply the user's Display preferences. Grass is the
+            // one toggle that genuinely strips a path for
+            // performance (Sculpt = off always, Preview = follows
+            // the pref). The advanced-map and advanced-model
+            // toggles are forward-looking gates for future
+            // additional fidelity work -- they don't reduce the
+            // baseline, so we send their pref value through to the
+            // renderer regardless of layout. Today both are
+            // effectively no-ops on the rendering side; setting
+            // them keeps the plumbing alive for when they drive
+            // real features.
+            let in_preview = app.active_layout() == bar_gui::Layout::Preview;
+            let display = app.settings().display;
+            renderer.set_grass_visible(in_preview && display.grass);
+            renderer.set_advanced_map_shading(display.advanced_map_shading);
+            renderer.set_advanced_model_shading(display.advanced_model_shading);
             // Render every frame the viewport body runs. egui's own
             // `request_repaint` in `update_viewport_texture` keeps
             // the frame loop ticking; rendering unconditionally here
@@ -1592,7 +1633,7 @@ fn draw_viewport_body(
         // is computed first (immutable borrows of app); the draw call
         // takes &mut app for the delete-button path, so the borrows
         // are split intentionally.
-        if let Some(frame) = core.current_frame.as_ref() {
+        if let Some(frame) = core.current_frame.clone() {
             let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
             let view_projection = core.camera.view_projection(aspect);
             let dims = bar_gui::panels::feature_popover::PopoverDims {
@@ -1619,6 +1660,95 @@ fn draw_viewport_body(
                 });
             if let Some(anchor) = anchor {
                 bar_gui::panels::feature_popover::draw(ctx, app, anchor);
+            }
+
+            // Metal-spot overlay: cyan rings + worth labels for every
+            // cluster the engine widget would render at runtime.
+            // Cached against the source asset path so we re-scan
+            // only when the metalmap node points at a different
+            // file. Scan is a single 4-connected BFS over the
+            // metalmap bytes -- ms-scale even on Onyx-sized
+            // 1536^2 input. Copy the dims out of `frame` first so
+            // the cache refresh can take `&mut core` without
+            // overlapping the outstanding immutable borrow.
+            let overlay_dims = bar_gui::overlays::metal_spots::OverlayDims {
+                map_w: app.map.width,
+                map_h: app.map.height,
+                min_height: app.map.min_height,
+                max_height: app.map.max_height,
+                x_extent: frame.x_extent,
+                z_extent: frame.z_extent,
+                height_scale: frame.height_scale,
+                max_metal: app
+                    .map
+                    .settings
+                    .max_metal
+                    .unwrap_or(bar_project::engine_defaults::MAP_MAX_METAL),
+            };
+            refresh_metal_spots_cache(core, app);
+            if !core.metal_spots.is_empty() {
+                let occlusion = app.paint.heightmap.as_ref().map(|hm| {
+                    bar_gui::overlays::metal_spots::OcclusionData {
+                        camera_pos: core.camera.position(),
+                        heightmap: hm,
+                    }
+                });
+                bar_gui::overlays::metal_spots::paint(
+                    ui.painter(),
+                    &core.metal_spots,
+                    &overlay_dims,
+                    app.paint.heightmap.as_ref(),
+                    occlusion,
+                    view_projection,
+                    response.rect,
+                );
+            }
+
+            // Sun-direction gizmo: three radial rings (Blender-style
+            // rotate gizmo) on a sphere around the map. The user
+            // clicks the sun marker to "arm" the gizmo, then drags a
+            // ring to rotate the sun. Occluded ring segments (line
+            // of sight blocked by the terrain) render dashed at low
+            // alpha so they read as "behind the map".
+            if app.active_layout() == bar_gui::Layout::Sculpt3D {
+                let dims = bar_gui::overlays::sun::SunGizmoDims {
+                    map_w: app.map.width,
+                    map_h: app.map.height,
+                    x_extent: frame.x_extent,
+                    z_extent: frame.z_extent,
+                };
+                let occlusion =
+                    app.paint
+                        .heightmap
+                        .as_ref()
+                        .map(|hm| bar_gui::overlays::sun::OcclusionData {
+                            camera_pos: core.camera.position(),
+                            heightmap: hm,
+                            x_extent: frame.x_extent,
+                            z_extent: frame.z_extent,
+                            height_scale: frame.height_scale,
+                        });
+                if let Some(geometry) = bar_gui::overlays::sun::compute_geometry(
+                    app.sun_dir_normalised(),
+                    &dims,
+                    view_projection,
+                    response.rect,
+                    occlusion,
+                ) {
+                    // Rings are always interactive; show hover
+                    // feedback whenever the cursor is over a
+                    // grab-able (non-occluded) segment.
+                    let hovered_axis = response
+                        .hover_pos()
+                        .and_then(|p| bar_gui::overlays::sun::hit_test_axis(&geometry, p));
+                    bar_gui::overlays::sun::paint(
+                        ui.painter(),
+                        &geometry,
+                        hovered_axis,
+                        core.sun_drag_axis,
+                        core.sun_gizmo_revealed,
+                    );
+                }
             }
         }
     } else {
@@ -1649,6 +1779,83 @@ fn draw_viewport_body(
         });
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
+}
+
+/// Pull the metalmap asset path off the FinalComposition's
+/// `metalmap` input. Returns `None` when no node feeds the port
+/// (new project, manually-disconnected graph, etc.).
+fn metalmap_asset_path(app: &bar_gui::BarEditorApp) -> Option<std::path::PathBuf> {
+    use bar_graph::{NodeType, ParamValue};
+    let graph = app.graph();
+    let fc_id = graph
+        .nodes()
+        .iter()
+        .find_map(|(id, n)| (n.node_type == NodeType::FinalComposition).then_some(*id))?;
+    for conn in graph.connections() {
+        if conn.to.node_id != fc_id || conn.to.port_name != "metalmap" {
+            continue;
+        }
+        let node = graph.get_node(conn.from.node_id)?;
+        if let Some(ParamValue::String(path)) = node.params.get("asset_path") {
+            if !path.is_empty() {
+                return Some(std::path::PathBuf::from(path));
+            }
+        }
+    }
+    None
+}
+
+/// Refresh the cached metal-spot list when the metalmap asset path
+/// changes. Idempotent on stable input: re-running with the same
+/// asset path is a single `Option` compare and returns without
+/// touching `metal_spots`. Called once per frame from
+/// `draw_viewport_body`.
+fn refresh_metal_spots_cache(core: &mut ViewportCore, app: &bar_gui::BarEditorApp) {
+    let current = metalmap_asset_path(app);
+    if current == core.metal_spots_loaded_for {
+        return;
+    }
+    core.metal_spots_loaded_for = current.clone();
+    core.metal_spots.clear();
+    let Some(path) = current else {
+        return;
+    };
+    let (header, bytes) = match bar_project::read_asset_file(&path) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(asset = %path.display(), error = %e, "Metal-spot overlay: failed to read asset");
+            return;
+        }
+    };
+    if header.kind != bar_project::AssetKind::GrayscaleU8 {
+        tracing::warn!(
+            asset = %path.display(),
+            ?header.kind,
+            "Metal-spot overlay: expected GrayscaleU8 metalmap asset",
+        );
+        return;
+    }
+    // The map's playable extent in elmos comes from Spring's
+    // `mapx * 8 = (heightmap_samples - 1) * 8`. The metalmap asset's
+    // own resolution can be smaller than the SMF native (the
+    // import-time `MAX_OTHER_RES` cap downsamples to 512px) -- the
+    // spot finder works in whatever resolution the asset carries
+    // and projects centroids into elmo space, so the two
+    // resolutions don't need to agree.
+    let map_w_elmos = ((app.map.width.saturating_sub(1)).max(1) as f32) * 8.0;
+    let map_h_elmos = ((app.map.height.saturating_sub(1)).max(1) as f32) * 8.0;
+    core.metal_spots = bar_project::find_metal_spots(
+        &bytes,
+        header.width,
+        header.height,
+        map_w_elmos,
+        map_h_elmos,
+    );
+    tracing::debug!(
+        count = core.metal_spots.len(),
+        asset = %path.display(),
+        "Metal-spot overlay: scanned metalmap",
+    );
 }
 
 fn fmt_tex_res(w: u32, h: u32) -> String {
@@ -1879,9 +2086,130 @@ fn handle_camera_input(
         renderer.set_brush_cursor(cursor_world);
     }
 
+    // Sun-direction gizmo: three rotation rings on a sphere around
+    // the map (Blender-style rotate gizmo). Disarmed by default --
+    // the user clicks the sun marker to arm, then can drag a ring
+    // to rotate. Clicks outside the gizmo disarm. Occlusion data is
+    // passed so ring segments behind the terrain don't bleed through
+    // the map.
+    let in_sculpt = app.active_layout() == bar_gui::Layout::Sculpt3D;
+    let gizmo_geometry = if in_sculpt {
+        core.terrain_renderer.as_ref().and_then(|r| {
+            let (height_scale, x_extent, z_extent) = r.mesh_extents();
+            let dims = bar_gui::overlays::sun::SunGizmoDims {
+                map_w: app.map.width,
+                map_h: app.map.height,
+                x_extent,
+                z_extent,
+            };
+            let view_projection = core.camera.view_projection(aspect);
+            let occlusion =
+                app.paint
+                    .heightmap
+                    .as_ref()
+                    .map(|hm| bar_gui::overlays::sun::OcclusionData {
+                        camera_pos: core.camera.position(),
+                        heightmap: hm,
+                        x_extent,
+                        z_extent,
+                        height_scale,
+                    });
+            bar_gui::overlays::sun::compute_geometry(
+                app.sun_dir_normalised(),
+                &dims,
+                view_projection,
+                response.rect,
+                occlusion,
+            )
+        })
+    } else {
+        None
+    };
+
+    // Marker click toggles "revealed" visibility (full alpha across
+    // all three rings vs distance-fade from the marker). The
+    // gesture is purely cosmetic; ring drag-to-rotate works in
+    // either state, so the user never needs the two-step
+    // arm-then-drag workflow. `clicked_by` fires only when the
+    // press didn't turn into a drag, so a click-and-drag on a ring
+    // routes to the drag-start branch below instead of toggling
+    // visibility. The flag is read by the feature-interaction
+    // block so a marker click doesn't ALSO place a feature.
+    let mut gizmo_consumed_click = false;
+    if in_sculpt && response.clicked_by(egui::PointerButton::Primary) {
+        let press = response.interact_pointer_pos();
+        if let (Some(p), Some(g)) = (press, gizmo_geometry.as_ref()) {
+            if bar_gui::overlays::sun::cursor_on_marker(g, p) {
+                core.sun_gizmo_revealed = !core.sun_gizmo_revealed;
+                gizmo_consumed_click = true;
+            } else if bar_gui::overlays::sun::hit_test_axis(g, p).is_some() {
+                // Click landed on a ring without becoming a drag --
+                // consume so feature placement doesn't fire; no state
+                // change otherwise.
+                gizmo_consumed_click = true;
+            } else if core.sun_gizmo_revealed {
+                // Clicking outside the gizmo while revealed collapses
+                // back to the faded state. Doesn't consume the click;
+                // a click in empty terrain may still be a feature
+                // gesture.
+                core.sun_gizmo_revealed = false;
+            }
+        }
+    }
+
+    if in_sculpt && response.drag_started_by(egui::PointerButton::Primary) {
+        // Press-time hit test: pick whichever ring the press landed
+        // on. If none, the gizmo passes the press through to the
+        // camera / feature path. Ring drag works regardless of
+        // revealed state -- one click-and-drag on any ring grabs it.
+        let press = response.interact_pointer_pos();
+        let press_axis = match (press, gizmo_geometry.as_ref()) {
+            (Some(p), Some(g)) => bar_gui::overlays::sun::hit_test_axis(g, p),
+            _ => None,
+        };
+        if let Some(axis) = press_axis {
+            if !sculpt_active && core.feature_drag.is_none() && app.selected_feature_type.is_none()
+            {
+                app.push_undo("Move sun");
+                core.sun_drag_axis = Some(axis);
+            }
+        }
+    }
+
+    if let Some(axis) = core.sun_drag_axis {
+        if response.dragged_by(egui::PointerButton::Primary) {
+            // First-frame delta after threshold cross is the multi-pixel
+            // jump from press to threshold; collapse it to zero so the
+            // gizmo doesn't snap when the drag starts. Subsequent frames
+            // give clean per-frame deltas.
+            let delta = if response.drag_started_by(egui::PointerButton::Primary) {
+                egui::Vec2::ZERO
+            } else {
+                response.drag_delta()
+            };
+            if let Some(geometry) = gizmo_geometry.as_ref() {
+                let new_dir = bar_gui::overlays::sun::rotate_around_axis(
+                    app.sun_dir_normalised(),
+                    axis,
+                    delta,
+                    geometry,
+                );
+                app.set_sun_dir(new_dir);
+            }
+        }
+        if response.drag_stopped_by(egui::PointerButton::Primary) {
+            core.sun_drag_axis = None;
+        }
+        // Sun drag owns the Primary button this frame; skip every
+        // other Primary handler below so the camera doesn't also
+        // orbit and so a click doesn't accidentally place a feature.
+        // Secondary / wheel / keyboard handlers still run.
+    }
+
     // Feature interaction: only when the Pointer tool is active and not in the read-only Preview layout.
     let feature_type = app.selected_feature_type.clone();
-    if app.paint.brush.tool == bar_gui::BrushTool::Pointer
+    if core.sun_drag_axis.is_none()
+        && app.paint.brush.tool == bar_gui::BrushTool::Pointer
         && app.active_layout() != bar_gui::Layout::Preview
     {
         // Start a drag-to-move gesture when the press lands on the
@@ -1947,7 +2275,7 @@ fn handle_camera_input(
             }
         }
 
-        if response.clicked_by(egui::PointerButton::Primary) {
+        if !gizmo_consumed_click && response.clicked_by(egui::PointerButton::Primary) {
             if let Some(ref feature_type) = feature_type {
                 // Placement mode: place a new feature at the terrain pick position.
                 if let Some(uv) = cursor_uv {
@@ -2052,7 +2380,7 @@ fn handle_camera_input(
         }
     };
 
-    if response.dragged_by(egui::PointerButton::Primary) {
+    if core.sun_drag_axis.is_none() && response.dragged_by(egui::PointerButton::Primary) {
         if sculpt_active {
             apply_sculpt_dab_at_cursor(core, gpu_context, response, ctx, app);
         } else if let Some(drag) = core.feature_drag {
@@ -2097,7 +2425,7 @@ fn handle_camera_input(
             camera_changed = true;
         }
     }
-    if response.drag_stopped_by(egui::PointerButton::Primary) {
+    if core.sun_drag_axis.is_none() && response.drag_stopped_by(egui::PointerButton::Primary) {
         if sculpt_active {
             if let Some(kind) = app.paint.selected_fc_layer {
                 app.end_brush_stroke_on_fc_layer(kind);
@@ -2110,7 +2438,24 @@ fn handle_camera_input(
 
     if response.dragged_by(egui::PointerButton::Secondary) {
         let delta = drag_delta_after_start(egui::PointerButton::Secondary);
-        core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+        // Alt-modified RMB pivots the look direction around the
+        // camera's current position (FPS-style "look around"); plain
+        // RMB orbits around the camera's target as before. Read the
+        // modifier on the press frame so Alt held mid-drag doesn't
+        // mid-flight switch the gesture, which would jump the camera.
+        let alt_held = ctx.input(|i| i.modifiers.alt);
+        if alt_held {
+            // Sign convention matches orbit: drag DOWN (positive
+            // delta.y) -> elevation increases -> in
+            // `look_in_place` that pushes the target downward
+            // relative to the fixed camera, so the view tilts
+            // DOWN. Drag UP -> view tilts UP. Same input/output
+            // mapping as plain RMB orbit, just with the pivot
+            // anchored to the camera instead of the target.
+            core.camera.look_in_place(delta.x * 0.01, delta.y * 0.01);
+        } else {
+            core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+        }
         camera_changed = true;
     }
 

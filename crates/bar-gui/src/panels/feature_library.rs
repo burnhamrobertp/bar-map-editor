@@ -51,12 +51,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     crate::panels::widgets::select_all_on_focus(ui, &search_resp, &app.feature_filter);
     ui.add_space(4.0);
 
-    if let Some(ref sel) = app.selected_feature_type.clone() {
-        ui.label(format!("Placing: {sel}"));
-        ui.weak("Click terrain to place. Esc to cancel.");
-        ui.add_space(4.0);
-    }
-
     let filter = app.feature_filter.to_lowercase();
     let names: Vec<String> = if filter.is_empty() {
         app.feature_palette_names.clone()
@@ -155,10 +149,18 @@ fn draw_feature_cell(
     }
 
     let font = egui::FontId::proportional(11.0);
+    // Two-wide grid: cells are ~half the panel width. Long feature
+    // names (`btreeshrub__nshrub_large`, etc.) overflow into the
+    // neighbouring cell when drawn untrimmed. Compute the available
+    // text width with a couple of pixels of side padding, then truncate
+    // with an ellipsis. The full name remains accessible via the
+    // hover tooltip wired up at `resp.on_hover_text(name)` above.
+    let max_text_w = (width - 6.0).max(0.0);
+    let label = truncate_with_ellipsis(ui.painter(), name, font.clone(), max_text_w);
     ui.painter().text(
         egui::pos2(rect.center().x, rect.bottom() - 11.0),
         egui::Align2::CENTER_CENTER,
-        name,
+        label,
         font,
         egui::Color32::from_rgba_unmultiplied(230, 230, 240, 240),
     );
@@ -169,5 +171,47 @@ fn draw_feature_cell(
         } else {
             Some(name.to_string())
         };
+    }
+}
+
+/// Shorten `text` with a trailing ellipsis so the rendered galley fits
+/// inside `max_w` at the supplied font. Returns the unmodified text when
+/// it already fits, or `"..."` alone when even the ellipsis is too wide
+/// for the cell. Binary search keeps this O(log n) per cell, which is
+/// cheap enough for the virtualised grid's visible rows.
+fn truncate_with_ellipsis(
+    painter: &egui::Painter,
+    text: &str,
+    font: egui::FontId,
+    max_w: f32,
+) -> String {
+    if max_w <= 0.0 {
+        return String::new();
+    }
+    let full = painter.layout_no_wrap(text.to_string(), font.clone(), egui::Color32::WHITE);
+    if full.size().x <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    if chars.is_empty() {
+        return String::new();
+    }
+    let ellipsis = "...";
+    let mut lo: usize = 0;
+    let mut hi: usize = chars.len().saturating_sub(1);
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let candidate: String = chars[..mid].iter().collect::<String>() + ellipsis;
+        let galley = painter.layout_no_wrap(candidate, font.clone(), egui::Color32::WHITE);
+        if galley.size().x <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    if lo == 0 {
+        ellipsis.to_string()
+    } else {
+        chars[..lo].iter().collect::<String>() + ellipsis
     }
 }

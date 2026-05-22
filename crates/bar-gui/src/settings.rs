@@ -63,6 +63,50 @@ pub struct Settings {
     /// when a BAR install is detected; user can override via Preferences.
     #[serde(default)]
     pub selected_game_archive: Option<PathBuf>,
+
+    /// Display-pipeline preferences. User-level toggles for expensive
+    /// rendering features that only run in the Preview layout.
+    #[serde(default)]
+    pub display: DisplayPrefs,
+}
+
+/// User-level toggles for expensive Preview-only rendering features.
+/// All default `true` so a fresh install gets the engine-faithful look;
+/// users can disable individual paths when they need lower GPU cost.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct DisplayPrefs {
+    /// Render BAR's `map_grass_gl4` widget in the Preview layout.
+    /// Sculpt view ignores this and never renders grass (it is the
+    /// high-performance authoring view).
+    #[serde(default = "default_true")]
+    pub grass: bool,
+    /// Enable the engine-faithful advanced SMF ground shading path
+    /// (splat-detail-normal, sky-reflection mod, detail-normal blend,
+    /// per-pixel specular, light emission, basic splat detail) in the
+    /// Preview layout. When off, the Preview falls back to plain
+    /// ambient+diffuse+spec lit albedo.
+    #[serde(default = "default_true")]
+    pub advanced_map_shading: bool,
+    /// Enable the engine-faithful advanced model shading path
+    /// (S3O texture2 emissive + spec multiplier + env-cubemap
+    /// reflection + team-color mix) in the Preview layout. When off,
+    /// models render with plain texture1 + lit shade only.
+    #[serde(default = "default_true")]
+    pub advanced_model_shading: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl Default for DisplayPrefs {
+    fn default() -> Self {
+        Self {
+            grass: true,
+            advanced_map_shading: true,
+            advanced_model_shading: true,
+        }
+    }
 }
 
 fn default_autosave_enabled() -> bool {
@@ -103,6 +147,7 @@ impl Default for Settings {
             window: None,
             active_layout: crate::app::Layout::default(),
             selected_game_archive: None,
+            display: DisplayPrefs::default(),
         }
     }
 }

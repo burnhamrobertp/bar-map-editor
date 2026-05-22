@@ -389,6 +389,14 @@ impl LayoutManager {
                 if let Some(ref owned) = slot.core.current_frame {
                     let elapsed = slot.core.started_at.elapsed().as_secs_f32();
                     let frame = owned.as_frame(elapsed, live_smf_lighting(app));
+                    // Sculpt drops grass for performance (the user's
+                    // explicit "high-performance view" request).
+                    // Map + model shading stay at full fidelity --
+                    // those toggles only ever ADD to the renderer
+                    // (when implemented), never strip the baseline.
+                    renderer.set_grass_visible(false);
+                    renderer.set_advanced_map_shading(true);
+                    renderer.set_advanced_model_shading(true);
                     renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, Some(&frame));
                     update_viewport_texture(
                         &mut slot.core.viewport_texture_id,
@@ -635,6 +643,15 @@ impl LayoutManager {
                     .current_frame
                     .as_ref()
                     .map(|f| f.as_frame(elapsed, smf));
+                // Preview = the user-facing presentation view. Forward
+                // each Display preference into the renderer ahead of
+                // the draw call; Sculpt's own setters above are
+                // overwritten here, so order between the two paths
+                // doesn't matter.
+                let display = app.settings().display;
+                renderer.set_grass_visible(display.grass);
+                renderer.set_advanced_map_shading(display.advanced_map_shading);
+                renderer.set_advanced_model_shading(display.advanced_model_shading);
                 renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, frame.as_ref());
                 update_viewport_texture(
                     &mut slot.core.viewport_texture_id,

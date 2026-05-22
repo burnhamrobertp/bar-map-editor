@@ -294,6 +294,54 @@ fn ray_y_above_terrain(
     Some(p.y - terrain_y)
 }
 
+/// Test whether the heightmap occludes the ray `[origin, origin +
+/// dir * max_t]`. Returns `true` if the ray's Y dips below the
+/// terrain at any sample inside the playable mesh AABB before
+/// reaching `max_t`. Used by editor gizmos that need to know whether
+/// a world-space point is behind the terrain from the camera's POV.
+///
+/// Marches the ray inside the terrain AABB only (the slab-clipped
+/// portion of `[0, max_t]`); each step is a single bilinear
+/// heightmap lookup. Step count is `steps`; 128 is a reasonable
+/// quality/cost tradeoff for editor UI use. Returns `false` if the
+/// ray misses the AABB entirely, has zero length, or never crosses
+/// below the terrain.
+pub fn ray_terrain_occludes(
+    origin: Vec3,
+    dir: Vec3,
+    max_t: f32,
+    heightmap: &Heightmap,
+    x_extent: f32,
+    z_extent: f32,
+    height_scale: f32,
+    steps: u32,
+) -> bool {
+    if heightmap.width() == 0 || heightmap.height() == 0 || max_t <= 0.0 || steps == 0 {
+        return false;
+    }
+    let (t_min, t_max) = aabb_intersect(origin, dir, x_extent, z_extent, height_scale);
+    let t_start = t_min.max(0.0);
+    let t_end = t_max.min(max_t);
+    if t_start >= t_end {
+        return false;
+    }
+    let step_len = (t_end - t_start) / steps as f32;
+    if step_len <= 0.0 {
+        return false;
+    }
+    for i in 0..=steps {
+        let t = t_start + step_len * i as f32;
+        if let Some(dy) =
+            ray_y_above_terrain(origin, dir, t, heightmap, x_extent, z_extent, height_scale)
+        {
+            if dy < 0.0 {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Sample the terrain's world-space Y at the given world-space XZ.
 /// Returns `None` if the XZ falls outside the mesh bounds. Uses the
 /// same bilinear-sampling math as `pick_terrain`'s ray-march so a

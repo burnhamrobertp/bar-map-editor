@@ -72,6 +72,30 @@ impl Camera {
         );
     }
 
+    /// Pivot the look direction in place: the camera's world
+    /// position stays fixed while the look-at target rotates around
+    /// it. Implementation: apply the same angular delta as `orbit`,
+    /// then shift `target` so `position()` returns the same vector
+    /// it returned before the call. Side effect -- subsequent
+    /// `orbit` calls revolve around the new target (i.e. wherever
+    /// the camera is now looking), which matches every common
+    /// "freelook" implementation: you look around, then orbit
+    /// centres on what you're now staring at.
+    pub fn look_in_place(&mut self, delta_azimuth: f32, delta_elevation: f32) {
+        let prev_position = self.position();
+        self.azimuth += delta_azimuth;
+        self.elevation = (self.elevation + delta_elevation).clamp(
+            -std::f32::consts::FRAC_PI_2 + 0.01,
+            std::f32::consts::FRAC_PI_2 - 0.01,
+        );
+        let new_offset = Vec3::new(
+            self.distance * self.elevation.cos() * self.azimuth.cos(),
+            self.distance * self.elevation.sin(),
+            self.distance * self.elevation.cos() * self.azimuth.sin(),
+        );
+        self.target = prev_position - new_offset;
+    }
+
     /// Zoom the camera (change distance to target). `factor` is a
     /// multiplier — 0.1 means "10% closer", -0.1 means "10% farther".
     /// Multiplicative scaling keeps perceived zoom speed consistent across
@@ -136,5 +160,39 @@ mod tests {
         let mut cam = Camera::default();
         cam.orbit(0.0, 100.0); // Try to go past 90 degrees
         assert!(cam.elevation < std::f32::consts::FRAC_PI_2);
+    }
+
+    #[test]
+    fn look_in_place_preserves_position() {
+        let mut cam = Camera::default();
+        let before = cam.position();
+        cam.look_in_place(0.5, -0.3);
+        let after = cam.position();
+        assert!(
+            (before - after).length() < 1e-4,
+            "position drifted on look-in-place: {before:?} -> {after:?}",
+        );
+    }
+
+    #[test]
+    fn look_in_place_rotates_view_direction() {
+        let mut cam = Camera::default();
+        let view_before = (cam.target - cam.position()).normalize_or_zero();
+        cam.look_in_place(0.6, 0.0);
+        let view_after = (cam.target - cam.position()).normalize_or_zero();
+        // View direction should have changed measurably.
+        assert!(
+            (view_before - view_after).length() > 0.1,
+            "view dir didn't move",
+        );
+    }
+
+    #[test]
+    fn look_in_place_clamps_elevation() {
+        let mut cam = Camera::default();
+        cam.look_in_place(0.0, 100.0);
+        assert!(cam.elevation < std::f32::consts::FRAC_PI_2);
+        cam.look_in_place(0.0, -100.0);
+        assert!(cam.elevation > -std::f32::consts::FRAC_PI_2);
     }
 }

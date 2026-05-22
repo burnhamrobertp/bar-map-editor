@@ -139,6 +139,32 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                 }
             });
 
+            ui.add_space(8.0);
+            ui.heading(t!("editor.prefs.display.heading"));
+            ui.weak(t!("editor.prefs.display.hint"));
+            let mut grass = app.settings().display.grass;
+            if ui
+                .checkbox(&mut grass, t!("editor.prefs.display.grass"))
+                .changed()
+            {
+                app.settings.display.grass = grass;
+                changed = true;
+            }
+            // The "Advanced Map Shading" and "Advanced Model Shading"
+            // toggles are hidden from the UI today: they were intended
+            // as opt-in switches for additional fidelity beyond the
+            // baseline, but neither has any rendering attached yet --
+            // surfacing them would mislead users into thinking the
+            // checkboxes do something. The `DisplayPrefs` fields are
+            // kept (with `#[serde(default)]`) so any saved settings
+            // referencing them still load cleanly; the renderer
+            // plumbing (`TerrainRenderer::advanced_*_shading` +
+            // `terrain_detail_params.zw`) stays for the eventual
+            // implementations. See `docs/TODO.md` -- "Diagnose the
+            // model-shading disparity vs in-engine cus_gl4-on" and
+            // "Real `cus_gl4` port..." -- for the work that needs to
+            // land before these are worth showing again.
+
             ui.add_space(12.0);
             if let Some(p) = Settings::config_path() {
                 ui.weak(t!("editor.prefs.saved_to", path = p.display().to_string()));

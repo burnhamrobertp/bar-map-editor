@@ -45,6 +45,11 @@
         "browse": "Browse...",
         "clear": "Clear",
         "hint": "Point to a BAR game archive (.sdz or .sdd) to show known feature types in green in the 3D preview."
+      },
+      "display": {
+        "heading": "Display",
+        "hint": "Grass is suppressed in the Sculpt view (high-performance authoring). Toggle this to also suppress it in the Preview layout.",
+        "grass": "Grass"
       }
     },
     "menu": {
@@ -102,8 +107,8 @@
       "validate_first": "Test in BAR: fix validation errors first."
     },
     "viewport_3d": {
-      "controls_hint": "LMB/RMB: rotate | Scroll: zoom | MMB: pan",
-      "sculpt_controls_hint": "LMB: sculpt | RMB: rotate | Scroll: zoom | MMB: pan",
+      "controls_hint": "LMB/RMB: rotate | Alt+RMB: look around | Scroll: zoom | MMB: pan",
+      "sculpt_controls_hint": "LMB: sculpt | RMB: rotate | Alt+RMB: look around | Scroll: zoom | MMB: pan",
       "force_refresh": "Force re-render preview"
     },
     "import": {

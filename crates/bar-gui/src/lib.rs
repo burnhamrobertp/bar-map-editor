@@ -11,6 +11,7 @@ pub mod io;
 pub mod layouts;
 pub mod log;
 pub mod macros;
+pub mod overlays;
 pub(crate) mod paint;
 pub(crate) mod paint_history;
 pub mod panels;

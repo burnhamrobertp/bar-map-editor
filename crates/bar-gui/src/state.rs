@@ -8,24 +8,29 @@ use eframe::egui::{self, FontData, FontDefinitions, FontFamily};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-/// Try to install a broad-coverage symbol font as a high-priority
-/// fallback in egui's font definitions. Looks for whatever the host
-/// OS ships with comprehensive symbol coverage:
+/// Build the egui font set this editor uses, registering everything
+/// in a single `set_fonts` call.
 ///
-/// - Windows: `seguisym.ttf` (Segoe UI Symbol) and `seguiemj.ttf`
-///   (Segoe UI Emoji), both under `%WINDIR%\Fonts\`.
-/// - macOS: `Apple Symbols.ttf`, `Apple Color Emoji.ttc`.
-/// - Linux: `NotoSansSymbols2-Regular.ttf` (Noto), `DejaVuSans.ttf`.
+/// Two things happen here:
 ///
-/// Whichever one is found is loaded under a new `"sys_<label>"`
-/// font key and inserted at index 1 in the proportional family
-/// fallback chain — so any glyph missing from Ubuntu-Light tries
-/// the system font before egui's bundled NotoEmoji. Silently does
-/// nothing if no candidate is on disk; the existing default
-/// fallbacks still apply.
-pub fn install_system_symbol_font(ctx: &eframe::egui::Context) {
+/// 1. Any broad-coverage system symbol font (Segoe UI Symbol on
+///    Windows, Apple Symbols / Apple Color Emoji on macOS, NotoSym2
+///    or DejaVu on Linux) gets added at the head of the proportional
+///    and monospace fallback chains so glyphs missing from
+///    Ubuntu-Light try the system font before egui's bundled NotoEmoji.
+/// 2. BAR's Exo2 family (the same `Exo2-SemiBold.otf` /
+///    `Exo2-Regular.otf` BAR ships in `bar-game/fonts/`) is registered
+///    as named families:
+///    - `FontFamily::Name("bar".into())` -- semibold, the weight
+///      `gui_metalspots.lua` uses for floating worth labels.
+///    - `FontFamily::Name("bar_regular".into())` -- regular weight,
+///      for general UI use in BAR's house font.
+pub fn install_custom_fonts(ctx: &eframe::egui::Context) {
+    static BAR_SEMIBOLD: &[u8] = include_bytes!("../../../assets/fonts/Exo2-SemiBold.otf");
+    static BAR_REGULAR: &[u8] = include_bytes!("../../../assets/fonts/Exo2-Regular.otf");
+
     let mut defs = FontDefinitions::default();
-    let mut installed_any = false;
+
     for (label, path) in candidate_font_paths() {
         if let Ok(bytes) = std::fs::read(&path) {
             let key = format!("sys_{label}");
@@ -39,12 +44,27 @@ pub fn install_system_symbol_font(ctx: &eframe::egui::Context) {
                 .entry(FontFamily::Monospace)
                 .or_default()
                 .insert(1, key);
-            installed_any = true;
         }
     }
-    if installed_any {
-        ctx.set_fonts(defs);
-    }
+
+    defs.font_data.insert(
+        "bar_exo2_semibold".to_string(),
+        Arc::new(FontData::from_static(BAR_SEMIBOLD)),
+    );
+    defs.font_data.insert(
+        "bar_exo2_regular".to_string(),
+        Arc::new(FontData::from_static(BAR_REGULAR)),
+    );
+    defs.families.insert(
+        FontFamily::Name("bar".into()),
+        vec!["bar_exo2_semibold".to_string()],
+    );
+    defs.families.insert(
+        FontFamily::Name("bar_regular".into()),
+        vec!["bar_exo2_regular".to_string()],
+    );
+
+    ctx.set_fonts(defs);
 }
 
 #[cfg(target_os = "windows")]

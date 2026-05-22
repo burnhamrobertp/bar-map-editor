@@ -16,12 +16,15 @@ pub mod fc;
 pub mod field_schema;
 pub mod fs_util;
 pub mod mapinfo;
+pub mod metal_spots;
 pub mod package;
 pub mod project;
 pub mod recipe;
 pub mod recipe_fields;
 pub mod scan;
 pub mod validation;
+
+pub use metal_spots::{find_metal_spots, MetalSpot};
 
 pub use fc::{mint_fc_layer_ids, populate_fc_layer_paths, FC_LAYER_KINDS};
 pub use fs_util::find_file_in_dir;

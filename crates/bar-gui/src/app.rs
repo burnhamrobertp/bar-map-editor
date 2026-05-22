@@ -407,12 +407,14 @@ impl Default for BarEditorApp {
 
 impl BarEditorApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Extend egui's default font fallbacks with whatever broad-
-        // coverage symbol font the host OS ships. Without this the
-        // editor falls back to grey "missing glyph" boxes for things
-        // like bullets, arrows, and the multiplication sign in
-        // dimension labels.
-        crate::state::install_system_symbol_font(&cc.egui_ctx);
+        // Bundle BAR's Exo2 family and the host OS's symbol coverage
+        // into a single FontDefinitions and register them once. Both
+        // sets are needed up front: BAR's font powers the metal-spot
+        // labels (and is available as `FontFamily::Name("bar")` for
+        // other in-engine-style overlays); the system symbol fallback
+        // keeps egui from rendering grey "missing glyph" boxes for
+        // bullets, arrows, and the multiplication sign.
+        crate::state::install_custom_fonts(&cc.egui_ctx);
         let mut app = Self::default();
         app.settings = Settings::load();
         // Restore the layout the user last had selected, falling
@@ -787,6 +789,34 @@ impl BarEditorApp {
 
     pub fn graph_mut(&mut self) -> &mut GraphEngine {
         &mut self.graph
+    }
+
+    /// Current sun direction with engine-faithful renormalisation
+    /// applied. Read by the in-viewport sun gizmo so the gizmo
+    /// position stays on the configured arc even when the recipe
+    /// stores an un-normalised vector. Falls back to the engine
+    /// default when no override is set.
+    pub fn sun_dir_normalised(&self) -> [f32; 3] {
+        let raw = self.map.settings.lighting.resolved().sun_dir;
+        let v = glam::Vec3::from(raw);
+        let n = v.length();
+        let unit = if n.is_finite() && n > 1e-6 {
+            v / n
+        } else {
+            glam::Vec3::from(bar_project::engine_defaults::LIGHTING_SUN_DIR).normalize()
+        };
+        [unit.x, unit.y, unit.z]
+    }
+
+    /// Set the sun direction from a UI gizmo drag. Bypasses the
+    /// schema renderer (which produces one undo entry per axis edit
+    /// session) so a continuous spherical drag commits as a single
+    /// undo entry -- caller pushes that entry on drag-start. Marks
+    /// the project dirty so the validation + autosave + compile-
+    /// dirty hooks fire normally.
+    pub fn set_sun_dir(&mut self, dir: [f32; 3]) {
+        self.map.settings_mut().lighting.sun_dir = Some(dir);
+        self.mark_dirty();
     }
 
     /// SMF ground shading inputs sourced from `MapSettings.lighting`
