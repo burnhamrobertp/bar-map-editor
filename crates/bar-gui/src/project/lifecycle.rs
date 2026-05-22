@@ -92,7 +92,6 @@ impl BarEditorApp {
         self.dialog.show_resources_editor = false;
         self.dialog.show_grass_editor = false;
         self.dialog.show_map_edge_editor = false;
-        self.dialog.show_start_boxes_editor = false;
         self.dialog.field_edit_in_progress = None;
         self.dialog.spawn_drag_in_progress = None;
         self.map_edge = crate::panels::action_bar_modals::map_edge::MapEdgePanelState::default();

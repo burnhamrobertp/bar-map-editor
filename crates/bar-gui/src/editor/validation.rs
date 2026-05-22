@@ -98,8 +98,6 @@ pub enum ModalId {
     MapEdge,
     /// The Grass modal (`custom.grassConfig` block).
     Grass,
-    /// The Start Boxes modal (team spawn positions).
-    StartBoxes,
     /// Findings that don't fit any modal -- graph-level issues,
     /// bundler-missing, file-not-found. The Map Info modal's
     /// "general" badge surfaces these as project-level issues.
@@ -118,7 +116,6 @@ impl ModalId {
             c::FOG | c::CLOUDS => ModalId::Fog,
             c::GRASS => ModalId::Grass,
             c::RESOURCES => ModalId::MapEdge,
-            c::STARTBOXES => ModalId::StartBoxes,
             _ => ModalId::Project,
         }
     }

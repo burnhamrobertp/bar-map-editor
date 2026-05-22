@@ -2,9 +2,9 @@
 //!
 //! Each `pub mod` in this directory is a top-level modal opened by
 //! one of the action-bar buttons (Identity / Dimensions / Physics /
-//! Atmosphere / Lighting / Water / Resources / Grass / Map Edge /
-//! Start Boxes). They share the same opening / commit / undo
-//! semantics via the helpers in [`shared`]:
+//! Atmosphere / Lighting / Water / Resources / Grass / Map Edge).
+//! They share the same opening / commit / undo semantics via the
+//! helpers in [`shared`]:
 //!
 //! * [`shared::modal_frame`] wraps the egui `Window` + `ScrollArea`
 //!   + scrollbar clearance boilerplate every modal uses.
@@ -31,5 +31,4 @@ pub mod lighting;
 pub mod map_edge;
 pub mod physics;
 pub mod resources;
-pub mod start_boxes;
 pub mod water;

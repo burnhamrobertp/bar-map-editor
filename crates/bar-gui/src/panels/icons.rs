@@ -128,37 +128,6 @@ pub(crate) fn paint_map_edge_icon(painter: &egui::Painter, rect: egui::Rect, col
     );
 }
 
-/// Outer rectangle + two corner filled squares, representing a 2-team map.
-pub(crate) fn paint_startbox_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
-    let cx = rect.center().x;
-    let cy = rect.center().y;
-    let half = 8.0_f32;
-    let stroke = egui::Stroke::new(1.6, color);
-    let outer = egui::Rect::from_min_max(
-        egui::pos2(cx - half, cy - half),
-        egui::pos2(cx + half, cy + half),
-    );
-    painter.rect_stroke(outer, 2.0, stroke, egui::StrokeKind::Inside);
-
-    let box_size = 4.5_f32;
-    painter.rect_filled(
-        egui::Rect::from_min_max(
-            egui::pos2(cx - half + 1.5, cy - half + 1.5),
-            egui::pos2(cx - half + 1.5 + box_size, cy - half + 1.5 + box_size),
-        ),
-        1.0,
-        color,
-    );
-    painter.rect_filled(
-        egui::Rect::from_min_max(
-            egui::pos2(cx + half - 1.5 - box_size, cy + half - 1.5 - box_size),
-            egui::pos2(cx + half - 1.5, cy + half - 1.5),
-        ),
-        1.0,
-        color,
-    );
-}
-
 /// Terminal prompt `>_` glyph for the Compile toolbar button.
 /// Reads as "build/run a command" -- distinct from the Run button's
 /// play-triangle and the lighting/gear icons.

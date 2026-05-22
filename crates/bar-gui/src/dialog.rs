@@ -126,11 +126,6 @@ pub struct DialogState {
     /// `field_edit_in_progress` -- one drag = one undo entry,
     /// captured at drag-start and pushed at drag-stop.
     pub(crate) spawn_drag_in_progress: Option<crate::undo::Snapshot>,
-    /// Whether the Start Boxes modal is currently open. Modal lets
-    /// the user add / remove / edit team spawn positions via the
-    /// same schema-driven render pipeline that the rest of the
-    /// map-settings UI uses.
-    pub show_start_boxes_editor: bool,
     /// Whether the Assemble Map wizard is currently open. The wizard's
     /// per-page state (current page, accumulated picks) lives on
     /// [`crate::panels::assemble_map::AssembleMapState`].

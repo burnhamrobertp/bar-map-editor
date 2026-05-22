@@ -12,7 +12,7 @@ pub(crate) use crate::panels::icons::{
     draw_io_icon, paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
     paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lighting_icon,
     paint_map_edge_icon, paint_physics_icon, paint_publish_icon, paint_resources_icon,
-    paint_startbox_icon, paint_water_icon,
+    paint_water_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.

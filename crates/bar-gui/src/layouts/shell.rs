@@ -14,9 +14,8 @@ use crate::app::{
     paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
     paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lighting_icon,
     paint_map_edge_icon, paint_physics_icon, paint_publish_icon, paint_resources_icon,
-    paint_startbox_icon, paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
-    ExportStatus, GroupDeleteChoice, Layout, PendingAction, UnsavedDecision,
-    CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog, ExportStatus, GroupDeleteChoice,
+    Layout, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::editor::validation::{BlockingAction, ModalId, ValidationSummary};
 use crate::panels::log::level_color;
@@ -953,7 +952,6 @@ impl BarEditorApp {
         crate::panels::action_bar_modals::resources::draw(self, ctx);
         crate::panels::action_bar_modals::grass::draw(self, ctx);
         crate::panels::action_bar_modals::map_edge::draw(self, ctx);
-        crate::panels::action_bar_modals::start_boxes::draw(self, ctx);
 
         crate::panels::assemble_map::draw(self, ctx);
 
@@ -1525,37 +1523,6 @@ impl BarEditorApp {
                     let me_resp = me_resp.on_hover_text(me_hover);
                     if me_resp.clicked() {
                         self.dialog.show_map_edge_editor = !self.dialog.show_map_edge_editor;
-                    }
-
-                    // Startboxes — opens the Start Boxes modal so the user
-                    // can edit team spawn positions. Last group on the
-                    // action bar.
-                    ui.add_space(4.0);
-                    ui.separator();
-                    ui.add_space(4.0);
-                    let (sb_rect, sb_resp) = ui.allocate_exact_size(btn_size, egui::Sense::click());
-                    if ui.is_rect_visible(sb_rect) {
-                        let bg = if sb_resp.is_pointer_button_down_on() {
-                            tokens::BTN_SPAWNS_PRESS
-                        } else if sb_resp.hovered() {
-                            tokens::BTN_SPAWNS_HOVER
-                        } else {
-                            tokens::BTN_SPAWNS_NORMAL
-                        };
-                        let painter = ui.painter_at(sb_rect);
-                        painter.rect_filled(sb_rect, 5.0, bg);
-                        paint_startbox_icon(&painter, sb_rect, egui::Color32::WHITE);
-                    }
-                    let sb_summary = self.validation.summary_for_modal(ModalId::StartBoxes);
-                    paint_validation_badge(ui, sb_rect, &sb_summary);
-                    let sb_hover = hover_with_summary(
-                        &t!("editor.toolbar.startboxes").to_string(),
-                        &sb_summary,
-                        "",
-                    );
-                    let sb_resp = sb_resp.on_hover_text(sb_hover);
-                    if sb_resp.clicked() {
-                        self.dialog.show_start_boxes_editor = !self.dialog.show_start_boxes_editor;
                     }
                 });
                 ui.add_space(4.0);
