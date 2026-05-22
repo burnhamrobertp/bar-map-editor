@@ -27,6 +27,85 @@ use bar_project::MapSettings;
 use bytemuck::{Pod, Zeroable};
 use wgpu::util::DeviceExt;
 
+/// Engine widget's hard cap on per-axis wind speed
+/// (`map_grass_gl4.lua:115`, `maxWindSpeed = 20`). Spring wind can
+/// blow harder than this; the engine widget caps the dominant axis at
+/// `maxWindSpeed` and scales the other axis proportionally to
+/// preserve direction (see `map_grass_gl4.lua:1149-1156`). Replicating
+/// the proportional cap rather than a per-axis clamp avoids rotating
+/// the apparent wind direction at high speed.
+const ENGINE_MAX_WIND_SPEED: f32 = 20.0;
+/// Engine widget's floor on the magnitude scalar that drives
+/// per-blade sway amplitude (`map_grass_gl4.lua:1288`,
+/// `mathMax(4.0, |wx| + |wz|)`). Below this floor calm wind would
+/// freeze grass entirely; the floor guarantees a minimal idle sway
+/// that matches in-engine "no wind" appearance.
+const ENGINE_WIND_STRENGTH_FLOOR: f32 = 4.0;
+/// User-config persisted by BAR's map-grass widget; the widget source
+/// defaults to 0.45 but installs commonly land on 0.4 (observed in
+/// runtime debug logs). Multiplies BOTH fade endpoints (vert.glsl
+/// :201). The value can be exposed through editor settings later;
+/// for now it lives as a constant matching the widget source default.
+const ENGINE_GRASS_DISTANCE_MULT: f32 = 0.45;
+/// Direction unit vector used to seed the wind drift accumulator in
+/// editor preview. BAR's `Spring.GetWind` returns a randomised vector
+/// that oscillates per game frame; BME has no equivalent source, so
+/// we synthesise a steady-state cardinal direction that produces the
+/// same visual character. Roughly east-by-south, picked to look
+/// "natural" against typical maps.
+const DEFAULT_WIND_DIR: [f32; 2] = [0.857, 0.515];
+
+/// Apply BAR's proportional wind cap. Returns `(capped_x, capped_z)`
+/// such that whichever input axis was dominant is clamped to
+/// `max_speed`, and the other axis is scaled by the same ratio so the
+/// vector's *direction* is preserved. Mirrors
+/// `map_grass_gl4.lua:1149-1156` verbatim.
+pub fn cap_wind_proportional(x: f32, z: f32, max_speed: f32) -> (f32, f32) {
+    let ax = x.abs();
+    let az = z.abs();
+    if ax > max_speed && ax >= az {
+        let scaled_z = (z / ax) * max_speed;
+        (x.signum() * max_speed, scaled_z)
+    } else if az > max_speed && az > ax {
+        let scaled_x = (x / az) * max_speed;
+        (scaled_x, z.signum() * max_speed)
+    } else {
+        (x, z)
+    }
+}
+
+#[cfg(test)]
+mod cap_wind_tests {
+    use super::cap_wind_proportional;
+    fn approx(a: f32, b: f32) {
+        assert!((a - b).abs() < 1e-4, "expected {b}, got {a}");
+    }
+    #[test]
+    fn passes_through_below_cap() {
+        let (x, z) = cap_wind_proportional(5.0, 3.0, 20.0);
+        approx(x, 5.0);
+        approx(z, 3.0);
+    }
+    #[test]
+    fn clamps_dominant_x_and_scales_z() {
+        let (x, z) = cap_wind_proportional(30.0, 6.0, 20.0);
+        approx(x, 20.0);
+        approx(z, 4.0); // 6 * (20/30)
+    }
+    #[test]
+    fn clamps_dominant_z_and_scales_x() {
+        let (x, z) = cap_wind_proportional(5.0, 50.0, 20.0);
+        approx(x, 2.0); // 5 * (20/50)
+        approx(z, 20.0);
+    }
+    #[test]
+    fn preserves_signs() {
+        let (x, z) = cap_wind_proportional(-30.0, -6.0, 20.0);
+        approx(x, -20.0);
+        approx(z, -4.0);
+    }
+}
+
 /// Resolved configuration for the grass widget. `enabled = false`
 /// when the map has no `mapinfo.custom.grassConfig` block or it
 /// lacks the required `grassDistTGA` distribution mask -- the
@@ -834,6 +913,18 @@ pub struct MapGrassPipeline {
     /// async asset loader. `None` until the first successful
     /// `sync_grass_assets` populates it.
     cached_mask: Option<CachedMask>,
+    /// Running wind-drift accumulator, mirrors the engine widget's
+    /// `(offsetX, offsetZ)` integral. Advances every `tick` call by
+    /// `wind_dir_capped * grassWindMult * dt`. NOT derived from
+    /// `camera.time` -- the engine widget pauses this on game pause
+    /// (Lua `if not isPaused then ...`), so deriving from a steady
+    /// engine clock would diverge from in-engine appearance on every
+    /// pause.
+    drift_offset: [f32; 2],
+    /// Wallclock of the previous `tick` call. `None` before the first
+    /// call; after that, each tick computes its own `dt` from this so
+    /// callers don't have to track a delta.
+    last_tick_at: Option<std::time::Instant>,
 }
 
 /// Snapshot of everything `generate_instances` needs to rebuild the
@@ -977,25 +1068,44 @@ impl MapGrassPipeline {
             usage: wgpu::BufferUsages::VERTEX,
         });
 
-        // Three vec4s = 48 bytes. Slot 0 carries the per-map tuning
-        // (`MAPCOLORFACTOR`, `MAPCOLORBASE`, `WINDSTRENGTH`,
-        // `GRASSBRIGHTNESS`), slot 1 the distance/threshold knobs
-        // (`FADESTART`, `FADEEND`, `SHADOWFACTOR`, `ALPHATHRESHOLD`),
-        // slot 2 the wind-noise sampling knobs (`WINDSCALE`,
-        // `WINDSAMPLESCALE`, `grassWindMult`, unused).
-        // `set_config` writes them from `MapGrassWidget`; defaults
-        // here match the BAR widget defaults so an enabled-but-
-        // unconfigured map renders the engine-stock look.
+        // Five vec4s = 80 bytes. Slots 0-2 carry the per-map static
+        // tuning copied from `MapGrassWidget` by `set_config`. Slots
+        // 3-4 are runtime/diagnostic state written separately:
+        //   slot 3 `dynamic` = (drift_x, drift_z, effective_wind_strength,
+        //         distance_mult). Refreshed every frame via `tick`.
+        //   slot 4 `dbg`     = (grass_debug_output, alpha_test_mode,
+        //         _pad, _pad). Refreshed when the user toggles a
+        //         diagnostic from the viewport gear menu.
+        // Defaults below match the BAR widget defaults so an
+        // enabled-but-unconfigured map renders the engine-stock look.
         let params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("map_grass_params"),
-            size: 48,
+            size: 80,
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let default_params: [f32; 12] = [
-            0.6, 1.0, 0.1, 1.0, // MAPCOLORFACTOR, MAPCOLORBASE, WINDSTRENGTH, GRASSBRIGHTNESS
-            5000.0, 8000.0, 0.25, 0.01, // FADESTART, FADEEND, SHADOWFACTOR, ALPHATHRESHOLD
-            0.33, 0.001, 4.5, 0.0, // WINDSCALE, WINDSAMPLESCALE, grassWindMult, unused
+        let default_params: [f32; 20] = [
+            0.6,
+            1.0,
+            0.1,
+            1.0, // MAPCOLORFACTOR, MAPCOLORBASE, WINDSTRENGTH, GRASSBRIGHTNESS
+            5000.0,
+            8000.0,
+            0.25,
+            0.01, // FADESTART, FADEEND, SHADOWFACTOR, ALPHATHRESHOLD
+            0.33,
+            0.001,
+            4.5,
+            0.0, // WINDSCALE, WINDSAMPLESCALE, grassWindMult, unused
+            0.0,
+            0.0,
+            ENGINE_WIND_STRENGTH_FLOOR,
+            ENGINE_GRASS_DISTANCE_MULT,
+            // ^ dynamic: (drift_x, drift_z, effective_wind_strength, distance_mult)
+            0.0,
+            0.0,
+            0.0,
+            0.0, // dbg: (grass_debug_output, alpha_test_mode, _pad, _pad)
         ];
         queue.write_buffer(&params_buffer, 0, bytemuck::bytes_of(&default_params));
 
@@ -1015,7 +1125,7 @@ impl MapGrassPipeline {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1035,7 +1145,7 @@ impl MapGrassPipeline {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1178,6 +1288,8 @@ impl MapGrassPipeline {
             instance_count: 0,
             widget: MapGrassWidget::default(),
             cached_mask: None,
+            drift_offset: [0.0, 0.0],
+            last_tick_at: None,
         }
     }
 
@@ -1310,7 +1422,7 @@ impl MapGrassPipeline {
             mip_level_count: mips.len() as u32,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
@@ -1353,7 +1465,7 @@ impl MapGrassPipeline {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8Unorm,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
                 view_formats: &[],
             },
@@ -1381,14 +1493,82 @@ impl MapGrassPipeline {
     }
 
     /// Set the grass-shader debug output mode. Written into the
-    /// `wind.w` slot of the params uniform (which is unused in normal
-    /// rendering). Driven from `ViewportDebug::grass_debug_output`
-    /// per-frame; see the FS comment block above the `debug_mode`
-    /// read for the meaning of the integer values.
+    /// `dbg.x` slot of the params uniform. Driven from
+    /// `ViewportDebug::grass_debug_output` per-frame; see the FS
+    /// comment block above the `debug_mode` read for the meaning of
+    /// the integer values.
     pub fn set_debug_output(&self, queue: &wgpu::Queue, mode: i32) {
-        // Offset 44 = 11 floats in = `wind.w` slot.
+        // Offset 64 = 16 floats in = `dbg.x` slot.
         let value = mode as f32;
-        queue.write_buffer(&self.params_buffer, 44, bytemuck::bytes_of(&value));
+        queue.write_buffer(&self.params_buffer, 64, bytemuck::bytes_of(&value));
+    }
+
+    /// Set the alpha-test technique. `0` = hashed (Wronski 2017
+    /// stochastic discard, BME default); `1` = binary discard at
+    /// `ALPHATHRESHOLD` only (matches the engine widget's discard
+    /// gate without the AtoC sub-pixel coverage path BME can't
+    /// produce at sample_count=1). Driven from
+    /// `ViewportDebug::grass_alpha_test_mode` so the user can A/B
+    /// against the in-engine look.
+    pub fn set_alpha_test_mode(&self, queue: &wgpu::Queue, mode: u32) {
+        // Offset 68 = 17 floats in = `dbg.y` slot.
+        let value = mode as f32;
+        queue.write_buffer(&self.params_buffer, 68, bytemuck::bytes_of(&value));
+    }
+
+    /// Advance the wind-drift accumulator and push the updated
+    /// `dynamic` vec4 (drift xy, effective wind strength, distance
+    /// mult) to the params buffer. Called per-render-frame by the
+    /// host (`crates/bar-app/src/viewport.rs`).
+    ///
+    /// `dt` is derived from the wallclock interval since the previous
+    /// call -- matches BAR Lua widget's `os.clock` integration, NOT
+    /// `Spring.GetGameSeconds`. Capped at 0.25s to absorb hitches
+    /// (alt-tab pause, GPU stalls) without a giant single-step jump
+    /// in the noise pattern.
+    ///
+    /// `mapinfo_avg_wind` is the `(min_wind + max_wind) / 2` value
+    /// from `MapSettings.atmosphere` -- a static stand-in for the
+    /// engine's randomised `Spring.GetWind()` since BME has no
+    /// equivalent gameplay state.
+    pub fn tick(&mut self, queue: &wgpu::Queue, mapinfo_avg_wind: f32) {
+        let now = std::time::Instant::now();
+        let dt_seconds = match self.last_tick_at {
+            Some(prev) => now.duration_since(prev).as_secs_f32().min(0.25),
+            None => 0.0,
+        };
+        self.last_tick_at = Some(now);
+        // Project the stand-in wind magnitude onto the editor's
+        // fixed default direction, then apply the engine widget's
+        // proportional cap.
+        let raw_x = DEFAULT_WIND_DIR[0] * mapinfo_avg_wind;
+        let raw_z = DEFAULT_WIND_DIR[1] * mapinfo_avg_wind;
+        let (wind_x, wind_z) = cap_wind_proportional(raw_x, raw_z, ENGINE_MAX_WIND_SPEED);
+
+        // Engine `grassuniforms.z`: `clamp(|wx|+|wz|, floor, cap)`.
+        // Floor matters when wind is calm -- without it the per-blade
+        // vertex offset goes to zero and grass freezes (the engine
+        // explicitly avoids that with the 4.0 floor).
+        let effective_strength =
+            (wind_x.abs() + wind_z.abs()).clamp(ENGINE_WIND_STRENGTH_FLOOR, ENGINE_MAX_WIND_SPEED);
+
+        // Integrate the drift accumulator. Engine widget sign:
+        // `offsetX -= windDirX * grassWindMult * dt` (`map_grass_gl4
+        // .lua:1264`), so positive wind drifts the noise sample
+        // position negatively -- gusts blow noise across the world
+        // in the wind direction.
+        let wind_mult = self.widget.grass_wind_mult;
+        self.drift_offset[0] -= wind_x * wind_mult * dt_seconds;
+        self.drift_offset[1] -= wind_z * wind_mult * dt_seconds;
+
+        let dynamic: [f32; 4] = [
+            self.drift_offset[0],
+            self.drift_offset[1],
+            effective_strength,
+            ENGINE_GRASS_DISTANCE_MULT,
+        ];
+        // Offset 48 = 12 floats in = start of `dynamic` slot.
+        queue.write_buffer(&self.params_buffer, 48, bytemuck::bytes_of(&dynamic));
     }
 
     /// Rebuild the grass bind group against the current blade-colour

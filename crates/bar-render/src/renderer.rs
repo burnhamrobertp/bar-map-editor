@@ -4826,7 +4826,14 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            // Was hardcoded `Rgba8Unorm`. Tracking the constructor's
+            // `output_format` so the call site (`bar-app::viewport`)
+            // can flip the entire pipeline between linear and sRGB
+            // colour spaces as a single change. All pipeline color
+            // targets are also built off `output_format`, so this
+            // assignment keeps them all in lockstep without per-
+            // pipeline edits.
+            format: self.output_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
                 | wgpu::TextureUsages::TEXTURE_BINDING,
@@ -4908,7 +4915,13 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            // Was hardcoded `Rgba8Unorm`. The reflection pre-pass
+            // uses the same terrain / feature / grass pipelines as
+            // the main pass; those pipelines bake in
+            // `self.output_format`, so this colour attachment must
+            // match. Critical when the constructor flips between
+            // linear and sRGB to keep pipeline compatibility.
+            format: self.output_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
@@ -4941,7 +4954,11 @@ impl TerrainRenderer {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
+            // Same reason as the reflection texture above -- the
+            // refraction pre-pass shares the main-pass pipelines and
+            // their colour-target format must agree with the
+            // attachment format.
+            format: self.output_format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });

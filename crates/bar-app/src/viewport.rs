@@ -1528,11 +1528,23 @@ fn draw_viewport_body(
             // avoids having to bookkeep changed-since-last-frame across
             // every renderer.render call site.
             renderer.set_gamma_exponent(&gpu.queue, app.viewport_debug.gamma_exponent);
-            // Grass diagnostic output mode -- piped into the FS via
-            // the params uniform's wind.w slot.
+            // Grass diagnostic output mode + alpha-test technique --
+            // both piped into the FS via the params uniform's `dbg`
+            // vec4 slot.
             renderer
                 .map_grass
                 .set_debug_output(&gpu.queue, app.viewport_debug.grass_debug_output);
+            renderer
+                .map_grass
+                .set_alpha_test_mode(&gpu.queue, app.viewport_debug.grass_alpha_test_mode);
+            // Advance the grass wind-drift accumulator using
+            // `(min_wind + max_wind) / 2` as the static stand-in for
+            // `Spring.GetWind()` (which BME has no equivalent of).
+            // Falls through to engine defaults when the recipe
+            // doesn't override either field.
+            let atmo = app.map.settings.atmosphere.resolved();
+            let avg_wind = (atmo.min_wind + atmo.max_wind) * 0.5;
+            renderer.map_grass.tick(&gpu.queue, avg_wind);
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
             }
@@ -1751,11 +1763,16 @@ fn draw_viewport_debug_overlay(
             ui.separator();
             ui.label("Gamma post-pass exponent");
             ui.add(
-                egui::Slider::new(&mut app.viewport_debug.gamma_exponent, 1.0..=2.4)
+                // Range extended past the spec'd "full sRGB gamma" (2.2)
+                // because empirically grass needs more correction than
+                // that to match the in-engine reference. If you have to
+                // go above ~3.0 to land on a match, the gap isn't a
+                // simple gamma offset and we need to look upstream.
+                egui::Slider::new(&mut app.viewport_debug.gamma_exponent, 1.0..=4.0)
                     .step_by(0.05)
                     .text("pow"),
             );
-            ui.small("1.0 = no correction (too bright)\n2.2 = full sRGB gamma (too dark)");
+            ui.small("1.0 = no correction (too bright)\n2.2 = full sRGB gamma\n>2.4 = empirical override");
 
             ui.separator();
             ui.label("Grass debug output");
@@ -1767,6 +1784,19 @@ fn draw_viewport_debug_overlay(
             ] {
                 ui.selectable_value(&mut app.viewport_debug.grass_debug_output, value, label);
             }
+
+            ui.separator();
+            ui.label("Grass alpha test");
+            for (value, label) in [
+                (0u32, "Hashed (BME default)"),
+                (1u32, "Binary discard (engine-style)"),
+            ] {
+                ui.selectable_value(&mut app.viewport_debug.grass_alpha_test_mode, value, label);
+            }
+            ui.small(
+                "Binary discard matches the engine widget's frag.glsl:48 \
+                 gate without MSAA + AtoC sub-pixel coverage.",
+            );
         },
     );
 

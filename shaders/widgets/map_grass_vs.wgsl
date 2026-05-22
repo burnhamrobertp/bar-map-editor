@@ -85,10 +85,41 @@ struct CameraUniform {
 ///   z = grassWindMult -- speed at which the drift offset
 ///       advances per second (combines with WINDSCALE).
 ///   w = unused / padding.
+/// dynamic (slot 3, runtime-updated each frame by the host):
+///   xy = wind_drift_offset -- host-side accumulator. The engine
+///        widget integrates `windDir * grassWindMult * real_dt`
+///        every draw frame in Lua (`map_grass_gl4.lua:1261-1265`)
+///        and pushes the running sum as `grassuniforms.xy`. BME
+///        does the same on the Rust side in `MapGrassPipeline::tick`,
+///        so the noise pattern translates across the map at the
+///        same rate regardless of the engine `camera.time` ticking
+///        underneath.
+///   z  = effective_wind_strength -- equivalent of the engine
+///        `grassuniforms.z` value, which is `clamp(|wx|+|wz|, 4,
+///        maxWindSpeed)`. The vertex offset formula multiplies by
+///        this directly, so an unclamped value (raw |wx|+|wz| can
+///        exceed maxWindSpeed of 20) overshoots blade sway by 2x+.
+///   w  = distance_mult -- the multiplier the engine applies to
+///        BOTH fade endpoints. Tied to the engine widget's user-
+///        configurable distance slider (`map_grass_gl4.lua:122`);
+///        default in widget source is 0.45, but user profiles can
+///        persist a different value (we've observed 0.4 on real
+///        installs).
+/// dbg (slot 4, debug-only toggles -- zero in production):
+///   x = grass_debug_output (was: `wind.w` in the old layout).
+///       0 = normal, 1 = raw map_color, 2 = raw blade_color,
+///       3 = post-blend rgb (FS short-circuits before modulator).
+///   y = alpha_test_mode. 0 = hashed alpha (Wronski 2017 stochastic
+///       discard, BME default). 1 = binary discard at
+///       ALPHATHRESHOLD only. Useful for isolating whether the
+///       silhouette character comes from the alpha-test technique
+///       vs the colour pipeline.
 struct GrassParams {
     blend: vec4<f32>,
     fade: vec4<f32>,
     wind: vec4<f32>,
+    dynamic: vec4<f32>,
+    dbg: vec4<f32>,
 }
 @group(1) @binding(3) var<uniform> grass_params: GrassParams;
 
@@ -110,34 +141,38 @@ struct ShadowUniform {
 /// widget at `vert.glsl:140-143`:
 ///   vec4 grassNoise = texture(grassWindPerturbTex, ...);
 ///   grassNoise = (grassNoise - 0.5).xzyw;
-/// We replicate the recenter + swizzle so the returned vec3 matches
-/// the engine's `(noise - 0.5).xzy` orientation (perturbation XYZ
-/// reads engine.x, engine.z, engine.y respectively).
+///
+/// Returns CENTERED samples in `[-0.5, +0.5]` with the engine's
+/// `.xzyw` swizzle applied (perturbation XYZ reads engine.x,
+/// engine.z, engine.y respectively).
+///
+/// Centering is critical for two downstream consumers:
+///   - **Position offset** `noise.rgb * pos.y * size * WINDSTRENGTH
+///     * windStrength`. Without centering, mean(noise.x) =
+///     mean(noise.z) = 0.5 produces a constant per-blade offset of
+///     ~0.5 elmo * peak (up to ~18 elmos at wind=20, size=2,
+///     pos.y=9) -- every blade in the world leans in the same
+///     fixed direction. With centering both means go to 0; offsets
+///     average out to zero displacement, and only the variance
+///     drives sway.
+///   - **`shade_amount = (noise.y * 2.0 - 0.66) * 3.0`**. Without
+///     centering noise.y has mean 0.5 -> shade_amount mean +1.02,
+///     so wind-shade is a ~1x-4x BRIGHTENER (and saturates white at
+///     amplified pixels). With centering noise.y has mean 0 ->
+///     shade_amount mean -1.98, so wind-shade is a darkener that
+///     clamps to black on negative excursion and lets the
+///     occasional positive sample peek through. Engine grass shows
+///     transient dark patches in the wind ripple; BME's
+///     uncentered code showed transient white patches instead.
 fn wind_noise(sample_pos: vec2<f32>) -> vec3<f32> {
-    // Return RAW perlin samples in [0, 1] (no `-0.5` centering).
-    // The engine widget consumes these values uncentered in both
-    // sites that use them:
-    //   - `shadeamount = (grassNoise.y * 2.0 - 0.66) * 3.0` expects
-    //     raw [0,1] mean ~0.5, producing shade_amount mean ~1.02
-    //     (mild brightening). Pre-centering biased the mean to ~0
-    //     and pushed shade_amount to ~-1.98, multiplying the blade
-    //     RGB by a negative number that clamped to black on the GPU
-    //     -- a major brightness deficit vs in-engine rendering.
-    //   - Position offset (`grassNoise.rgb * vertexPos.y * ...`) is
-    //     added directly to world position; the engine's raw +0.5
-    //     mean produces consistent drift the rest of the formula
-    //     scales down via `vertexPos.y`. Pre-centering removed that
-    //     drift and made the per-vertex offset alternate sign.
-    //
-    // Component swizzle (.x, .z, .y) matches the engine widget's
-    // texture component order on read.
     let raw = textureSampleLevel(
         grass_wind_perturb_tex,
         grass_wind_perturb_sam,
         sample_pos,
         0.0,
     );
-    return vec3<f32>(raw.x, raw.z, raw.y);
+    let centered = raw - vec4<f32>(0.5);
+    return vec3<f32>(centered.x, centered.z, centered.y);
 }
 
 struct VsIn {
@@ -257,32 +292,22 @@ fn vs_grass(in: VsIn) -> VsOut {
     //   texture(grassWindPerturbTex,
     //           (grassVertWorldPos.xz + grassuniforms.xy*WINDSCALE)
     //           * WINDSAMPLESCALE)
-    // `grassuniforms.xy = (offsetX, offsetZ)` is the globally-advancing
-    // drift that integrates `windDir * grassWindMult * dt` every tick
-    // (`map_grass_gl4.lua:1261-1265`). The drift translates the noise
-    // pattern across the map, producing the "wind gusts blowing
-    // across the map" appearance rather than "blades shaking in
-    // place". BME synthesises the drift -- no gameplay wind state
-    // available, so a fixed unit direction advances at
-    // `grass_wind_mult` per second using `camera.time`. The
-    // per-vertex sample position uses world XZ in elmos so the
-    // statistics align with the engine.
+    // `grassuniforms.xy = (offsetX, offsetZ)` is the host-integrated
+    // drift accumulator. BME's `MapGrassPipeline::tick` performs the
+    // same `offset -= windDir * grassWindMult * dt` integration on
+    // the Rust side (driven by real frame `dt`, not `camera.time`),
+    // and pushes the running sum here via `grass_params.dynamic.xy`.
+    // This matches the engine widget bit-for-bit: pauses freeze the
+    // drift, unpauses resume from the same offset; the noise pattern
+    // translates across the map at the same rate the engine produces.
     let vertex_xz_elmos = vertex_xz_render / elmo_to_render;
-    let wind_dir = normalize(vec2<f32>(0.7, 0.7));
-    let wind_drift = wind_dir * grass_params.wind.z * camera.time;
+    let wind_drift = grass_params.dynamic.xy;
     let sample_pos = (vertex_xz_elmos + wind_drift * grass_params.wind.x)
         * grass_params.wind.y;
     let noise = wind_noise(sample_pos);
 
-    // Wind shadeamount -- engine widget `vert.glsl:146-147` verbatim:
-    //   shadeamount = (noise.y*2 - 0.66) * 3
-    //   wind_shade  = mix(1.0, shadeamount, uv.y)
-    // Now that `wind_noise` returns RAW [0, 1] perlin samples (no
-    // centering), `noise.y` has mean ~0.5 and shade_amount has
-    // mean ~1.02, matching the engine. Range across typical perlin
-    // values lands roughly in [-1.5, +4.0], so wind_shade at the
-    // tip varies between mild darkening and bright highlights as
-    // the noise drifts -- the visual "wind ripple" effect.
+    // Engine widget `vert.glsl:146-147`. noise.y is centered (mean 0)
+    // so shade_amount mean ~-1.98 -- a darkener at the blade tip.
     let shade_amount = (noise.y * 2.0 - 0.66) * 3.0;
     let wind_shade = mix(1.0, shade_amount, in.uv.y);
 
@@ -301,38 +326,41 @@ fn vs_grass(in: VsIn) -> VsOut {
     // where `grassuniforms.z` is the lua-clamped wind magnitude
     // (`map_grass_gl4.lua:1289` -- `mathMax(4.0, |windDirX| + |windDirZ|)`).
     //
-    // BME has no gameplay wind state, so we use the engine's clamp
-    // floor (4.0) as a constant for `grassuniforms.z`. The
-    // `wind_noise` function is calibrated to land in BAR's +-0.1
-    // amplitude range so this constant + the user's `WINDSTRENGTH`
-    // produce engine-magnitude sway directly.
+    // The host pushes the engine-matched scalar through
+    // `grass_params.dynamic.z`: equivalent of the engine
+    // `grassuniforms.z` value, which is
+    // `clamp(|wx|+|wz|, 4, maxWindSpeed)` (4-elmo/sec floor in calm
+    // wind, 20-elmo/sec cap at storm). This drives the sway
+    // amplitude per blade tip directly, so feeding a wrong value
+    // here (eg raw wind without the floor) produces a 0->5x
+    // amplitude swing that doesn't match in-engine grass at any
+    // wind speed.
     //
     // Engine's `grassNoise.y -= 0.4` is applied to the RAW [0, 1]
     // perlin sample, so after the shift the value ranges roughly
     // [-0.4, 0.6] (mild downward bias = blades droop slightly under
-    // wind). `wind_noise` now returns raw values, so we apply the
-    // same `-0.4` directly.
+    // wind).
     //
     // `in.pos.y` ranges [-0.0012, +9.04] across the patch mesh
     // (base -> tip), so the offset scales by vertex height,
     // anchoring blade bases to the ground while tips sway.
-    let wind_speed_floor = 4.0;
     let noise_offset = vec3<f32>(noise.x, noise.y - 0.4, noise.z);
     let wind_xyz_elmos = noise_offset
         * in.pos.y
         * size_elmos
         * grass_params.blend.z
-        * wind_speed_floor;
+        * grass_params.dynamic.z;
     world_pos = world_pos + wind_xyz_elmos * elmo_to_render;
 
     // --- Distance fade (vert.glsl:199-201) ---
     // Engine: `clamp((FADEEND*distanceMult - dist) / ((FADEEND -
     // FADESTART)*distanceMult), 0, 1)`. Both endpoints come from
     // `grass_params.fade.xy` in elmos; multiplied by `elmo_to_render`
-    // to land in BME render units, and by `distanceMult = 0.45`
-    // (`map_grass_gl4.lua:122`) to match the engine's effective fade
-    // distance.
-    let distance_mult = 0.45;
+    // to land in BME render units, and by `distance_mult`
+    // (`map_grass_gl4.lua:122` -- widget source default 0.45 but
+    // persisted user config can override; passed in from host via
+    // `grass_params.dynamic.w`).
+    let distance_mult = grass_params.dynamic.w;
     let to_cam = camera.camera_pos - world_pos;
     let dist = length(to_cam);
     let fade_end_render = max(grass_params.fade.y * elmo_to_render * distance_mult, 1e-4);

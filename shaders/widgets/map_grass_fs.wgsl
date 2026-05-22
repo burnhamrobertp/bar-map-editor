@@ -77,14 +77,36 @@ fn grass_shadow_factor(world_pos: vec3<f32>) -> f32 {
 fn fs_grass(in: FsIn) -> @location(0) vec4<f32> {
     // Diagnostic mode driven at runtime from the viewport gear menu
     // (`bar-gui::ViewportDebug::grass_debug_output`, packed into
-    // `grass_params.wind.w`):
+    // `grass_params.dbg.x`):
     //   0 = normal grass output
     //   1 = raw `map_color` (grassShadingTex sample)
     //   2 = raw blade-colour sample
     //   3 = post-blend rgb (before modulator)
-    let debug_mode = i32(grass_params.wind.w);
+    let debug_mode = i32(grass_params.dbg.x);
+    // Alpha-test technique selector (`grass_params.dbg.y`):
+    //   0 = hashed alpha (Wronski 2017 stochastic discard, BME default)
+    //   1 = binary discard at ALPHATHRESHOLD only -- isolates whether
+    //       the silhouette character comes from the hashed test vs
+    //       the colour pipeline. Useful when chasing visual gaps
+    //       against the in-engine widget, which uses MSAA + AtoC
+    //       (impossible at sample_count=1) but produces a different
+    //       look from hashed test under static viewing.
+    let alpha_test_mode = i32(grass_params.dbg.y);
 
-    var color = textureSample(blade_color_tex, blade_color_sam, in.uv);
+    // V-flip the blade UV at sample time. The mesh UVs were copied
+    // verbatim from BAR's `grassPatches.lua` and assume OpenGL's
+    // `uv.y=0 = bottom of texture` convention. wgpu uses
+    // `uv.y=0 = top of texture`, so without this flip the texture
+    // renders upside down: the solid colourful blade-base region of
+    // the atlas lands at the rendered blade *tip* (visible against
+    // the sky) and the alpha-feathered tip region lands at the base
+    // (hidden against the ground). Visible side-effect was grass
+    // appearing "almost white" -- the opaque base colours rendered
+    // in the air. Only the texture sample needs flipping; the mesh
+    // UV's role as "base vs tip" for wind shading
+    // (`mix(1.0, shade_amount, in.uv.y)` in the VS) is unaffected.
+    let blade_uv = vec2<f32>(in.uv.x, 1.0 - in.uv.y);
+    var color = textureSample(blade_color_tex, blade_color_sam, blade_uv);
 
     // Sample `mapGrassColorModTex` at the patch's render-space XZ.
     // Engine convention: this is the per-map `grassShadingTex` (or
@@ -154,10 +176,21 @@ fn fs_grass(in: FsIn) -> @location(0) vec4<f32> {
     // Distance fade is kept on the output alpha channel (drives
     // the standard ALPHA_BLENDING state) so far-blade fade-out
     // remains smooth and not stochastic.
-    let hash = grass_hash(in.uv, in.world_xz);
-    let hash_threshold = 0.1 + hash * 0.8;
-    if color.a < hash_threshold {
-        discard;
+    if alpha_test_mode == 1 {
+        // Binary discard: same as the engine widget's `fragColor.a <
+        // ALPHATHRESHOLD` check on `frag.glsl:48`, no stochastic
+        // smoothing. Useful as a diagnostic to confirm whether
+        // stippling artefacts in normal output come from the hashed
+        // test or from the colour pipeline. NOT recommended for
+        // production -- produces hard-cut blade silhouettes at
+        // sample_count=1, where the engine relies on MSAA + AtoC to
+        // soften them.
+    } else {
+        let hash = grass_hash(in.uv, in.world_xz);
+        let hash_threshold = 0.1 + hash * 0.8;
+        if color.a < hash_threshold {
+            discard;
+        }
     }
 
     // Diagnostic short-circuits BEFORE blend math: confirms what the
@@ -204,20 +237,11 @@ fn fs_grass(in: FsIn) -> @location(0) vec4<f32> {
     // been resolved via discard above).
     let faded_alpha = clamp((in.fade - 0.5) * 1.5 + 0.5, 0.0, 1.0);
 
-    // *** Temporary visual workaround (BME-only) ***
-    //
-    // The proper widget port (perlin tex + engine-faithful shade
-    // formula + alpha-to-coverage path) isn't done yet, so BME's
-    // grass renders thicker / more opaque than in-engine. As a
-    // stopgap, dim the blade's upper half: uv.y = 0 at the base,
-    // 1 at the tip; below 0.4 the blade keeps full opacity, above
-    // 0.6 it drops to 50%, smooth-stepped in between to avoid a
-    // visible cutoff line.
-    //
-    // Lives in the shader (not in grass-settings) on purpose --
-    // it's a render-time hack to mask a port gap, not an authored
-    // map parameter. When `widgets/map_grass` ships the engine-
-    // faithful tip taper, delete this.
-    let upper_dim = mix(1.0, 0.5, smoothstep(0.4, 0.6, in.uv.y));
-    return vec4<f32>(rgb * modulator, faded_alpha * upper_dim);
+    // Engine-faithful output: blade tip carries its full authored
+    // alpha + colour. The earlier `upper_dim` stopgap (50% smoothstep
+    // dim above uv.y=0.6) is gone -- the proper engine-equivalent
+    // tapering is the per-fragment hashed alpha test above, which
+    // statistically reproduces the in-engine AtoC's sub-pixel
+    // coverage across the blade's authored alpha gradient.
+    return vec4<f32>(rgb * modulator, faded_alpha);
 }
