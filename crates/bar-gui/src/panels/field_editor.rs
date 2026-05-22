@@ -89,7 +89,15 @@ pub fn process_intent(app: &mut BarEditorApp, label: &str, intent: FieldIntent) 
             app.mark_dirty();
         }
         FieldIntent::EditAtomic => {
-            let snap = app.snapshot(&format!("Edit {}", label));
+            // Prefer the in-flight pre-edit snapshot (saved by a prior
+            // EditStarted) so undo restores the correct pre-commit state.
+            // Clears the slot regardless to prevent it being pushed again
+            // by a subsequent EditCommitted on an unrelated field.
+            let snap = if let Some(pre) = app.dialog.field_edit_in_progress.take() {
+                pre
+            } else {
+                app.snapshot(&format!("Edit {}", label))
+            };
             app.history.push(snap);
             app.mark_dirty();
         }
@@ -314,13 +322,13 @@ where
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
     let mut intent = FieldIntent::None;
-    // Captures whether the user cleared the DragValue's text buffer
-    // before blurring. Egui's default parser rejects empty input as
-    // a no-op and reverts the field to its prior value, but we
-    // want that gesture to mean "drop the override, fall back to
-    // engine default". `custom_parser` runs during the lost-focus
-    // commit so the Cell is true by the time `ui.add` returns.
-    let cleared = std::cell::Cell::new(false);
+    // "Cleared" flag persisted in egui's context data across frames.
+    // Stack-local Cell<bool> would be lost between the frame where
+    // custom_parser fires (user presses Delete) and the frame where
+    // lost_focus() fires (user presses Tab). Keyed by spec.id so each
+    // field tracks independently.
+    let cleared_key = egui::Id::new(("field_cleared", spec.id));
+    let ctx = ui.ctx().clone();
 
     ui.horizontal(|ui| {
         draw_label(ui, spec.label, spec.description);
@@ -332,20 +340,29 @@ where
                 egui::DragValue::new(&mut value)
                     .range(hard.0..=hard.1)
                     .speed((hard.1 - hard.0) / 1000.0)
-                    .custom_parser(|s| {
-                        let trimmed = s.trim();
-                        if trimmed.is_empty() {
-                            cleared.set(true);
-                            None
-                        } else {
-                            trimmed.parse::<f64>().ok()
+                    .custom_parser({
+                        let ctx = ctx.clone();
+                        move |s| {
+                            let trimmed = s.trim();
+                            if trimmed.is_empty() {
+                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
+                                None
+                            } else {
+                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                                trimmed.parse::<f64>().ok()
+                            }
                         }
                     }),
             );
             if resp.drag_started() || resp.gained_focus() {
+                if resp.gained_focus() {
+                    ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                }
                 intent = FieldIntent::EditStarted;
             }
-            if resp.lost_focus() && cleared.get() {
+            let cleared = ctx.data(|d| d.get_temp::<bool>(cleared_key).unwrap_or(false));
+            if resp.lost_focus() && cleared {
+                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
                 spec.commit(state, FieldValue::F32(None));
                 intent = FieldIntent::EditAtomic;
             } else if (value - displayed).abs() > f32::EPSILON {
@@ -386,7 +403,8 @@ where
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
     let mut intent = FieldIntent::None;
-    let cleared = std::cell::Cell::new(false);
+    let cleared_key = egui::Id::new(("field_cleared", spec.id));
+    let ctx = ui.ctx().clone();
 
     ui.horizontal(|ui| {
         draw_label(ui, spec.label, spec.description);
@@ -397,20 +415,29 @@ where
             let resp = ui.add(
                 egui::DragValue::new(&mut value)
                     .range(hard.0..=hard.1)
-                    .custom_parser(|s| {
-                        let trimmed = s.trim();
-                        if trimmed.is_empty() {
-                            cleared.set(true);
-                            None
-                        } else {
-                            trimmed.parse::<f64>().ok()
+                    .custom_parser({
+                        let ctx = ctx.clone();
+                        move |s| {
+                            let trimmed = s.trim();
+                            if trimmed.is_empty() {
+                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
+                                None
+                            } else {
+                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                                trimmed.parse::<f64>().ok()
+                            }
                         }
                     }),
             );
             if resp.drag_started() || resp.gained_focus() {
+                if resp.gained_focus() {
+                    ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                }
                 intent = FieldIntent::EditStarted;
             }
-            if resp.lost_focus() && cleared.get() {
+            let cleared = ctx.data(|d| d.get_temp::<bool>(cleared_key).unwrap_or(false));
+            if resp.lost_focus() && cleared {
+                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
                 spec.commit(state, FieldValue::U32(None));
                 intent = FieldIntent::EditAtomic;
             } else if value != displayed {
@@ -585,10 +612,11 @@ where
     let mut started = false;
     let mut stopped = false;
     let mut secondary = false;
-    // Per-channel "cleared" flags. Any channel being cleared +
-    // blurred reverts the whole vector to None -- there's no
-    // sensible "partial None" representation for a vec3/vec4.
-    let cleared = std::cell::Cell::new(false);
+    // Any channel being cleared + blurred reverts the whole vector to
+    // None. Keyed by spec.id so channels in different fields don't
+    // share a flag. Persisted in egui context data across frames.
+    let cleared_key = egui::Id::new(("field_cleared", spec.id));
+    let ctx = ui.ctx().clone();
 
     ui.horizontal(|ui| {
         draw_label(ui, spec.label, spec.description);
@@ -598,17 +626,23 @@ where
                     egui::DragValue::new(slot)
                         .range(hard.0..=hard.1)
                         .speed((hard.1 - hard.0) / 1000.0)
-                        .custom_parser(|s| {
-                            let trimmed = s.trim();
-                            if trimmed.is_empty() {
-                                cleared.set(true);
-                                None
-                            } else {
-                                trimmed.parse::<f64>().ok()
+                        .custom_parser({
+                            let ctx = ctx.clone();
+                            move |s| {
+                                let trimmed = s.trim();
+                                if trimmed.is_empty() {
+                                    ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
+                                    None
+                                } else {
+                                    trimmed.parse::<f64>().ok()
+                                }
                             }
                         }),
                 );
                 if resp.drag_started() || resp.gained_focus() {
+                    if resp.gained_focus() {
+                        ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                    }
                     started = true;
                 }
                 if resp.drag_stopped() || resp.lost_focus() {
@@ -628,8 +662,10 @@ where
         });
     });
 
-    let reverting = stopped && cleared.get();
+    let cleared = ctx.data(|d| d.get_temp::<bool>(cleared_key).unwrap_or(false));
+    let reverting = stopped && cleared;
     if reverting || secondary {
+        ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
         let none_value = if N == 3 {
             FieldValue::Vec3(None)
         } else {
