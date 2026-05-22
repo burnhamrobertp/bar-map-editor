@@ -757,6 +757,35 @@ pub(crate) fn paint_water_icon(painter: &egui::Painter, rect: egui::Rect, color:
     ));
 }
 
+/// Asymmetric flame silhouette for the Lava action-bar button.
+/// Rounded base + leaning teardrop body so it reads as fire rather
+/// than the symmetrical water droplet next door.
+pub(crate) fn paint_lava_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let base_r = 4.5_f32;
+    let base_center = egui::pos2(cx, cy + 3.0);
+    painter.circle_filled(base_center, base_r, color);
+    // Main flame body leans slightly right.
+    let tip = egui::pos2(cx + 1.0, cy - 8.5);
+    let shoulder_l = egui::pos2(cx - 3.8, cy - 0.5);
+    let shoulder_r = egui::pos2(cx + 3.8, cy + 1.5);
+    painter.add(egui::Shape::convex_polygon(
+        vec![tip, shoulder_r, shoulder_l],
+        color,
+        egui::Stroke::NONE,
+    ));
+    // Smaller curl flickering off the left side for asymmetry.
+    let curl_tip = egui::pos2(cx - 3.0, cy - 3.5);
+    let curl_l = egui::pos2(cx - 5.0, cy + 0.5);
+    let curl_r = egui::pos2(cx - 1.0, cy + 0.5);
+    painter.add(egui::Shape::convex_polygon(
+        vec![curl_tip, curl_r, curl_l],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
 /// Horizontal misty lines for the Fog action-bar button.
 pub(crate) fn paint_fog_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let cx = rect.center().x;

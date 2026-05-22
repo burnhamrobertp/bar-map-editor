@@ -154,6 +154,13 @@ pub const BTN_TAB_WATER_NORMAL: Color32 = Color32::from_rgb(45, 90, 145);
 pub const BTN_TAB_WATER_HOVER: Color32 = Color32::from_rgb(60, 115, 175);
 pub const BTN_TAB_WATER_PRESS: Color32 = Color32::from_rgb(35, 70, 115);
 
+// Lava -- molten orange / red (flame). Displaces the water palette
+// when `water.is_lava` so the action bar telegraphs that the modal
+// will open the lava form, not the water one.
+pub const BTN_TAB_LAVA_NORMAL: Color32 = Color32::from_rgb(165, 60, 30);
+pub const BTN_TAB_LAVA_HOVER: Color32 = Color32::from_rgb(200, 85, 40);
+pub const BTN_TAB_LAVA_PRESS: Color32 = Color32::from_rgb(130, 45, 20);
+
 // Resources -- sand / tan (texture grid).
 pub const BTN_TAB_RESOURCES_NORMAL: Color32 = Color32::from_rgb(125, 105, 75);
 pub const BTN_TAB_RESOURCES_HOVER: Color32 = Color32::from_rgb(150, 130, 95);

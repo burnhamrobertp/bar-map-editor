@@ -12,10 +12,11 @@ use std::time::Instant;
 
 use crate::app::{
     paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
-    paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lighting_icon,
-    paint_map_edge_icon, paint_physics_icon, paint_publish_icon, paint_resources_icon,
-    paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog, ExportStatus, GroupDeleteChoice,
-    Layout, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lava_icon,
+    paint_lighting_icon, paint_map_edge_icon, paint_physics_icon, paint_publish_icon,
+    paint_resources_icon, paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
+    ExportStatus, GroupDeleteChoice, Layout, PendingAction, UnsavedDecision,
+    CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::editor::validation::{BlockingAction, ModalId, ValidationSummary};
 use crate::panels::log::level_color;
@@ -1421,17 +1422,37 @@ impl BarEditorApp {
                                 tokens::BTN_TAB_LIGHTING_PRESS,
                             ),
                         ),
-                        (
-                            paint_water_icon,
-                            |d| &mut d.show_water_editor,
-                            "water",
-                            "editor.actions.tabs.water",
+                        // Water / Lava: same modal, but the action-bar
+                        // affordance follows the map's current mode so
+                        // the user can tell at a glance which form will
+                        // open. Mode lives on `water.is_lava`; the
+                        // exporter and modal both key off the same
+                        // flag.
+                        if self.map_settings().water.is_lava.unwrap_or(false) {
                             (
-                                tokens::BTN_TAB_WATER_NORMAL,
-                                tokens::BTN_TAB_WATER_HOVER,
-                                tokens::BTN_TAB_WATER_PRESS,
-                            ),
-                        ),
+                                paint_lava_icon as IconFn,
+                                (|d| &mut d.show_water_editor) as FlagFn,
+                                "lava",
+                                "editor.actions.tabs.lava",
+                                (
+                                    tokens::BTN_TAB_LAVA_NORMAL,
+                                    tokens::BTN_TAB_LAVA_HOVER,
+                                    tokens::BTN_TAB_LAVA_PRESS,
+                                ),
+                            )
+                        } else {
+                            (
+                                paint_water_icon as IconFn,
+                                (|d| &mut d.show_water_editor) as FlagFn,
+                                "water",
+                                "editor.actions.tabs.water",
+                                (
+                                    tokens::BTN_TAB_WATER_NORMAL,
+                                    tokens::BTN_TAB_WATER_HOVER,
+                                    tokens::BTN_TAB_WATER_PRESS,
+                                ),
+                            )
+                        },
                     ];
 
                     // Draw the metadata group: leading separator

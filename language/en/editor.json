@@ -148,6 +148,7 @@
         "fog": "Fog & Clouds",
         "lighting": "Lighting",
         "water": "Water",
+        "lava": "Lava",
         "grass": "Grass",
         "map_edge": "Map Edge"
       }
