@@ -96,6 +96,16 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
     // payload: heightmap is `GrayscaleF32` (4 bytes/pixel, captures
     // full SMF precision); metalmap / typemap are `GrayscaleU8` (1
     // byte/pixel, naturally quantised).
+    //
+    // `sampling` selects how the executor resamples the asset to the
+    // eval resolution. "smooth" (bilinear) is correct for continuous
+    // data; "nearest" must be set for quantised data (engine
+    // metalmap / typemap) so single-pixel metal spots or terrain-type
+    // boundaries round-trip through the eval pipeline without being
+    // averaged into faded blobs. Bilinear-blurring a sparse metalmap
+    // both dilutes individual spot density AND merges adjacent
+    // spots, which the engine's `gui_metalspots` widget then
+    // mis-aggregates or drops via the `maxValue = 15` gate.
     let add_hm = |key: &str,
                   label: &str,
                   y: f32,
@@ -103,6 +113,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
                   width: u32,
                   height: u32,
                   kind: AssetKind,
+                  sampling: &str,
                   nodes: &mut Vec<RecipeNode>,
                   positions: &mut HashMap<String, Position>,
                   sizes: &mut HashMap<String, NodeSize>,
@@ -112,6 +123,10 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         params.insert("asset_id".to_string(), ParamValue::String(id.0.clone()));
         params.insert("width".to_string(), ParamValue::UInt(width));
         params.insert("height".to_string(), ParamValue::UInt(height));
+        params.insert(
+            "sampling".to_string(),
+            ParamValue::String(sampling.to_string()),
+        );
         nodes.push(RecipeNode {
             key: key.to_string(),
             node_type: NodeType::PaintedHeightmap,
@@ -138,7 +153,10 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         });
     };
 
-    // Heightmap node -- f32, captures full SMF precision.
+    // Heightmap node -- f32, captures full SMF precision. F32 path
+    // ignores the `sampling` param (continuous data only flows
+    // through the f32 helper) but we set "smooth" anyway so the
+    // recipe carries an explicit value.
     let has_heightmap = !scan.heightmap_data.is_empty();
     if has_heightmap {
         add_hm(
@@ -149,6 +167,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
             scan.heightmap_w,
             scan.heightmap_h,
             AssetKind::GrayscaleF32,
+            "smooth",
             &mut nodes,
             &mut node_positions,
             &mut node_sizes,
@@ -156,7 +175,10 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         );
     }
 
-    // Metalmap node -- u8 metal density per pixel.
+    // Metalmap node -- u8 metal density per pixel. Use nearest-
+    // neighbour resampling so single-pixel metal spots survive the
+    // eval-pipeline upsample / SMF-export downsample round-trip and
+    // the engine's `gui_metalspots` widget finds them.
     if !scan.metalmap_data.is_empty() {
         add_hm(
             "metal",
@@ -166,6 +188,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
             scan.metalmap_w,
             scan.metalmap_h,
             AssetKind::GrayscaleU8,
+            "nearest",
             &mut nodes,
             &mut node_positions,
             &mut node_sizes,
@@ -173,7 +196,10 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         );
     }
 
-    // Typemap node -- u8 terrain-type index per pixel.
+    // Typemap node -- u8 terrain-type index per pixel. Same nearest-
+    // neighbour rationale as the metalmap: each value is an integer
+    // terrain-type id, averaging neighbours produces nonsense type
+    // ids on cell boundaries.
     if !scan.typemap_data.is_empty() {
         add_hm(
             "type",
@@ -183,6 +209,7 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
             scan.typemap_w,
             scan.typemap_h,
             AssetKind::GrayscaleU8,
+            "nearest",
             &mut nodes,
             &mut node_positions,
             &mut node_sizes,

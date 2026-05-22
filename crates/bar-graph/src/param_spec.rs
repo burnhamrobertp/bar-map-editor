@@ -17,12 +17,12 @@
 //! - **Type mismatch is hard-fail.** A param declared `Float` cannot
 //!   silently be loaded as `Int`; the recipe is rejected. Type
 //!   collisions are always a hand-edit error or a deliberate format
-//!   change that wants a `schema_version` bump.
-//! - **Unknown keys are warnings (today: silent), not errors.** Old
-//!   projects that carry params from removed node-type variants need
-//!   to load. The unknown key is dropped on load; the user sees no
-//!   regression. A future strict mode can opt into hard-fail here
-//!   once the recipe schema version stabilises.
+//!   change.
+//! - **Unknown keys are warnings (today: silent), not errors.** Hand-
+//!   edited recipes that carry params from removed node-type variants
+//!   still load; the unknown key is dropped silently. Tighten to
+//!   hard-fail here if the schema stabilises and stray keys become
+//!   useful to surface.
 
 use std::collections::HashMap;
 

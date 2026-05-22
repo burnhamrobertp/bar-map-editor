@@ -15,7 +15,8 @@
 
 // Layout-matches `CameraUniform` in `crates/bar-render/src/renderer.rs`. We
 // only read the fields we need (view_proj, camera_pos, sun_dir_exp,
-// ground_*), but the full struct is mirrored so byte offsets line up.
+// ground_*, skybox_params, terrain_detail_params), but the full struct is
+// mirrored so byte offsets line up.
 struct CameraUniform {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -42,6 +43,26 @@ struct CameraUniform {
     water_min_color: vec4<f32>,
     brush_cursor: vec4<f32>,
     clip_plane: vec4<f32>,
+    custom_fog_color_atten: vec4<f32>,
+    custom_fog_params: vec4<f32>,
+    sun_color: vec4<f32>,
+    sky_color_density: vec4<f32>,
+    sky_dir: vec4<f32>,
+    cloud_color: vec4<f32>,
+    skybox_params: vec4<f32>,
+    splat_tex_scales: vec4<f32>,
+    splat_tex_mults: vec4<f32>,
+    splat_params: vec4<f32>,
+    fog_dists: vec4<f32>,
+    fog_color: vec4<f32>,
+    // .x = SMF_BLEND_NORMALS present (terrain only).
+    // .y = basic SMF_DETAIL_TEXTURE_SPLATTING active (terrain only).
+    // .z = reserved.
+    // .w = advanced_model_shading enabled (0/1). When < 0.5 the
+    //   feature shader skips the texture2 emissive + spec / env-
+    //   reflection mix + team-color paths and renders plain
+    //   texture1 * SMF lit shade.
+    terrain_detail_params: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniform;
@@ -170,6 +191,17 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
         shadow,
     );
 
+    // Engine-faithful ModelFragProg path. ALWAYS runs -- the
+    // "Advanced Model Shading" preference exists as a stub for a
+    // future cus_gl4 PBR port (which would add normal-mapping, BRDF,
+    // IBL, etc. on top of this) but the engine's stock model shader
+    // is what every map feature ships its textures for, so we run
+    // it unconditionally. Gating it earlier made the baseline worse
+    // for features without a shading texture: `spec_mult` got
+    // forced to 1.0 and added a full sun-spec lobe on top of plain
+    // diffuse-lit textures, which over-brightened every tree/wreck/
+    // rock that doesn't author tex2 data.
+    //
     // S3O texture2 channels -- per ModelFragProg.glsl:87-109:
     //   .r => self-illumination / emissive, added to the lighting multiplier
     //         so the textured RGB takes the boost (so the glow ends up the
@@ -177,13 +209,13 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
     //   .g => spec / env-reflection mix factor. Engine path:
     //         `specular *= (extraColor.g * 4.0)` (line 97) and
     //         `reflection = mix(light, reflectTex, extraColor.g)` (line 103).
-    // Without these, the emissive crystal / glow-mushroom features that BAR
-    // ships on Azurite Shores etc. render as dead matte geometry instead of
-    // the cyan / purple halos seen in-engine.
     //
-    // Placeholders and models with no tex2 bind a (0,0,0,1) shading default
-    // (see `feature_default_shading_view` in features.rs) so this path is a
-    // no-op contribution when shading data is absent.
+    // Models with no tex2 bind a (0,0,0,1) shading default (see
+    // `feature_default_shading_view` in features.rs) so emissive,
+    // spec_mult, and reflection mix all evaluate to zero
+    // contribution and the result is plain `diffuse * lit`. Models
+    // that DO ship tex2 (emissive crystals, glow features) get the
+    // engine's intended look.
     let emissive  = vec3<f32>(shading_sample.r);
     let spec_mult = shading_sample.g * 4.0;
 
@@ -192,10 +224,7 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
     // skybox cubemap, then mix that into the lit term by
     // `shading_sample.g`. Chrome / metal surfaces with high `.g`
     // pick up the sky reflection; matte surfaces with `.g = 0` stay
-    // on the diffuse lighting term. Gated on the same
-    // `skybox_params.x` flag the terrain uses -- when no cubemap is
-    // uploaded the 1x1 black default produces zero contribution,
-    // matching the engine's behaviour when `reflectTex` is empty.
+    // on the diffuse lighting term.
     let cam_to_frag = in.world_pos - camera.camera_pos;
     let reflect_dir = reflect(cam_to_frag, normal);
     let env_refl    = textureSample(skybox_tex, skybox_sam, reflect_dir).rgb;
@@ -205,10 +234,7 @@ fn fs_feature(in: VertexOutput) -> @location(0) vec4<f32> {
     // `mix(diffuse.rgb, teamColor.rgb, diffuse.a)`. Map-baked features
     // (trees, wrecks, rocks) almost always ship `diffuse.a = 0` so
     // the mix is a no-op; the path matters only for unit / variant
-    // models that use texture1.a as a team-colour mask. Default
-    // teamColor is a neutral grey -- the editor has no team
-    // selection today; if a future feature surfaces one, lift this
-    // to a uniform.
+    // models that use texture1.a as a team-colour mask.
     let team_color = vec3<f32>(0.5, 0.5, 0.5);
     let team_diffuse_rgb = mix(diffuse_sample.rgb, team_color, diffuse_sample.a);
 

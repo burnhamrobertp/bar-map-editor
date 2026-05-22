@@ -445,14 +445,21 @@ impl FeatureRenderer {
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
-                // Small bias to reduce shadow acne on near-grazing surfaces.
-                // Small slope-scale bias is enough for acne avoidance on
-                // sloped feature faces; larger values eroded small crystals
-                // entirely (their full depth extent in light space is
-                // smaller than the bias).
+                // Depth bias for feature shadow casting. Tuned for
+                // THIN geometry (tree trunks, lampposts, crystal
+                // spires): slope-scale bias adds depth proportional
+                // to dz/dscreen, which on a vertical cylinder seen
+                // from the sun is enormous -- the recorded shadow
+                // depth gets pushed past the ground receiver's depth
+                // and the ground tests as un-shadowed. We previously
+                // ran `slope_scale: 0.5` here and saw exactly that:
+                // crystals first, then tree trunks. A small CONSTANT
+                // bias alone is enough to suppress acne on
+                // self-shadowing feature faces without eroding thin
+                // silhouettes.
                 bias: wgpu::DepthBiasState {
-                    constant: 1,
-                    slope_scale: 0.5,
+                    constant: 2,
+                    slope_scale: 0.0,
                     clamp: 0.0,
                 },
             }),

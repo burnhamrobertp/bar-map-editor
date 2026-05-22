@@ -283,6 +283,14 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             // Canvas resolution. Power-of-two values map cleanly to
             // BAR's 64-px square grid.
             ("resolution", ParamValue::UInt(256)),
+            // How the executor resamples the asset to eval
+            // resolution. "smooth" (bilinear) for continuous data
+            // like heightmap delta layers; "nearest" for quantised
+            // data like the engine's metalmap / typemap. Set to
+            // "nearest" at import time on the Metal Map / Type Map
+            // nodes by `bar_project::scan_to_project` so single-pixel
+            // metal spots round-trip without bilinear-blur dilution.
+            ("sampling", ParamValue::String("smooth".to_string())),
         ],
         NodeType::PaintedTexture => vec![
             // UUID of the binary asset file holding the RGB pixel grid.

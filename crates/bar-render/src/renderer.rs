@@ -382,6 +382,33 @@ pub struct SmfLighting {
     pub atmosphere_fog_color: [f32; 3],
 }
 
+/// Stamp the advanced-shading flags into the trailing `zw` slots of
+/// the terrain-detail params vec4 so the terrain and features shaders
+/// can read them. `.x` (SMF_BLEND_NORMALS) and `.y` (basic splat
+/// detail) are produced by `SmfLighting::to_uniform_slots`.
+///
+/// `.z = advanced_map_shading` mirrors BAR's engine `AdvMapShading`
+/// toggle. When below 0.5 the terrain shader skips the engine's
+/// advanced-renderer pieces that aren't already covered by per-feature
+/// flags (per-fragment specular, shadow sampling, detail-tex
+/// contribution) so the ground falls through to BAR's basic
+/// `SMFShadingTextureFragProg` equivalent: ambient + diffuse times
+/// NdL modulated by albedo, plus the water-absorption pass.
+///
+/// `.w = advanced_model_shading` mirrors BAR's `cus_gl4` LuaRules
+/// toggle. When below 0.5 the features shader skips the texture2
+/// emissive, spec / env-cubemap mix, and team-color paths.
+fn pack_detail_params_with_advanced_flags(
+    detail_params: [f32; 4],
+    advanced_map_shading: bool,
+    advanced_model_shading: bool,
+) -> [f32; 4] {
+    let mut p = detail_params;
+    p[2] = if advanced_map_shading { 1.0 } else { 0.0 };
+    p[3] = if advanced_model_shading { 1.0 } else { 0.0 };
+    p
+}
+
 /// Helper: clone `f.smf_lighting` with renderer-runtime flags overridden.
 /// MapSettings doesn't know which assets the renderer has actually
 /// uploaded -- so the per-frame uniform reads upload state from the
@@ -1089,6 +1116,31 @@ pub struct TerrainRenderer {
     z_extent: f32,
     time: f32,
     quality_high: bool,
+    /// Whether to issue the map-grass widget draw call this frame.
+    /// Set per render-call by the host (Sculpt view forces off, Preview
+    /// follows the user's display preference). Defaults to `true` so
+    /// callers that don't manage the flag get engine-faithful behaviour.
+    grass_visible: bool,
+    /// Forward-looking gate for additional advanced terrain
+    /// rendering features (e.g. parallax, infotex, future engine
+    /// paths BME doesn't yet implement). Currently a no-op on the
+    /// rendering side: the renderer always runs the full
+    /// engine-faithful SMF path (splat-detail-normal, sky-reflection
+    /// mod, detail-normal blend, per-pixel specular, light emission,
+    /// basic splat, detail tex) regardless of this flag, because
+    /// that path IS the baseline -- turning it off would only ever
+    /// reduce quality below what BME already delivers. The flag is
+    /// kept on `TerrainRenderer` so future enhancement paths can
+    /// branch on it without re-plumbing.
+    advanced_map_shading: bool,
+    /// Stub for a future `cus_gl4` (PBR / normal-mapped) model port.
+    /// Currently a no-op: the engine-faithful ModelFragProg path in
+    /// `features.wgsl` runs unconditionally regardless of this flag.
+    /// The flag is still threaded through (packed into
+    /// `CameraUniform::terrain_detail_params.w`) so the eventual port
+    /// can read it without a uniform-buffer change. See
+    /// `docs/recoil-shader-ports.md` for the cus_gl4 gap.
+    advanced_model_shading: bool,
 }
 
 /// Generate a tileable noise-based water normal map.
@@ -3090,7 +3142,30 @@ impl TerrainRenderer {
             z_extent: 0.5,
             time: 0.0,
             quality_high: true,
+            grass_visible: true,
+            advanced_map_shading: true,
+            advanced_model_shading: true,
         }
+    }
+
+    /// Toggle whether the map-grass widget pass runs this frame. The
+    /// flag is read inside `render_internal`; callers reset it every
+    /// render-call so a stale `false` from a previous Sculpt frame
+    /// can't ghost into a subsequent Preview frame. Sculpt forces
+    /// `false` (high-performance view); Preview forwards
+    /// `settings.display.grass`.
+    pub fn set_grass_visible(&mut self, visible: bool) {
+        self.grass_visible = visible;
+    }
+
+    /// Toggle the advanced SMF ground path. See [`Self::advanced_map_shading`].
+    pub fn set_advanced_map_shading(&mut self, enabled: bool) {
+        self.advanced_map_shading = enabled;
+    }
+
+    /// Toggle the advanced S3O model path. See [`Self::advanced_model_shading`].
+    pub fn set_advanced_model_shading(&mut self, enabled: bool) {
+        self.advanced_model_shading = enabled;
     }
 
     // ── Public update methods ───────────────────────────────────────────────
@@ -5108,6 +5183,14 @@ impl TerrainRenderer {
         // flags regardless of what the caller set in `f.smf_lighting`.
         // Same for `elmo_per_render_xz` -- comes from `update_heightmap`
         // (host computes it from map dimensions).
+        // Engine-faithful SMF ground path always runs at full
+        // fidelity. The `advanced_map_shading` toggle is reserved
+        // for ADDITIONAL future paths the engine has but BME
+        // doesn't implement yet (e.g. parallax, infotex); it does
+        // not gate any existing path off. Lowering the floor in
+        // Sculpt or when the flag is false was a previous (wrong)
+        // implementation -- the toggle should only raise the
+        // ceiling, never reduce the baseline.
         self.smf_lighting = bar_render_smf_with_runtime_overrides(
             f.smf_lighting,
             self.skybox_enabled,
@@ -5273,7 +5356,18 @@ impl TerrainRenderer {
                 0.0,
             ],
             fog_color: smf.atmosphere_fog_color,
-            terrain_detail_params: smf.terrain_detail_params,
+            // Reserved-slot packing: zw of `terrain_detail_params` are
+            // documented as reserved. We use .z to forward
+            // `advanced_map_shading` to `terrain.wgsl` and .w to
+            // forward `advanced_model_shading` to `features.wgsl`,
+            // since both pipelines share `camera_bind_group` group 0
+            // and a uniform-buffer slot is cheaper than adding a
+            // dedicated bind-group entry.
+            terrain_detail_params: pack_detail_params_with_advanced_flags(
+                smf.terrain_detail_params,
+                self.advanced_map_shading,
+                self.advanced_model_shading,
+            ),
         };
 
         // ── Pass 0: shadow map ──────────────────────────────────────────────
@@ -5667,7 +5761,11 @@ impl TerrainRenderer {
         // main encoder + same color/depth attachments; the pipeline
         // disables depth-write so alpha-tested blade edges don't
         // cast hard depth silhouettes.
-        if self.map_grass.ready_to_draw() {
+        //
+        // Gated by `grass_visible` so the Sculpt view (high-performance
+        // authoring) can suppress grass entirely without dropping the
+        // pipeline. Preview forwards the user's display preference.
+        if self.grass_visible && self.map_grass.ready_to_draw() {
             let mut grass_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("map_grass_pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {

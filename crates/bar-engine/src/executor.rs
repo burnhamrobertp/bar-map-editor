@@ -483,8 +483,22 @@ impl NodeExecutor for CpuExecutor {
                 let fallback_w = get_uint(params, "width", res_fallback).max(1);
                 let fallback_h = get_uint(params, "height", res_fallback).max(1);
                 let asset_path = get_string(params, "asset_path", "");
-                let hm =
-                    read_painted_heightmap_asset(asset_path, fallback_w, fallback_h, width, height);
+                // `sampling` selects bilinear vs nearest-neighbour when
+                // the asset's source resolution differs from the eval
+                // resolution. Default "smooth" (bilinear) for continuous
+                // data like heightmap delta layers; "nearest" must be
+                // set on import for quantised data (engine metalmap /
+                // typemap) where pixel values carry integer meaning and
+                // averaging neighbours corrupts the engine readback. The
+                // import boundary in `scan.rs` stamps this for the
+                // auto-created Metal Map / Type Map nodes.
+                let sampling = match get_string(params, "sampling", "smooth") {
+                    "nearest" => GrayscaleSampling::Nearest,
+                    _ => GrayscaleSampling::Bilinear,
+                };
+                let hm = read_painted_heightmap_asset(
+                    asset_path, fallback_w, fallback_h, width, height, sampling,
+                );
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
@@ -2722,9 +2736,17 @@ fn read_painted_heightmap_asset(
     fallback_h: u32,
     out_w: u32,
     out_h: u32,
+    sampling: GrayscaleSampling,
 ) -> Heightmap {
     if asset_path.is_empty() {
-        return painted_grayscale_to_heightmap(Vec::new(), fallback_w, fallback_h, out_w, out_h);
+        return painted_grayscale_to_heightmap(
+            Vec::new(),
+            fallback_w,
+            fallback_h,
+            out_w,
+            out_h,
+            sampling,
+        );
     }
     match bar_project::read_asset_file(std::path::Path::new(asset_path)) {
         Ok((header, data)) => {
@@ -2732,7 +2754,7 @@ fn read_painted_heightmap_asset(
             let src_h = header.height.max(1);
             match header.kind {
                 bar_project::AssetKind::GrayscaleU8 => {
-                    painted_grayscale_to_heightmap(data, src_w, src_h, out_w, out_h)
+                    painted_grayscale_to_heightmap(data, src_w, src_h, out_w, out_h, sampling)
                 }
                 bar_project::AssetKind::GrayscaleF32 => {
                     painted_f32_to_heightmap(&data, src_w, src_h, out_w, out_h)
@@ -2743,13 +2765,27 @@ fn read_painted_heightmap_asset(
                         ?other,
                         "PaintedHeightmap asset has non-grayscale kind; falling back to zero heightmap",
                     );
-                    painted_grayscale_to_heightmap(Vec::new(), fallback_w, fallback_h, out_w, out_h)
+                    painted_grayscale_to_heightmap(
+                        Vec::new(),
+                        fallback_w,
+                        fallback_h,
+                        out_w,
+                        out_h,
+                        sampling,
+                    )
                 }
             }
         }
         Err(e) => {
             tracing::warn!(asset_path, error = %e, "Failed to read PaintedHeightmap asset");
-            painted_grayscale_to_heightmap(Vec::new(), fallback_w, fallback_h, out_w, out_h)
+            painted_grayscale_to_heightmap(
+                Vec::new(),
+                fallback_w,
+                fallback_h,
+                out_w,
+                out_h,
+                sampling,
+            )
         }
     }
 }
@@ -2810,12 +2846,28 @@ fn painted_f32_to_heightmap(
 
 /// Bilinearly scale a painted greyscale image at `src_w x src_h`
 /// up/down to the output dims and normalise `[0,255] -> [0.0, 1.0]`.
+/// Sampling mode for `painted_grayscale_to_heightmap`. Smooth
+/// (bilinear) is correct for continuous data like heightmap-delta
+/// paint layers; Nearest preserves quantised data like the
+/// engine's metalmap / typemap, where each u8 value is an integer
+/// reading (metal density, terrain-type id) and averaging
+/// neighbouring values is semantically meaningless. Bilinear-blurring
+/// a sparse metal map dilutes single-pixel spots into faint blobs
+/// that the engine's spot-finder later mis-aggregates (or filters
+/// out entirely via the `maxValue = 15` gate in `gui_metalspots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GrayscaleSampling {
+    Bilinear,
+    Nearest,
+}
+
 fn painted_grayscale_to_heightmap(
     pixels: Vec<u8>,
     src_w: u32,
     src_h: u32,
     out_w: u32,
     out_h: u32,
+    sampling: GrayscaleSampling,
 ) -> Heightmap {
     // Fill with zeros if no painted data
     let pixels = if pixels.len() == (src_w as usize) * (src_h as usize) {
@@ -2829,21 +2881,37 @@ fn painted_grayscale_to_heightmap(
         for ox in 0..out_w {
             let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
             let sy = oy as f32 * (src_h as f32 - 1.0) / (out_h as f32 - 1.0).max(1.0);
-            let x0 = sx as u32;
-            let y0 = sy as u32;
-            let x1 = (x0 + 1).min(src_w - 1);
-            let y1 = (y0 + 1).min(src_h - 1);
-            let fx = sx - sx.floor();
-            let fy = sy - sy.floor();
-
-            let v00 = pixels[(y0 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
-            let v10 = pixels[(y0 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
-            let v01 = pixels[(y1 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
-            let v11 = pixels[(y1 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
-            let v = v00 * (1.0 - fx) * (1.0 - fy)
-                + v10 * fx * (1.0 - fy)
-                + v01 * (1.0 - fx) * fy
-                + v11 * fx * fy;
+            let v = match sampling {
+                GrayscaleSampling::Bilinear => {
+                    let x0 = sx as u32;
+                    let y0 = sy as u32;
+                    let x1 = (x0 + 1).min(src_w - 1);
+                    let y1 = (y0 + 1).min(src_h - 1);
+                    let fx = sx - sx.floor();
+                    let fy = sy - sy.floor();
+                    let v00 = pixels[(y0 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
+                    let v10 = pixels[(y0 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+                    let v01 = pixels[(y1 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
+                    let v11 = pixels[(y1 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+                    v00 * (1.0 - fx) * (1.0 - fy)
+                        + v10 * fx * (1.0 - fy)
+                        + v01 * (1.0 - fx) * fy
+                        + v11 * fx * fy
+                }
+                GrayscaleSampling::Nearest => {
+                    // Round, not floor, so cells at the half-pixel
+                    // boundary land on the nearer source pixel rather
+                    // than systematically biasing toward the lower
+                    // index (which on a 64 -> 1536 upsample would
+                    // leave the rightmost column of every 24-px block
+                    // un-mapped).
+                    let sx_round = (sx + 0.5) as u32;
+                    let sy_round = (sy + 0.5) as u32;
+                    let sx_c = sx_round.min(src_w.saturating_sub(1));
+                    let sy_c = sy_round.min(src_h.saturating_sub(1));
+                    pixels[(sy_c as usize) * (src_w as usize) + sx_c as usize] as f32 / 255.0
+                }
+            };
             data[(oy as usize) * (out_w as usize) + ox as usize] = v;
         }
     }
@@ -3272,6 +3340,45 @@ fn apply_select_aspect(input: &Heightmap, direction: f32, width: f32, falloff: f
 mod tests {
     use super::*;
     use bar_graph::{GraphEngine, Node, NodeId, PortId};
+
+    #[test]
+    fn nearest_neighbour_preserves_single_metal_spot_through_upsample() {
+        // Metalmap regression: a single-pixel metal spot at value 200
+        // in a 4x4 source must survive an upsample to 12x12 with peak
+        // value intact. With the previous bilinear path the same
+        // upsample dilutes the peak to ~140; the engine's spot
+        // finder then sees a smeared cluster instead of the original
+        // discrete spot.
+        let mut pixels = vec![0u8; 16];
+        pixels[5] = 200; // (1, 1) in a 4x4 grid
+        let hm = painted_grayscale_to_heightmap(
+            pixels.clone(),
+            4,
+            4,
+            12,
+            12,
+            GrayscaleSampling::Nearest,
+        );
+        // Peak should be the original value normalised.
+        let peak = hm.data().iter().cloned().fold(0.0f32, f32::max);
+        let expected = 200.0 / 255.0;
+        assert!(
+            (peak - expected).abs() < 1e-4,
+            "nearest peak should be {expected}, got {peak}",
+        );
+        // Bilinear sanity-check: same upsample with bilinear gives a
+        // strictly lower peak (the spot is averaged with zero
+        // neighbours), confirming the round-trip degradation the
+        // engine's spot-finder was running into.
+        let blurred =
+            painted_grayscale_to_heightmap(pixels, 4, 4, 12, 12, GrayscaleSampling::Bilinear);
+        let bilinear_peak = blurred.data().iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            bilinear_peak < expected * 0.95,
+            "bilinear should dilute the peak below 95% of source (got {bilinear_peak} vs expected < {})",
+            expected * 0.95,
+        );
+    }
 
     #[test]
     fn test_passthrough_normalises_backslash_bundle_paths() {
