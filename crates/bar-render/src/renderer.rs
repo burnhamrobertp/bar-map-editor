@@ -266,6 +266,14 @@ pub struct SmfLighting {
     /// the per-map coast-distance field. Gates the shader's foam
     /// stage so machines without a BAR install don't render garbage.
     pub foam_enabled: bool,
+    /// True when the map's water table represents lava
+    /// (`mapinfo.water.damage > 0` equivalent, stored as
+    /// `WaterSettings::is_lava`). Switches the water shader from
+    /// the engine-faithful BumpWater path (refraction + fresnel
+    /// reflection + caustics + foam) to an opaque emissive surface
+    /// so the result reads as molten lava instead of red-tinted
+    /// water.
+    pub is_lava: bool,
     /// Height-based "custom" fog widget state. Applied as a final
     /// post-pass in the terrain shader -- not engine-native, but
     /// driven by the per-map `mapinfo.custom.fog` block that BAR's
@@ -505,6 +513,7 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             wave_foam_intensity: w.wave_foam_intensity,
             wave_length: w.wave_length,
             foam_enabled: false,
+            is_lava: w.is_lava,
             custom_fog: crate::widgets::custom_fog::CustomFogWidget::from_settings(ms),
             sun_color: atm.sun_color,
             sun_intensity: l.sun_intensity,
@@ -588,6 +597,7 @@ impl Default for SmfLighting {
             wave_foam_intensity: 0.5,
             wave_length: 0.15,
             foam_enabled: false,
+            is_lava: false,
             custom_fog: crate::widgets::custom_fog::CustomFogWidget::default(),
             sun_color: [1.0, 1.0, 1.0],
             sun_intensity: 1.0,
@@ -810,7 +820,9 @@ struct WaterParamsUniform {
     /// x = ambientFactor, y = specularFactor,
     /// z = reflectionDistortion, w = perlinAmplitude
     factors: [f32; 4],
-    /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = unused
+    /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = is_lava
+    /// flag (0 = water, 1 = lava; switches the shader to the opaque
+    /// emissive lava path).
     fresnel: [f32; 4],
     /// x = blurBase (pixels), y = blurExponent, zw reserved. Drives
     /// the 7-tap reflection blur in `water.wgsl` -- the shader divides
@@ -837,13 +849,16 @@ impl From<&SmfLighting> for WaterParamsUniform {
         // shader, so the WGSL port has to apply the same scale before the
         // value reaches the uniform. Without them the surface tint runs to
         // double the engine's, which is what produced the white-wash look.
+        // Lava bypasses the BumpWater path entirely so the prescale would
+        // just dim the user's chosen lava color; pass it through at 1.0.
         const SURFACE_COLOR_SCALE: f32 = 0.4;
         const DIFFUSE_FACTOR_SCALE: f32 = 15.0;
+        let surface_scale = if l.is_lava { 1.0 } else { SURFACE_COLOR_SCALE };
         Self {
             surface_color_alpha: [
-                l.water_surface_color[0] * SURFACE_COLOR_SCALE,
-                l.water_surface_color[1] * SURFACE_COLOR_SCALE,
-                l.water_surface_color[2] * SURFACE_COLOR_SCALE,
+                l.water_surface_color[0] * surface_scale,
+                l.water_surface_color[1] * surface_scale,
+                l.water_surface_color[2] * surface_scale,
                 l.water_surface_alpha,
             ],
             diffuse_color_factor: [
@@ -868,7 +883,7 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 l.water_fresnel_min,
                 l.water_fresnel_max,
                 l.water_fresnel_power.max(0.01),
-                0.0,
+                if l.is_lava { 1.0 } else { 0.0 },
             ],
             blur: [l.water_blur_base, l.water_blur_exponent, 0.0, 0.0],
             caustics: [

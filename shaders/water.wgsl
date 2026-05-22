@@ -45,7 +45,10 @@ struct WaterParams {
     /// x = ambientFactor, y = specularFactor,
     /// z = reflectionDistortion, w = perlinAmplitude
     factors: vec4<f32>,
-    /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = unused
+    /// x = fresnelMin, y = fresnelMax, z = fresnelPower, w = is_lava
+    /// (0 = water, 1 = lava -- switches `shade_water` to an opaque
+    /// emissive surface so molten lava reads as actual lava instead
+    /// of red-tinted water).
     fresnel: vec4<f32>,
     /// x = blurBase (pixels), y = blurExponent, zw reserved. Drives
     /// the 7-tap `opt_blurreflection` path -- the shader divides x
@@ -284,6 +287,52 @@ fn water_shallow_scale(world_pos: vec3<f32>) -> f32 {
     return clamp(depth * 33.0 / max(camera.height_scale, 1e-4), 0.0, 1.0);
 }
 
+/// Shade a lava-plane fragment. Engine treats `mapinfo.water.damage > 0`
+/// as lava; in-game the result is rendered as actual molten material
+/// rather than a red-tinted version of the BumpWater surface (no
+/// reflection, no refraction, no caustics, self-illuminated). We mirror
+/// that: an opaque emissive base in the user-chosen surface colour with
+/// a slow-scrolling vein pattern sourced from the normal map.
+fn shade_lava(world_pos: vec3<f32>) -> vec4<f32> {
+    let base = water_params.surface_color_alpha.rgb;
+    // Two slowly-scrolling samples of the normal texture, used as a
+    // flow / vein pattern. Time multiplier is ~20x slower than the
+    // water-octave normal so the lava reads as sluggishly molten
+    // rather than wave-like.
+    let t = camera.time * 0.05;
+    let uv_a = world_pos.xz * 0.020 + vec2<f32>(t * 0.7, t * 0.5);
+    let uv_b = world_pos.xz * 0.012 - vec2<f32>(t * 0.4, t * 0.6);
+    let n_a = textureSample(water_normal_tex, water_normal_sam, uv_a).rgb;
+    let n_b = textureSample(water_normal_tex, water_normal_sam, uv_b).rgb;
+    // Combine the two layers into a single 0..1 vein intensity. The
+    // bright / dark smoothsteps carve narrow glowing veins out of a
+    // cooled-over crust so the surface looks alive.
+    let veins  = clamp(length(n_a.xy + n_b.xy) * 0.7, 0.0, 1.0);
+    let bright = smoothstep(0.45, 0.95, veins);
+    let dark   = smoothstep(0.0, 0.30, veins);
+    let glow_color  = base + vec3<f32>(0.35, 0.20, 0.05);
+    let crust_color = base * 0.30;
+    var col = mix(crust_color, base, dark);
+    col = mix(col, glow_color, bright);
+    // Slight overall brightness lift so the surface reads as emissive
+    // rather than lit -- engine doesn't run the lava plane through the
+    // standard lighting pipeline.
+    col = col * 1.15;
+    // Distance fog still applies (the lava plane sits in the
+    // atmosphere); reuse the same gate `shade_water` does.
+    if camera.fog_dists.y > 0.0 {
+        let view_dist = length(camera.camera_pos - world_pos);
+        let fog_factor = clamp(
+            (camera.fog_dists.y - view_dist)
+                / max(camera.fog_dists.y - camera.fog_dists.x, 1e-4),
+            0.0,
+            1.0,
+        );
+        col = mix(camera.fog_color.rgb, col, fog_factor);
+    }
+    return vec4<f32>(col, 1.0);
+}
+
 /// Shade a water-plane fragment.
 ///
 /// `world_pos` -- fragment world position (render space).
@@ -300,6 +349,12 @@ fn shade_water(
     screen_uv: vec2<f32>,
     frag_z: f32,
 ) -> vec4<f32> {
+    // Lava maps short-circuit the entire BumpWater pipeline -- the
+    // engine renders them as opaque emissive lava, not red-tinted
+    // water. Flag lives on `water_params.fresnel.w` (1.0 = lava).
+    if water_params.fresnel.w >= 0.5 {
+        return shade_lava(world_pos);
+    }
     // --- 1. Normal + depth-based attenuation ----------------------------
     let normal        = water_octave_normal(world_pos.xz, camera.time);
     let shallow_scale = water_shallow_scale(world_pos);
