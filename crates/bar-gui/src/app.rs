@@ -247,6 +247,11 @@ pub struct BarEditorApp {
     /// Per-session state for the Map Edge action-bar panel (preview
     /// texture cache so flipping the modal doesn't re-decode the file).
     pub map_edge: crate::panels::action_bar_modals::map_edge::MapEdgePanelState,
+    /// Per-session state for the Dimensions modal (minimap preview cache).
+    pub dimensions: crate::panels::action_bar_modals::dimensions::DimensionsPanelState,
+    /// Per-session state for the Assemble Map wizard. Holds the
+    /// current page and the in-progress picks until Finish / Cancel.
+    pub assemble_map: crate::panels::assemble_map::AssembleMapState,
     pub paint: PaintSession,
     /// In-flight drag from the node palette (set when pointer starts
     /// dragging an item, cleared on pointer release).
@@ -263,6 +268,10 @@ pub struct BarEditorApp {
     /// Sorted list of feature type names from the loaded catalog.
     /// Populated by `bar-app` when the feature catalog is loaded.
     pub feature_palette_names: Vec<String>,
+    /// Live text filter typed into the feature library search box.
+    /// Empty = show every catalog entry; otherwise case-insensitive
+    /// substring match against the lowercased type name.
+    pub(crate) feature_filter: String,
     /// Feature type currently selected in the feature palette for placement.
     /// When Some, clicking on the 3D terrain places a feature of this type.
     pub selected_feature_type: Option<String>,
@@ -324,9 +333,16 @@ pub struct ViewportDebug {
     ///   1 = raw `map_color` (grassShadingTex sample)
     ///   2 = raw blade-colour sample
     ///   3 = post-blend rgb (before modulator)
-    /// Fed into `grass_params.wind.w` so the FS picks it up without
-    /// any new bind-group entries.
+    /// Fed into `grass_params.dbg.x`.
     pub grass_debug_output: i32,
+    /// Grass alpha-test technique:
+    ///   0 = hashed alpha (Wronski 2017 stochastic discard, BME default)
+    ///   1 = binary discard at ALPHATHRESHOLD only -- matches the
+    ///       engine widget's `frag.glsl:48` gate, without the MSAA +
+    ///       AtoC path BME can't reproduce at sample_count=1.
+    /// Useful for isolating whether the silhouette character comes
+    /// from the alpha-test technique or from the colour pipeline.
+    pub grass_alpha_test_mode: u32,
 }
 
 impl Default for ViewportDebug {
@@ -335,6 +351,7 @@ impl Default for ViewportDebug {
             show_camera_readout: false,
             gamma_exponent: 1.5,
             grass_debug_output: 0,
+            grass_alpha_test_mode: 0,
         }
     }
 }
@@ -366,6 +383,9 @@ impl Default for BarEditorApp {
             validation: crate::editor::ValidationState::default(),
             props: crate::editor::PropsPanelState::default(),
             map_edge: crate::panels::action_bar_modals::map_edge::MapEdgePanelState::default(),
+            dimensions: crate::panels::action_bar_modals::dimensions::DimensionsPanelState::default(
+            ),
+            assemble_map: crate::panels::assemble_map::AssembleMapState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
             palette_filter: String::new(),
@@ -373,6 +393,7 @@ impl Default for BarEditorApp {
             active_layout: Layout::default(),
             supports_bc: false,
             feature_palette_names: Vec::new(),
+            feature_filter: String::new(),
             selected_feature_type: None,
             pending_placement_angle: 0.0,
             placement_ghost: None,
@@ -518,6 +539,10 @@ impl BarEditorApp {
     pub(crate) fn mark_dirty(&mut self) {
         self.project.is_dirty = true;
         self.project.compile_dirty = true;
+        // Bumping the commit counter feeds the validation
+        // fingerprint, so a re-validation fires on the next frame
+        // after any committable input event (blur, drag-stop, etc.).
+        self.project.commits = self.project.commits.wrapping_add(1);
     }
 
     /// Append a message to the log buffer. Info/Warning/Error also update

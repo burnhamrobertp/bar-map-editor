@@ -130,6 +130,10 @@ pub struct DialogState {
     /// same schema-driven render pipeline that the rest of the
     /// map-settings UI uses.
     pub show_start_boxes_editor: bool,
+    /// Whether the Assemble Map wizard is currently open. The wizard's
+    /// per-page state (current page, accumulated picks) lives on
+    /// [`crate::panels::assemble_map::AssembleMapState`].
+    pub show_assemble_map: bool,
     pub show_settings: bool,
     pub show_about: bool,
     /// True for one frame after the user accepts an unsaved-changes

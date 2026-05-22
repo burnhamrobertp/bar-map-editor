@@ -24,6 +24,13 @@ pub struct ProjectState {
     /// Drives the title bar's dirty asterisk and the unsaved-changes
     /// confirmation dialog.
     pub is_dirty: bool,
+    /// Monotonic counter bumped every time the project takes a
+    /// committable mutation (every `mark_dirty()` call). The
+    /// validation fingerprint reads this so any atomic field commit
+    /// -- text-input blur, drag-stopped, colour-picked, etc. --
+    /// drives a validation refresh on the next frame, without
+    /// needing the fingerprint to enumerate every recipe field.
+    pub commits: u64,
     /// Timestamp of the last successful autosave, used as the gate
     /// for the autosave-interval timer.
     pub last_autosave_at: Option<Instant>,

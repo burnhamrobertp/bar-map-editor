@@ -207,6 +207,7 @@ mod tests {
         assert_eq!(t("editor.menu.file"), "File");
         assert_eq!(t("editor.welcome.heading"), "BAR - Map Editor");
         assert_eq!(t("editor.welcome.blank_project"), "Blank Project");
+        assert_eq!(t("editor.welcome.assemble_map"), "Assemble Map...");
     }
 
     #[test]

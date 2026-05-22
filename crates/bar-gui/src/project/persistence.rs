@@ -53,6 +53,24 @@ impl BarEditorApp {
                     self.log_error(format!("Failed to copy SMF minimap sidecar: {e}"));
                 }
             }
+            // Copy the entire `passthrough/` subtree from the staging
+            // dir into the project's `passthrough/`. Used by the
+            // Assemble Map wizard (which stages picked resource
+            // files there before any project dir exists) and by any
+            // future flow that needs to defer the project-dir copy
+            // until first save. Existing destination files are
+            // overwritten -- the staging dir is authoritative.
+            let staged_pt = src_dir.join("passthrough");
+            if staged_pt.is_dir() {
+                let dest_pt = path.join("passthrough");
+                if let Some(parent) = dest_pt.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                if let Err(e) = copy_dir_flat(&staged_pt, &dest_pt) {
+                    self.log_error(format!("Failed to copy staged passthrough: {e}"));
+                }
+            }
+
             // Copy the SMF grass distribution map (`grassmap.png`,
             // written by `import_sd7_to_project` when the SMF carries
             // a `MEH_Vegetation` extra header) into the .barproj so

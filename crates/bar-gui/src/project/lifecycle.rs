@@ -96,6 +96,8 @@ impl BarEditorApp {
         self.dialog.field_edit_in_progress = None;
         self.dialog.spawn_drag_in_progress = None;
         self.map_edge = crate::panels::action_bar_modals::map_edge::MapEdgePanelState::default();
+        self.dimensions =
+            crate::panels::action_bar_modals::dimensions::DimensionsPanelState::default();
         self.dialog.confirm_dialog = None;
         self.dialog.pending_action = None;
         self.selection.pending_group_delete = None;
@@ -111,6 +113,7 @@ impl BarEditorApp {
         self.map.dragging_spawn = None;
         self.palette_drag = None;
         self.palette_filter.clear();
+        self.feature_filter.clear();
         self.project.passthrough_edit = None;
         self.dialog.pending_props_open = None;
         self.props.close();
@@ -222,6 +225,323 @@ impl BarEditorApp {
     /// egui main loop keeps rendering.
     pub(crate) fn welcome_open_dialog(&mut self) {
         self.open_file_dialog_async();
+    }
+
+    /// Welcome panel's "Assemble Map…" button -- opens the assemble
+    /// wizard. Wizard state is reset on open so a previously cancelled
+    /// session doesn't bleed picks into the new one.
+    pub(crate) fn start_assemble_map_dialog(&mut self) {
+        self.assemble_map.reset();
+        self.dialog.show_assemble_map = true;
+    }
+
+    /// Finish handler for the Assemble Map wizard. Builds a fresh
+    /// project from `self.assemble_map.picks`: clears any existing
+    /// graph, drops the standard FinalComposition + per-asset input
+    /// nodes, copies every picked file into the per-project temp
+    /// asset dir, and populates `MapSettings` (identity, dimensions,
+    /// height range, resource basenames). The user lands in the
+    /// editor with the project dirty and no path -- next save
+    /// prompts Save As.
+    pub(crate) fn finish_assemble_map(&mut self) {
+        let picks = self.assemble_map.picks.clone();
+        self.reset_project();
+
+        let fc_pos = self.starter_bundler_position();
+        let fc_id = self.add_final_composition_node("Final Composition");
+        self.visuals.node_visuals.insert(
+            fc_id,
+            NodeVisual {
+                position: fc_pos,
+                size: egui::vec2(210.0, 240.0),
+            },
+        );
+
+        // Apply dimensions + height range.
+        if picks.squares_x > 0 && picks.squares_z > 0 {
+            self.map.width = picks.squares_x * 64 + 1;
+            self.map.height = picks.squares_z * 64 + 1;
+        }
+        self.map.min_height = picks.min_height;
+        self.map.max_height = picks.max_height;
+
+        // Identity metadata onto the recipe-meta block. Empty strings
+        // collapse to `None` so the optional fields don't ship empty
+        // values into the bundled mapinfo.
+        let opt_string = |s: &str| {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else {
+                Some(t.to_string())
+            }
+        };
+        self.map.recipe_meta.name = opt_string(&picks.name);
+        self.map.recipe_meta.author = opt_string(&picks.author);
+        self.map.recipe_meta.description = picks.description.trim().to_string();
+        self.map.recipe_meta.version = opt_string(&picks.version);
+
+        // Stash any picked optional resource files: copy each into
+        // the per-session temp dir, then write the basename into the
+        // matching MapSettings field so the bundler can find them in
+        // `passthrough/` after the project is saved.
+        // Stage every picked resource file inside a per-session temp
+        // dir's `passthrough/` subtree. On first save, the persistence
+        // layer copies that subtree into `<project>/passthrough/` so
+        // the basenames stored on the recipe resolve cleanly. Until
+        // the save lands the recipe references files that only exist
+        // in the temp dir -- the editor-side preview path falls back
+        // to `pending_map_data_dir` to resolve them.
+        let temp_dir = std::env::temp_dir().join("bar-editor-assemble-map");
+        let passthrough_dir = temp_dir.join("passthrough");
+        let _ = std::fs::create_dir_all(&passthrough_dir);
+        let stash_into_passthrough = |src: &std::path::PathBuf| -> Option<String> {
+            let basename = src.file_name()?.to_str()?.to_string();
+            let dest = passthrough_dir.join(&basename);
+            if std::fs::copy(src, &dest).is_err() {
+                tracing::warn!(src = %src.display(), "assemble_map: copy failed");
+                return None;
+            }
+            Some(basename)
+        };
+        let settings = &mut self.map.settings;
+        if let Some(p) = picks.minimap_path.as_ref() {
+            settings.minimap = stash_into_passthrough(p);
+        }
+        if let Some(p) = picks.skybox_path.as_ref() {
+            settings.atmosphere.skybox = stash_into_passthrough(p);
+        }
+        if let Some(p) = picks.splat_distribution_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.splat_distr_tex = n;
+            }
+        }
+        if let Some(p) = picks.splat_detail_normal_1_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.splat_detail_normal_tex_1 = n;
+            }
+        }
+        if let Some(p) = picks.splat_detail_normal_2_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.splat_detail_normal_tex_2 = n;
+            }
+        }
+        if let Some(p) = picks.splat_detail_normal_3_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.splat_detail_normal_tex_3 = n;
+            }
+        }
+        if let Some(p) = picks.splat_detail_normal_4_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.splat_detail_normal_tex_4 = n;
+            }
+        }
+        if let Some(p) = picks.specular_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.specular_tex = n;
+            }
+        }
+        if let Some(p) = picks.sky_reflect_mod_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.sky_reflect_mod_tex = n;
+            }
+        }
+        if let Some(p) = picks.detail_normal_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.detail_normal_tex = n;
+            }
+        }
+        if let Some(p) = picks.light_emission_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.resources.light_emission_tex = n;
+            }
+        }
+        if let Some(p) = picks.grass_distribution_path.as_ref() {
+            if let Some(n) = stash_into_passthrough(p) {
+                settings.custom_grass.dist_tga = Some(n);
+            }
+        }
+
+        // Pin the temp passthrough dir so save / preview can locate
+        // the staged files before the first save lands.
+        self.project.pending_map_data_dir = Some(temp_dir.clone());
+
+        // Build the four core graph input nodes (heightmap, diffuse
+        // texture, metalmap, typemap) and wire them to the Final
+        // Composition. These are the ONLY layers that flow through the
+        // node graph -- mapinfo-driven resources (splats, masks,
+        // skybox, minimap, grass dist) live exclusively on
+        // `MapSettings`. Strict no-duplication: every required file
+        // belongs to exactly one of {graph, MapSettings}, never both.
+        let assets_dir = temp_dir.join("assets");
+        self.build_core_input_nodes(fc_id, fc_pos, &picks, &assets_dir);
+
+        self.assemble_map.reset();
+        self.project.is_dirty = true;
+    }
+
+    /// Stage each picked core-layer file as an asset and add the
+    /// matching graph node wired to the Final Composition. Heightmap
+    /// is special-cased: when present, also drops a NormalMap node
+    /// driven off the heightmap (matches the .sd7-import shape so
+    /// the bundler's normal-map input is populated automatically).
+    fn build_core_input_nodes(
+        &mut self,
+        fc_id: NodeId,
+        fc_pos: egui::Pos2,
+        picks: &crate::panels::assemble_map::state::AssembleMapPicks,
+        assets_dir: &std::path::Path,
+    ) {
+        use crate::panels::assemble_map::build::{
+            stage_grayscale_u8, stage_heightmap, stage_texture,
+        };
+        // Stack source nodes vertically to the left of FC.
+        let source_x = fc_pos.x - 320.0;
+        let mut next_y = fc_pos.y;
+        let mut place = |this: &mut Self, node_id: NodeId, size: egui::Vec2| {
+            this.visuals.node_visuals.insert(
+                node_id,
+                NodeVisual {
+                    position: egui::pos2(source_x, next_y),
+                    size,
+                },
+            );
+            next_y += size.y + 24.0;
+        };
+
+        // Heightmap -- f32, plus a derived NormalMap node.
+        if let Some(src) = picks.heightmap_path.as_ref() {
+            match stage_heightmap(src, assets_dir) {
+                Ok(staged) => {
+                    let id = self.add_painted_heightmap_node("Heightmap", &staged);
+                    place(self, id, egui::vec2(165.0, 80.0));
+                    self.connect_to_fc(id, fc_id, "heightmap");
+
+                    let nm = self.add_normalmap_node();
+                    place(self, nm, egui::vec2(140.0, 60.0));
+                    let _ = self.graph.connect(
+                        bar_graph::PortId {
+                            node_id: id,
+                            port_name: "output".to_string(),
+                        },
+                        bar_graph::PortId {
+                            node_id: nm,
+                            port_name: "input".to_string(),
+                        },
+                    );
+                    self.connect_to_fc(nm, fc_id, "normalmap");
+                }
+                Err(e) => tracing::warn!(error = %e, "assemble_map: stage_heightmap failed"),
+            }
+        }
+
+        // Diffuse texture -- PaintedTexture, RGB.
+        if let Some(src) = picks.diffuse_path.as_ref() {
+            match stage_texture(src, assets_dir) {
+                Ok(staged) => {
+                    let id = self.add_painted_texture_node("Texture", &staged);
+                    place(self, id, egui::vec2(165.0, 80.0));
+                    self.connect_to_fc(id, fc_id, "texture");
+                }
+                Err(e) => tracing::warn!(error = %e, "assemble_map: stage_texture failed"),
+            }
+        }
+
+        // Metalmap -- u8.
+        if let Some(src) = picks.metalmap_path.as_ref() {
+            match stage_grayscale_u8(src, assets_dir) {
+                Ok(staged) => {
+                    let id = self.add_painted_heightmap_node("Metal Map", &staged);
+                    place(self, id, egui::vec2(165.0, 80.0));
+                    self.connect_to_fc(id, fc_id, "metalmap");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "assemble_map: stage_grayscale_u8 (metal) failed")
+                }
+            }
+        }
+
+        // Typemap -- u8.
+        if let Some(src) = picks.typemap_path.as_ref() {
+            match stage_grayscale_u8(src, assets_dir) {
+                Ok(staged) => {
+                    let id = self.add_painted_heightmap_node("Type Map", &staged);
+                    place(self, id, egui::vec2(165.0, 80.0));
+                    self.connect_to_fc(id, fc_id, "typemap");
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "assemble_map: stage_grayscale_u8 (type) failed")
+                }
+            }
+        }
+    }
+
+    fn add_painted_heightmap_node(
+        &mut self,
+        label: &str,
+        staged: &crate::panels::assemble_map::build::StagedAsset,
+    ) -> NodeId {
+        let mut node = bar_graph::Node::new(NodeId(0), NodeType::PaintedHeightmap, label);
+        node.params.insert(
+            "asset_id".to_string(),
+            bar_graph::ParamValue::String(staged.asset_id.0.clone()),
+        );
+        node.params.insert(
+            "width".to_string(),
+            bar_graph::ParamValue::UInt(staged.width),
+        );
+        node.params.insert(
+            "height".to_string(),
+            bar_graph::ParamValue::UInt(staged.height),
+        );
+        node.params.insert(
+            "asset_path".to_string(),
+            bar_graph::ParamValue::String(staged.asset_path.to_string_lossy().into_owned()),
+        );
+        self.graph.add_node(node)
+    }
+
+    fn add_painted_texture_node(
+        &mut self,
+        label: &str,
+        staged: &crate::panels::assemble_map::build::StagedAsset,
+    ) -> NodeId {
+        let mut node = bar_graph::Node::new(NodeId(0), NodeType::PaintedTexture, label);
+        node.params.insert(
+            "asset_id".to_string(),
+            bar_graph::ParamValue::String(staged.asset_id.0.clone()),
+        );
+        node.params.insert(
+            "width".to_string(),
+            bar_graph::ParamValue::UInt(staged.width),
+        );
+        node.params.insert(
+            "height".to_string(),
+            bar_graph::ParamValue::UInt(staged.height),
+        );
+        node.params.insert(
+            "asset_path".to_string(),
+            bar_graph::ParamValue::String(staged.asset_path.to_string_lossy().into_owned()),
+        );
+        self.graph.add_node(node)
+    }
+
+    fn add_normalmap_node(&mut self) -> NodeId {
+        let node = bar_graph::Node::new(NodeId(0), NodeType::NormalMap, "Normal Map");
+        self.graph.add_node(node)
+    }
+
+    fn connect_to_fc(&mut self, from_node: NodeId, fc_id: NodeId, fc_port: &str) {
+        let _ = self.graph.connect(
+            bar_graph::PortId {
+                node_id: from_node,
+                port_name: "output".to_string(),
+            },
+            bar_graph::PortId {
+                node_id: fc_id,
+                port_name: fc_port.to_string(),
+            },
+        );
     }
 
     /// Welcome panel's "Recent" menu entry click — defers to the

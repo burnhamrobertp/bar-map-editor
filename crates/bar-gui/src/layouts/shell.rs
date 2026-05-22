@@ -36,8 +36,13 @@ fn paint_validation_badge(ui: &egui::Ui, btn_rect: egui::Rect, summary: &Validat
         (egui::Color32::from_rgb(230, 180, 60), summary.warnings)
     };
     let radius = 7.0;
-    let center = egui::pos2(btn_rect.max.x - radius, btn_rect.min.y + radius);
-    let painter = ui.painter_at(btn_rect.expand(radius));
+    // Anchor outside the button's top-right corner so the badge
+    // doesn't clip the icon underneath. ~60% of the badge sits past
+    // the rect edges; the painter's clip is expanded twice the
+    // radius to leave room for the overflow.
+    let offset = radius * 0.6;
+    let center = egui::pos2(btn_rect.max.x + offset, btn_rect.min.y - offset);
+    let painter = ui.painter_at(btn_rect.expand(radius * 2.0));
     painter.circle_filled(center, radius, color);
     painter.circle_stroke(
         center,
@@ -948,6 +953,8 @@ impl BarEditorApp {
         crate::panels::action_bar_modals::map_edge::draw(self, ctx);
         crate::panels::action_bar_modals::start_boxes::draw(self, ctx);
 
+        crate::panels::assemble_map::draw(self, ctx);
+
         crate::panels::validation::draw_details(self, ctx);
 
         // Action bar -- only shown inside a project.
@@ -996,9 +1003,12 @@ impl BarEditorApp {
                         painter.rect_filled(compile_rect, 5.0, bg);
                         paint_compile_icon(&painter, compile_rect, egui::Color32::WHITE);
                     }
+                    // No badge on the build / ship buttons -- the
+                    // disabled state already communicates "blocked
+                    // by validation errors", and the hover tooltip
+                    // lists the offending findings via `blocking_msg`.
                     let compile_summary =
                         self.validation.summary_for_action(BlockingAction::Compile);
-                    paint_validation_badge(ui, compile_rect, &compile_summary);
                     let base_hover = if compile_running {
                         "Compiling...".to_string()
                     } else {
@@ -1083,7 +1093,6 @@ impl BarEditorApp {
                     let bar_summary = self
                         .validation
                         .summary_for_action(BlockingAction::TestInBar);
-                    paint_validation_badge(ui, bar_rect, &bar_summary);
                     let base_tooltip = if test_in_bar_busy {
                         "Test in BAR (launching)".to_string()
                     } else {
@@ -1140,7 +1149,6 @@ impl BarEditorApp {
                     }
 
                     let bundle_summary = self.validation.summary_for_action(BlockingAction::Bundle);
-                    paint_validation_badge(ui, rect, &bundle_summary);
                     let base_tooltip = if busy {
                         "Bundle (exporting)".to_string()
                     } else {

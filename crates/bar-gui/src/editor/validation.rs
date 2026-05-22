@@ -34,6 +34,13 @@ pub struct ValidationFingerprint {
     pub min_h_bits: u32,
     pub max_h_bits: u32,
     pub n_spawns: usize,
+    /// `ProjectState::commits` -- bumps on every `mark_dirty()`,
+    /// which is the editor-wide signal for "an atomic field commit
+    /// just happened" (text-input blur, drag-stop, colour pick,
+    /// checkbox toggle). Including it means any committed recipe
+    /// edit re-runs validation on the next frame without needing
+    /// the fingerprint to enumerate every individual recipe field.
+    pub commits: u64,
 }
 
 impl ValidationFingerprint {
@@ -48,6 +55,7 @@ impl ValidationFingerprint {
             min_h_bits: 0,
             max_h_bits: 0,
             n_spawns: usize::MAX,
+            commits: u64::MAX,
         }
     }
 }
@@ -299,6 +307,7 @@ impl BarEditorApp {
             min_h_bits: rs.min_height.to_bits(),
             max_h_bits: rs.max_height.to_bits(),
             n_spawns: self.map.settings.start_positions.len(),
+            commits: self.project.commits,
         }
     }
 
