@@ -53,10 +53,7 @@ See `docs/recoil-shader-ports.md` for the full status table and per-feature cont
 - **`SMF_BLEND_NORMALS`** (`detailNormalTex` / `blendNormalsTex`) -- single-normal-map perturbation. Aurelia ships one but its visible contribution overlaps with the splat-detail-normal path that IS done. Low priority, but worth a quick check on maps that ship the texture without the splat variant.
 - **Basic `SMF_DETAIL_TEXTURE_SPLATTING`** -- the simpler 1-texture splat path. Most modern BAR maps use the 4-texture normal-splat variant which is done; the simple path appears on older maps.
 - **`HAVE_INFOTEX`** -- gameplay overlay (FoW, metal, LoS spots). Documented as out-of-scope for the editor preview in `recoil-shader-ports.md`; tracked here in case scope changes.
-- **Shore foam** (`GetShorewaves`) -- needs SDP reader (see below) for `foam.png` / `waverand` plus a CPU-computed coast-distance map.
 - **Caustics** -- needs SDP reader for `caust00..caust31.tga` animation sequence.
-- **Refraction blur** (`BumpWaterCoastBlur`) -- engine blurs the refraction texture before BumpWater samples it; we currently compensate by undershooting the distortion UV magnitude to ~20% of engine's. Adding the blur would let the UV magnitude come back up to engine's value and improve ripple crispness. Pure shader-side pass; no asset dependencies.
-- **Multi-tap reflection blur** (`opt_blurreflection`) -- 7 extra reflection samples + `BlurBase` / `BlurExponent` uniforms. Pure shader. Engine treats it as a user quality setting.
 - **MiniMap port wiring** -- shader is ported (`recoil/minimap.wgsl`) but not GUI-wired. Inspector still draws its own topo view. Switch when there's a concrete user complaint about the topo view.
 
 ## Engine asset access
@@ -85,8 +82,6 @@ The bulk of the widget is ported: shaders, instance generation, mapinfo parsing,
 - **Mouse-painting the grass distribution mask.** The BAR widget supports `/loadgrass`, `/savegrass`, `/cleargrass`, `/editgrass` commands plus mouse-paint-on-viewport with `[` / `]` brush size and shift-modifier (`map_grass_gl4.lua:735-772`). BME's grass-editor panel today edits the *parameters* (blade size, shader factors, fade distances, file paths) but not the spatial distribution -- to author grass placement the user has to externally paint `grassmap.png` / `grassDistTGA` and reload. Belongs alongside the existing 3D-paint brush flow once that subsystem is re-enabled.
 - **Hardcoded per-map override table.** Widget hardcodes overrides for `DSDR 4.0`, `DeltaSiegeDry`, `Pentos_V1`, `Taldarim_V3`, `Altair_Crossing_V4` (`map_grass_gl4.lua:160-198` -- notably Altair uses `MAPCOLORFACTOR = -1.2`). BME doesn't replicate. Workaround: those maps' mapinfo can carry the same values explicitly under `custom.grassConfig.grassShaderParams`. Worth a one-time scrape into mapinfo overrides if/when those specific maps get imported.
 - **Row-based CPU visibility culling.** Widget builds a `grassRowInstance` table mapping screen rows to instance ranges and skips off-screen rows entirely. BME draws all instances and lets the per-instance VS clip-space cull (now ported) handle visibility. Pure performance optimization; deferred until grass becomes a measured bottleneck on large maps.
-- **`patchSize=1` low-quality fallback.** Widget downgrades to a 36-vertex patch (instead of 144) on potato GPUs. Not relevant for the editor.
-- **Engine perlin texture (`grassWindPerturbTex` = `bitmaps/GPL/perlin_noise.jpg`).** Currently using procedural value-noise calibrated to the engine's `+-0.1` magnitude. Visual difference is subtle; loading the actual perlin JPEG would close the last bit of fidelity gap. Asset is GPL-licensed so embedding directly into BME would require a license review -- defer until that decision is made.
 
 ## Logging
 
