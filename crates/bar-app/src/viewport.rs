@@ -1458,7 +1458,7 @@ pub fn draw_sculpt_viewport(
     ctx: &egui::Context,
     app: &mut bar_gui::BarEditorApp,
 ) {
-    ui.small(bar_gui::i18n::t("editor.viewport_3d.sculpt_controls_hint"));
+    ui.small(bar_gui::i18n::t("editor.viewport_3d.controls_hint"));
     ui.separator();
     let has_content = core.current_frame.is_some();
     draw_viewport_body(
@@ -1625,7 +1625,21 @@ fn draw_viewport_body(
         }
         draw_viewport_debug_overlay(ui, &response.rect, &core.camera, app);
 
-        handle_camera_input(core, gpu_context, render_state, &response, ctx, app);
+        // Sun-gizmo geometry is shared between the input handler
+        // (marker/ring hit-test, drag math) and the paint pass below;
+        // compute once per frame so we don't pay for two identical
+        // 96-sample, 128-step occlusion ray-marches per ring.
+        let sun_geometry = compute_sun_gizmo_geometry(core, &response, app);
+
+        handle_camera_input(
+            core,
+            gpu_context,
+            render_state,
+            &response,
+            ctx,
+            app,
+            sun_geometry.as_ref(),
+        );
 
         // Floating feature popover -- anchors next to the selected
         // feature in the viewport when one is selected. Hidden when
@@ -1687,18 +1701,11 @@ fn draw_viewport_body(
             };
             refresh_metal_spots_cache(core, app);
             if !core.metal_spots.is_empty() {
-                let occlusion = app.paint.heightmap.as_ref().map(|hm| {
-                    bar_gui::overlays::metal_spots::OcclusionData {
-                        camera_pos: core.camera.position(),
-                        heightmap: hm,
-                    }
-                });
                 bar_gui::overlays::metal_spots::paint(
                     ui.painter(),
                     &core.metal_spots,
                     &overlay_dims,
                     app.paint.heightmap.as_ref(),
-                    occlusion,
                     view_projection,
                     response.rect,
                 );
@@ -1709,46 +1716,22 @@ fn draw_viewport_body(
             // clicks the sun marker to "arm" the gizmo, then drags a
             // ring to rotate the sun. Occluded ring segments (line
             // of sight blocked by the terrain) render dashed at low
-            // alpha so they read as "behind the map".
-            if app.active_layout() == bar_gui::Layout::Sculpt3D {
-                let dims = bar_gui::overlays::sun::SunGizmoDims {
-                    map_w: app.map.width,
-                    map_h: app.map.height,
-                    x_extent: frame.x_extent,
-                    z_extent: frame.z_extent,
-                };
-                let occlusion =
-                    app.paint
-                        .heightmap
-                        .as_ref()
-                        .map(|hm| bar_gui::overlays::sun::OcclusionData {
-                            camera_pos: core.camera.position(),
-                            heightmap: hm,
-                            x_extent: frame.x_extent,
-                            z_extent: frame.z_extent,
-                            height_scale: frame.height_scale,
-                        });
-                if let Some(geometry) = bar_gui::overlays::sun::compute_geometry(
-                    app.sun_dir_normalised(),
-                    &dims,
-                    view_projection,
-                    response.rect,
-                    occlusion,
-                ) {
-                    // Rings are always interactive; show hover
-                    // feedback whenever the cursor is over a
-                    // grab-able (non-occluded) segment.
-                    let hovered_axis = response
-                        .hover_pos()
-                        .and_then(|p| bar_gui::overlays::sun::hit_test_axis(&geometry, p));
-                    bar_gui::overlays::sun::paint(
-                        ui.painter(),
-                        &geometry,
-                        hovered_axis,
-                        core.sun_drag_axis,
-                        core.sun_gizmo_revealed,
-                    );
-                }
+            // alpha so they read as "behind the map". Geometry was
+            // built once above and shared with `handle_camera_input`.
+            if let Some(geometry) = sun_geometry.as_ref() {
+                // Rings are always interactive; show hover
+                // feedback whenever the cursor is over a
+                // grab-able (non-occluded) segment.
+                let hovered_axis = response
+                    .hover_pos()
+                    .and_then(|p| bar_gui::overlays::sun::hit_test_axis(geometry, p));
+                bar_gui::overlays::sun::paint(
+                    ui.painter(),
+                    geometry,
+                    hovered_axis,
+                    core.sun_drag_axis,
+                    core.sun_gizmo_revealed,
+                );
             }
         }
     } else {
@@ -1779,6 +1762,49 @@ fn draw_viewport_body(
         });
         ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
+}
+
+/// Compute the sun-gizmo geometry for this frame's camera + sun
+/// direction. Returns `None` outside Sculpt3D, when the terrain
+/// renderer hasn't been built yet, or when the gizmo collapses to
+/// zero radius. Result is consumed by both `handle_camera_input`
+/// (hit-test, drag) and the paint pass in `draw_viewport_body`.
+fn compute_sun_gizmo_geometry(
+    core: &ViewportCore,
+    response: &egui::Response,
+    app: &bar_gui::BarEditorApp,
+) -> Option<bar_gui::overlays::sun::GizmoGeometry> {
+    if app.active_layout() != bar_gui::Layout::Sculpt3D {
+        return None;
+    }
+    let renderer = core.terrain_renderer.as_ref()?;
+    let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
+    let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
+    let dims = bar_gui::overlays::sun::SunGizmoDims {
+        map_w: app.map.width,
+        map_h: app.map.height,
+        x_extent,
+        z_extent,
+    };
+    let view_projection = core.camera.view_projection(aspect);
+    let occlusion = app
+        .paint
+        .heightmap
+        .as_ref()
+        .map(|hm| bar_gui::overlays::sun::OcclusionData {
+            camera_pos: core.camera.position(),
+            heightmap: hm,
+            x_extent,
+            z_extent,
+            height_scale,
+        });
+    bar_gui::overlays::sun::compute_geometry(
+        app.sun_dir_normalised(),
+        &dims,
+        view_projection,
+        response.rect,
+        occlusion,
+    )
 }
 
 /// Pull the metalmap asset path off the FinalComposition's
@@ -2041,6 +2067,7 @@ fn handle_camera_input(
     response: &egui::Response,
     ctx: &egui::Context,
     app: &mut bar_gui::BarEditorApp,
+    gizmo_geometry: Option<&bar_gui::overlays::sun::GizmoGeometry>,
 ) {
     // Snapshot camera state before any per-frame mutation so we can
     // revert at the end if the net effect would have pushed the
@@ -2089,42 +2116,10 @@ fn handle_camera_input(
     // Sun-direction gizmo: three rotation rings on a sphere around
     // the map (Blender-style rotate gizmo). Disarmed by default --
     // the user clicks the sun marker to arm, then can drag a ring
-    // to rotate. Clicks outside the gizmo disarm. Occlusion data is
-    // passed so ring segments behind the terrain don't bleed through
-    // the map.
+    // to rotate. Clicks outside the gizmo disarm. Geometry is
+    // computed once per frame by `draw_viewport_body` and threaded
+    // in here so the hit-test + paint paths see the same data.
     let in_sculpt = app.active_layout() == bar_gui::Layout::Sculpt3D;
-    let gizmo_geometry = if in_sculpt {
-        core.terrain_renderer.as_ref().and_then(|r| {
-            let (height_scale, x_extent, z_extent) = r.mesh_extents();
-            let dims = bar_gui::overlays::sun::SunGizmoDims {
-                map_w: app.map.width,
-                map_h: app.map.height,
-                x_extent,
-                z_extent,
-            };
-            let view_projection = core.camera.view_projection(aspect);
-            let occlusion =
-                app.paint
-                    .heightmap
-                    .as_ref()
-                    .map(|hm| bar_gui::overlays::sun::OcclusionData {
-                        camera_pos: core.camera.position(),
-                        heightmap: hm,
-                        x_extent,
-                        z_extent,
-                        height_scale,
-                    });
-            bar_gui::overlays::sun::compute_geometry(
-                app.sun_dir_normalised(),
-                &dims,
-                view_projection,
-                response.rect,
-                occlusion,
-            )
-        })
-    } else {
-        None
-    };
 
     // Marker click toggles "revealed" visibility (full alpha across
     // all three rings vs distance-fade from the marker). The
@@ -2138,7 +2133,7 @@ fn handle_camera_input(
     let mut gizmo_consumed_click = false;
     if in_sculpt && response.clicked_by(egui::PointerButton::Primary) {
         let press = response.interact_pointer_pos();
-        if let (Some(p), Some(g)) = (press, gizmo_geometry.as_ref()) {
+        if let (Some(p), Some(g)) = (press, gizmo_geometry) {
             if bar_gui::overlays::sun::cursor_on_marker(g, p) {
                 core.sun_gizmo_revealed = !core.sun_gizmo_revealed;
                 gizmo_consumed_click = true;
@@ -2163,7 +2158,7 @@ fn handle_camera_input(
         // camera / feature path. Ring drag works regardless of
         // revealed state -- one click-and-drag on any ring grabs it.
         let press = response.interact_pointer_pos();
-        let press_axis = match (press, gizmo_geometry.as_ref()) {
+        let press_axis = match (press, gizmo_geometry) {
             (Some(p), Some(g)) => bar_gui::overlays::sun::hit_test_axis(g, p),
             _ => None,
         };
@@ -2187,7 +2182,7 @@ fn handle_camera_input(
             } else {
                 response.drag_delta()
             };
-            if let Some(geometry) = gizmo_geometry.as_ref() {
+            if let Some(geometry) = gizmo_geometry {
                 let new_dir = bar_gui::overlays::sun::rotate_around_axis(
                     app.sun_dir_normalised(),
                     axis,

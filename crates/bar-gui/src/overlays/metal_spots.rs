@@ -67,11 +67,6 @@ const LABEL_GLYPH_HEIGHT_ELMOS: f32 = 18.0;
 const LABEL_FONT_MIN_PX: f32 = 8.0;
 const LABEL_FONT_MAX_PX: f32 = 42.0;
 
-/// Ray-march sample count for the camera-to-sample occlusion test.
-/// Same density as the sun gizmo's rings -- 128 is plenty inside a
-/// typical map AABB and stays cheap even with dozens of spots.
-const OCCLUSION_STEPS: u32 = 128;
-
 /// Lower display gate, in metal/sec (`worth * max_metal / 1000`).
 /// Below this the label rounds to "0.0", which is just noise on
 /// the screen.
@@ -171,46 +166,18 @@ fn project_world_point(
     Some(egui::pos2(sx, sy))
 }
 
-/// Camera context used to discard ring / dot / label samples that
-/// sit behind the terrain from the active camera's POV. `None`
-/// disables occlusion (no heightmap loaded -- every sample renders
-/// as visible).
-#[derive(Clone, Copy)]
-pub struct OcclusionData<'a> {
-    pub camera_pos: Vec3,
-    pub heightmap: &'a bar_data::Heightmap,
-}
-
-fn sample_occluded(p: Vec3, dims: &OverlayDims, occ: &OcclusionData<'_>) -> bool {
-    let ray = p - occ.camera_pos;
-    let len = ray.length();
-    if len < 1e-3 {
-        return false;
-    }
-    let dir = ray / len;
-    bar_render::ray_terrain_occludes(
-        occ.camera_pos,
-        dir,
-        len,
-        occ.heightmap,
-        dims.x_extent,
-        dims.z_extent,
-        dims.height_scale,
-        OCCLUSION_STEPS,
-    )
-}
-
 /// Paint all visible metal-spot markers. Each spot becomes a flat
 /// white broken-arc ring at terrain level, a cyan-green centre
 /// dot, and an outlined billboarded worth label floating above the
-/// spot. Samples whose camera-ray is blocked by intervening terrain
-/// are skipped so rings / labels don't bleed through hills.
+/// spot. Rings / labels paint without an occlusion test -- the per-
+/// frame ray-march cost was the dominant sculpt-view stutter source
+/// (74% of frame time on a 30-spot map), so the overlay bleeds
+/// through hills instead of being clipped against them.
 pub fn paint(
     painter: &egui::Painter,
     spots: &[MetalSpot],
     dims: &OverlayDims,
     heightmap: Option<&bar_data::Heightmap>,
-    occlusion: Option<OcclusionData<'_>>,
     view_projection: Mat4,
     viewport_rect: egui::Rect,
 ) {
@@ -249,39 +216,20 @@ pub fn paint(
             world,
             ring_radius_x,
             ring_radius_z,
-            dims,
-            occlusion.as_ref(),
             view_projection,
             viewport_rect,
         );
 
-        if !occlusion
-            .as_ref()
-            .is_some_and(|occ| sample_occluded(world, dims, occ))
-        {
-            paint_filled_disc(
-                painter,
-                world,
-                dot_radius_x,
-                dot_radius_z,
-                view_projection,
-                viewport_rect,
-            );
-        }
+        paint_filled_disc(
+            painter,
+            world,
+            dot_radius_x,
+            dot_radius_z,
+            view_projection,
+            viewport_rect,
+        );
 
-        // Project a world-space lift above the spot. The text height
-        // comes from a second projected point above that, so the
-        // label scales with the camera the same way the rings do.
         let label_world = world + Vec3::new(0.0, label_lift_render, 0.0);
-        // Skip the label entirely if the lift point sits behind
-        // intervening terrain. Without this the badge floats over
-        // hills the spot is hidden behind.
-        if occlusion
-            .as_ref()
-            .is_some_and(|occ| sample_occluded(label_world, dims, occ))
-        {
-            continue;
-        }
         let label_world_top = label_world + Vec3::new(0.0, label_height_render, 0.0);
         let (pointer_anchor, label_px) = match (
             project_world_point(label_world, view_projection, viewport_rect),
@@ -353,8 +301,6 @@ fn paint_ring(
     centre_world: Vec3,
     radius_x_world: f32,
     radius_z_world: f32,
-    dims: &OverlayDims,
-    occlusion: Option<&OcclusionData<'_>>,
     view_projection: Mat4,
     viewport_rect: egui::Rect,
 ) -> f32 {
@@ -404,7 +350,6 @@ fn paint_ring(
         let start = arc_index as f32 * segment_angle;
         let end = start + arc_angle;
         let mut points: [Option<egui::Pos2>; RING_ARC_SAMPLES + 1] = [None; RING_ARC_SAMPLES + 1];
-        let mut occluded: [bool; RING_ARC_SAMPLES + 1] = [false; RING_ARC_SAMPLES + 1];
         for (i, slot) in points.iter_mut().enumerate() {
             let t = i as f32 / RING_ARC_SAMPLES as f32;
             let theta = start + (end - start) * t;
@@ -415,20 +360,11 @@ fn paint_ring(
                     radius_z_world * theta.sin(),
                 );
             *slot = project_world_point(p, view_projection, viewport_rect);
-            occluded[i] = occlusion.is_some_and(|occ| sample_occluded(p, dims, occ));
         }
-        for (i, pair) in points.windows(2).enumerate() {
+        for pair in points.windows(2) {
             let (Some(a), Some(b)) = (pair[0], pair[1]) else {
                 continue;
             };
-            // Drop segments that have a terrain silhouette anywhere
-            // along their span -- both endpoints occluded means the
-            // arc is behind a hill; one endpoint occluded means it
-            // crosses the silhouette, easier to just hide than to
-            // clip.
-            if occluded[i] || occluded[i + 1] {
-                continue;
-            }
             painter.line_segment([a, b], egui::Stroke::new(glow_w, ring_glow));
             painter.line_segment([a, b], egui::Stroke::new(outline_w, outline));
             painter.line_segment([a, b], egui::Stroke::new(inner_w, ring));

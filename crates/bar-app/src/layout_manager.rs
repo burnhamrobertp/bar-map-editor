@@ -383,32 +383,6 @@ impl LayoutManager {
             spawn_eval_passes(slot, current_key, app, executor, ctx);
         }
 
-        // Animation tick: re-render each frame so water + clouds animate.
-        if let Some(ref gpu) = gpu_context {
-            if let Some(ref mut renderer) = slot.core.terrain_renderer {
-                if let Some(ref owned) = slot.core.current_frame {
-                    let elapsed = slot.core.started_at.elapsed().as_secs_f32();
-                    let frame = owned.as_frame(elapsed, live_smf_lighting(app));
-                    // Sculpt drops grass for performance (the user's
-                    // explicit "high-performance view" request).
-                    // Map + model shading stay at full fidelity --
-                    // those toggles only ever ADD to the renderer
-                    // (when implemented), never strip the baseline.
-                    renderer.set_grass_visible(false);
-                    renderer.set_advanced_map_shading(true);
-                    renderer.set_advanced_model_shading(true);
-                    renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, Some(&frame));
-                    update_viewport_texture(
-                        &mut slot.core.viewport_texture_id,
-                        &slot.core.terrain_renderer,
-                        render_state,
-                        ctx,
-                    );
-                    ctx.request_repaint_after(std::time::Duration::from_millis(16));
-                }
-            }
-        }
-
         // Snapshot resolution state before borrowing core mutably.
         let res = ResolutionStatus {
             current_tex_dims: slot.core.current_frame.as_ref().map(|f| (f.tex_w, f.tex_h)),
@@ -627,40 +601,6 @@ impl LayoutManager {
                         }
                     }
                     app.set_status("Preview: native-resolution BC1 texture loaded");
-                }
-            }
-        }
-
-        // Animation + initial render. Drive the render even when there is no
-        // current_frame (no heightmap yet) so viewport_texture_id gets set
-        // as soon as the BC1 albedo is available.
-        if let Some(ref gpu) = gpu_context {
-            if let Some(ref mut renderer) = slot.core.terrain_renderer {
-                let elapsed = slot.core.started_at.elapsed().as_secs_f32();
-                let smf = live_smf_lighting(app);
-                let frame = slot
-                    .core
-                    .current_frame
-                    .as_ref()
-                    .map(|f| f.as_frame(elapsed, smf));
-                // Preview = the user-facing presentation view. Forward
-                // each Display preference into the renderer ahead of
-                // the draw call; Sculpt's own setters above are
-                // overwritten here, so order between the two paths
-                // doesn't matter.
-                let display = app.settings().display;
-                renderer.set_grass_visible(display.grass);
-                renderer.set_advanced_map_shading(display.advanced_map_shading);
-                renderer.set_advanced_model_shading(display.advanced_model_shading);
-                renderer.render(&gpu.device, &gpu.queue, &slot.core.camera, frame.as_ref());
-                update_viewport_texture(
-                    &mut slot.core.viewport_texture_id,
-                    &slot.core.terrain_renderer,
-                    render_state,
-                    ctx,
-                );
-                if slot.core.current_frame.is_some() {
-                    ctx.request_repaint_after(std::time::Duration::from_millis(16));
                 }
             }
         }
