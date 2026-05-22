@@ -12,18 +12,19 @@
 use eframe::egui;
 
 use crate::app::BarEditorApp;
+use crate::t;
 
 /// Draw the full feature library panel into `ui`. Caller controls
 /// when to show it (today: when the Features pseudo-layer is active
 /// in the Sculpt3D layout).
 pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.strong("Library");
+        ui.strong(t!("editor.feature_library.heading"));
         if app.selected_feature_type.is_some() {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
                     .small_button("x")
-                    .on_hover_text("Cancel placement")
+                    .on_hover_text(t!("editor.feature_library.cancel_placement"))
                     .clicked()
                 {
                     app.selected_feature_type = None;
@@ -34,8 +35,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
 
     if app.feature_palette_names.is_empty() {
-        ui.weak("No feature catalog loaded.");
-        ui.weak("Set a game archive in Preferences.");
+        ui.weak(t!("editor.feature_library.no_catalog"));
+        ui.weak(t!("editor.feature_library.hint_set_archive"));
         return;
     }
 
@@ -45,7 +46,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     // through hundreds of types.
     let search_resp = ui.add(
         egui::TextEdit::singleline(&mut app.feature_filter)
-            .hint_text("Search features...")
+            .hint_text(t!("editor.feature_library.search_hint"))
             .desired_width(f32::INFINITY),
     );
     crate::panels::widgets::select_all_on_focus(ui, &search_resp, &app.feature_filter);
@@ -63,7 +64,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     };
 
     if names.is_empty() {
-        ui.weak("No features match.");
+        ui.weak(t!("editor.feature_library.no_matches"));
         return;
     }
 

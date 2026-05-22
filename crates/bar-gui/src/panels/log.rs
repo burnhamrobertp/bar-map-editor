@@ -33,7 +33,10 @@ impl BarEditorApp {
                     if ui.small_button(t!("editor.log.clear")).clicked() {
                         self.dialog.log_buffer.clear();
                     }
-                    ui.weak(format!("({} entries)", self.dialog.log_buffer.len()));
+                    ui.weak(t!(
+                        "editor.log.entries_count",
+                        n = self.dialog.log_buffer.len()
+                    ));
                     ui.separator();
                     // Per-level visibility toggles. Each button reads
                     // its current state from `log_levels_visible` and
@@ -59,7 +62,7 @@ impl BarEditorApp {
                     }
                     ui.separator();
                     // Text search box.
-                    ui.label("Filter:");
+                    ui.label(t!("editor.log.filter_label"));
                     let search = ui.add(
                         egui::TextEdit::singleline(&mut self.dialog.log_search)
                             .desired_width(150.0),
@@ -69,7 +72,10 @@ impl BarEditorApp {
                         self.dialog.log_buffer.mark_needs_scroll();
                     }
                     if !self.dialog.log_search.is_empty()
-                        && ui.small_button("x").on_hover_text("Clear filter").clicked()
+                        && ui
+                            .small_button("x")
+                            .on_hover_text(t!("editor.log.clear_filter_hint"))
+                            .clicked()
                     {
                         self.dialog.log_search.clear();
                     }

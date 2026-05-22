@@ -187,7 +187,8 @@ impl eframe::App for AppRunner {
             self.compile_result_rx = None;
             self.app.preview.compile_running = false;
             self.pending_test_in_bar_after_compile = false;
-            self.app.set_status("Compile cancelled");
+            self.app
+                .set_status(bar_gui::i18n::t("editor.status.compile.cancelled"));
         }
 
         // Cancel export (bundle or test-in-bar) if requested.
@@ -197,12 +198,14 @@ impl eframe::App for AppRunner {
                 self.pending_export_dir = None;
                 self.progress_rx = None;
                 self.export_status = bar_gui::ExportStatus::Idle;
-                self.app.set_status("Bundle cancelled");
+                self.app
+                    .set_status(bar_gui::i18n::t("editor.status.bundle.cancelled"));
             } else if self.test_in_bar_rx.is_some() {
                 self.test_in_bar_rx = None;
                 self.progress_rx = None;
                 self.export_status = bar_gui::ExportStatus::Idle;
-                self.app.set_status("Test in BAR cancelled");
+                self.app
+                    .set_status(bar_gui::i18n::t("editor.status.test_in_bar.cancelled"));
             }
         }
 
@@ -229,7 +232,8 @@ impl eframe::App for AppRunner {
                     self.app.project.compiled_at = Some(std::time::Instant::now());
                     self.app.preview.compile_running = false;
                     self.compile_result_rx = None;
-                    self.app.set_status("Compile complete");
+                    self.app
+                        .set_status(bar_gui::i18n::t("editor.status.compile.complete"));
                     self.layout_manager.invalidate_bc1();
                     if self.pending_test_in_bar_after_compile {
                         self.pending_test_in_bar_after_compile = false;
@@ -239,7 +243,10 @@ impl eframe::App for AppRunner {
                 Ok(Err(e)) => {
                     self.app.preview.compile_running = false;
                     self.compile_result_rx = None;
-                    self.app.set_status(format!("Compile failed: {e}"));
+                    self.app.set_status(bar_gui::i18n::t_args(
+                        "editor.status.compile.failed",
+                        &[("error", &e.to_string())],
+                    ));
                     self.pending_test_in_bar_after_compile = false;
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
@@ -273,7 +280,7 @@ impl eframe::App for AppRunner {
                 });
             } else {
                 self.app
-                    .set_status("Project must be saved before compiling");
+                    .set_status(bar_gui::i18n::t("editor.status.compile.save_first"));
             }
         }
 
@@ -476,7 +483,9 @@ impl eframe::App for AppRunner {
             if needs_compile {
                 self.pending_test_in_bar_after_compile = true;
                 self.app.preview.compile_requested = true;
-                self.app.set_status("Compiling before launch...");
+                self.app.set_status(bar_gui::i18n::t(
+                    "editor.status.test_in_bar.compiling_first",
+                ));
             } else {
                 self.start_test_in_bar(ctx);
             }
@@ -509,7 +518,10 @@ impl eframe::App for AppRunner {
                         ));
                         self.finish_test_in_bar(&sd7_path, &map_internal_name)
                     }
-                    Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
+                    Err(e) => self.app.set_status(bar_gui::i18n::t_args(
+                        "editor.status.test_in_bar.error",
+                        &[("error", &e.to_string())],
+                    )),
                 }
             }
         }
@@ -551,8 +563,10 @@ impl eframe::App for AppRunner {
                 let mut names: Vec<String> = catalog.features.keys().cloned().collect();
                 names.sort();
                 self.app.feature_palette_names = names;
-                self.app
-                    .set_status(format!("Feature catalog: {count} definitions"));
+                self.app.set_status(bar_gui::i18n::t_args(
+                    "editor.status.feature_catalog_loaded",
+                    &[("n", &count.to_string())],
+                ));
                 self.feature_catalog = Some(catalog);
                 self.spawn_model_loader(ctx);
                 self.layout_manager.mark_features_dirty();
@@ -689,7 +703,10 @@ impl eframe::App for AppRunner {
                     self.spawn_model_loader(ctx);
                 }
                 Ok(Err(e)) => {
-                    self.app.set_status(format!("Failed to open: {e}"));
+                    self.app.set_status(bar_gui::i18n::t_args(
+                        "editor.status.open.failed",
+                        &[("error", &e.to_string())],
+                    ));
                     self.app.project.import_status = None;
                     self.sd7_extract_rx = None;
                     self.sd7_progress_rx = None;
@@ -697,7 +714,7 @@ impl eframe::App for AppRunner {
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
                     self.app
-                        .set_status("Open operation failed unexpectedly".to_string());
+                        .set_status(bar_gui::i18n::t("editor.status.open.failed_unexpected"));
                     self.app.project.import_status = None;
                     self.sd7_extract_rx = None;
                     self.sd7_progress_rx = None;
@@ -892,8 +909,10 @@ impl AppRunner {
             // catalog); no work and nothing to say.
             return;
         }
-        self.app
-            .set_status(format!("Loading {} feature models...", to_load.len()));
+        self.app.set_status(bar_gui::i18n::t_args(
+            "editor.status.feature_models_loading",
+            &[("n", &to_load.len().to_string())],
+        ));
         let (tx, rx) = mpsc::channel::<LoadedModel>();
         self.model_rx = Some(rx);
 
@@ -978,10 +997,8 @@ impl AppRunner {
 
     fn start_test_in_bar(&mut self, ctx: &egui::Context) {
         let Some(ref install) = self.bar_install else {
-            self.app.set_status(
-                "BAR install not found. Install Beyond All Reason or set the path manually."
-                    .to_string(),
-            );
+            self.app
+                .set_status(bar_gui::i18n::t("editor.status.test_in_bar.no_install"));
             return;
         };
         // Write the test artifact straight into BAR's `maps/` folder
@@ -992,8 +1009,10 @@ impl AppRunner {
         // .sd7 path did, since we're already writing in place.
         let bundler_output_dir = install.maps_dir.clone();
         if let Err(e) = std::fs::create_dir_all(&bundler_output_dir) {
-            self.app
-                .set_status(format!("Test in BAR: cannot create maps dir: {e}"));
+            self.app.set_status(bar_gui::i18n::t_args(
+                "editor.status.test_in_bar.no_maps_dir",
+                &[("error", &e.to_string())],
+            ));
             return;
         }
 
@@ -1029,7 +1048,7 @@ impl AppRunner {
                         "Test in BAR: full cache hit, reusing existing .sdd"
                     );
                     self.app
-                        .set_status("Test in BAR: reusing cached bundle...".to_string());
+                        .set_status(bar_gui::i18n::t("editor.status.test_in_bar.reuse_cache"));
                     self.finish_test_in_bar(prev_sdd.as_path(), &prev_map_name);
                     return;
                 }
@@ -1039,7 +1058,7 @@ impl AppRunner {
                     "Test in BAR: heavy cache hit, regenerating mapinfo.lua only"
                 );
                 self.app
-                    .set_status("Test in BAR: updating mapinfo.lua...".to_string());
+                    .set_status(bar_gui::i18n::t("editor.status.test_in_bar.update_mapinfo"));
                 match bar_engine::regenerate_mapinfo_in_bundle(
                     &graph,
                     &recipe,
@@ -1064,8 +1083,10 @@ impl AppRunner {
         let (progress_tx, progress_rx) = mpsc::channel::<String>();
         self.progress_rx = Some(progress_rx);
         self.export_status = bar_gui::ExportStatus::TestInBar;
-        self.app
-            .set_status(format!("Generating {}x{} map...", w, h));
+        self.app.set_status(bar_gui::i18n::t_args(
+            "editor.export.generating",
+            &[("w", &w.to_string()), ("h", &h.to_string())],
+        ));
         let ctx_clone = ctx.clone();
         let ctx_progress = ctx.clone();
         let test_project_dir = self.app.project.path.clone();
@@ -1109,8 +1130,9 @@ impl AppRunner {
 
     fn finish_test_in_bar(&mut self, sd7_path: &std::path::Path, map_internal_name: &str) {
         let Some(ref install) = self.bar_install else {
-            self.app
-                .set_status("BAR install vanished mid-flight".to_string());
+            self.app.set_status(bar_gui::i18n::t(
+                "editor.status.test_in_bar.install_vanished",
+            ));
             return;
         };
         let game_idx = self.app.bar_versions.selected_game;
@@ -1128,10 +1150,15 @@ impl AppRunner {
             engine_idx,
         ) {
             Ok(bar_install::LaunchOutcome::EngineStarted { map_name }) => {
-                self.app
-                    .set_status(format!("BAR started: skirmish on {map_name}"));
+                self.app.set_status(bar_gui::i18n::t_args(
+                    "editor.status.test_in_bar.started",
+                    &[("map_name", &map_name)],
+                ));
             }
-            Err(e) => self.app.set_status(format!("Test in BAR: {e}")),
+            Err(e) => self.app.set_status(bar_gui::i18n::t_args(
+                "editor.status.test_in_bar.error",
+                &[("error", &e.to_string())],
+            )),
         }
     }
 }

@@ -11,20 +11,27 @@ use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, modal_frame, render_specs, FieldFindings,
 };
 use crate::panels::field_editor::{heading_with_info, section_heading};
+use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_fog_editor {
         return;
     }
     let mut open = app.dialog.show_fog_editor;
-    modal_frame(ctx, &mut open, "Fog & Clouds", "fog_editor_modal", |ui| {
-        let findings = FieldFindings::from(app.validation.findings());
-        render_specs(ui, app, FOG_SPECS, &findings);
-        ui.add_space(12.0);
-        draw_height_fog(ui, app);
-        ui.add_space(12.0);
-        draw_clouds(ui, app, &findings);
-    });
+    modal_frame(
+        ctx,
+        &mut open,
+        &t!("editor.modals.fog.title"),
+        "fog_editor_modal",
+        |ui| {
+            let findings = FieldFindings::from(app.validation.findings());
+            render_specs(ui, app, FOG_SPECS, &findings);
+            ui.add_space(12.0);
+            draw_height_fog(ui, app);
+            ui.add_space(12.0);
+            draw_clouds(ui, app, &findings);
+        },
+    );
     app.dialog.show_fog_editor = open;
 }
 
@@ -33,10 +40,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 fn draw_height_fog(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     heading_with_info(
         ui,
-        "Height fog",
-        "Tints fragments below the ceiling toward the fog colour, \
-         attenuated per elmo. Used for the cool underwater cast on \
-         maps like Aurelia.",
+        &t!("editor.modals.fog.height_heading"),
+        &t!("editor.modals.fog.height_info"),
     );
 
     let fog_current = app.map_settings().custom_fog.clone();
@@ -47,19 +52,22 @@ fn draw_height_fog(ui: &mut egui::Ui, app: &mut BarEditorApp) {
 
     let mut fog_enabled_changed = false;
     ui.horizontal(|ui| {
-        if ui.checkbox(&mut fog_enabled, "Enabled").changed() {
+        if ui
+            .checkbox(&mut fog_enabled, t!("common.enabled"))
+            .changed()
+        {
             fog_enabled_changed = true;
         }
     });
     if fog_enabled_changed {
-        app.push_undo("Toggle height fog");
+        app.push_undo(&t!("editor.modals.fog.undo_toggle_height"));
         app.map_settings_mut().custom_fog.enabled = fog_enabled;
     }
 
     ui.add_enabled_ui(fog_enabled, |ui| {
         let mut color_changed = false;
         ui.horizontal(|ui| {
-            ui.label("Colour");
+            ui.label(t!("common.colour"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let mut linear = bar_render::color::srgb_to_linear_rgb(fog_color);
                 if ui.color_edit_button_rgb(&mut linear).changed() {
@@ -69,13 +77,13 @@ fn draw_height_fog(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             });
         });
         if color_changed {
-            app.push_undo("Edit fog colour");
+            app.push_undo(&t!("editor.modals.fog.undo_edit_colour"));
             app.map_settings_mut().custom_fog.color = fog_color;
         }
 
         let mut height_resp = None;
         ui.horizontal(|ui| {
-            ui.label("Ceiling height (elmos)");
+            ui.label(t!("editor.modals.fog.field.ceiling_height"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 height_resp = Some(
                     ui.add(
@@ -90,11 +98,11 @@ fn draw_height_fog(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         if height_resp.changed() {
             app.map_settings_mut().custom_fog.height_elmos = fog_height;
         }
-        drive_drag_intent(app, &height_resp, "fog height");
+        drive_drag_intent(app, &height_resp, &t!("editor.modals.fog.undo_height"));
 
         let mut atten_resp = None;
         ui.horizontal(|ui| {
-            ui.label("Attenuation (per elmo)");
+            ui.label(t!("editor.modals.fog.field.attenuation"));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 atten_resp = Some(
                     ui.add(
@@ -109,12 +117,12 @@ fn draw_height_fog(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         if atten_resp.changed() {
             app.map_settings_mut().custom_fog.atten = fog_atten;
         }
-        drive_drag_intent(app, &atten_resp, "fog atten");
+        drive_drag_intent(app, &atten_resp, &t!("editor.modals.fog.undo_atten"));
     });
 }
 
 /// `custom.clouds` block: volumetric cloud layer widget.
 fn draw_clouds(ui: &mut egui::Ui, app: &mut BarEditorApp, findings: &FieldFindings) {
-    section_heading(ui, "Clouds");
+    section_heading(ui, &t!("editor.modals.fog.clouds_heading"));
     render_specs(ui, app, CLOUDS_SPECS, findings);
 }

@@ -15,6 +15,7 @@ use eframe::egui;
 use eframe::egui::Color32;
 
 use crate::app::{BarEditorApp, BrushTool};
+use crate::t;
 
 /// Draw the Sculpt3D layout.
 pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -38,7 +39,8 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
             ui.painter()
                 .circle_filled(rect.center(), 4.0, Color32::from_rgb(255, 165, 60));
-            ui.selectable_label(features_selected, "Features").clicked()
+            ui.selectable_label(features_selected, t!("editor.sculpt3d.features_layer"))
+                .clicked()
         })
         .inner
     {
@@ -91,7 +93,7 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         crate::panels::feature_library::draw(app, ui);
     } else {
         // --- TOOLS section ---
-        ui.strong("Tools");
+        ui.strong(t!("editor.sculpt3d.tools_heading"));
         ui.add_space(4.0);
 
         let fc_kind = app.paint.selected_fc_layer;
@@ -118,7 +120,7 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                 // radius. No tool variants -- the only operation is
                 // "paint this colour".
                 ui.horizontal(|ui| {
-                    ui.label("Colour");
+                    ui.label(t!("common.colour"));
                     let [r, g, b] = app.paint.brush.color_rgb;
                     let mut c = egui::Color32::from_rgb(r, g, b);
                     if ui.color_edit_button_srgba(&mut c).changed() {
@@ -131,9 +133,9 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                 // touched pixels with it. (A proper terrain-type-ID
                 // picker for typemap is a UX follow-up.)
                 let label = if kind == crate::FCLayerKind::Metalmap {
-                    "Metal density"
+                    t!("editor.sculpt3d.metal_density")
                 } else {
-                    "Type ID (0..1)"
+                    t!("editor.sculpt3d.type_id")
                 };
                 ui.horizontal(|ui| {
                     ui.label(label);
@@ -144,7 +146,7 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
                 });
             }
             None => {
-                ui.weak("Select a Composition layer to paint.");
+                ui.weak(t!("editor.sculpt3d.select_layer_hint"));
             }
         }
         if fc_kind.is_some() && !has_terrain {
@@ -155,27 +157,27 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ui.separator();
 
         // --- BRUSH sliders ---
-        ui.strong("Brush");
+        ui.strong(t!("editor.sculpt3d.brush_heading"));
         ui.add_space(4.0);
         egui::Grid::new("sculpt_brush_params")
             .num_columns(2)
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
-                ui.label("Radius");
+                ui.label(t!("editor.inspector.brush_radius"));
                 ui.add(crate::panels::widgets::ParamSlider::new(
                     &mut app.paint.brush.radius_px,
                     0.5,
                     96.0,
                 ));
                 ui.end_row();
-                ui.label("Strength");
+                ui.label(t!("editor.inspector.brush_strength"));
                 ui.add(crate::panels::widgets::ParamSlider::new(
                     &mut app.paint.brush.strength,
                     0.001,
                     0.2,
                 ));
                 ui.end_row();
-                ui.label("Falloff");
+                ui.label(t!("editor.inspector.brush_falloff"));
                 ui.add(crate::panels::widgets::ParamSlider::new(
                     &mut app.paint.brush.falloff,
                     0.5,
@@ -188,8 +190,8 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
 
 fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.weak("No terrain loaded --");
-        if ui.small_button("Run preview").clicked() {
+        ui.weak(t!("editor.sculpt3d.no_terrain"));
+        if ui.small_button(t!("editor.sculpt3d.run_preview")).clicked() {
             app.preview.run_requested = true;
         }
     });

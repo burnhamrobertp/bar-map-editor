@@ -13,6 +13,7 @@ use eframe::egui;
 use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{render_specs, FieldFindings};
 use crate::panels::field_editor::scrollbar_clearance;
+use crate::t;
 
 /// Lava-mode minimum damage. Anything below this rounds back to
 /// water at runtime, so a fresh switch to lava with damage == 0
@@ -24,7 +25,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_water_editor {
         return;
     }
-    egui::Window::new("Water / Lava")
+    egui::Window::new(t!("editor.modals.water.title"))
         .id(egui::Id::new("water_editor_modal"))
         .title_bar(false)
         .resizable(true)
@@ -56,18 +57,18 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 fn draw_title_row(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let is_lava = app.map_settings().water.is_lava.unwrap_or(false);
     ui.horizontal(|ui| {
-        let water_resp = title_label(ui, "Water", !is_lava);
+        let water_resp = title_label(ui, &t!("editor.modals.water.tab_water"), !is_lava);
         let switch_resp = title_switch(ui, is_lava);
-        let lava_resp = title_label(ui, "Lava", is_lava);
+        let lava_resp = title_label(ui, &t!("editor.modals.water.tab_lava"), is_lava);
 
         let want_water = is_lava && (water_resp.clicked() || switch_resp.clicked());
         let want_lava = !is_lava && (lava_resp.clicked() || switch_resp.clicked());
 
         if want_water || want_lava {
-            let snap = app.snapshot(if want_lava {
-                "Switch to Lava"
+            let snap = app.snapshot(&if want_lava {
+                t!("editor.modals.water.switch_to_lava")
             } else {
-                "Switch to Water"
+                t!("editor.modals.water.switch_to_water")
             });
             app.history.push(snap);
             let settings = app.map_settings_mut();

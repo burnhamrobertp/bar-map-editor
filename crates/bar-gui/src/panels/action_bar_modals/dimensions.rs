@@ -42,7 +42,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     modal_frame(
         ctx,
         &mut open,
-        "Dimensions",
+        &t!("editor.modals.dimensions.title"),
         "dimensions_editor_modal",
         |ui| {
             draw_size(ui, app);
@@ -79,7 +79,7 @@ fn draw_size(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         let wr = ui.add_sized([30.0, 18.0], egui::TextEdit::singleline(&mut ws).id(wid));
         crate::panels::widgets::select_all_on_focus(ui, &wr, &ws);
         wr_taken = Some(wr);
-        ui.label("x");
+        ui.label(t!("editor.modals.dimensions.size_separator"));
         let hr = ui.add_sized([30.0, 18.0], egui::TextEdit::singleline(&mut hs).id(hid));
         crate::panels::widgets::select_all_on_focus(ui, &hr, &hs);
         hr_taken = Some(hr);
@@ -109,8 +109,10 @@ fn draw_size(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         let (_, h) = app.map_dimensions_mut();
         *h = nv * 64 + 1;
     }
-    drive_text_edit_intent(app, &wr, "map width", wr.changed());
-    drive_text_edit_intent(app, &hr, "map height", hr.changed());
+    let width_label = t!("editor.modals.dimensions.undo_width");
+    let height_label = t!("editor.modals.dimensions.undo_height");
+    drive_text_edit_intent(app, &wr, &width_label, wr.changed());
+    drive_text_edit_intent(app, &hr, &height_label, hr.changed());
 }
 
 fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
@@ -120,7 +122,7 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut min_resp = None;
     let mut max_resp = None;
     ui.horizontal(|ui| {
-        ui.label("Min height");
+        ui.label(t!("editor.modals.dimensions.field.min_height"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let resp = ui.add(
                 egui::DragValue::new(&mut min_val)
@@ -131,7 +133,7 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         });
     });
     ui.horizontal(|ui| {
-        ui.label("Max height");
+        ui.label(t!("editor.modals.dimensions.field.max_height"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let resp = ui.add(
                 egui::DragValue::new(&mut max_val)
@@ -150,8 +152,10 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     if max_resp.changed() {
         *mx_mut = max_val;
     }
-    drive_drag_intent(app, &min_resp, "Min height");
-    drive_drag_intent(app, &max_resp, "Max height");
+    let min_label = t!("editor.modals.dimensions.field.min_height");
+    let max_label = t!("editor.modals.dimensions.field.max_height");
+    drive_drag_intent(app, &min_resp, &min_label);
+    drive_drag_intent(app, &max_resp, &max_label);
 }
 
 /// Minimap override: an optional source file (DDS / PNG / TGA / etc.)
@@ -165,17 +169,20 @@ fn draw_minimap(
     project_dir: Option<&std::path::Path>,
     parent: Option<&crate::io::dialogs::ParentWindow>,
 ) {
-    section_heading(ui, "Minimap");
+    section_heading(ui, &t!("editor.modals.dimensions.minimap_heading"));
 
     let mut filename = app.map_settings().minimap.clone().unwrap_or_default();
-    let changed = FilePickerField::new("File", "passthrough")
+    let file_label = t!("editor.modals.dimensions.minimap_file_label");
+    let dialog_title = t!("editor.modals.dimensions.minimap_dialog_title");
+    let hint = t!("editor.modals.dimensions.minimap_hint");
+    let changed = FilePickerField::new(&file_label, "passthrough")
         .extensions(&["dds", "png", "jpg", "jpeg", "tga", "bmp"])
-        .title("Select minimap image")
+        .title(&dialog_title)
         .allow_clear(true)
-        .hint("(empty = generate from terrain)")
+        .hint(&hint)
         .show(ui, &mut filename, project_dir, parent);
     if changed {
-        app.push_undo("Edit minimap");
+        app.push_undo(&t!("editor.modals.dimensions.undo_minimap"));
         app.map_settings_mut().minimap = if filename.is_empty() {
             None
         } else {
@@ -186,9 +193,9 @@ fn draw_minimap(
 
     ui.add_space(8.0);
     ui.label(if filename.is_empty() {
-        "Preview: SMF-embedded minimap (engine default)"
+        t!("editor.modals.dimensions.preview_smf")
     } else {
-        "Preview: custom minimap"
+        t!("editor.modals.dimensions.preview_custom")
     });
 
     let max_side = 256.0_f32;
@@ -217,10 +224,7 @@ fn draw_minimap(
                     };
                     ui.image((tex.id(), display_size));
                 } else {
-                    ui.label(
-                        "No preview available. The SMF minimap sidecar is generated \
-                         on .sd7 import and copied into the .barproj on save.",
-                    );
+                    ui.label(t!("editor.modals.dimensions.preview_unavailable"));
                 }
             },
         );

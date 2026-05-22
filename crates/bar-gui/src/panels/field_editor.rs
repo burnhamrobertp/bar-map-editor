@@ -48,6 +48,7 @@ use bar_project::Severity;
 use eframe::egui;
 
 use crate::app::BarEditorApp;
+use crate::t;
 
 /// What happened to a field this frame. Returned by `render_field` so
 /// the caller can drive the undo + dirty-flag side-effects without
@@ -377,7 +378,7 @@ where
             }
             if is_unset {
                 ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text("Engine default. Edit to override.");
+                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
             }
         });
     });
@@ -452,7 +453,7 @@ where
             }
             if is_unset {
                 ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text("Engine default. Edit to override.");
+                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
             }
         });
     });
@@ -547,7 +548,7 @@ where
             }
             if is_unset {
                 ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text("Engine default. Edit to override.");
+                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
             }
         });
     });
@@ -657,7 +658,7 @@ where
             }
             if is_unset {
                 ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text("Engine default. Edit to override.");
+                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
             }
         });
     });

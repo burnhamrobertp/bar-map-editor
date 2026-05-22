@@ -85,7 +85,9 @@ pub(crate) const CONFIRM_KEY_DELETE_CONNECTED_NODE: &str = "delete_connected_nod
 /// Friendly label for one of the confirmation keys.
 pub(crate) fn confirm_key_display_name(key: &str) -> String {
     match key {
-        CONFIRM_KEY_DELETE_CONNECTED_NODE => "Delete a node that has wires connected".to_string(),
+        CONFIRM_KEY_DELETE_CONNECTED_NODE => {
+            crate::t!("editor.prefs.confirmations.key.delete_connected_node")
+        }
         other => other.to_string(),
     }
 }

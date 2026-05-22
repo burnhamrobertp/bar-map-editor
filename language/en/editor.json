@@ -2,12 +2,22 @@
   "editor": {
     "app": {
       "title": "BAR - Map Editor",
+      "title_with_project": "%{name}%{dirty} — BAR - Map Editor",
+      "dirty_marker": " *",
       "about": "About BAR - Map Editor",
       "version": "Version %{v}",
       "tagline_about": "Standalone map editor for Beyond All Reason."
     },
     "common": {
-      "delete": "Delete"
+      "cancel": "Cancel",
+      "save": "Save",
+      "delete": "Delete",
+      "discard": "Discard",
+      "enabled": "Enabled",
+      "colour": "Colour",
+      "browse": "Browse...",
+      "clear": "Clear",
+      "description": "description"
     },
     "project": {
       "load_failed": "Load failed: %{error}",
@@ -32,7 +42,10 @@
         "heading": "Confirmations",
         "none_suppressed": "No confirmations are currently suppressed.",
         "suppressed_count": "%{n} confirmation type(s) suppressed via \"Don't ask again\":",
-        "clear": "Clear suppressed confirmations"
+        "clear": "Clear suppressed confirmations",
+        "key": {
+          "delete_connected_node": "Delete a node that has wires connected"
+        }
       },
       "startup": {
         "heading": "Startup",
@@ -44,11 +57,11 @@
         "none": "(not set)",
         "browse": "Browse...",
         "clear": "Clear",
-        "hint": "Point to a BAR game archive (.sdz or .sdd) to show known feature types in green in the 3D preview."
+        "hint": "Point to a BAR game archive (.sdz or .sdd) to render map features"
       },
       "display": {
         "heading": "Display",
-        "hint": "Grass is suppressed in the Sculpt view (high-performance authoring). Toggle this to also suppress it in the Preview layout.",
+        "hint": "Show grass it in the Preview layout",
         "grass": "Grass"
       }
     },
@@ -78,10 +91,26 @@
     "log": {
       "title": "Log",
       "clear": "Clear",
-      "open_hint": "Open log"
+      "open_hint": "Open log",
+      "filter_label": "Filter:",
+      "clear_filter_hint": "Clear filter",
+      "entries_count": "(%{n} entries)"
     },
     "palette": {
-      "heading": "Node Library"
+      "heading": "Node Library",
+      "search_hint": "Search nodes...",
+      "no_matches": "No matches",
+      "section": {
+        "subgraph_io": "SubGraph IO",
+        "generators": "Generators",
+        "filters": "Filters",
+        "combiners": "Combiners",
+        "colorizers": "Colorizers",
+        "splat_maps": "Splat / Maps",
+        "masks": "Masks",
+        "sources": "Sources",
+        "macros": "Macros"
+      }
     },
     "welcome": {
       "heading": "BAR - Map Editor",
@@ -94,6 +123,34 @@
     },
     "export": {
       "generating": "Generating %{w}x%{h} map..."
+    },
+    "actions": {
+      "cancel_hover": "Click to cancel",
+      "compile": "Compile",
+      "test_in_bar": "Test in BAR",
+      "bundle": {
+        "hover": "Bundle",
+        "label_for_validation": "Bundle all"
+      },
+      "publish": {
+        "coming_soon": "Publish (coming soon)"
+      },
+      "version_picker": {
+        "game": "Game",
+        "engine": "Engine"
+      },
+      "tabs": {
+        "identity": "Identity",
+        "dimensions": "Dimensions",
+        "physics": "Physics",
+        "resources": "Resources",
+        "atmosphere": "Atmosphere",
+        "fog": "Fog & Clouds",
+        "lighting": "Lighting",
+        "water": "Water",
+        "grass": "Grass",
+        "map_edge": "Map Edge"
+      }
     },
     "toolbar": {
       "export_all": "Export all Bundler nodes",
@@ -111,6 +168,15 @@
       "sculpt_controls_hint": "LMB: sculpt | RMB: rotate | Alt+RMB: look around | Scroll: zoom | MMB: pan",
       "force_refresh": "Force re-render preview"
     },
+    "preview": {
+      "bc_unavailable_title": "BC texture compression unavailable",
+      "bc_unavailable_gpu": "Your GPU does not support BC1/DXT1 texture compression.",
+      "bc_unavailable_required": "The native-resolution Preview layout requires it.",
+      "not_compiled_title": "Not yet compiled",
+      "not_compiled_hint": "Run Compile to generate the native-resolution texture.",
+      "compiling_title": "Compiling...",
+      "compiling_hint": "Use the Compile button in the toolbar."
+    },
     "import": {
       "title": "Importing map"
     },
@@ -123,7 +189,7 @@
       },
       "feature_lights": {
         "title": "Feature Lights",
-        "info_tooltip": "Coloured markers above the feature show where BAR will attach point lights at runtime. BME doesn't render the actual glow.",
+        "info_tooltip": "Coloured markers above the feature show where BAR will attach point lights at runtime. Map editor doesn't render the actual glow.",
         "light_n": "Light %{n}",
         "field": {
           "colour": "Colour",
@@ -134,6 +200,47 @@
           "intensity": "Intensity"
         }
       }
+    },
+    "feature_library": {
+      "heading": "Library",
+      "cancel_placement": "Cancel placement",
+      "no_catalog": "No feature catalog loaded.",
+      "hint_set_archive": "Set a game archive in Preferences.",
+      "search_hint": "Search features...",
+      "no_matches": "No features match."
+    },
+    "inspector": {
+      "title": "2D Inspector",
+      "mode_label": "Mode:",
+      "mode_spawns": "Start positions",
+      "mode_sculpt": "Sculpt",
+      "spawns_hint": "Click to add a start position; drag to move; right-click to delete.",
+      "sculpt_hint": "Drag-paint to sculpt the heightmap. Preview-only - doesn't yet write back into the graph.",
+      "brush_radius": "Radius",
+      "brush_strength": "Strength",
+      "brush_falloff": "Falloff",
+      "placeholder": "Open a project / preview to see the heightmap",
+      "spawn_count": "%{n} spawn(s)",
+      "clear_all": "Clear all",
+      "undo_clear_spawns": "Clear start positions",
+      "no_preview": "(no preview)",
+      "heightmap_status": "Heightmap: %{size}",
+      "reset_to_graph": "Reset to graph output",
+      "save_heightmap_png": "Save heightmap as PNG...",
+      "save_dialog_title": "Save sculpted heightmap",
+      "save_filter_label": "16-bit grayscale PNG",
+      "save_ok": "Sculpt saved to %{path}",
+      "save_failed": "Save failed: %{error}"
+    },
+    "sculpt3d": {
+      "features_layer": "Features",
+      "tools_heading": "Tools",
+      "brush_heading": "Brush",
+      "metal_density": "Metal density",
+      "type_id": "Type ID (0..1)",
+      "select_layer_hint": "Select a Composition layer to paint.",
+      "no_terrain": "No terrain loaded --",
+      "run_preview": "Run preview"
     },
     "map_settings": {
       "title": "Map settings",
@@ -148,6 +255,154 @@
         "resources": "Resources"
       }
     },
+    "modals": {
+      "identity": {
+        "title": "Identity",
+        "field": {
+          "name": "name",
+          "name_hint": "(map name)",
+          "shortname": "shortname",
+          "author": "author",
+          "version": "version",
+          "tip": "tip",
+          "depend": "depend",
+          "depend_hint": "Map Helper v1"
+        }
+      },
+      "dimensions": {
+        "title": "Dimensions",
+        "size_separator": "x",
+        "field": {
+          "min_height": "Min height",
+          "max_height": "Max height"
+        },
+        "undo_width": "map width",
+        "undo_height": "map height",
+        "minimap_heading": "Minimap",
+        "minimap_file_label": "File",
+        "minimap_dialog_title": "Select minimap image",
+        "minimap_hint": "(empty = generate from terrain)",
+        "undo_minimap": "Edit minimap",
+        "preview_smf": "Preview: SMF-embedded minimap (engine default)",
+        "preview_custom": "Preview: custom minimap",
+        "preview_unavailable": "No preview available. The SMF minimap sidecar isn't loaded yet (re-import the map or open a project that has one), or the custom minimap path doesn't resolve."
+      },
+      "physics": {
+        "title": "Physics"
+      },
+      "atmosphere": {
+        "title": "Atmosphere",
+        "skybox_heading": "Skybox",
+        "cubemap_label": "Cubemap",
+        "cubemap_dialog_title": "Select skybox DDS cubemap",
+        "cubemap_hint": "(empty = procedural sky)",
+        "undo_skybox": "Edit skybox"
+      },
+      "lighting": {
+        "title": "Lighting"
+      },
+      "fog": {
+        "title": "Fog & Clouds",
+        "height_heading": "Height fog",
+        "height_info": "Volumetric fog confined to a ceiling height (custom.fog.* block, separate from atmosphere distance fog).",
+        "clouds_heading": "Clouds",
+        "undo_toggle_height": "Toggle height fog",
+        "undo_edit_colour": "Edit fog colour",
+        "field": {
+          "ceiling_height": "Ceiling height (elmos)",
+          "attenuation": "Attenuation (per elmo)"
+        },
+        "undo_height": "fog height",
+        "undo_atten": "fog atten"
+      },
+      "water": {
+        "title": "Water / Lava",
+        "tab_water": "Water",
+        "tab_lava": "Lava",
+        "switch_to_lava": "Switch to Lava",
+        "switch_to_water": "Switch to Water"
+      },
+      "resources": {
+        "title": "Resources",
+        "splat_distr_heading": "Splat distribution",
+        "splat_distr_info": "RGBA splat mask routing the four detail-normal textures across terrain. R/G/B/A correspond to splatDetailNormalTex1..4.",
+        "detail_normals_heading": "Splat detail-normal textures",
+        "diffuse_alpha": "Diffuse alpha contribution",
+        "undo_diffuse_alpha": "Toggle splat diffuse alpha",
+        "per_channel_heading": "Per-channel sampling",
+        "per_channel_info": "Per-splat-channel UV scale and tex multipliers (overrides per-detail-normal defaults).",
+        "legacy_detail_heading": "Legacy detail texture",
+        "legacy_detail_info": "Pre-splat single detail texture; ignored when splatDistrTex is set.",
+        "per_pixel_masks_heading": "Per-pixel masks",
+        "field_hint_unset": "(empty = unset)"
+      },
+      "grass": {
+        "title": "Grass",
+        "textures_heading": "Textures",
+        "textures_info": "Distribution mask + blade-colour texture drive grass placement and per-blade tint.",
+        "dist_tga_dialog_title": "Select grass distribution mask",
+        "blade_dialog_title": "Select blade colour texture",
+        "colours_heading": "Colours",
+        "colours_info": "Optional shading texture; falls back to the SMF minimap when unset.",
+        "shading_dialog_title": "Select grass shading texture",
+        "shading_hint": "(empty = SMF minimap fallback)",
+        "undo_edit_texture": "Edit grass texture"
+      },
+      "map_edge": {
+        "title": "Map Edge",
+        "shading_heading": "Grass shading texture",
+        "shading_info": "Map-edge fallback texture sampled where the playable terrain doesn't reach. When unset, the engine uses the SMF-embedded minimap.",
+        "file_label": "File",
+        "dialog_title": "Select grass shading texture",
+        "hint": "(empty = SMF minimap fallback)",
+        "undo_edit": "Edit grassShadingTex",
+        "preview_smf": "Preview: SMF-embedded minimap (engine default)",
+        "preview_custom": "Preview: custom grassShadingTex",
+        "preview_unavailable": "No preview available. The SMF minimap sidecar isn't loaded yet (re-import the map or open a project that has one), or the custom path doesn't resolve."
+      },
+      "start_boxes": {
+        "title": "Start Boxes",
+        "field": {
+          "x": "x:",
+          "z": "z:"
+        },
+        "undo_spawn_x": "spawn x",
+        "undo_spawn_z": "spawn z",
+        "remove_hint": "Remove this spawn",
+        "add": "+ Add spawn",
+        "undo_add": "Add start position",
+        "undo_remove": "Remove start position"
+      }
+    },
+    "dialogs": {
+      "unsaved": {
+        "title": "Unsaved changes",
+        "action_close": "close BAR - Map Editor",
+        "action_new_project": "start a new project",
+        "action_open_file": "open this file",
+        "action_load_preset": "load this preset",
+        "message": "Your project has unsaved changes. Save before you %{action}?"
+      },
+      "group_delete": {
+        "title": "Delete '%{label}'?",
+        "untitled_group": "Group %{id}",
+        "message": "This group contains %{n} node(s). What should happen to them?",
+        "affirm_group_only": "Delete group only",
+        "affirm_group_and_members": "Delete group and its nodes"
+      },
+      "confirm": {
+        "dont_ask_again": "Don't ask again",
+        "delete_node_title": "Delete node?",
+        "delete_node_message_singular": "Delete this node and disconnect all of its wires?",
+        "delete_node_message_plural": "Delete %{n} nodes and disconnect all of their wires?"
+      }
+    },
+    "field_editor": {
+      "engine_default_hint": "Engine default. Edit to override."
+    },
+    "undo": {
+      "edit_field": "Edit %{name}"
+    },
     "validation": {
       "heading": "Validation",
       "rerun": "Re-run validation",
@@ -158,13 +413,43 @@
       "tab_errors": "Errors (%{n})",
       "tab_warnings": "Warnings (%{n})",
       "tab_info": "Info (%{n})",
-      "window_title": "Map validation"
+      "window_title": "Map validation",
+      "hover_errors_suffix": "\n%{n} error(s)",
+      "hover_warnings_suffix": "\n%{n} warning(s)",
+      "hover_blocking_prefix": "\n\nBlocking: ",
+      "action_blocked_by_errors": "%{action}: fix validation errors first."
     },
     "status": {
       "no_selection": "No selection",
       "selected": "Selected: %{id}",
       "map_size": "Map: %{w}×%{h}",
-      "open_map_settings": "Open Map Settings"
+      "open_map_settings": "Open Map Settings",
+      "compile": {
+        "cancelled": "Compile cancelled",
+        "complete": "Compile complete",
+        "failed": "Compile failed: %{error}",
+        "save_first": "Project must be saved before compiling"
+      },
+      "bundle": {
+        "cancelled": "Bundle cancelled"
+      },
+      "test_in_bar": {
+        "cancelled": "Test in BAR cancelled",
+        "compiling_first": "Compiling before launch...",
+        "error": "Test in BAR: %{error}",
+        "no_install": "Test in BAR: no BAR install detected.",
+        "no_maps_dir": "Test in BAR: cannot create maps dir: %{error}",
+        "reuse_cache": "Test in BAR: reusing cached bundle...",
+        "update_mapinfo": "Test in BAR: updating mapinfo.lua...",
+        "install_vanished": "BAR install vanished mid-flight",
+        "started": "BAR started: skirmish on %{map_name}"
+      },
+      "feature_catalog_loaded": "Feature catalog: %{n} definitions",
+      "feature_models_loading": "Loading %{n} feature models...",
+      "open": {
+        "failed": "Failed to open: %{error}",
+        "failed_unexpected": "Open operation failed unexpectedly"
+      }
     },
     "notify": {
       "project_saved": "Project saved.",

@@ -149,13 +149,19 @@ fn hover_with_summary(base: &str, summary: &ValidationSummary, blocking_msg: &st
     let mut s = base.to_string();
     s.push('\n');
     if summary.errors > 0 {
-        s.push_str(&format!("\n{} error(s)", summary.errors));
+        s.push_str(&t!(
+            "editor.validation.hover_errors_suffix",
+            n = summary.errors
+        ));
     }
     if summary.warnings > 0 {
-        s.push_str(&format!("\n{} warning(s)", summary.warnings));
+        s.push_str(&t!(
+            "editor.validation.hover_warnings_suffix",
+            n = summary.warnings
+        ));
     }
     if !blocking_msg.is_empty() {
-        s.push_str("\n\nBlocking: ");
+        s.push_str(&t!("editor.validation.hover_blocking_prefix"));
         s.push_str(blocking_msg);
     }
     s
@@ -263,8 +269,12 @@ impl BarEditorApp {
             .map(|s| s.to_string_lossy().into_owned())
             .or_else(|| self.project.loaded_name.clone())
         {
-            Some(name) => format!("{name}{dirty_marker} — BAR - Map Editor"),
-            None => "BAR - Map Editor".to_string(),
+            Some(name) => t!(
+                "editor.app.title_with_project",
+                name = name,
+                dirty = dirty_marker
+            ),
+            None => t!("editor.app.title"),
         };
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(title));
 
@@ -390,17 +400,17 @@ impl BarEditorApp {
                     .contains(CONFIRM_KEY_DELETE_CONNECTED_NODE);
                 if has_connections && !suppressed {
                     let msg = if selection.len() > 1 {
-                        format!(
-                            "Delete {} nodes and disconnect all of their wires?",
-                            selection.len()
+                        t!(
+                            "editor.dialogs.confirm.delete_node_message_plural",
+                            n = selection.len()
                         )
                     } else {
-                        "Delete this node and disconnect all of its wires?".to_string()
+                        t!("editor.dialogs.confirm.delete_node_message_singular")
                     };
                     self.dialog.confirm_dialog = Some(ConfirmDialog {
-                        title: "Delete node?".to_string(),
+                        title: t!("editor.dialogs.confirm.delete_node_title"),
                         message: msg,
-                        affirm_label: "Delete".to_string(),
+                        affirm_label: t!("common.delete"),
                         on_affirm: ConfirmAction::DeleteSelected,
                         suppression_key: Some(CONFIRM_KEY_DELETE_CONNECTED_NODE.to_string()),
                         dont_ask_again: false,
@@ -678,10 +688,10 @@ impl BarEditorApp {
                 // dimensions and the rest of the map metadata live in one
                 // place instead of a separate side dialog.
                 if ui
-                    .small_button(format!(
-                        "Map: {}×{}",
-                        self.map.width.saturating_sub(1) / 64,
-                        self.map.height.saturating_sub(1) / 64,
+                    .small_button(t!(
+                        "editor.status.map_size",
+                        w = self.map.width.saturating_sub(1) / 64,
+                        h = self.map.height.saturating_sub(1) / 64,
                     ))
                     .on_hover_text(t!("editor.status.open_map_settings"))
                     .clicked()
@@ -698,12 +708,15 @@ impl BarEditorApp {
                     )
                 } else if let Some(id) = self.selection.node {
                     ui.add(
-                        egui::Label::new(format!("Selected: {:?}", id)).sense(egui::Sense::click()),
+                        egui::Label::new(t!("editor.status.selected", id = format!("{:?}", id)))
+                            .sense(egui::Sense::click()),
                     )
                 } else {
                     ui.add(
-                        egui::Label::new(egui::RichText::new("No selection").weak())
-                            .sense(egui::Sense::click()),
+                        egui::Label::new(
+                            egui::RichText::new(t!("editor.status.no_selection")).weak(),
+                        )
+                        .sense(egui::Sense::click()),
                     )
                 };
                 if status_resp
@@ -725,29 +738,31 @@ impl BarEditorApp {
         if let Some(action) = self.dialog.pending_action.clone() {
             let mut close = false;
             let mut decision: Option<UnsavedDecision> = None;
-            egui::Window::new("Unsaved changes")
+            egui::Window::new(t!("editor.dialogs.unsaved.title"))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ctx, |ui| {
                     let action_label = match &action {
-                        PendingAction::Close => "close BAR - Map Editor",
-                        PendingAction::NewProject => "start a new project",
-                        PendingAction::OpenPath(_) => "open this file",
-                        PendingAction::LoadMacro { .. } => "load this preset",
+                        PendingAction::Close => t!("editor.dialogs.unsaved.action_close"),
+                        PendingAction::NewProject => {
+                            t!("editor.dialogs.unsaved.action_new_project")
+                        }
+                        PendingAction::OpenPath(_) => t!("editor.dialogs.unsaved.action_open_file"),
+                        PendingAction::LoadMacro { .. } => {
+                            t!("editor.dialogs.unsaved.action_load_preset")
+                        }
                     };
-                    ui.label(format!(
-                        "Your project has unsaved changes. Save before you {action_label}?"
-                    ));
+                    ui.label(t!("editor.dialogs.unsaved.message", action = action_label));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Save").clicked() {
+                        if ui.button(t!("common.save")).clicked() {
                             decision = Some(UnsavedDecision::Save);
                         }
-                        if ui.button("Discard").clicked() {
+                        if ui.button(t!("common.discard")).clicked() {
                             decision = Some(UnsavedDecision::Discard);
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel")).clicked() {
                             decision = Some(UnsavedDecision::Cancel);
                         }
                     });
@@ -789,12 +804,12 @@ impl BarEditorApp {
                 .get(&gid)
                 .map(|g| {
                     if g.label.is_empty() {
-                        format!("Group {gid}")
+                        t!("editor.dialogs.group_delete.untitled_group", id = gid)
                     } else {
                         g.label.clone()
                     }
                 })
-                .unwrap_or_else(|| format!("Group {gid}"));
+                .unwrap_or_else(|| t!("editor.dialogs.group_delete.untitled_group", id = gid));
             let member_count = self
                 .visuals
                 .groups
@@ -802,23 +817,27 @@ impl BarEditorApp {
                 .map(|g| g.member_ids.len())
                 .unwrap_or(0);
             let mut decision: Option<GroupDeleteChoice> = None;
-            egui::Window::new(format!("Delete '{label}'?"))
+            egui::Window::new(t!("editor.dialogs.group_delete.title", label = label))
                 .collapsible(false)
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
                 .show(ctx, |ui| {
-                    ui.label(format!(
-                        "This group contains {member_count} node(s). What should happen to them?"
-                    ));
+                    ui.label(t!("editor.dialogs.group_delete.message", n = member_count));
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Delete group only").clicked() {
+                        if ui
+                            .button(t!("editor.dialogs.group_delete.affirm_group_only"))
+                            .clicked()
+                        {
                             decision = Some(GroupDeleteChoice::GroupOnly);
                         }
-                        if ui.button("Delete group and its nodes").clicked() {
+                        if ui
+                            .button(t!("editor.dialogs.group_delete.affirm_group_and_members"))
+                            .clicked()
+                        {
                             decision = Some(GroupDeleteChoice::GroupAndMembers);
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel")).clicked() {
                             decision = Some(GroupDeleteChoice::Cancel);
                         }
                     });
@@ -890,14 +909,17 @@ impl BarEditorApp {
                     ui.label(&dialog.message);
                     if dialog.suppression_key.is_some() {
                         ui.add_space(6.0);
-                        ui.checkbox(&mut dialog.dont_ask_again, "Don't ask again");
+                        ui.checkbox(
+                            &mut dialog.dont_ask_again,
+                            t!("editor.dialogs.confirm.dont_ask_again"),
+                        );
                     }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button(&dialog.affirm_label).clicked() {
                             decision = Some(true);
                         }
-                        if ui.button("Cancel").clicked() {
+                        if ui.button(t!("common.cancel")).clicked() {
                             decision = Some(false);
                         }
                     });
@@ -1005,9 +1027,9 @@ impl BarEditorApp {
                     let compile_summary =
                         self.validation.summary_for_action(BlockingAction::Compile);
                     let base_hover = if compile_running {
-                        "Compiling... (click to cancel)".to_string()
+                        t!("editor.actions.cancel_hover")
                     } else {
-                        "Compile".to_string()
+                        t!("editor.actions.compile")
                     };
                     // Suppress unused-warning until compile age is
                     // re-surfaced through a different UI affordance.
@@ -1091,9 +1113,9 @@ impl BarEditorApp {
                         .validation
                         .summary_for_action(BlockingAction::TestInBar);
                     let base_tooltip = if test_in_bar_busy {
-                        "Test in BAR (click to cancel)".to_string()
+                        t!("editor.actions.cancel_hover")
                     } else {
-                        "Test in BAR".to_string()
+                        t!("editor.actions.test_in_bar")
                     };
                     let blocking_msg = if bar_blocked {
                         self.validation
@@ -1149,9 +1171,9 @@ impl BarEditorApp {
 
                     let bundle_summary = self.validation.summary_for_action(BlockingAction::Bundle);
                     let base_tooltip = if busy {
-                        "Bundle (click to cancel)".to_string()
+                        t!("editor.actions.cancel_hover")
                     } else {
-                        "Bundle".to_string()
+                        t!("editor.actions.bundle.hover")
                     };
                     let blocking_msg = if bundle_blocked {
                         self.validation.blocking_summary(BlockingAction::Bundle, 3)
@@ -1165,7 +1187,9 @@ impl BarEditorApp {
                     } else if !any_running
                         && !bundle_blocked
                         && response.clicked()
-                        && self.validate_before_export("Bundle all")
+                        && self.validate_before_export(&t!(
+                            "editor.actions.bundle.label_for_validation"
+                        ))
                     {
                         self.preview.run_requested = true;
                     }
@@ -1180,7 +1204,7 @@ impl BarEditorApp {
                         painter.rect_filled(pub_rect, 5.0, tokens::BTN_PUBLISH_DISABLED);
                         paint_publish_icon(&painter, pub_rect, egui::Color32::from_white_alpha(60));
                     }
-                    _pub_resp.on_hover_text("Publish (coming soon)");
+                    _pub_resp.on_hover_text(t!("editor.actions.publish.coming_soon"));
 
                     // Chevron -- only rendered when multiple versions exist.
                     let popup_id = ui.make_persistent_id("bar_version_picker");
@@ -1247,7 +1271,7 @@ impl BarEditorApp {
                                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                                     ui.set_min_width(180.0);
                                     if self.bar_versions.game_labels.len() > 1 {
-                                        ui.label("Game");
+                                        ui.label(t!("editor.actions.version_picker.game"));
                                         for i in 0..self.bar_versions.game_labels.len() {
                                             let label = self.bar_versions.game_labels[i].clone();
                                             ui.radio_value(
@@ -1263,7 +1287,7 @@ impl BarEditorApp {
                                         ui.separator();
                                     }
                                     if self.bar_versions.engine_labels.len() > 1 {
-                                        ui.label("Engine");
+                                        ui.label(t!("editor.actions.version_picker.engine"));
                                         for i in 0..self.bar_versions.engine_labels.len() {
                                             let label = self.bar_versions.engine_labels[i].clone();
                                             ui.radio_value(
@@ -1309,12 +1333,15 @@ impl BarEditorApp {
                     type IconFn = fn(&egui::Painter, egui::Rect, egui::Color32);
                     type ColorTriple = (egui::Color32, egui::Color32, egui::Color32);
                     type FlagFn = fn(&mut crate::dialog::DialogState) -> &mut bool;
+                    // Tab tooltip strings are i18n keys -- resolved
+                    // at the call site so we keep the static array
+                    // small and language-agnostic.
                     let metadata_tabs: &[(IconFn, FlagFn, &str, &str, ColorTriple)] = &[
                         (
                             paint_identity_icon,
                             |d| &mut d.show_identity_editor,
                             "identity",
-                            "Identity",
+                            "editor.actions.tabs.identity",
                             (
                                 tokens::BTN_TAB_IDENTITY_NORMAL,
                                 tokens::BTN_TAB_IDENTITY_HOVER,
@@ -1325,7 +1352,7 @@ impl BarEditorApp {
                             paint_dimensions_icon,
                             |d| &mut d.show_dimensions_editor,
                             "dimensions",
-                            "Dimensions",
+                            "editor.actions.tabs.dimensions",
                             (
                                 tokens::BTN_TAB_DIMENSIONS_NORMAL,
                                 tokens::BTN_TAB_DIMENSIONS_HOVER,
@@ -1336,7 +1363,7 @@ impl BarEditorApp {
                             paint_physics_icon,
                             |d| &mut d.show_physics_editor,
                             "physics",
-                            "Physics",
+                            "editor.actions.tabs.physics",
                             (
                                 tokens::BTN_TAB_PHYSICS_NORMAL,
                                 tokens::BTN_TAB_PHYSICS_HOVER,
@@ -1347,7 +1374,7 @@ impl BarEditorApp {
                             paint_resources_icon,
                             |d| &mut d.show_resources_editor,
                             "resources",
-                            "Resources",
+                            "editor.actions.tabs.resources",
                             (
                                 tokens::BTN_TAB_RESOURCES_NORMAL,
                                 tokens::BTN_TAB_RESOURCES_HOVER,
@@ -1365,7 +1392,7 @@ impl BarEditorApp {
                             paint_atmosphere_icon,
                             |d| &mut d.show_atmosphere_editor,
                             "atmosphere",
-                            "Atmosphere",
+                            "editor.actions.tabs.atmosphere",
                             (
                                 tokens::BTN_TAB_ATMOSPHERE_NORMAL,
                                 tokens::BTN_TAB_ATMOSPHERE_HOVER,
@@ -1376,7 +1403,7 @@ impl BarEditorApp {
                             paint_fog_icon,
                             |d| &mut d.show_fog_editor,
                             "fog",
-                            "Fog & Clouds",
+                            "editor.actions.tabs.fog",
                             (
                                 tokens::BTN_TAB_FOG_NORMAL,
                                 tokens::BTN_TAB_FOG_HOVER,
@@ -1387,7 +1414,7 @@ impl BarEditorApp {
                             paint_lighting_icon,
                             |d| &mut d.show_lighting_editor,
                             "lighting",
-                            "Lighting",
+                            "editor.actions.tabs.lighting",
                             (
                                 tokens::BTN_TAB_LIGHTING_NORMAL,
                                 tokens::BTN_TAB_LIGHTING_HOVER,
@@ -1398,7 +1425,7 @@ impl BarEditorApp {
                             paint_water_icon,
                             |d| &mut d.show_water_editor,
                             "water",
-                            "Water",
+                            "editor.actions.tabs.water",
                             (
                                 tokens::BTN_TAB_WATER_NORMAL,
                                 tokens::BTN_TAB_WATER_HOVER,
@@ -1430,7 +1457,7 @@ impl BarEditorApp {
                             btn_size,
                             *icon,
                             category,
-                            tooltip,
+                            &t!(tooltip),
                             *colors,
                             pos,
                             &self.validation,
@@ -1459,7 +1486,7 @@ impl BarEditorApp {
                             btn_size,
                             *icon,
                             category,
-                            tooltip,
+                            &t!(tooltip),
                             *colors,
                             pos,
                             &self.validation,
@@ -1483,7 +1510,8 @@ impl BarEditorApp {
                     }
                     let gr_summary = self.validation.summary_for_modal(ModalId::Grass);
                     paint_validation_badge(ui, gr_rect, &gr_summary);
-                    let gr_hover = hover_with_summary("Grass", &gr_summary, "");
+                    let gr_hover =
+                        hover_with_summary(&t!("editor.actions.tabs.grass"), &gr_summary, "");
                     let gr_resp = gr_resp.on_hover_text(gr_hover);
                     if gr_resp.clicked() {
                         self.dialog.show_grass_editor = !self.dialog.show_grass_editor;
@@ -1519,7 +1547,8 @@ impl BarEditorApp {
                     }
                     let me_summary = self.validation.summary_for_modal(ModalId::MapEdge);
                     paint_validation_badge(ui, me_rect, &me_summary);
-                    let me_hover = hover_with_summary("Map Edge", &me_summary, "");
+                    let me_hover =
+                        hover_with_summary(&t!("editor.actions.tabs.map_edge"), &me_summary, "");
                     let me_resp = me_resp.on_hover_text(me_hover);
                     if me_resp.clicked() {
                         self.dialog.show_map_edge_editor = !self.dialog.show_map_edge_editor;

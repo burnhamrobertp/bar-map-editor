@@ -13,6 +13,7 @@ use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, drive_text_edit_intent, modal_frame,
 };
 use crate::panels::field_editor::{heading_with_info, section_heading};
+use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_resources_editor {
@@ -22,19 +23,18 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     modal_frame(
         ctx,
         &mut open,
-        "Resources",
+        &t!("editor.modals.resources.title"),
         "resources_editor_modal",
         |ui| {
             heading_with_info(
                 ui,
-                "Splat distribution",
-                "Four-channel mask that selects which of the four \
-                 detail-normal textures contributes per pixel.",
+                &t!("editor.modals.resources.splat_distr_heading"),
+                &t!("editor.modals.resources.splat_distr_info"),
             );
             text_field_atomic(ui, app, "splatDistrTex", |r| &mut r.splat_distr_tex);
 
             ui.add_space(8.0);
-            section_heading(ui, "Splat detail-normal textures");
+            section_heading(ui, &t!("editor.modals.resources.detail_normals_heading"));
             text_field_atomic(ui, app, "splatDetailNormalTex1", |r| {
                 &mut r.splat_detail_normal_tex_1
             });
@@ -52,10 +52,13 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 .resources
                 .splat_detail_normal_diffuse_alpha;
             if ui
-                .checkbox(&mut splat_alpha, "Diffuse alpha contribution")
+                .checkbox(
+                    &mut splat_alpha,
+                    t!("editor.modals.resources.diffuse_alpha"),
+                )
                 .changed()
             {
-                app.push_undo("Toggle splat diffuse alpha");
+                app.push_undo(&t!("editor.modals.resources.undo_diffuse_alpha"));
                 app.map_settings_mut()
                     .resources
                     .splat_detail_normal_diffuse_alpha = splat_alpha;
@@ -64,9 +67,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             heading_with_info(
                 ui,
-                "Per-channel sampling",
-                "UV scale per splat channel (`splats.texScales`) and \
-                 mix multiplier (`splats.texMults`).",
+                &t!("editor.modals.resources.per_channel_heading"),
+                &t!("editor.modals.resources.per_channel_info"),
             );
             splat_array_atomic(
                 ui,
@@ -90,14 +92,13 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.add_space(8.0);
             heading_with_info(
                 ui,
-                "Legacy detail texture",
-                "Older single-tiling-texture path. Used by the renderer \
-                 only when no splat distribution texture is set above.",
+                &t!("editor.modals.resources.legacy_detail_heading"),
+                &t!("editor.modals.resources.legacy_detail_info"),
             );
             text_field_atomic(ui, app, "detailTex", |r| &mut r.detail_tex);
 
             ui.add_space(8.0);
-            section_heading(ui, "Per-pixel masks");
+            section_heading(ui, &t!("editor.modals.resources.per_pixel_masks_heading"));
             text_field_atomic(ui, app, "specularTex", |r| &mut r.specular_tex);
             text_field_atomic(ui, app, "skyReflectModTex", |r| &mut r.sky_reflect_mod_tex);
         },
@@ -121,7 +122,7 @@ fn text_field_atomic(
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let edit = egui::TextEdit::singleline(&mut value)
                 .desired_width(200.0)
-                .hint_text("(empty = unset)");
+                .hint_text(t!("editor.modals.resources.field_hint_unset"));
             resp_taken = Some(ui.add(edit));
         });
     });

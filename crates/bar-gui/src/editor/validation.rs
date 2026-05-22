@@ -334,8 +334,10 @@ impl BarEditorApp {
         self.run_validation();
         if self.validation_has_errors() {
             self.dialog.show_validation_panel = true;
-            self.dialog.status_message =
-                Some(format!("{action_label}: fix validation errors first."));
+            self.dialog.status_message = Some(crate::t!(
+                "editor.validation.action_blocked_by_errors",
+                action = action_label
+            ));
             false
         } else {
             true

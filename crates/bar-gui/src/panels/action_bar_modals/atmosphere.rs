@@ -9,6 +9,7 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{modal_frame, render_specs, FieldFindings};
 use crate::panels::field_editor::section_heading;
 use crate::panels::file_picker::FilePickerField;
+use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_atmosphere_editor {
@@ -18,7 +19,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     modal_frame(
         ctx,
         &mut open,
-        "Atmosphere",
+        &t!("editor.modals.atmosphere.title"),
         "atmosphere_editor_modal",
         |ui| {
             let findings = FieldFindings::from(app.validation.findings());
@@ -31,7 +32,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 }
 
 fn draw_skybox(ui: &mut egui::Ui, app: &mut BarEditorApp) {
-    section_heading(ui, "Skybox");
+    section_heading(ui, &t!("editor.modals.atmosphere.skybox_heading"));
     let project_path_opt: Option<std::path::PathBuf> = app.project.path.clone();
     let parent_window = app.parent_window();
     let mut filename = app
@@ -40,11 +41,14 @@ fn draw_skybox(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         .skybox
         .clone()
         .unwrap_or_default();
-    let changed = FilePickerField::new("Cubemap", "passthrough/maps")
+    let cubemap_label = t!("editor.modals.atmosphere.cubemap_label");
+    let cubemap_title = t!("editor.modals.atmosphere.cubemap_dialog_title");
+    let cubemap_hint = t!("editor.modals.atmosphere.cubemap_hint");
+    let changed = FilePickerField::new(&cubemap_label, "passthrough/maps")
         .extensions(&["dds"])
-        .title("Select skybox DDS cubemap")
+        .title(&cubemap_title)
         .allow_clear(true)
-        .hint("(empty = procedural sky)")
+        .hint(&cubemap_hint)
         .show(
             ui,
             &mut filename,
@@ -52,7 +56,7 @@ fn draw_skybox(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             parent_window.as_ref(),
         );
     if changed {
-        app.push_undo("Edit skybox");
+        app.push_undo(&t!("editor.modals.atmosphere.undo_skybox"));
         app.map_settings_mut().atmosphere.skybox = if filename.is_empty() {
             None
         } else {

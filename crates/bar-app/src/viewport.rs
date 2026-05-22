@@ -1486,19 +1486,19 @@ pub fn draw_preview_placeholder(
         ui.vertical_centered(|ui| {
             ui.add_space(60.0);
             if !supports_bc {
-                ui.heading("BC texture compression unavailable");
+                ui.heading(bar_gui::i18n::t("editor.preview.bc_unavailable_title"));
                 ui.add_space(8.0);
-                ui.label("Your GPU does not support BC1/DXT1 texture compression.");
-                ui.label("The native-resolution Preview layout requires it.");
+                ui.label(bar_gui::i18n::t("editor.preview.bc_unavailable_gpu"));
+                ui.label(bar_gui::i18n::t("editor.preview.bc_unavailable_required"));
             } else if !is_compiled {
-                ui.heading("Not yet compiled");
+                ui.heading(bar_gui::i18n::t("editor.preview.not_compiled_title"));
                 ui.add_space(8.0);
-                ui.label("Run Compile to generate the native-resolution texture.");
+                ui.label(bar_gui::i18n::t("editor.preview.not_compiled_hint"));
                 ui.add_space(16.0);
                 if compile_running {
-                    ui.label("Compiling...");
+                    ui.label(bar_gui::i18n::t("editor.preview.compiling_title"));
                 } else {
-                    ui.label("Use the Compile button in the toolbar.");
+                    ui.label(bar_gui::i18n::t("editor.preview.compiling_hint"));
                 }
             }
         });

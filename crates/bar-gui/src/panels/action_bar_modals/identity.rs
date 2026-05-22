@@ -19,58 +19,72 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         return;
     }
     let mut open = app.dialog.show_identity_editor;
-    modal_frame(ctx, &mut open, "Identity", "identity_editor_modal", |ui| {
-        draw_text_fields(ui, app);
-        draw_description(ui, app);
-        draw_depend(ui, app);
-    });
+    modal_frame(
+        ctx,
+        &mut open,
+        &t!("editor.modals.identity.title"),
+        "identity_editor_modal",
+        |ui| {
+            draw_text_fields(ui, app);
+            draw_description(ui, app);
+            draw_depend(ui, app);
+        },
+    );
     app.dialog.show_identity_editor = open;
 }
 
 fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     type MetaGet = fn(&crate::editor::RecipeMeta) -> String;
     type MetaSet = fn(&mut crate::editor::RecipeMeta, String);
+    // Field labels + hints are i18n keys; resolved at the use site
+    // so the static array stays small.
     let text_fields: &[(&str, MetaGet, MetaSet, &str)] = &[
         (
-            "name",
+            "editor.modals.identity.field.name",
             |m| m.name.clone().unwrap_or_default(),
             |m, v| m.name = if v.is_empty() { None } else { Some(v) },
-            "(map name)",
+            "editor.modals.identity.field.name_hint",
         ),
         (
-            "shortname",
+            "editor.modals.identity.field.shortname",
             |m| m.shortname.clone().unwrap_or_default(),
             |m, v| m.shortname = if v.is_empty() { None } else { Some(v) },
             "",
         ),
         (
-            "author",
+            "editor.modals.identity.field.author",
             |m| m.author.clone().unwrap_or_default(),
             |m, v| m.author = if v.is_empty() { None } else { Some(v) },
             "",
         ),
         (
-            "version",
+            "editor.modals.identity.field.version",
             |m| m.version.clone().unwrap_or_default(),
             |m, v| m.version = if v.is_empty() { None } else { Some(v) },
             "",
         ),
         (
-            "tip",
+            "editor.modals.identity.field.tip",
             |m| m.tip.clone().unwrap_or_default(),
             |m, v| m.tip = if v.is_empty() { None } else { Some(v) },
             "",
         ),
     ];
-    for (label, getter, setter, hint) in text_fields {
+    for (label_key, getter, setter, hint_key) in text_fields {
+        let label = t!(label_key);
+        let hint = if hint_key.is_empty() {
+            String::new()
+        } else {
+            t!(hint_key)
+        };
         let mut buf = getter(app.recipe_meta_mut());
         let mut resp_taken = None;
         ui.horizontal(|ui| {
-            ui.label(*label);
+            ui.label(&label);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let edit = egui::TextEdit::singleline(&mut buf)
                     .desired_width(220.0)
-                    .hint_text(*hint);
+                    .hint_text(&hint);
                 let resp = ui.add(edit);
                 crate::panels::widgets::select_all_on_focus(ui, &resp, &buf);
                 resp_taken = Some(resp);
@@ -81,7 +95,7 @@ fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         if changed {
             setter(app.recipe_meta_mut(), buf.clone());
         }
-        drive_text_edit_intent(app, &resp, label, changed);
+        drive_text_edit_intent(app, &resp, &label, changed);
     }
 }
 
@@ -103,18 +117,24 @@ fn draw_description(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     if desc_resp.changed() {
         app.recipe_meta_mut().description = desc.clone();
     }
-    drive_text_edit_intent(app, &desc_resp, "description", desc_resp.changed());
+    drive_text_edit_intent(
+        app,
+        &desc_resp,
+        &t!("common.description"),
+        desc_resp.changed(),
+    );
 }
 
 fn draw_depend(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut depend_joined = app.recipe_meta_mut().depend.join(", ");
     let mut depend_resp = None;
     ui.horizontal(|ui| {
-        ui.label("depend");
+        let depend_label = t!("editor.modals.identity.field.depend");
+        ui.label(&depend_label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let edit = egui::TextEdit::singleline(&mut depend_joined)
                 .desired_width(220.0)
-                .hint_text("Map Helper v1");
+                .hint_text(t!("editor.modals.identity.field.depend_hint"));
             depend_resp = Some(ui.add(edit));
         });
     });
@@ -126,5 +146,10 @@ fn draw_depend(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             .filter(|s| !s.is_empty())
             .collect();
     }
-    drive_text_edit_intent(app, &depend_resp, "depend", depend_resp.changed());
+    drive_text_edit_intent(
+        app,
+        &depend_resp,
+        &t!("editor.modals.identity.field.depend"),
+        depend_resp.changed(),
+    );
 }

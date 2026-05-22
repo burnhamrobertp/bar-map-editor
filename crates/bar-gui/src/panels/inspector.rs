@@ -11,6 +11,7 @@ use crate::app::{
     apply_brush_dab, heightmap_to_color_image, save_heightmap_as_png16, BarEditorApp, BrushTool,
     InspectorMode,
 };
+use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if !app.dialog.show_inspector {
@@ -52,24 +53,32 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     let mut last_rect: Option<egui::Rect> = None;
     let mut clicked_save_png = false;
 
-    egui::Window::new("2D Inspector")
+    egui::Window::new(t!("editor.inspector.title"))
         .open(&mut open)
         .resizable(true)
         .default_size([540.0, 620.0])
         .show(ctx, |ui| {
             // Mode selector at the top of the window.
             ui.horizontal(|ui| {
-                ui.label("Mode:");
+                ui.label(t!("editor.inspector.mode_label"));
                 let p = app.paint_mut();
-                ui.selectable_value(&mut p.inspector_mode, InspectorMode::Spawns, "Start positions");
-                ui.selectable_value(&mut p.inspector_mode, InspectorMode::Sculpt, "Sculpt");
+                ui.selectable_value(
+                    &mut p.inspector_mode,
+                    InspectorMode::Spawns,
+                    t!("editor.inspector.mode_spawns"),
+                );
+                ui.selectable_value(
+                    &mut p.inspector_mode,
+                    InspectorMode::Sculpt,
+                    t!("editor.inspector.mode_sculpt"),
+                );
             });
             match app.paint().inspector_mode {
                 InspectorMode::Spawns => {
-                    ui.label("Click to add a start position; drag to move; right-click to delete.");
+                    ui.label(t!("editor.inspector.spawns_hint"));
                 }
                 InspectorMode::Sculpt => {
-                    ui.label("Drag-paint to sculpt the heightmap. Preview-only - doesn't yet write back into the graph.");
+                    ui.label(t!("editor.inspector.sculpt_hint"));
                 }
             }
             ui.separator();
@@ -78,22 +87,30 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             if app.paint().inspector_mode == InspectorMode::Sculpt {
                 ui.horizontal(|ui| {
                     let current_tool = app.paint().brush.tool;
-                    for tool in [BrushTool::Raise, BrushTool::Lower, BrushTool::Smooth, BrushTool::Flatten] {
-                        let resp = ui.add(egui::SelectableLabel::new(current_tool == tool, tool.label()));
+                    for tool in [
+                        BrushTool::Raise,
+                        BrushTool::Lower,
+                        BrushTool::Smooth,
+                        BrushTool::Flatten,
+                    ] {
+                        let resp = ui.add(egui::SelectableLabel::new(
+                            current_tool == tool,
+                            tool.label(),
+                        ));
                         if resp.clicked() {
                             app.paint_mut().brush.tool = tool;
                         }
                     }
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Radius");
+                    ui.label(t!("editor.inspector.brush_radius"));
                     ui.add(
                         egui::Slider::new(&mut app.paint_mut().brush.radius_px, 2.0..=128.0)
                             .clamping(egui::SliderClamping::Always),
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Strength");
+                    ui.label(t!("editor.inspector.brush_strength"));
                     ui.add(
                         egui::Slider::new(&mut app.paint_mut().brush.strength, 0.001..=0.1)
                             .clamping(egui::SliderClamping::Always)
@@ -101,7 +118,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                     );
                 });
                 ui.horizontal(|ui| {
-                    ui.label("Falloff");
+                    ui.label(t!("editor.inspector.brush_falloff"));
                     ui.add(
                         egui::Slider::new(&mut app.paint_mut().brush.falloff, 0.5..=4.0)
                             .clamping(egui::SliderClamping::Always),
@@ -113,23 +130,22 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             // Reserve a square-ish area for the map view.
             let avail = ui.available_size();
             let side = avail.x.min(avail.y - 30.0).max(64.0);
-            let (rect, resp) = ui.allocate_exact_size(
-                egui::vec2(side, side),
-                egui::Sense::click_and_drag(),
-            );
+            let (rect, resp) =
+                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click_and_drag());
             last_rect = Some(rect);
             let painter = ui.painter_at(rect);
 
             // Backdrop.
             if let Some(tex_id) = app.paint().texture.as_ref().map(|t| t.id()) {
-                let img = egui::Image::from_texture(egui::load::SizedTexture::new(tex_id, rect.size()));
+                let img =
+                    egui::Image::from_texture(egui::load::SizedTexture::new(tex_id, rect.size()));
                 img.paint_at(ui, rect);
             } else {
                 painter.rect_filled(rect, 4.0, egui::Color32::from_rgb(28, 35, 50));
                 painter.text(
                     rect.center(),
                     egui::Align2::CENTER_CENTER,
-                    "Open a project / preview to see the heightmap",
+                    t!("editor.inspector.placeholder"),
                     egui::FontId::proportional(13.0),
                     egui::Color32::from_rgb(150, 150, 170),
                 );
@@ -137,9 +153,20 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 
             // Convert elmo XZ <-> screen pixel inside `rect`.
             let to_screen = |elmo_x: u32, elmo_z: u32| -> egui::Pos2 {
-                let u = if world_w > 0 { elmo_x as f32 / world_w as f32 } else { 0.5 };
-                let v = if world_h > 0 { elmo_z as f32 / world_h as f32 } else { 0.5 };
-                egui::pos2(rect.left() + u * rect.width(), rect.top() + v * rect.height())
+                let u = if world_w > 0 {
+                    elmo_x as f32 / world_w as f32
+                } else {
+                    0.5
+                };
+                let v = if world_h > 0 {
+                    elmo_z as f32 / world_h as f32
+                } else {
+                    0.5
+                };
+                egui::pos2(
+                    rect.left() + u * rect.width(),
+                    rect.top() + v * rect.height(),
+                )
             };
             let to_world = |pos: egui::Pos2| -> [u32; 2] {
                 let u = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0);
@@ -168,7 +195,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                             egui::Color32::from_rgb(220, 80, 70)
                         };
                         painter.circle_filled(p, marker_radius, fill);
-                        painter.circle_stroke(p, marker_radius, egui::Stroke::new(1.5, egui::Color32::WHITE));
+                        painter.circle_stroke(
+                            p,
+                            marker_radius,
+                            egui::Stroke::new(1.5, egui::Color32::WHITE),
+                        );
                         painter.text(
                             p,
                             egui::Align2::CENTER_CENTER,
@@ -189,7 +220,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         if let Some(pos) = pointer {
                             if rect.contains(pos) {
                                 let world = to_world(pos);
-                                if let Some(slot) = app.map_settings_mut().start_positions.get_mut(idx) {
+                                if let Some(slot) =
+                                    app.map_settings_mut().start_positions.get_mut(idx)
+                                {
                                     *slot = world;
                                 }
                             }
@@ -220,13 +253,18 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                             hover_pos_in_rect = Some(p);
                             let scale = rect.width() / map_w.max(1) as f32;
                             let r_screen = (app.paint().brush.radius_px * scale).max(2.0);
-                            let stroking = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                            let stroking =
+                                ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
                             let stroke_color = if stroking {
                                 egui::Color32::from_rgb(255, 220, 120)
                             } else {
                                 egui::Color32::from_rgb(255, 255, 255)
                             };
-                            painter.circle_stroke(p, r_screen, egui::Stroke::new(1.5, stroke_color));
+                            painter.circle_stroke(
+                                p,
+                                r_screen,
+                                egui::Stroke::new(1.5, stroke_color),
+                            );
                             painter.circle_stroke(
                                 p,
                                 r_screen * 0.5,
@@ -235,7 +273,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         }
                     }
 
-                    let primary_down = ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
+                    let primary_down =
+                        ctx.input(|i| i.pointer.button_down(egui::PointerButton::Primary));
                     let inside = pointer.map(|p| rect.contains(p)).unwrap_or(false);
                     if primary_down && inside {
                         if !app.paint().brush_stroking {
@@ -254,9 +293,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.horizontal(|ui| match app.paint().inspector_mode {
                 InspectorMode::Spawns => {
                     let n = app.map_settings_mut().start_positions.len();
-                    ui.label(format!("{n} spawn(s)"));
-                    if ui.button("Clear all").clicked() {
-                        app.push_undo("Clear start positions");
+                    ui.label(t!("editor.inspector.spawn_count", n = n));
+                    if ui.button(t!("editor.inspector.clear_all")).clicked() {
+                        app.push_undo(&t!("editor.inspector.undo_clear_spawns"));
                         app.map_settings_mut().start_positions.clear();
                     }
                 }
@@ -266,9 +305,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                         .heightmap
                         .as_ref()
                         .map(|hm| format!("{}x{} px", hm.width(), hm.height()))
-                        .unwrap_or_else(|| "(no preview)".to_string());
-                    ui.weak(format!("Heightmap: {h_label}"));
-                    if ui.button("Reset to graph output").clicked() {
+                        .unwrap_or_else(|| t!("editor.inspector.no_preview"));
+                    ui.weak(t!("editor.inspector.heightmap_status", size = h_label));
+                    if ui.button(t!("editor.inspector.reset_to_graph")).clicked() {
                         let p = app.paint_mut();
                         p.heightmap = None;
                         p.texture = None;
@@ -276,7 +315,10 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                     }
                     let can_save = app.paint().heightmap.is_some();
                     ui.add_enabled_ui(can_save, |ui| {
-                        if ui.button("Save heightmap as PNG...").clicked() {
+                        if ui
+                            .button(t!("editor.inspector.save_heightmap_png"))
+                            .clicked()
+                        {
                             clicked_save_png = true;
                         }
                     });
@@ -286,7 +328,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
 
     app.dialog.show_inspector = open;
     if let Some(idx) = to_remove {
-        app.push_undo("Remove start position");
+        app.push_undo(&t!("editor.modals.start_boxes.undo_remove"));
         app.map_settings_mut().start_positions.remove(idx);
         if app.dragging_spawn() == Some(idx) {
             app.set_dragging_spawn(None);
@@ -321,7 +363,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         app.mark_dirty();
     }
     if let Some(p) = spawn_to_add {
-        app.push_undo("Add start position");
+        app.push_undo(&t!("editor.modals.start_boxes.undo_add"));
         app.map_settings_mut().start_positions.push(p);
     }
 
@@ -375,8 +417,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
     if clicked_save_png {
         if let Some(path) = app
             .make_dialog()
-            .set_title("Save sculpted heightmap")
-            .add_filter("16-bit grayscale PNG", &["png"])
+            .set_title(t!("editor.inspector.save_dialog_title"))
+            .add_filter(t!("editor.inspector.save_filter_label"), &["png"])
             .set_file_name("sculpted-heightmap.png")
             .save_file()
         {
@@ -386,13 +428,13 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             if let Some(hm) = hm {
                 match save_heightmap_as_png16(&hm, &path) {
                     Ok(()) => {
-                        app.set_status_message(format!(
-                            "Sculpt saved to {}. Add a FileInput node pointing at it to bake into export.",
-                            path.display(),
+                        app.set_status_message(t!(
+                            "editor.inspector.save_ok",
+                            path = path.display()
                         ));
                     }
                     Err(e) => {
-                        app.set_status_message(format!("Save failed: {e}"));
+                        app.set_status_message(t!("editor.inspector.save_failed", error = e));
                     }
                 }
             }
