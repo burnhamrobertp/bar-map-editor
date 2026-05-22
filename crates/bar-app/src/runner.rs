@@ -182,6 +182,30 @@ impl eframe::App for AppRunner {
             }
         }
 
+        // Cancel compile if requested.
+        if self.app.preview.take_cancel_compile() && self.compile_result_rx.is_some() {
+            self.compile_result_rx = None;
+            self.app.preview.compile_running = false;
+            self.pending_test_in_bar_after_compile = false;
+            self.app.set_status("Compile cancelled");
+        }
+
+        // Cancel export (bundle or test-in-bar) if requested.
+        if self.app.preview.take_cancel_export() {
+            if self.export_result_rx.is_some() || self.pending_export_dir.is_some() {
+                self.export_result_rx = None;
+                self.pending_export_dir = None;
+                self.progress_rx = None;
+                self.export_status = bar_gui::ExportStatus::Idle;
+                self.app.set_status("Bundle cancelled");
+            } else if self.test_in_bar_rx.is_some() {
+                self.test_in_bar_rx = None;
+                self.progress_rx = None;
+                self.export_status = bar_gui::ExportStatus::Idle;
+                self.app.set_status("Test in BAR cancelled");
+            }
+        }
+
         // Poll export result.
         if let Some(ref rx) = self.export_result_rx {
             if let Ok(msg) = rx.try_recv() {

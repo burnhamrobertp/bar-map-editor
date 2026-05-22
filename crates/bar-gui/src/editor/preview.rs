@@ -78,6 +78,13 @@ pub struct PreviewState {
     pub compile_requested: bool,
     /// True while a compile is running. Set by `bar-app`.
     pub compile_running: bool,
+    /// Pulsed when the user clicks the Compile button while a compile
+    /// is already running. `bar-app` consumes via `take_cancel_compile`.
+    pub cancel_compile_requested: bool,
+    /// Pulsed when the user clicks the BAR or Bundle button while the
+    /// corresponding export is running. `bar-app` consumes via
+    /// `take_cancel_export`.
+    pub cancel_export_requested: bool,
     /// Set to `true` for one frame when the Preview layout wants bar-app
     /// to load the compiled SMT as a BC1 GPU texture. Consumed via
     /// `take_bc_texture_requested`.
@@ -112,6 +119,17 @@ impl PreviewState {
     /// Consume the one-frame "compile" pulse.
     pub fn take_compile_requested(&mut self) -> bool {
         std::mem::take(&mut self.compile_requested)
+    }
+
+    /// Consume the one-frame "cancel compile" pulse.
+    pub fn take_cancel_compile(&mut self) -> bool {
+        std::mem::take(&mut self.cancel_compile_requested)
+    }
+
+    /// Consume the one-frame "cancel export" pulse (covers both
+    /// Test-in-BAR and Bundle).
+    pub fn take_cancel_export(&mut self) -> bool {
+        std::mem::take(&mut self.cancel_export_requested)
     }
 
     /// Consume the one-frame "load BC1 texture" pulse.
