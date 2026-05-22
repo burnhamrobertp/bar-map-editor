@@ -62,6 +62,16 @@ pub const WATER_BLUR_BASE: f32 = 2.0;
 pub const WATER_BLUR_EXPONENT: f32 = 1.5;
 pub const WATER_CAUSTICS_RESOLUTION: f32 = 75.0;
 pub const WATER_CAUSTICS_STRENGTH: f32 = 0.08;
+pub const WATER_NUM_TILES: u32 = 2;
+pub const WATER_PERLIN_START_FREQ: f32 = 8.0;
+pub const WATER_PERLIN_LACUNARITY: f32 = 3.0;
+pub const WATER_PLANE_COLOR: [f32; 3] = [0.1, 0.15, 0.17];
+pub const WATER_REPEAT_X: f32 = 0.0;
+pub const WATER_REPEAT_Y: f32 = 0.0;
+pub const WATER_WAVE_OFFSET_FACTOR: f32 = 1.0;
+pub const WATER_WAVE_LENGTH: f32 = 1.0;
+pub const WATER_WAVE_FOAM_DISTORTION: f32 = 1.0;
+pub const WATER_WAVE_FOAM_INTENSITY: f32 = 1.0;
 
 // ── Grass widget (mapinfo `custom.grassConfig`) ───────────────────
 // Citations: `bar-game/luaui/Widgets/map_grass_gl4.lua` lines 87-110

@@ -49,6 +49,8 @@ pub mod categories {
     pub const GRASS: &str = "grass";
     pub const RESOURCES: &str = "resources";
     pub const STARTBOXES: &str = "startboxes";
+    pub const FOG: &str = "fog";
+    pub const CLOUDS: &str = "clouds";
 }
 
 /// Domain-typed runtime value carrier used by [`FieldSpec::get`] /

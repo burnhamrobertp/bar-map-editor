@@ -11,8 +11,10 @@
 //! ## Organisation
 //!
 //! - [`PHYSICS_SPECS`]      -- top-level physics scalars
-//! - [`ATMOSPHERE_SPECS`]   -- `MapSettings::atmosphere`
-//! - [`LIGHTING_SPECS`]     -- `MapSettings::lighting`
+//! - [`ATMOSPHERE_SPECS`]   -- `MapSettings::atmosphere` (wind + sky/cloud appearance)
+//! - [`FOG_SPECS`]          -- distance fog from `AtmosphereSettings`
+//! - [`CLOUDS_SPECS`]       -- `MapSettings::custom_clouds` widget settings
+//! - [`LIGHTING_SPECS`]     -- `MapSettings::lighting` (includes `atmosphere.sun_color`)
 //! - [`WATER_SPECS`]        -- `MapSettings::water`
 //! - [`GRASS_SPECS`]        -- `MapSettings::custom_grass`
 //!
@@ -232,7 +234,7 @@ pub static PHYSICS_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Atmosphere
+// Atmosphere (wind + sky/cloud appearance; fog and sun moved out)
 // ──────────────────────────────────────────────────────────────────
 
 pub static ATMOSPHERE_SPECS: &[FieldSpec<MapSettings>] = &[
@@ -274,78 +276,6 @@ pub static ATMOSPHERE_SPECS: &[FieldSpec<MapSettings>] = &[
         },
         category: categories::ATMOSPHERE,
         group: "Wind",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "atmosphere.fog_start",
-        label: "Fog start",
-        description: Some("0 = camera plane, 1 = far plane. Typically [0, 1]."),
-        kind: FieldKind::F32 {
-            hard: (-10.0, 10.0),
-            soft: Some((0.0, 1.0)),
-            unit: "",
-        },
-        default: DefaultValue::F32(ed::ATMOSPHERE_FOG_START),
-        get: |s| FieldValue::F32(s.atmosphere.fog_start),
-        set: |s, v| {
-            if let FieldValue::F32(x) = v {
-                s.atmosphere.fog_start = x;
-            }
-        },
-        category: categories::ATMOSPHERE,
-        group: "Fog",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "atmosphere.fog_end",
-        label: "Fog end",
-        description: Some("0 = camera plane, 1 = far plane. Typically [0, 1]."),
-        kind: FieldKind::F32 {
-            hard: (-10.0, 10.0),
-            soft: Some((0.0, 1.0)),
-            unit: "",
-        },
-        default: DefaultValue::F32(ed::ATMOSPHERE_FOG_END),
-        get: |s| FieldValue::F32(s.atmosphere.fog_end),
-        set: |s, v| {
-            if let FieldValue::F32(x) = v {
-                s.atmosphere.fog_end = x;
-            }
-        },
-        category: categories::ATMOSPHERE,
-        group: "Fog",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "atmosphere.fog_color",
-        label: "Fog colour",
-        description: None,
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::ATMOSPHERE_FOG_COLOR),
-        get: |s| FieldValue::Color(s.atmosphere.fog_color),
-        set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.atmosphere.fog_color = x;
-            }
-        },
-        category: categories::ATMOSPHERE,
-        group: "Fog",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "atmosphere.sun_color",
-        label: "Sun colour",
-        description: None,
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::ATMOSPHERE_SUN_COLOR),
-        get: |s| FieldValue::Color(s.atmosphere.sun_color),
-        set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.atmosphere.sun_color = x;
-            }
-        },
-        category: categories::ATMOSPHERE,
-        group: "Sky",
         blocks_export: false,
     },
     FieldSpec {
@@ -446,10 +376,269 @@ pub static ATMOSPHERE_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
+// Fog (distance fog from AtmosphereSettings; custom.fog height fog
+// and custom.clouds are rendered bespoke in the Fog modal)
+// ──────────────────────────────────────────────────────────────────
+
+pub static FOG_SPECS: &[FieldSpec<MapSettings>] = &[
+    FieldSpec {
+        id: "fog.fog_start",
+        label: "Fog start",
+        description: Some("0 = camera plane, 1 = far plane. Typically [0, 1]."),
+        kind: FieldKind::F32 {
+            hard: (-10.0, 10.0),
+            soft: Some((0.0, 1.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::ATMOSPHERE_FOG_START),
+        get: |s| FieldValue::F32(s.atmosphere.fog_start),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.atmosphere.fog_start = x;
+            }
+        },
+        category: categories::FOG,
+        group: "Distance fog",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "fog.fog_end",
+        label: "Fog end",
+        description: Some("0 = camera plane, 1 = far plane. Typically [0, 1]."),
+        kind: FieldKind::F32 {
+            hard: (-10.0, 10.0),
+            soft: Some((0.0, 1.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::ATMOSPHERE_FOG_END),
+        get: |s| FieldValue::F32(s.atmosphere.fog_end),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.atmosphere.fog_end = x;
+            }
+        },
+        category: categories::FOG,
+        group: "Distance fog",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "fog.fog_color",
+        label: "Fog colour",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::ATMOSPHERE_FOG_COLOR),
+        get: |s| FieldValue::Color(s.atmosphere.fog_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.atmosphere.fog_color = x;
+            }
+        },
+        category: categories::FOG,
+        group: "Distance fog",
+        blocks_export: false,
+    },
+];
+
+// ──────────────────────────────────────────────────────────────────
+// Clouds (custom.clouds widget; all Option<T> fields)
+// ──────────────────────────────────────────────────────────────────
+
+pub static CLOUDS_SPECS: &[FieldSpec<MapSettings>] = &[
+    FieldSpec {
+        id: "clouds.speed",
+        label: "Speed",
+        description: Some("Wind-speed multiplier for cloud scrolling."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100.0),
+            soft: Some((0.0, 5.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(1.0),
+        get: |s| FieldValue::F32(s.custom_clouds.speed),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.speed = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.color",
+        label: "Colour",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color([1.0, 1.0, 1.0]),
+        get: |s| FieldValue::Color(s.custom_clouds.color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.custom_clouds.color = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.height",
+        label: "Height (elmos)",
+        description: Some("Altitude above which cloud opacity is zero. Can be absolute or a % of map max height."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100000.0),
+            soft: Some((0.0, 5000.0)),
+            unit: "elmos",
+        },
+        default: DefaultValue::F32(800.0),
+        get: |s| FieldValue::F32(s.custom_clouds.height),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.height = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.bottom",
+        label: "Bottom (elmos)",
+        description: Some("No cloud density below this altitude."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100000.0),
+            soft: Some((0.0, 2000.0)),
+            unit: "elmos",
+        },
+        default: DefaultValue::F32(0.0),
+        get: |s| FieldValue::F32(s.custom_clouds.bottom),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.bottom = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.fade_alt",
+        label: "Fade altitude (elmos)",
+        description: Some("Cloud opacity fades linearly from full at bottom to zero at height between fade_alt and height."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100000.0),
+            soft: Some((0.0, 3000.0)),
+            unit: "elmos",
+        },
+        default: DefaultValue::F32(400.0),
+        get: |s| FieldValue::F32(s.custom_clouds.fade_alt),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.fade_alt = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.scale",
+        label: "Scale (elmos)",
+        description: Some("Spatial size of the cloud texture tiles."),
+        kind: FieldKind::F32 {
+            hard: (1.0, 100000.0),
+            soft: Some((50.0, 5000.0)),
+            unit: "elmos",
+        },
+        default: DefaultValue::F32(500.0),
+        get: |s| FieldValue::F32(s.custom_clouds.scale),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.scale = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.opacity",
+        label: "Opacity",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 1.0),
+            soft: Some((0.0, 1.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(0.5),
+        get: |s| FieldValue::F32(s.custom_clouds.opacity),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.opacity = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.clamp_to_map",
+        label: "Clamp to map",
+        description: Some("When true, the cloud volume is clipped to the map boundary rather than extending to the horizon."),
+        kind: FieldKind::Bool,
+        default: DefaultValue::Bool(false),
+        get: |s| FieldValue::Bool(s.custom_clouds.clamp_to_map),
+        set: |s, v| {
+            if let FieldValue::Bool(x) = v {
+                s.custom_clouds.clamp_to_map = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "clouds.sun_penetration",
+        label: "Sun penetration",
+        description: Some("How much sun light penetrates the cloud volume."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100.0),
+            soft: Some((0.0, 30.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(10.0),
+        get: |s| FieldValue::F32(s.custom_clouds.sun_penetration),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.custom_clouds.sun_penetration = x;
+            }
+        },
+        category: categories::CLOUDS,
+        group: "Clouds",
+        blocks_export: false,
+    },
+];
+
+// ──────────────────────────────────────────────────────────────────
 // Lighting
 // ──────────────────────────────────────────────────────────────────
 
 pub static LIGHTING_SPECS: &[FieldSpec<MapSettings>] = &[
+    FieldSpec {
+        id: "atmosphere.sun_color",
+        label: "Sun colour",
+        description: None,
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::ATMOSPHERE_SUN_COLOR),
+        get: |s| FieldValue::Color(s.atmosphere.sun_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.atmosphere.sun_color = x;
+            }
+        },
+        category: categories::LIGHTING,
+        group: "Sun",
+        blocks_export: false,
+    },
     FieldSpec {
         id: "lighting.sun_dir",
         label: "Sun direction",
@@ -975,6 +1164,350 @@ pub static WATER_SPECS: &[FieldSpec<MapSettings>] = &[
         group: "Wave normals",
         blocks_export: false,
     },
+    FieldSpec {
+        id: "water.perlin_start_freq",
+        label: "Perlin start freq",
+        description: Some("Starting octave frequency for the normal-map Perlin sum."),
+        kind: FieldKind::F32 {
+            hard: (0.1, 1000.0),
+            soft: Some((1.0, 32.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_PERLIN_START_FREQ),
+        get: |s| FieldValue::F32(s.water.perlin_start_freq),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.perlin_start_freq = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Wave normals",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.perlin_lacunarity",
+        label: "Perlin lacunarity",
+        description: Some("Frequency multiplier per octave for the normal-map Perlin sum."),
+        kind: FieldKind::F32 {
+            hard: (1.0, 20.0),
+            soft: Some((1.5, 6.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_PERLIN_LACUNARITY),
+        get: |s| FieldValue::F32(s.water.perlin_lacunarity),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.perlin_lacunarity = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Wave normals",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.num_tiles",
+        label: "Num tiles",
+        description: Some("Number of normal-map tiles (NxN) tiling the water surface."),
+        kind: FieldKind::U32 {
+            hard: (1, 16),
+            soft: Some((1, 8)),
+            unit: "",
+        },
+        default: DefaultValue::U32(ed::WATER_NUM_TILES),
+        get: |s| FieldValue::U32(s.water.num_tiles),
+        set: |s, v| {
+            if let FieldValue::U32(x) = v {
+                s.water.num_tiles = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Wave normals",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.normal_texture",
+        label: "Normal texture",
+        description: Some(
+            "Game-data-relative path to a DDS normal map. Empty = engine default bump texture.",
+        ),
+        kind: FieldKind::OptionText { max_len: None },
+        default: DefaultValue::Empty,
+        get: |s| FieldValue::OptionText(s.water.normal_texture.clone()),
+        set: |s, v| {
+            if let FieldValue::OptionText(x) = v {
+                s.water.normal_texture = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Wave normals",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.wave_offset_factor",
+        label: "Wave offset factor",
+        description: Some("Scales the UV displacement applied by the wave normal map."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 3.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_WAVE_OFFSET_FACTOR),
+        get: |s| FieldValue::F32(s.water.wave_offset_factor),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.wave_offset_factor = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Shore foam",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.wave_length",
+        label: "Wave length",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 3.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_WAVE_LENGTH),
+        get: |s| FieldValue::F32(s.water.wave_length),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.wave_length = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Shore foam",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.wave_foam_distortion",
+        label: "Foam distortion",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 2.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_WAVE_FOAM_DISTORTION),
+        get: |s| FieldValue::F32(s.water.wave_foam_distortion),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.wave_foam_distortion = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Shore foam",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.wave_foam_intensity",
+        label: "Foam intensity",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 2.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_WAVE_FOAM_INTENSITY),
+        get: |s| FieldValue::F32(s.water.wave_foam_intensity),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.wave_foam_intensity = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Shore foam",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.shore_waves",
+        label: "Shore waves",
+        description: Some("Enable wave-foam rendering along shorelines."),
+        kind: FieldKind::Bool,
+        default: DefaultValue::Bool(true),
+        get: |s| FieldValue::Bool(s.water.shore_waves),
+        set: |s, v| {
+            if let FieldValue::Bool(x) = v {
+                s.water.shore_waves = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Shore foam",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.blur_base",
+        label: "Blur base",
+        description: Some("Base blur radius for the refraction blur pass."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 20.0),
+            soft: Some((0.0, 5.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_BLUR_BASE),
+        get: |s| FieldValue::F32(s.water.blur_base),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.blur_base = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Refraction blur",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.blur_exponent",
+        label: "Blur exponent",
+        description: Some("Depth-based exponent that widens the blur with depth."),
+        kind: FieldKind::F32 {
+            hard: (0.1, 10.0),
+            soft: Some((0.5, 4.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_BLUR_EXPONENT),
+        get: |s| FieldValue::F32(s.water.blur_exponent),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.blur_exponent = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Refraction blur",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.caustics_resolution",
+        label: "Caustics resolution",
+        description: Some("Size of the caustics texture rendered each frame."),
+        kind: FieldKind::F32 {
+            hard: (1.0, 1024.0),
+            soft: Some((16.0, 256.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_CAUSTICS_RESOLUTION),
+        get: |s| FieldValue::F32(s.water.caustics_resolution),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.caustics_resolution = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Caustics",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.caustics_strength",
+        label: "Caustics strength",
+        description: None,
+        kind: FieldKind::F32 {
+            hard: (0.0, 1.0),
+            soft: Some((0.0, 0.5)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_CAUSTICS_STRENGTH),
+        get: |s| FieldValue::F32(s.water.caustics_strength),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.caustics_strength = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Caustics",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.plane_color",
+        label: "Plane colour",
+        description: Some(
+            "Colour of the flat water plane rendered at sea level when BumpWater is not active.",
+        ),
+        kind: FieldKind::Color,
+        default: DefaultValue::Color(ed::WATER_PLANE_COLOR),
+        get: |s| FieldValue::Color(s.water.plane_color),
+        set: |s, v| {
+            if let FieldValue::Color(x) = v {
+                s.water.plane_color = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Plane",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.repeat_x",
+        label: "Repeat X",
+        description: Some("Normal-map UV repeat count in X; 0 = auto (derived from map width)."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 1024.0),
+            soft: Some((0.0, 64.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_REPEAT_X),
+        get: |s| FieldValue::F32(s.water.repeat_x),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.repeat_x = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Plane",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.repeat_y",
+        label: "Repeat Y",
+        description: Some("Normal-map UV repeat count in Y; 0 = auto (derived from map height)."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 1024.0),
+            soft: Some((0.0, 64.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::WATER_REPEAT_Y),
+        get: |s| FieldValue::F32(s.water.repeat_y),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.repeat_y = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Plane",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.force_rendering",
+        label: "Force rendering",
+        description: Some("Render water even when the map has no sea-level area."),
+        kind: FieldKind::Bool,
+        default: DefaultValue::Bool(false),
+        get: |s| FieldValue::Bool(s.water.force_rendering),
+        set: |s, v| {
+            if let FieldValue::Bool(x) = v {
+                s.water.force_rendering = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Plane",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "water.has_water_plane",
+        label: "Has water plane",
+        description: Some("When false, no flat water plane is rendered at sea level."),
+        kind: FieldKind::Bool,
+        default: DefaultValue::Bool(true),
+        get: |s| FieldValue::Bool(s.water.has_water_plane),
+        set: |s, v| {
+            if let FieldValue::Bool(x) = v {
+                s.water.has_water_plane = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Plane",
+        blocks_export: false,
+    },
 ];
 
 // ──────────────────────────────────────────────────────────────────
@@ -1320,6 +1853,8 @@ mod tests {
         for spec in PHYSICS_SPECS
             .iter()
             .chain(ATMOSPHERE_SPECS.iter())
+            .chain(FOG_SPECS.iter())
+            .chain(CLOUDS_SPECS.iter())
             .chain(LIGHTING_SPECS.iter())
             .chain(WATER_SPECS.iter())
             .chain(GRASS_SPECS.iter())
@@ -1347,6 +1882,12 @@ mod tests {
         for s in ATMOSPHERE_SPECS {
             assert_eq!(s.category, categories::ATMOSPHERE);
         }
+        for s in FOG_SPECS {
+            assert_eq!(s.category, categories::FOG);
+        }
+        for s in CLOUDS_SPECS {
+            assert_eq!(s.category, categories::CLOUDS);
+        }
         for s in LIGHTING_SPECS {
             assert_eq!(s.category, categories::LIGHTING);
         }
@@ -1367,6 +1908,8 @@ mod tests {
         for s in PHYSICS_SPECS
             .iter()
             .chain(ATMOSPHERE_SPECS.iter())
+            .chain(FOG_SPECS.iter())
+            .chain(CLOUDS_SPECS.iter())
             .chain(LIGHTING_SPECS.iter())
             .chain(WATER_SPECS.iter())
             .chain(GRASS_SPECS.iter())
