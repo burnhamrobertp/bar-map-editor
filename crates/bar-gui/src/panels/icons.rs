@@ -159,37 +159,30 @@ pub(crate) fn paint_startbox_icon(painter: &egui::Painter, rect: egui::Rect, col
     );
 }
 
-/// Hammer glyph for the Compile toolbar button. A rotated rectangular head
-/// at the upper-left and a thin handle running diagonally down to the
-/// lower-right. The previous icon was a lightning bolt, which read as
-/// "fast / energy" rather than the "build" semantics of the compile action.
+/// Terminal prompt `>_` glyph for the Compile toolbar button.
+/// Reads as "build/run a command" -- distinct from the Run button's
+/// play-triangle and the lighting/gear icons.
 pub(crate) fn paint_compile_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
     let cx = rect.center().x;
     let cy = rect.center().y;
-    // Hammer head: a quad tilted ~25 degrees so it reads as a head, not a
-    // brick. Sits in the upper-left of the icon area.
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            egui::pos2(cx - 6.5, cy - 5.5),
-            egui::pos2(cx - 0.5, cy - 8.0),
-            egui::pos2(cx + 1.5, cy - 3.5),
-            egui::pos2(cx - 4.5, cy - 1.0),
+    let stroke = egui::Stroke::new(2.0, color);
+    // `>` chevron on the left half
+    painter.line_segment(
+        [egui::pos2(cx - 6.5, cy - 4.5), egui::pos2(cx - 1.5, cy)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx - 1.5, cy), egui::pos2(cx - 6.5, cy + 4.5)],
+        stroke,
+    );
+    // `_` cursor on the right half
+    painter.line_segment(
+        [
+            egui::pos2(cx - 0.5, cy + 4.5),
+            egui::pos2(cx + 6.5, cy + 4.5),
         ],
-        color,
-        egui::Stroke::NONE,
-    ));
-    // Handle: a thin diagonal bar running from just under the head down to
-    // the lower-right of the icon area.
-    painter.add(egui::Shape::convex_polygon(
-        vec![
-            egui::pos2(cx - 3.5, cy - 0.5),
-            egui::pos2(cx - 1.0, cy - 2.5),
-            egui::pos2(cx + 6.0, cy + 6.0),
-            egui::pos2(cx + 3.5, cy + 8.0),
-        ],
-        color,
-        egui::Stroke::NONE,
-    ));
+        stroke,
+    );
 }
 
 /// Rotating dot in the top-right corner of a button rect to signal a running
@@ -793,6 +786,54 @@ pub(crate) fn paint_water_icon(painter: &egui::Painter, rect: egui::Rect, color:
         color,
         egui::Stroke::NONE,
     ));
+}
+
+/// Horizontal misty lines for the Fog action-bar button.
+pub(crate) fn paint_fog_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(1.6, color);
+    // Four lines of decreasing length top-to-bottom to suggest fading mist.
+    for (i, (y_off, x_shrink)) in [(-4.5, 1.5), (-1.5, 0.0), (1.5, 2.0), (4.5, 3.5)]
+        .iter()
+        .enumerate()
+    {
+        let _ = i;
+        painter.line_segment(
+            [
+                egui::pos2(cx - 7.5 + x_shrink, cy + y_off),
+                egui::pos2(cx + 7.5 - x_shrink, cy + y_off),
+            ],
+            stroke,
+        );
+    }
+}
+
+/// Up-arrow with a horizontal line at the top for the Publish
+/// action-bar button. Reads as "push up / submit / publish".
+pub(crate) fn paint_publish_icon(painter: &egui::Painter, rect: egui::Rect, color: egui::Color32) {
+    let cx = rect.center().x;
+    let cy = rect.center().y;
+    let stroke = egui::Stroke::new(2.0, color);
+    // Horizontal destination line at top
+    painter.line_segment(
+        [
+            egui::pos2(cx - 6.0, cy - 6.5),
+            egui::pos2(cx + 6.0, cy - 6.5),
+        ],
+        stroke,
+    );
+    // Arrow stem
+    painter.line_segment([egui::pos2(cx, cy - 5.5), egui::pos2(cx, cy + 5.0)], stroke);
+    // Arrowhead (upward-pointing chevron)
+    painter.line_segment(
+        [egui::pos2(cx - 4.0, cy - 1.5), egui::pos2(cx, cy - 5.5)],
+        stroke,
+    );
+    painter.line_segment(
+        [egui::pos2(cx, cy - 5.5), egui::pos2(cx + 4.0, cy - 1.5)],
+        stroke,
+    );
 }
 
 /// 2x2 grid of squares for the Resources (texture-splat) button.

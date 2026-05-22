@@ -139,6 +139,11 @@ pub const BTN_TAB_ATMOSPHERE_NORMAL: Color32 = Color32::from_rgb(70, 110, 130);
 pub const BTN_TAB_ATMOSPHERE_HOVER: Color32 = Color32::from_rgb(90, 140, 165);
 pub const BTN_TAB_ATMOSPHERE_PRESS: Color32 = Color32::from_rgb(55, 90, 105);
 
+// Fog -- muted lavender-grey (mist).
+pub const BTN_TAB_FOG_NORMAL: Color32 = Color32::from_rgb(90, 90, 115);
+pub const BTN_TAB_FOG_HOVER: Color32 = Color32::from_rgb(115, 115, 145);
+pub const BTN_TAB_FOG_PRESS: Color32 = Color32::from_rgb(70, 70, 90);
+
 // Lighting -- amber / gold (sun).
 pub const BTN_TAB_LIGHTING_NORMAL: Color32 = Color32::from_rgb(135, 110, 50);
 pub const BTN_TAB_LIGHTING_HOVER: Color32 = Color32::from_rgb(165, 140, 70);
@@ -166,6 +171,9 @@ pub const BTN_MAPEDGE_PRESS: Color32 = Color32::from_rgb(85, 75, 50);
 pub const BTN_GRASS_NORMAL: Color32 = Color32::from_rgb(70, 110, 55);
 pub const BTN_GRASS_HOVER: Color32 = Color32::from_rgb(90, 135, 70);
 pub const BTN_GRASS_PRESS: Color32 = Color32::from_rgb(55, 90, 40);
+
+// Publish (disabled placeholder).
+pub const BTN_PUBLISH_DISABLED: Color32 = Color32::from_rgb(40, 42, 52);
 
 pub const BTN_COMPILE_NORMAL: Color32 = Color32::from_rgb(38, 95, 115);
 pub const BTN_COMPILE_HOVER: Color32 = Color32::from_rgb(52, 118, 140);

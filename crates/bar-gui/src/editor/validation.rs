@@ -89,9 +89,11 @@ impl Default for ValidationState {
 /// finding list itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModalId {
-    /// The seven-tab Map Info modal (Identity / Dimensions /
-    /// Physics / Atmosphere / Lighting / Water / Resources).
+    /// The map-settings modals: Identity / Dimensions / Physics /
+    /// Atmosphere / Lighting / Water / Resources.
     MapInfo,
+    /// The Fog modal (distance fog, height fog, volumetric clouds).
+    Fog,
     /// The Map Edge modal (grass shading texture picker).
     MapEdge,
     /// The Grass modal (`custom.grassConfig` block).
@@ -113,6 +115,7 @@ impl ModalId {
             c::IDENTITY | c::DIMENSIONS | c::PHYSICS | c::ATMOSPHERE | c::LIGHTING | c::WATER => {
                 ModalId::MapInfo
             }
+            c::FOG | c::CLOUDS => ModalId::Fog,
             c::GRASS => ModalId::Grass,
             c::RESOURCES => ModalId::MapEdge,
             c::STARTBOXES => ModalId::StartBoxes,
@@ -369,6 +372,14 @@ impl BarEditorApp {
         ));
         findings.extend(bar_project::field_schema::validate_with_schema(
             bar_project::recipe_fields::ATMOSPHERE_SPECS,
+            &settings,
+        ));
+        findings.extend(bar_project::field_schema::validate_with_schema(
+            bar_project::recipe_fields::FOG_SPECS,
+            &settings,
+        ));
+        findings.extend(bar_project::field_schema::validate_with_schema(
+            bar_project::recipe_fields::CLOUDS_SPECS,
             &settings,
         ));
         findings.extend(bar_project::field_schema::validate_with_schema(

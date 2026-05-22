@@ -24,6 +24,7 @@ pub mod shared;
 
 pub mod atmosphere;
 pub mod dimensions;
+pub mod fog;
 pub mod grass;
 pub mod identity;
 pub mod lighting;

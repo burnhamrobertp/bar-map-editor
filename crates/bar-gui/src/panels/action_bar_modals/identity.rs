@@ -8,13 +8,10 @@
 //! multiline description / depend list don't fit a single-line
 //! `FieldKind`.
 
-use bar_project::engine_defaults as ed;
 use eframe::egui;
 
 use crate::app::BarEditorApp;
-use crate::panels::action_bar_modals::shared::{
-    drive_drag_intent, drive_text_edit_intent, modal_frame,
-};
+use crate::panels::action_bar_modals::shared::{drive_text_edit_intent, modal_frame};
 use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
@@ -26,7 +23,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         draw_text_fields(ui, app);
         draw_description(ui, app);
         draw_depend(ui, app);
-        draw_map_hardness(ui, app);
     });
     app.dialog.show_identity_editor = open;
 }
@@ -131,21 +127,4 @@ fn draw_depend(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             .collect();
     }
     drive_text_edit_intent(app, &depend_resp, "depend", depend_resp.changed());
-}
-
-fn draw_map_hardness(ui: &mut egui::Ui, app: &mut BarEditorApp) {
-    let mut hardness = app.map_settings().map_hardness.unwrap_or(ed::MAP_HARDNESS);
-    let mut hardness_resp = None;
-    ui.horizontal(|ui| {
-        ui.label("mapHardness");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let resp = ui.add(egui::DragValue::new(&mut hardness).range(1u32..=65535u32));
-            hardness_resp = Some(resp);
-        });
-    });
-    let hardness_resp = hardness_resp.expect("hardness response captured above");
-    if hardness_resp.changed() {
-        app.map_settings_mut().map_hardness = Some(hardness);
-    }
-    drive_drag_intent(app, &hardness_resp, "mapHardness");
 }

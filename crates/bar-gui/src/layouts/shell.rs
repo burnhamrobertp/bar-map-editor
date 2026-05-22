@@ -12,10 +12,11 @@ use std::time::Instant;
 
 use crate::app::{
     paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
-    paint_export_icon, paint_grass_icon, paint_identity_icon, paint_lighting_icon,
-    paint_map_edge_icon, paint_physics_icon, paint_resources_icon, paint_startbox_icon,
-    paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog, ExportStatus, GroupDeleteChoice,
-    Layout, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lighting_icon,
+    paint_map_edge_icon, paint_physics_icon, paint_publish_icon, paint_resources_icon,
+    paint_startbox_icon, paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
+    ExportStatus, GroupDeleteChoice, Layout, PendingAction, UnsavedDecision,
+    CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 use crate::editor::validation::{BlockingAction, ModalId, ValidationSummary};
 use crate::panels::log::level_color;
@@ -946,6 +947,7 @@ impl BarEditorApp {
         crate::panels::action_bar_modals::dimensions::draw(self, ctx);
         crate::panels::action_bar_modals::physics::draw(self, ctx);
         crate::panels::action_bar_modals::atmosphere::draw(self, ctx);
+        crate::panels::action_bar_modals::fog::draw(self, ctx);
         crate::panels::action_bar_modals::lighting::draw(self, ctx);
         crate::panels::action_bar_modals::water::draw(self, ctx);
         crate::panels::action_bar_modals::resources::draw(self, ctx);
@@ -965,11 +967,6 @@ impl BarEditorApp {
                     let btn_size = egui::vec2(37.0, 30.0);
                     let busy = self.preview.export_status == ExportStatus::All;
                     let any_running = self.preview.export_status.is_running();
-                    let sense = if any_running {
-                        egui::Sense::hover()
-                    } else {
-                        egui::Sense::click()
-                    };
                     // "Build / ship" group: Compile -> Test in BAR (+ optional
                     // chevron) -> Bundle. Members keep individual
                     // rounded-rectangle styling -- they belong to the
@@ -980,7 +977,7 @@ impl BarEditorApp {
                     let compile_dirty = self.project.compile_dirty;
                     let compile_blocked = self.validation.is_blocking(BlockingAction::Compile);
                     let can_compile = !compile_running && !any_running && !compile_blocked;
-                    let compile_sense = if can_compile {
+                    let compile_sense = if can_compile || compile_running {
                         egui::Sense::click()
                     } else {
                         egui::Sense::hover()
@@ -1010,7 +1007,7 @@ impl BarEditorApp {
                     let compile_summary =
                         self.validation.summary_for_action(BlockingAction::Compile);
                     let base_hover = if compile_running {
-                        "Compiling...".to_string()
+                        "Compiling... (click to cancel)".to_string()
                     } else {
                         "Compile".to_string()
                     };
@@ -1025,7 +1022,9 @@ impl BarEditorApp {
                     let hover = hover_with_summary(&base_hover, &compile_summary, &blocking_msg);
                     let compile_clicked = compile_resp.clicked();
                     compile_resp.on_hover_text(hover);
-                    if !compile_running && !compile_blocked && compile_clicked {
+                    if compile_running && compile_clicked {
+                        self.preview.cancel_compile_requested = true;
+                    } else if !compile_running && !compile_blocked && compile_clicked {
                         self.preview.compile_requested = true;
                     }
                     if compile_running {
@@ -1051,10 +1050,10 @@ impl BarEditorApp {
 
                     let bar_rect = egui::Rect::from_min_size(group_rect.min, btn_size);
                     let bar_blocked = self.validation.is_blocking(BlockingAction::TestInBar);
-                    let bar_sense = if any_running || bar_blocked {
-                        egui::Sense::hover()
-                    } else {
+                    let bar_sense = if test_in_bar_busy || (!any_running && !bar_blocked) {
                         egui::Sense::click()
+                    } else {
+                        egui::Sense::hover()
                     };
                     let bar_resp = ui.interact(bar_rect, ui.id().with("bar_btn"), bar_sense);
 
@@ -1094,7 +1093,7 @@ impl BarEditorApp {
                         .validation
                         .summary_for_action(BlockingAction::TestInBar);
                     let base_tooltip = if test_in_bar_busy {
-                        "Test in BAR (launching)".to_string()
+                        "Test in BAR (click to cancel)".to_string()
                     } else {
                         "Test in BAR".to_string()
                     };
@@ -1107,7 +1106,9 @@ impl BarEditorApp {
                     let bar_tooltip =
                         hover_with_summary(&base_tooltip, &bar_summary, &blocking_msg);
                     let bar_resp = bar_resp.on_hover_text(bar_tooltip);
-                    if !any_running && !bar_blocked && bar_resp.clicked() {
+                    if test_in_bar_busy && bar_resp.clicked() {
+                        self.preview.cancel_export_requested = true;
+                    } else if !any_running && !bar_blocked && bar_resp.clicked() {
                         self.run_validation();
                         if bar_project::has_errors(&self.validation.findings) {
                             self.dialog.show_validation_panel = true;
@@ -1121,10 +1122,10 @@ impl BarEditorApp {
                     // action and rightmost button of the build group.
                     ui.add_space(4.0);
                     let bundle_blocked = self.validation.is_blocking(BlockingAction::Bundle);
-                    let bundle_sense = if any_running || bundle_blocked {
-                        egui::Sense::hover()
+                    let bundle_sense = if busy || (!any_running && !bundle_blocked) {
+                        egui::Sense::click()
                     } else {
-                        sense
+                        egui::Sense::hover()
                     };
                     let (rect, response) = ui.allocate_exact_size(btn_size, bundle_sense);
 
@@ -1150,7 +1151,7 @@ impl BarEditorApp {
 
                     let bundle_summary = self.validation.summary_for_action(BlockingAction::Bundle);
                     let base_tooltip = if busy {
-                        "Bundle (exporting)".to_string()
+                        "Bundle (click to cancel)".to_string()
                     } else {
                         "Bundle".to_string()
                     };
@@ -1161,13 +1162,27 @@ impl BarEditorApp {
                     };
                     let tooltip = hover_with_summary(&base_tooltip, &bundle_summary, &blocking_msg);
                     let response = response.on_hover_text(tooltip);
-                    if !any_running
+                    if busy && response.clicked() {
+                        self.preview.cancel_export_requested = true;
+                    } else if !any_running
                         && !bundle_blocked
                         && response.clicked()
                         && self.validate_before_export("Bundle all")
                     {
                         self.preview.run_requested = true;
                     }
+
+                    // Publish -- disabled placeholder; not wired to any action yet.
+                    // TODO: wire to a map-publishing flow (upload to BAR lobby / itch.io / etc.)
+                    ui.add_space(4.0);
+                    let (pub_rect, _pub_resp) =
+                        ui.allocate_exact_size(btn_size, egui::Sense::hover());
+                    if ui.is_rect_visible(pub_rect) {
+                        let painter = ui.painter_at(pub_rect);
+                        painter.rect_filled(pub_rect, 5.0, tokens::BTN_PUBLISH_DISABLED);
+                        paint_publish_icon(&painter, pub_rect, egui::Color32::from_white_alpha(60));
+                    }
+                    _pub_resp.on_hover_text("Publish (coming soon)");
 
                     // Chevron -- only rendered when multiple versions exist.
                     let popup_id = ui.make_persistent_id("bar_version_picker");
@@ -1357,6 +1372,17 @@ impl BarEditorApp {
                                 tokens::BTN_TAB_ATMOSPHERE_NORMAL,
                                 tokens::BTN_TAB_ATMOSPHERE_HOVER,
                                 tokens::BTN_TAB_ATMOSPHERE_PRESS,
+                            ),
+                        ),
+                        (
+                            paint_fog_icon,
+                            |d| &mut d.show_fog_editor,
+                            "fog",
+                            "Fog & Clouds",
+                            (
+                                tokens::BTN_TAB_FOG_NORMAL,
+                                tokens::BTN_TAB_FOG_HOVER,
+                                tokens::BTN_TAB_FOG_PRESS,
                             ),
                         ),
                         (

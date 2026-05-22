@@ -104,6 +104,7 @@ pub struct DialogState {
     pub show_dimensions_editor: bool,
     pub show_physics_editor: bool,
     pub show_atmosphere_editor: bool,
+    pub show_fog_editor: bool,
     pub show_lighting_editor: bool,
     pub show_water_editor: bool,
     pub show_resources_editor: bool,
