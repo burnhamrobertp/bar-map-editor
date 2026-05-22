@@ -15,6 +15,7 @@ Vendored upstream files live at `vendor/recoil/shaders/GLSL/`. Our ports live at
 | `BumpWaterVS.glsl`, `BumpWaterFS.glsl`         | **Fully ported**             | `shaders/water.wgsl`               | Octave normals, surface composite, refraction with depth mixback + engine-formula UV distortion, 7-tap reflection blur (`opt_blurreflection`) with mapinfo-driven `blurBase`/`blurExponent`, fresnel reflection, sun spec, height fog overlay, tonemap, 32-frame caustic animation (loaded from engine `bitmaps.sdz`), shore foam (`GetShorewaves` -- CPU chamfer coast-distance bake via `bar_data::coastmap` + engine-shipped foam/waverand textures + cliff-foam term) all in. |
 | `MiniMapVertProg.glsl`, `MiniMapFragProg.glsl` | **Ported** (not GUI-wired)   | `shaders/recoil/minimap.wgsl`      | Inspector still draws its own topo view; switch deferred until concrete user complaint. |
 | `ModelVertProg.glsl`, `ModelFragProg.glsl`     | **Mostly ported**            | `shaders/features.wgsl`            | Diffuse + SMF-style lighting + shadow + texture2.r emissive + texture2.g spec multiplier + env-cubemap reflection mixed by texture2.g + team-colour mix via texture1.a (`MFP:87-109`). **Remaining**: dynamic point/spot light accumulation (`MFP:42-77`, `MAX_DYNAMIC_MODEL_LIGHTS`). **Deferred** -- engine exposes `Spring.AddMapLight` / `AddModelLight` Lua APIs but BAR's gameplay layer doesn't drive them, no BAR map ships a widget that calls them, and the editor preview has no light-source authoring today. Implement when (a) BAR starts using dynamic lights or (b) BME adds light-emitter authoring. |
+| `bar-game/modelmaterials_gl4/templates/cus_gl4.{vert,frag}.glsl` (1377+765 lines) | Not ported -- runtime gated   | (Preview falls back to `features.wgsl` engine-faithful ModelFragProg path) | The CUS GL4 LuaRules gadget (`luarules/gadgets/cus_gl4.lua`, 2417 lines) replaces the engine's stock model shader with a PBR-style replacement carrying unit-specific options (treads, health-displace, flashlights, raptors, scavengers, XMAS, normal-mapping, BRDF/env LUT). Most of those options apply only to live unit rendering (`Spring.AddUnit*` callbacks, real-time team state, dynamic lights) and have no editor-side source today. The Preferences "Advanced Model Shading" toggle gates the engine-faithful ModelFragProg subset already in `features.wgsl` (emissive, spec/env-reflection mix, team colour). A full cus_gl4 port would require asset plumbing for `brdf_0.png` / `envLut_0.png` and per-feature normal maps that BME's project format doesn't yet carry. |
 | `SMFShadingTexture{Vert,Frag}Prog.glsl`        | Folded into SMF              | (math inlined in `smf_ground.wgsl`)| n/a                                                         |
 | `SMFBorderProg`                                | Not vendored                 | —                                  | Off-map border. Cosmetic; depends on detail tex pipeline that's now in. |
 | `BumpWaterCoastBlur*`                          | Not vendored                 | —                                  | Subordinate to shore-foam — see below.                      |
@@ -124,6 +125,63 @@ Port lives at `shaders/water.wgsl`. Originally an "intentionally original PBR sh
 | **SMFBorderProg**                  | Nothing engine-shipped — uses map textures. No SDP dependency. |
 
 ---
+
+## Display preferences
+
+The Preferences > Display section exposes three runtime toggles
+that BME forwards into `TerrainRenderer` per render-call. All three
+are user preferences -- persisted in `settings.json` under the
+per-user config directory, NOT in any project file -- so toggling
+them in one project carries to the next.
+
+### Design rule
+
+**These toggles only ever RAISE quality when on.** Turning a toggle
+off must never strip a path that BME's baseline already renders;
+that would let the toggle reduce fidelity below the baseline, which
+is the opposite of what an "Advanced..." opt-in should do. The
+Sculpt layout therefore does NOT force these toggles off as a
+performance shortcut -- the renderer runs the engine-faithful path
+unconditionally in both Sculpt and Preview.
+
+The single exception is **Grass**, which is a legitimate
+performance toggle: the user explicitly asked for grass to be off
+in Sculpt regardless of the preference. Grass is a discrete widget
+draw (~thousands of instanced blade quads), not part of the
+baseline SMF terrain rendering, so suppressing it in the
+high-performance authoring view doesn't violate the rule.
+
+| Setting                      | Behaviour                                                                                                                                          | Sculpt forced off?                            | Engine analogue                                |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- | ---------------------------------------------- |
+| **Grass**                    | Issue the `map_grass_gl4` widget draw.                                                                                                             | yes (Sculpt = always off, Preview = pref)     | `mapinfo.custom.grassConfig` widget            |
+| **Advanced Map Shading**     | Reserved gate for FUTURE engine SMF paths BME doesn't yet implement (parallax, infotex, etc.). Currently a no-op on the rendering side.            | no -- toggle does not strip the baseline      | `springsettings.cfg::AdvMapShading` config     |
+| **Advanced Model Shading**   | Reserved gate for the eventual `cus_gl4` port (PBR + normal maps + BRDF / env LUT + dynamic lights). Currently a no-op on the rendering side.      | no -- toggle does not strip the baseline      | `cus_gl4.lua` LuaRules toggle                  |
+
+### Why the two "advanced" toggles are stubs today
+
+BME already renders the engine's stock SMF advanced paths
+(`SMFFragProg.glsl` -- splat detail-normal, sky reflections,
+per-pixel specular, light emission, detail-normal blend, basic
+splat, detail tex, sun specular) and the engine's stock model path
+(`ModelFragProg.glsl` -- texture2 emissive, spec multiplier,
+env-cubemap reflection, team-color). That IS the baseline. The
+toggles are reserved for the next quality tier above the baseline:
+
+- **Advanced Map Shading** would attach engine paths BME hasn't yet
+  built. Parallax and infotex are listed as deferred above; both
+  have specific blockers (verified non-issue, gameplay overlay
+  scope) so this slot stays a stub until a concrete enhancement
+  scope appears.
+- **Advanced Model Shading** would drive a real cus_gl4 PBR port
+  (see the cus_gl4 row of the status table for the gap). That
+  requires asset plumbing for `brdf_0.png` / `envLut_0.png` and
+  per-feature normal maps that BME's project format doesn't yet
+  carry, plus a substantial new shader.
+
+The flags thread through the renderer (`TerrainRenderer::
+advanced_map_shading` / `advanced_model_shading`) and the uniform
+layout (`terrain_detail_params.zw`) so the eventual implementations
+can attach without re-plumbing. Shaders currently ignore them.
 
 ## Verified non-issues
 
