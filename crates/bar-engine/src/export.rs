@@ -95,11 +95,6 @@ pub fn write_smf_full(
     Ok(())
 }
 
-/// Legacy wrapper for backward compat.
-pub fn write_smf(heightmap: &Heightmap, width: u32, height: u32, path: &Path) -> Result<()> {
-    write_smf_full(heightmap, None, None, width, height, path)
-}
-
 /// Export the graph's heightmap output as a 16-bit grayscale PNG.
 pub fn export_heightmap_png(
     graph: &GraphEngine,
@@ -536,6 +531,13 @@ return mapinfo
         // turn the exported map into lava on Test-in-BAR. Lava mode
         // emits the stored value as-is.
         water_damage = if wat.is_lava { wat.damage } else { 0.0 },
+        // (`wat.is_lava` is a bool here, sourced from
+        // ResolvedWater, which defaults to false when the recipe
+        // hasn't expressed a preference. The
+        // forced-zero-in-water-mode rule still applies because
+        // this template emits `damage` unconditionally; the
+        // structured emitter in `targets/spring_smf.rs` is the
+        // path where unset damage stays unset.)
         abs_r = wat.absorb[0],
         abs_g = wat.absorb[1],
         abs_b = wat.absorb[2],

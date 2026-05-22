@@ -32,7 +32,7 @@ pub use compile::{compile_from_outputs, compile_project, read_compiled_heightmap
 pub use executor::CpuExecutor;
 pub use export::{
     export_grassmap_png, export_heightmap_png, export_normalmap_png, export_sd7_directory,
-    export_smf, export_smt, export_texture_png, export_with_target, write_color_png, write_smf,
+    export_smf, export_smt, export_texture_png, export_with_target, write_color_png,
 };
 pub use extract::{
     extract_sd7_to_dir_with_progress, extract_sd7_to_work_dir,

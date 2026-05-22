@@ -34,8 +34,6 @@ impl SpringSmfCodec {
         TargetConfig {
             id: "spring-smf".to_string(),
             name: "Spring/Recoil (BAR)".to_string(),
-            schema_version: 1,
-            version: "1.0.0".to_string(),
             codec: "spring-smf".to_string(),
             codec_params: super::config::CodecParams {
                 square_size: 8,
@@ -1593,7 +1591,6 @@ mod tests {
             max_height: Some(800.0),
             map_hardness: Some(150),
             gravity: Some(80.0),
-            water_damage: Some(0.0),
             detail_textures: Vec::new(),
             deformable: Some(false),
             void_water: Some(true),

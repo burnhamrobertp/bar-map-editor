@@ -215,26 +215,6 @@ pub static PHYSICS_SPECS: &[FieldSpec<MapSettings>] = &[
         group: "Behaviour",
         blocks_export: false,
     },
-    FieldSpec {
-        id: "physics.water_damage",
-        label: "Water damage / sec",
-        description: None,
-        kind: FieldKind::F32 {
-            hard: (0.0, 1000.0),
-            soft: Some((0.0, 100.0)),
-            unit: "/s",
-        },
-        default: DefaultValue::F32(0.0),
-        get: |s| FieldValue::F32(s.water_damage),
-        set: |s, v| {
-            if let FieldValue::F32(x) = v {
-                s.water_damage = x;
-            }
-        },
-        category: categories::PHYSICS,
-        group: "Behaviour",
-        blocks_export: false,
-    },
 ];
 
 // ──────────────────────────────────────────────────────────────────

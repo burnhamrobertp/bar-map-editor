@@ -88,7 +88,6 @@ fn bench_full_export(c: &mut Criterion) {
     for &size in RESOLUTIONS {
         group.bench_with_input(BenchmarkId::new("noise_to_sd7", size), &size, |b, &size| {
             let recipe = Recipe {
-                schema_version: bar_project::RECIPE_SCHEMA_VERSION,
                 name: "bench".to_string(),
                 shortname: None,
                 description: String::new(),

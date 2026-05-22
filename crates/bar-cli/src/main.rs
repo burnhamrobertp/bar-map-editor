@@ -253,7 +253,9 @@ fn cmd_run(
     let executor = CpuExecutor;
     let start = Instant::now();
 
-    // If --target is specified, use the codec-based export path (backward compat shortcut)
+    // --target chooses the codec-based export path (`spring-smf`,
+    // `raw-layers`, or a user TOML file). Bypasses bundler-node
+    // discovery for one-shot CLI exports.
     if let Some(target_id) = target {
         let written = bar_engine::export_with_target(
             &graph,
@@ -515,7 +517,6 @@ fn cmd_targets() -> Result<()> {
         let target = registry.get_target(id).unwrap();
         println!("  {} — {}", id, target.name);
         println!("    Codec:   {}", target.codec);
-        println!("    Version: {}", target.version);
         println!("    Layers:  {}", target.layers.len());
         println!();
     }

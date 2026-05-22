@@ -20,9 +20,7 @@ pub const SMF_MINIMAP_SIDE_CAR: &str = "_bme_smf_minimap.png";
 
 use crate::package::{AssetHeader, AssetId, AssetKind};
 use crate::project::{EditorLayout, NodeSize, Position, Project};
-use crate::recipe::{
-    MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, RECIPE_SCHEMA_VERSION,
-};
+use crate::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode};
 
 /// A binary asset produced during SD7 import that must be written to the
 /// project's `assets/` directory before the project can be evaluated.
@@ -478,7 +476,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         .unwrap_or_else(|| scan.map_name.clone());
 
     let recipe = Recipe {
-        schema_version: RECIPE_SCHEMA_VERSION,
         name: recipe_name,
         shortname: recipe_shortname,
         description: recipe_description,

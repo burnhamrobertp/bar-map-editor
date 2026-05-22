@@ -42,7 +42,7 @@ pub use recipe::{
     DetailTexture, FeatureSource, LightingSettings, MapSettings, OutputConfig, PlacedFeature,
     Recipe, RecipeConnection, RecipeNode, ReplaceTable, ResolvedAtmosphere, ResolvedGrassSettings,
     ResolvedLighting, ResolvedMapSettings, ResolvedWater, ResourcesSettings, SoundSettings,
-    TerrainTypeEntry, WaterSettings, RECIPE_SCHEMA_VERSION,
+    TerrainTypeEntry, WaterSettings,
 };
 pub use scan::{scan_to_project, PendingAsset, PendingRawFile, WorkDirScan, SMF_MINIMAP_SIDE_CAR};
 pub use validation::{has_errors, validate_project, Finding, Severity};

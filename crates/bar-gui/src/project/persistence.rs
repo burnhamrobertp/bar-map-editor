@@ -326,7 +326,6 @@ impl BarEditorApp {
             .collect();
 
         let recipe = Recipe {
-            schema_version: bar_project::RECIPE_SCHEMA_VERSION,
             // Preserve the imported source name through save; the
             // .barproj directory stem is only a fallback for fresh
             // projects that never had a source mapinfo. Without this

@@ -95,7 +95,6 @@ fn test_complex_recipe_with_combiners() {
     use std::collections::HashMap;
 
     let recipe = Recipe {
-        schema_version: bar_project::RECIPE_SCHEMA_VERSION,
         name: "Complex Test".to_string(),
         shortname: None,
         description: String::new(),
@@ -210,7 +209,6 @@ fn test_recipe_with_erosion_pipeline() {
     use std::collections::HashMap;
 
     let recipe = Recipe {
-        schema_version: bar_project::RECIPE_SCHEMA_VERSION,
         name: "Erosion Test".to_string(),
         shortname: None,
         description: "Tests hydraulic erosion in pipeline".to_string(),
@@ -314,7 +312,6 @@ fn test_mask_operations_pipeline() {
     use std::collections::HashMap;
 
     let recipe = Recipe {
-        schema_version: bar_project::RECIPE_SCHEMA_VERSION,
         name: "Mask Test".to_string(),
         shortname: None,
         description: "Tests mask threshold, invert, blur, and apply".to_string(),

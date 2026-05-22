@@ -15,9 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
-use bar_engine::recipe::{
-    MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, RECIPE_SCHEMA_VERSION,
-};
+use bar_engine::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode};
 use bar_engine::CpuExecutor;
 use bar_graph::{evaluate_graph, NodeType, ParamValue, PortValue};
 
@@ -321,7 +319,6 @@ fn build_recipe(
     });
 
     Ok(Recipe {
-        schema_version: RECIPE_SCHEMA_VERSION,
         name: format!("preview-{}", template.name),
         shortname: None,
         description: String::new(),

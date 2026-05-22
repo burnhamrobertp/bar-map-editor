@@ -22,8 +22,14 @@ impl BarEditorApp {
         let mut color_idx = snapshot.color_idx;
         let mut is_subgraph = snapshot.is_subgraph;
         let mut collapsed = snapshot.collapsed;
-        let mut inputs = snapshot.subgraph_inputs.clone();
-        let mut outputs = snapshot.subgraph_outputs.clone();
+        // Read-only views of the runtime port lists. They're
+        // recomputed every frame from the subgraph's `SubgraphInput`
+        // / `SubgraphOutput` member nodes by
+        // `recompute_all_subgraph_io`, so the properties panel only
+        // displays them; editing happens by adding / removing IO
+        // nodes inside the subgraph.
+        let inputs = &snapshot.subgraph_inputs;
+        let outputs = &snapshot.subgraph_outputs;
 
         // Editable label — same affordance node titles use.
         let resp = ui.add(
@@ -76,15 +82,15 @@ impl BarEditorApp {
         ui.separator();
         // SubGraph toggle: a visual group can be promoted to a reusable
         // subgraph with explicit inputs/outputs. Demoting back drops
-        // the port definitions.
+        // the port definitions automatically the next frame -- the
+        // runtime port lists are recomputed from member IO nodes by
+        // `recompute_all_subgraph_io` regardless of this checkbox.
         if ui
             .checkbox(&mut is_subgraph, "Use as a SubGraph (reusable)")
             .changed()
         {
             dirty = true;
             if !is_subgraph {
-                inputs.clear();
-                outputs.clear();
                 collapsed = false;
             }
         }
@@ -96,43 +102,11 @@ impl BarEditorApp {
                 dirty = true;
             }
             ui.add_space(4.0);
-            // Build the member-port pool used by binding dropdowns.
-            // `inputs_pool` lists each member's INPUT ports (for
-            // external input bindings); `outputs_pool` lists each
-            // member's OUTPUT ports (for external output bindings).
-            let (inputs_pool, outputs_pool) = {
-                let mut ip: Vec<(NodeId, String, Vec<(String, String)>)> = Vec::new();
-                let mut op: Vec<(NodeId, String, Vec<(String, String)>)> = Vec::new();
-                for nid in &snapshot.member_ids {
-                    if let Some(node) = self.graph.get_node(*nid) {
-                        let label = node.label.clone();
-                        let i_ports: Vec<(String, String)> = node
-                            .inputs
-                            .iter()
-                            .map(|p| (p.name.clone(), format!("{:?}", p.kind)))
-                            .collect();
-                        let o_ports: Vec<(String, String)> = node
-                            .outputs
-                            .iter()
-                            .map(|p| (p.name.clone(), format!("{:?}", p.kind)))
-                            .collect();
-                        if !i_ports.is_empty() {
-                            ip.push((*nid, label.clone(), i_ports));
-                        }
-                        if !o_ports.is_empty() {
-                            op.push((*nid, label, o_ports));
-                        }
-                    }
-                }
-                (ip, op)
-            };
             // High-level macro parameters: the abstracted-knob layer.
             // Each one writes through directly to the bound inner-node
             // param the moment the user changes the slider, so the
             // user gets the "drop a Mountain Range, twiddle 4 sliders"
-            // workflow without ever expanding the SubGraph. Drawn
-            // FIRST because it's the casual-tier surface; the port
-            // editors below it are advanced.
+            // workflow without ever expanding the SubGraph.
             let macro_params_snapshot: Vec<crate::state::MacroParamRuntime> =
                 snapshot.macro_params.clone();
             if !macro_params_snapshot.is_empty() {
@@ -140,12 +114,10 @@ impl BarEditorApp {
                 self.draw_macro_params(ui, &macro_params_snapshot);
                 ui.separator();
             }
-            // Inputs / outputs are no longer edited here. They're
-            // derived from the `SubgraphInput` / `SubgraphOutput`
-            // nodes inside the subgraph: drop a `SubgraphInput` /
-            // `SubgraphOutput` from the palette into the subgraph
-            // canvas, wire it up, and rename it. The collapsed
-            // block's external ports follow.
+            // Read-only port summary. Editing happens by adding /
+            // renaming SubgraphInput / SubgraphOutput nodes inside
+            // the subgraph; `recompute_all_subgraph_io` rebuilds
+            // this list every frame from those nodes.
             ui.add_space(4.0);
             ui.label(egui::RichText::new("Inputs").strong());
             if inputs.is_empty() {
@@ -154,7 +126,7 @@ impl BarEditorApp {
                      drop a SubgraphInput node from the palette to add one.",
                 );
             } else {
-                for p in &inputs {
+                for p in inputs {
                     ui.horizontal(|ui| {
                         ui.weak("•");
                         ui.label(&p.name);
@@ -170,7 +142,7 @@ impl BarEditorApp {
                      drop a SubgraphOutput node from the palette to add one.",
                 );
             } else {
-                for p in &outputs {
+                for p in outputs {
                     ui.horizontal(|ui| {
                         ui.weak("•");
                         ui.label(&p.name);
@@ -178,11 +150,6 @@ impl BarEditorApp {
                     });
                 }
             }
-            // Suppress dead-code warnings — pool/dirty list still wired
-            // through `draw_subgraph_port_list` callers below for
-            // backward-compat, even though we don't render the editor
-            // here.
-            let _ = (&inputs_pool, &outputs_pool);
         }
 
         ui.separator();
@@ -206,11 +173,10 @@ impl BarEditorApp {
                 g.color_idx = color_idx;
                 g.is_subgraph = is_subgraph;
                 g.collapsed = collapsed;
-                // Note: subgraph_inputs / subgraph_outputs are no longer
-                // written from the properties panel — they're derived
-                // from the IO nodes inside the subgraph by
-                // `recompute_all_subgraph_io` once per frame.
-                let _ = (&inputs, &outputs);
+                // subgraph_inputs / subgraph_outputs are derived from
+                // member IO nodes by `recompute_all_subgraph_io`
+                // every frame, so the panel never writes them
+                // directly.
                 self.project.is_dirty = true;
             }
         }

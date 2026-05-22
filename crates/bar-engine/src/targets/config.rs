@@ -11,12 +11,6 @@ pub struct TargetConfig {
     pub id: String,
     /// Human-readable name.
     pub name: String,
-    /// Schema version for forward compatibility.
-    #[serde(default = "default_schema_version")]
-    pub schema_version: u32,
-    /// Target definition version (semantic versioning).
-    #[serde(default = "default_version")]
-    pub version: String,
     /// Codec identifier (selects the Rust implementation).
     pub codec: String,
     /// Codec-specific parameters.
@@ -34,13 +28,6 @@ pub struct TargetConfig {
     /// Path to metadata template file (relative to target config).
     #[serde(default)]
     pub metadata_template: Option<String>,
-}
-
-fn default_schema_version() -> u32 {
-    1
-}
-fn default_version() -> String {
-    "1.0.0".to_string()
 }
 
 /// Codec-specific parameters (varies by codec).

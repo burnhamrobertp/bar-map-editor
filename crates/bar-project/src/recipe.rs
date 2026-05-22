@@ -1,4 +1,4 @@
-//! Recipe format: a versioned, human-friendly serializable graph configuration.
+//! Recipe format: a human-friendly serializable graph configuration.
 //!
 //! Recipes use stable string keys for nodes (not internal IDs) and validate
 //! on load by constructing the graph through proper APIs.
@@ -11,24 +11,9 @@ use serde::{Deserialize, Serialize};
 
 use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId};
 
-/// On-disk format version for `Recipe`. Bumped whenever a structural
-/// change to the recipe schema lands that needs a migration step (a
-/// renamed field, a new required field with no sensible default, a
-/// reorganised section). Loaders branch on this value to apply
-/// migrations; absence in older files is treated as `1` via
-/// `serde(default)`.
-///
-/// Bump this AND add a migration in `Recipe::load`/`Recipe::from_json`
-/// in the same commit. Never bump silently.
-pub const RECIPE_SCHEMA_VERSION: u32 = 1;
-
-fn default_schema_version() -> u32 {
-    1
-}
-
-/// Default `depend` list for new / pre-migration recipes. Every
-/// BAR map references `Map Helper v1` to get the common mapconfig
-/// loaders, so the default is the conservative thing.
+/// Default `depend` list for new recipes. Every BAR map references
+/// `Map Helper v1` to get the common mapconfig loaders, so the
+/// default is the conservative thing.
 fn default_depend() -> Vec<String> {
     vec!["Map Helper v1".to_string()]
 }
@@ -41,12 +26,6 @@ fn default_depend() -> Vec<String> {
 /// should keep its own copy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
-    /// On-disk schema version. Use `RECIPE_SCHEMA_VERSION` for new
-    /// recipes; older files without the field load as `1` via
-    /// `default_schema_version`. Migrations live in the load path,
-    /// not in field-level `serde(alias = …)` patches.
-    #[serde(default = "default_schema_version", rename = "schema_version")]
-    pub schema_version: u32,
     /// Human-readable map name. Becomes mapinfo's `name` and the
     /// stem of generated map files (`<name>.smf`, `<name>.smt`).
     pub name: String,
@@ -196,7 +175,6 @@ pub struct MapSettings {
     pub max_height: Option<f32>,
     pub map_hardness: Option<u32>,
     pub gravity: Option<f32>,
-    pub water_damage: Option<f32>,
 
     /// Detail Normal Texture Set (DNTS) — paths to tiling textures for each terrain type.
     /// Up to 4 entries (one per splat channel).
@@ -346,7 +324,6 @@ pub struct ResolvedMapSettings {
     pub max_height: f32,
     pub map_hardness: u32,
     pub gravity: f32,
-    pub water_damage: f32,
     pub deformable: bool,
     pub void_water: bool,
     pub void_ground: bool,
@@ -367,7 +344,6 @@ impl MapSettings {
             max_height: self.max_height.unwrap_or(ed::MAP_MAX_HEIGHT),
             map_hardness: self.map_hardness.unwrap_or(ed::MAP_HARDNESS),
             gravity: self.gravity.unwrap_or(ed::MAP_GRAVITY),
-            water_damage: self.water_damage.unwrap_or(0.0),
             deformable: self.deformable.unwrap_or(!ed::MAP_NOT_DEFORMABLE),
             void_water: self.void_water.unwrap_or(ed::MAP_VOID_WATER),
             void_ground: self.void_ground.unwrap_or(ed::MAP_VOID_GROUND),
@@ -915,34 +891,10 @@ impl Recipe {
     }
 
     /// Parse a recipe from a JSON string.
-    ///
-    /// Reads `schema_version` first and refuses to load anything
-    /// newer than the build understands — better to fail loudly than
-    /// to silently drop unrecognised fields. Older versions are
-    /// migrated in-place through `migrate_to_current`.
     pub fn from_json(json: &str) -> Result<Self> {
-        let mut recipe: Self = serde_json::from_str(json).context("Failed to parse recipe JSON")?;
-        if recipe.schema_version > RECIPE_SCHEMA_VERSION {
-            bail!(
-                "Recipe schema_version {} is newer than this build supports ({}); \
-                 upgrade bar-editor to open it.",
-                recipe.schema_version,
-                RECIPE_SCHEMA_VERSION,
-            );
-        }
-        recipe.migrate_to_current();
+        let recipe: Self = serde_json::from_str(json).context("Failed to parse recipe JSON")?;
         recipe.validate()?;
         Ok(recipe)
-    }
-
-    /// Apply any field-level migrations needed to bring an older
-    /// schema version up to `RECIPE_SCHEMA_VERSION`. Today there are
-    /// no migrations — this is a placeholder so future bumps have an
-    /// obvious home and don't regress into ad-hoc branches scattered
-    /// through the load path.
-    fn migrate_to_current(&mut self) {
-        // v1 → vN migrations land here, oldest-first.
-        self.schema_version = RECIPE_SCHEMA_VERSION;
     }
 
     /// Serialize this recipe to a pretty-printed JSON string.
@@ -1128,7 +1080,6 @@ impl Recipe {
     /// Generate a sample recipe demonstrating the format.
     pub fn sample() -> Self {
         Self {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Sample Terrain".to_string(),
             shortname: None,
             description: "A basic ridged noise terrain with blur smoothing".to_string(),
@@ -1248,7 +1199,6 @@ mod tests {
     #[test]
     fn test_invalid_recipe_zero_dimensions() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Bad".to_string(),
             shortname: None,
             description: String::new(),
@@ -1276,7 +1226,6 @@ mod tests {
     #[test]
     fn test_invalid_recipe_bad_connection() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Bad".to_string(),
             shortname: None,
             description: String::new(),
@@ -1311,7 +1260,6 @@ mod tests {
     #[test]
     fn test_invalid_recipe_duplicate_keys() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Bad".to_string(),
             shortname: None,
             description: String::new(),
@@ -1341,43 +1289,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_version_defaults_to_one_when_absent() {
-        // Old recipes (pre-versioning) had no `schema_version`
-        // field; serde's `default` should fill it in as 1 so the
-        // load path doesn't reject them.
-        let json = r#"{
-            "name": "legacy",
-            "nodes": [{"key": "n", "type": "PerlinNoise", "params": {}}],
-            "connections": [],
-            "output": {"width": 256, "height": 256}
-        }"#;
-        let recipe = Recipe::from_json(json).expect("legacy recipe should load");
-        assert_eq!(recipe.schema_version, RECIPE_SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn schema_version_newer_than_build_is_rejected() {
-        // Loaders must refuse to silently drop unknown fields when
-        // the file declares a schema newer than the build supports.
-        let json = format!(
-            r#"{{
-                "schema_version": {},
-                "name": "future",
-                "nodes": [{{"key": "n", "type": "PerlinNoise", "params": {{}}}}],
-                "connections": [],
-                "output": {{"width": 256, "height": 256}}
-            }}"#,
-            RECIPE_SCHEMA_VERSION + 1,
-        );
-        let err = Recipe::from_json(&json).expect_err("newer schema must error");
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("schema_version") && msg.contains("newer"),
-            "error should mention schema_version + newer; got: {msg}",
-        );
-    }
-
-    #[test]
     fn recipe_with_wrong_typed_param_is_rejected() {
         // A hand-edited recipe with `Blur.radius` typed as a String
         // (it's `Float`) used to silently fall back to the default
@@ -1388,7 +1299,6 @@ mod tests {
         // `{"String": "..."}` — that *parses* fine but fails the
         // schema validator we wired into `Recipe::validate`.
         let json = r#"{
-            "schema_version": 1,
             "name": "typo",
             "nodes": [
                 {"key": "n", "type": "Blur",
@@ -1407,12 +1317,10 @@ mod tests {
 
     #[test]
     fn recipe_with_unknown_param_loads_anyway() {
-        // Unknown keys are tolerated — old projects with deprecated
-        // params should still load. (See `param_spec` module docs;
-        // this becomes strict if we ever bump the schema_version
-        // and want to enforce it.)
+        // Unknown keys are tolerated so older / hand-edited recipes
+        // with deprecated params still load. See `param_spec` module
+        // docs for the per-node strictness story.
         let json = r#"{
-            "schema_version": 1,
             "name": "extra",
             "nodes": [
                 {"key": "n", "type": "Blur",
@@ -1427,15 +1335,6 @@ mod tests {
         Recipe::from_json(json).expect("unknown keys must not block load");
     }
 
-    #[test]
-    fn schema_version_round_trips_through_save_load() {
-        let recipe = Recipe::sample();
-        assert_eq!(recipe.schema_version, RECIPE_SCHEMA_VERSION);
-        let json = recipe.to_json().unwrap();
-        let loaded = Recipe::from_json(&json).unwrap();
-        assert_eq!(loaded.schema_version, RECIPE_SCHEMA_VERSION);
-    }
-
     // Recipe round-trip scenarios: these mirror the three ways a user
     // creates or opens a project in the editor.
 
@@ -1444,7 +1343,6 @@ mod tests {
     #[test]
     fn manual_project_recipe_roundtrip() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Manual test".to_string(),
             shortname: None,
             description: String::new(),
@@ -1501,7 +1399,6 @@ mod tests {
             },
         };
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Alpine 8x8".to_string(),
             shortname: None,
             description: String::new(),
@@ -1557,7 +1454,6 @@ mod tests {
     #[test]
     fn painted_heightmap_to_bundler_roundtrip() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Import test".to_string(),
             shortname: None,
             description: String::new(),

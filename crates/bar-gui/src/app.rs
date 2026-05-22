@@ -852,7 +852,6 @@ impl BarEditorApp {
     /// must come from this snapshot.
     pub fn recipe_for_export(&self) -> bar_project::Recipe {
         bar_project::Recipe {
-            schema_version: bar_project::RECIPE_SCHEMA_VERSION,
             // Recipe `name` is the engine-visible map identity (used
             // to build the archive ID `name .. " " .. version`).
             // Prefer the source-mapinfo name from `recipe_meta` (set

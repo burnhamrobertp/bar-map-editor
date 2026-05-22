@@ -24,8 +24,6 @@ impl RawLayersCodec {
         TargetConfig {
             id: "raw-layers".to_string(),
             name: "Raw Image Layers (PNG)".to_string(),
-            schema_version: 1,
-            version: "1.0.0".to_string(),
             codec: "raw-layers".to_string(),
             codec_params: Default::default(),
             dimension_constraint: DimensionConstraint::none(),

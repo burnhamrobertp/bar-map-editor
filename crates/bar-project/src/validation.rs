@@ -346,15 +346,6 @@ fn check_physics(settings: &MapSettings, out: &mut Vec<Finding>) {
             .on_field("extractor_radius"),
         );
     }
-    if rs.water_damage < 0.0 {
-        out.push(
-            Finding::err(
-                "physics",
-                format!("Water damage {} can't be negative.", rs.water_damage),
-            )
-            .on_field("water_damage"),
-        );
-    }
 }
 
 /// Atmosphere block: wind range ordering and fog range ordering. Engine
