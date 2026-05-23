@@ -123,7 +123,21 @@ fn main() -> Result<()> {
 
             let executor = make_executor(&gpu_context);
 
-            let bar_install = bar_install::BarVersions::detect();
+            // First-launch seed: if no install path is in settings,
+            // probe the standard Windows install locations once and
+            // persist the result. After this the user owns the value
+            // -- detection never runs again (clearing the setting
+            // disables Test-in-BAR; nothing tries to recover it).
+            if app.settings().bar_install_path.is_none() {
+                if let Some(detected) = bar_install::auto_detect_install_root() {
+                    app.set_bar_install_path(Some(detected));
+                }
+            }
+            let bar_install = app
+                .settings()
+                .bar_install_path
+                .as_deref()
+                .and_then(bar_install::BarVersions::from_install_root);
             if let Some(ref versions) = bar_install {
                 app.bar_versions.game_labels =
                     versions.games.iter().map(|g| g.label.clone()).collect();
@@ -140,6 +154,7 @@ fn main() -> Result<()> {
                 }
             }
 
+            let bar_install_path_seen = app.settings().bar_install_path.clone();
             Ok(Box::new(AppRunner {
                 app,
                 executor,
@@ -156,6 +171,7 @@ fn main() -> Result<()> {
                 pending_test_in_bar_after_compile: false,
                 pending_export_dir: None,
                 bar_install,
+                bar_install_path_seen,
                 layout_manager: layout_manager::LayoutManager::new(),
                 pending_maximize: default_maximized,
                 has_shown_window: false,

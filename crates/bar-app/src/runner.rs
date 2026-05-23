@@ -77,6 +77,12 @@ pub struct AppRunner {
     pub pending_test_in_bar_after_compile: bool,
     pub pending_export_dir: Option<PendingExportDir>,
     pub bar_install: Option<bar_install::BarVersions>,
+    /// Mirror of `settings.bar_install_path` so the per-frame update
+    /// loop can detect Preferences edits and refresh `bar_install`
+    /// against the new path. `None` here means we believe the user
+    /// has no install configured; reconciling this against the
+    /// current setting drives the rebuild.
+    pub bar_install_path_seen: Option<std::path::PathBuf>,
     pub layout_manager: LayoutManager,
     pub pending_maximize: bool,
     pub has_shown_window: bool,
@@ -530,6 +536,30 @@ impl eframe::App for AppRunner {
 
         // Run the bar-gui frame (menus, palette, properties, modals, layout panels).
         self.app.update(ctx, frame);
+
+        // Reconcile `bar_install` against the configured path. When
+        // the user edits Preferences -> Game Data -> BAR install
+        // path, this picks up the change on the next frame and
+        // rebuilds the version list (or clears it when the path is
+        // emptied). No magical fallthrough -- if the configured
+        // path doesn't validate, Test-in-BAR is gated off the same
+        // way it is when nothing was detected on first launch.
+        let desired_install = self.app.settings().bar_install_path.clone();
+        if desired_install != self.bar_install_path_seen {
+            self.bar_install_path_seen = desired_install.clone();
+            self.bar_install = desired_install
+                .as_deref()
+                .and_then(bar_install::BarVersions::from_install_root);
+            if let Some(ref versions) = self.bar_install {
+                self.app.bar_versions.game_labels =
+                    versions.games.iter().map(|g| g.label.clone()).collect();
+                self.app.bar_versions.engine_labels =
+                    versions.engines.iter().map(|e| e.label.clone()).collect();
+            } else {
+                self.app.bar_versions.game_labels.clear();
+                self.app.bar_versions.engine_labels.clear();
+            }
+        }
 
         // Consume `graph_reset` here, BEFORE the features_changed
         // handler below spawns the model loader. `apply_project` (in
