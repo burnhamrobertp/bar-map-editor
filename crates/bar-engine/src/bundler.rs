@@ -74,15 +74,26 @@ pub fn execute_bundlers(
 /// is well under a second. The engine accepts both `.sd7` and `.sdd`
 /// from the `maps/` directory transparently.
 ///
-/// `identity_suffix`, when set, is appended verbatim to the
-/// `mapinfo.version` written into the bundle AND to the
-/// `BundlerResult.map_internal_name` returned to the caller. The
-/// recipe on disk is NOT modified. Used by Test-in-BAR so the test
-/// bundle's archive identity (`name + " " + version`) differs from
-/// any source archive the user has installed in BAR's `maps/`
-/// folder, preventing the engine from picking up the wrong archive
-/// on identity collision. Pass `None` for the normal deliverable
-/// export path.
+/// `test_identity_override`, when set, replaces the bundle's
+/// archive identity with `<stripped_name> + " " + <override>` --
+/// i.e. any trailing `v?<version>` token is removed from
+/// `mapinfo.name` and `mapinfo.version` is replaced with the
+/// override string. Used by Test-in-BAR so:
+///
+/// 1. bar-game's `map_lava` gadget can match the test bundle's
+///    name against its `common/configs/LavaMaps/<MapName>.lua`
+///    catalog (the gadget's `trimMapVersion` only strips ONE
+///    trailing version token, so recipes whose `name` field
+///    already embeds the version -- e.g. `"Forge v2.3"` -- don't
+///    match the catalog entry `Forge.lua` after a single trim).
+/// 2. The bundle's identity is distinct from any user-installed
+///    source archive in BAR's `maps/` -- the bogus version (e.g.
+///    `"99.99.99"`) makes it unmistakeably a BME-generated test
+///    artifact in the lobby.
+///
+/// The recipe on disk is NOT modified. Pass `None` for the normal
+/// deliverable export path; the user's chosen name + version round-
+/// trip verbatim.
 pub fn execute_bundlers_with_format(
     graph: &GraphEngine,
     outputs: &NodeOutputs,
@@ -91,7 +102,7 @@ pub fn execute_bundlers_with_format(
     filter_label: Option<&str>,
     project_dir: Option<&Path>,
     archive_format_override: Option<ArchiveFormat>,
-    identity_suffix: Option<&str>,
+    test_identity_override: Option<&str>,
 ) -> Result<Vec<BundlerResult>> {
     let bundler_ids = find_bundler_nodes(graph);
     let mut results = Vec::new();
@@ -114,7 +125,7 @@ pub fn execute_bundlers_with_format(
             output_dir,
             project_dir,
             archive_format_override,
-            identity_suffix,
+            test_identity_override,
         )
         .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
 
@@ -133,7 +144,7 @@ fn execute_single_bundler(
     output_dir: &Path,
     project_dir: Option<&Path>,
     archive_format_override: Option<ArchiveFormat>,
-    identity_suffix: Option<&str>,
+    test_identity_override: Option<&str>,
 ) -> Result<BundlerResult> {
     let width = recipe.output.width;
     let height = recipe.output.height;
@@ -171,12 +182,24 @@ fn execute_single_bundler(
     // archive identifier) must be the human-readable recipe name,
     // not the filesystem slug. Fall back to the slug only when the
     // recipe has no name set yet.
+    //
+    // Test-in-BAR override: when `test_identity_override` is set,
+    // strip any trailing `v?<version>` token from the recipe name
+    // so bar-game's `map_lava` gadget (whose `trimMapVersion` only
+    // removes ONE trailing version) can match the test bundle's
+    // identity against its LavaMaps catalog. The `version` field
+    // below is also overridden to the test value.
     let display_name = {
         let trimmed = recipe.name.trim();
-        if trimmed.is_empty() {
+        let base = if trimmed.is_empty() {
             map_name.clone()
         } else {
             trimmed.to_string()
+        };
+        if test_identity_override.is_some() {
+            strip_trailing_version(&base).to_string()
+        } else {
+            base
         }
     };
 
@@ -223,12 +246,14 @@ fn execute_single_bundler(
     // Compute dimensions
     let dims = codec.compute_dimensions(&config, width, height);
 
-    // Create export plan. The `version` field carries the optional
-    // identity_suffix so the emitted mapinfo's `name + " " + version`
-    // and the bundler's `map_internal_name` stay in lockstep. The
-    // recipe on disk is untouched -- we clone the version and append
-    // here, leaving `recipe.version` alone.
-    let plan_version = apply_identity_suffix(recipe.version.as_deref(), identity_suffix);
+    // Create export plan. For Test-in-BAR the `version` field is
+    // replaced with the override string so the engine identity (and
+    // the launcher's `MapName=`) line up against a clean stripped
+    // name. The recipe on disk is untouched.
+    let plan_version = match test_identity_override {
+        Some(v) if !v.is_empty() => Some(v.to_string()),
+        _ => recipe.version.clone(),
+    };
     let plan = ExportPlan {
         map_name: map_name.clone(),
         display_name: display_name.clone(),
@@ -544,7 +569,7 @@ pub fn regenerate_mapinfo_in_bundle(
     recipe: &Recipe,
     bundle_dir: &Path,
     project_dir: Option<&Path>,
-    identity_suffix: Option<&str>,
+    test_identity_override: Option<&str>,
 ) -> Result<()> {
     let bundler_ids = find_bundler_nodes(graph);
     let bundler_id = bundler_ids
@@ -562,12 +587,20 @@ pub fn regenerate_mapinfo_in_bundle(
         Some(ParamValue::String(s)) if !s.is_empty() => s.clone(),
         _ => default_map_name_from_recipe(recipe, &node.label, false),
     };
+    // Mirror `execute_single_bundler`'s display_name handling -- if
+    // `test_identity_override` is set, strip the embedded version
+    // from the name so the lava-gadget catalog match works.
     let display_name = {
         let trimmed = recipe.name.trim();
-        if trimmed.is_empty() {
+        let base = if trimmed.is_empty() {
             map_name.clone()
         } else {
             trimmed.to_string()
+        };
+        if test_identity_override.is_some() {
+            strip_trailing_version(&base).to_string()
+        } else {
+            base
         }
     };
 
@@ -581,7 +614,10 @@ pub fn regenerate_mapinfo_in_bundle(
         .ok_or_else(|| anyhow::anyhow!("Missing spring-smf codec"))?
         .compute_dimensions(&config, recipe.output.width, recipe.output.height);
 
-    let plan_version = apply_identity_suffix(recipe.version.as_deref(), identity_suffix);
+    let plan_version = match test_identity_override {
+        Some(v) if !v.is_empty() => Some(v.to_string()),
+        _ => recipe.version.clone(),
+    };
     let plan = ExportPlan {
         map_name: map_name.clone(),
         display_name,
@@ -618,18 +654,66 @@ pub fn regenerate_mapinfo_in_bundle(
     Ok(())
 }
 
-/// Append a runtime identity-suffix to a recipe version. Used by
-/// Test-in-BAR so the bundle's archive identity is distinct from
-/// any source map the user has installed -- the suffix lives only
-/// for the lifetime of the bundle, never reaches the saved recipe.
-/// `None` suffix or empty version returns the original unchanged
-/// (the suffix is meaningless without a base version, and the
-/// regular bundle path always passes `None`).
-fn apply_identity_suffix(version: Option<&str>, suffix: Option<&str>) -> Option<String> {
-    match (version, suffix) {
-        (Some(v), Some(s)) if !v.is_empty() && !s.is_empty() => Some(format!("{v}{s}")),
-        (Some(v), _) => Some(v.to_string()),
-        _ => None,
+/// Strip a single trailing `v?<digits-and-dots>` token from a map
+/// name, mirroring bar-game's `trimMapVersion` in
+/// `modules/lava.lua`. Used by the Test-in-BAR path so the bundle's
+/// emitted `mapinfo.name` doesn't carry an embedded version that
+/// would survive the lava-gadget's single-trim and break the
+/// LavaMaps catalog lookup -- e.g. `"Forge v2.3"` becomes `"Forge"`
+/// so the gadget can match `Forge.lua`. Regular deliverable bundles
+/// don't pass through here; they preserve the author's chosen name
+/// field verbatim.
+fn strip_trailing_version(name: &str) -> &str {
+    let trimmed = name.trim_end();
+    let Some(last_space) = trimmed.rfind(' ') else {
+        return name;
+    };
+    let candidate = &trimmed[last_space + 1..];
+    let core = candidate.strip_prefix(['v', 'V']).unwrap_or(candidate);
+    if !core.is_empty() && core.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        &trimmed[..last_space]
+    } else {
+        name
+    }
+}
+
+#[cfg(test)]
+mod strip_trailing_version_tests {
+    use super::strip_trailing_version;
+
+    #[test]
+    fn strips_v_prefixed_version() {
+        assert_eq!(strip_trailing_version("Forge v2.3"), "Forge");
+    }
+
+    #[test]
+    fn strips_bare_version() {
+        assert_eq!(
+            strip_trailing_version("Onyx Cauldron 2.2.3"),
+            "Onyx Cauldron"
+        );
+    }
+
+    #[test]
+    fn leaves_word_suffix_alone() {
+        assert_eq!(strip_trailing_version("Map of Foo"), "Map of Foo");
+    }
+
+    #[test]
+    fn leaves_versionless_name_alone() {
+        assert_eq!(strip_trailing_version("Forge"), "Forge");
+    }
+
+    #[test]
+    fn only_strips_once() {
+        // Two trailing version tokens, only the last one is removed
+        // -- matches the lava gadget's behaviour.
+        assert_eq!(strip_trailing_version("Forge v2.3 2.3"), "Forge v2.3");
+    }
+
+    #[test]
+    fn empty_input() {
+        assert_eq!(strip_trailing_version(""), "");
     }
 }
 

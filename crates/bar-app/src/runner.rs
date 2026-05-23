@@ -31,15 +31,25 @@ use crate::layout_manager::LayoutManager;
 /// `MapName=` in the launch script lines up regardless.
 const TEST_IN_BAR_BUNDLE_NAME: &str = "_bme_test_in_bar.sdd";
 
-/// Suffix appended to `mapinfo.version` (and the launcher's
-/// `MapName=`) for Test-in-BAR bundles. Keeps the test archive's
-/// engine identity (`name + " " + version`) distinct from the user's
-/// installed source -- avoids load-order ambiguity when both
-/// archives are present in `<install>/data/maps/`. Lobby map name
-/// reads e.g. "Forge v2.3 2.3 [BME Test]" so the user can tell at a
-/// glance they're in the dev build, not the source map. Runtime-only;
-/// never persisted into the recipe.
-const TEST_IN_BAR_IDENTITY_SUFFIX: &str = " [BME Test]";
+/// Replacement version string applied to the Test-in-BAR bundle's
+/// `mapinfo.version`. Combined with stripping the embedded version
+/// from `mapinfo.name`, this produces an archive identity of the
+/// form `"<base-name> 99.99.99"` (e.g. `"Forge 99.99.99"`). Three
+/// things this buys:
+///   1. bar-game's `map_lava` gadget can single-trim ` 99.99.99` to
+///      reach `<base-name>` and match its LavaMaps catalog entry
+///      (e.g. `Forge.lua`). Source recipes whose `name` field
+///      embeds the version -- common in BAR-shipped maps -- can't
+///      be matched after a single trim if both tokens are present.
+///   2. The fake version is unmistakeable in BAR's lobby; it reads
+///      "Forge 99.99.99" so the user can see at a glance they're
+///      testing the BME build, not their installed source archive.
+///   3. Identity is distinct from any plausible user-installed
+///      source, so the engine never has to pick between two
+///      archives claiming the same identity.
+///
+/// Runtime-only; never persisted into the recipe.
+const TEST_IN_BAR_VERSION: &str = "99.99.99";
 
 pub struct PendingExportDir {
     pub rx: mpsc::Receiver<Option<std::path::PathBuf>>,
@@ -1144,7 +1154,7 @@ impl AppRunner {
                     &recipe,
                     &prev_sdd,
                     self.app.project.path.as_deref(),
-                    Some(TEST_IN_BAR_IDENTITY_SUFFIX),
+                    Some(TEST_IN_BAR_VERSION),
                 ) {
                     Ok(()) => {
                         self.test_in_bar_cache =
@@ -1194,7 +1204,7 @@ impl AppRunner {
                     None,
                     test_project_dir.as_deref(),
                     Some(bar_engine::ArchiveFormat::Directory),
-                    Some(TEST_IN_BAR_IDENTITY_SUFFIX),
+                    Some(TEST_IN_BAR_VERSION),
                 ) {
                     Ok(results) => match results
                         .into_iter()
