@@ -19,3 +19,4 @@
 
 pub mod custom_fog;
 pub mod map_grass;
+pub mod map_lava;

@@ -1047,6 +1047,16 @@ pub struct TerrainRenderer {
     /// the shader gate keeps foam off until a real heightmap loads.
     coastmap_texture: wgpu::Texture,
     coastmap_enabled: bool,
+    /// Lava widget textures (bar-game `map_lava` port). CC0
+    /// originals from `bar-game/luaui/images/lava/lava2_*.dds` +
+    /// `lavadistortion.dds`, decoded once at init from
+    /// `assets/widgets/lava/`. The water shader samples these only
+    /// when `water_params.fresnel.w >= 0.5` (lava flag set), so for
+    /// non-lava maps they're bound but contribute nothing.
+    lava_diffuse_emit_texture: wgpu::Texture,
+    lava_normal_height_texture: wgpu::Texture,
+    lava_distortion_texture: wgpu::Texture,
+    lava_sampler: wgpu::Sampler,
     /// Map-grass widget pipeline (BAR `map_grass_gl4` widget port,
     /// driven by mapinfo `custom.grassConfig`). Self-contained
     /// instance-rendered pass between water and gamma encode.
@@ -1445,10 +1455,11 @@ impl TerrainRenderer {
         let modern_sky_source = include_str!("../../../shaders/recoil/modern_sky.wgsl");
         let smf_ground_source = include_str!("../../../shaders/recoil/smf_ground.wgsl");
         let custom_fog_source = include_str!("../../../shaders/widgets/custom_fog.wgsl");
+        let map_lava_source = include_str!("../../../shaders/widgets/map_lava.wgsl");
         let water_source = include_str!("../../../shaders/water.wgsl");
         let terrain_source = include_str!("../../../shaders/terrain.wgsl");
         let shader_source = format!(
-            "{modern_sky_source}\n{smf_ground_source}\n{custom_fog_source}\n{water_source}\n{terrain_source}",
+            "{modern_sky_source}\n{smf_ground_source}\n{custom_fog_source}\n{map_lava_source}\n{water_source}\n{terrain_source}",
         );
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("terrain_shader"),
@@ -1857,6 +1868,48 @@ impl TerrainRenderer {
                             view_dimension: wgpu::TextureViewDimension::D2,
                             multisampled: false,
                         },
+                        count: None,
+                    },
+                    // Lava widget (`shaders/widgets/map_lava.wgsl`).
+                    // Port of bar-game's `luarules/gadgets/map_lava.lua`
+                    // shader; uses three textures bundled in
+                    // `assets/widgets/lava/` (CC0 originals from
+                    // bar-game). Sampler at binding 15 is shared by all
+                    // three textures.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 12,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 13,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 14,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            multisampled: false,
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 15,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
                 ],
@@ -2701,6 +2754,31 @@ impl TerrainRenderer {
             &foam_default_data,
         );
 
+        // Lava widget textures. Decoded once from bundled CC0 DDS
+        // copies (bar-game's `LuaUI/images/lava/lava2_*.dds` +
+        // `lavadistortion.dds`). Shared across every render -- the
+        // shader gates them with `water_params.fresnel.w` (is_lava
+        // flag), so for non-lava maps they're bound but not
+        // sampled.
+        let (lava_diffuse_emit_texture, lava_normal_height_texture, lava_distortion_texture) =
+            crate::widgets::map_lava::upload_bundled_textures(device, queue);
+        let lava_diffuse_emit_view =
+            lava_diffuse_emit_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_normal_height_view =
+            lava_normal_height_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_distortion_view =
+            lava_distortion_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("lava_sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+
         let make_water_planes_bg =
             |refl_view: &wgpu::TextureView,
              refr_view: &wgpu::TextureView,
@@ -2760,6 +2838,22 @@ impl TerrainRenderer {
                         wgpu::BindGroupEntry {
                             binding: 11,
                             resource: wgpu::BindingResource::TextureView(coastmap_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 12,
+                            resource: wgpu::BindingResource::TextureView(&lava_diffuse_emit_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 13,
+                            resource: wgpu::BindingResource::TextureView(&lava_normal_height_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 14,
+                            resource: wgpu::BindingResource::TextureView(&lava_distortion_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 15,
+                            resource: wgpu::BindingResource::Sampler(&lava_sampler),
                         },
                     ],
                 })
@@ -3111,6 +3205,10 @@ impl TerrainRenderer {
             foam_assets_enabled: false,
             coastmap_texture: coastmap_default,
             coastmap_enabled: false,
+            lava_diffuse_emit_texture,
+            lava_normal_height_texture,
+            lava_distortion_texture,
+            lava_sampler,
             map_grass,
             water_params_buffer,
             last_water_params: WaterParamsUniform::default(),
@@ -4477,6 +4575,15 @@ impl TerrainRenderer {
         let coastmap_view = self
             .coastmap_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_de_view = self
+            .lava_diffuse_emit_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_nh_view = self
+            .lava_normal_height_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_dist_view = self
+            .lava_distortion_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
             layout: &self.water_planes_bind_group_layout,
@@ -4528,6 +4635,22 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: wgpu::BindingResource::TextureView(&coastmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView(&lava_de_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&lava_nh_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&lava_dist_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::Sampler(&self.lava_sampler),
                 },
             ],
         });
@@ -5102,6 +5225,15 @@ impl TerrainRenderer {
         let coastmap_view = self
             .coastmap_texture
             .create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_de_view = self
+            .lava_diffuse_emit_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_nh_view = self
+            .lava_normal_height_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let lava_dist_view = self
+            .lava_distortion_texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
         self.water_planes_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("water_planes_bind_group"),
             layout: &self.water_planes_bind_group_layout,
@@ -5153,6 +5285,22 @@ impl TerrainRenderer {
                 wgpu::BindGroupEntry {
                     binding: 11,
                     resource: wgpu::BindingResource::TextureView(&coastmap_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 12,
+                    resource: wgpu::BindingResource::TextureView(&lava_de_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 13,
+                    resource: wgpu::BindingResource::TextureView(&lava_nh_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 14,
+                    resource: wgpu::BindingResource::TextureView(&lava_dist_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 15,
+                    resource: wgpu::BindingResource::Sampler(&self.lava_sampler),
                 },
             ],
         });
@@ -6104,9 +6252,11 @@ mod tests {
         let modern_sky = include_str!("../../../shaders/recoil/modern_sky.wgsl");
         let smf_ground = include_str!("../../../shaders/recoil/smf_ground.wgsl");
         let custom_fog = include_str!("../../../shaders/widgets/custom_fog.wgsl");
+        let map_lava = include_str!("../../../shaders/widgets/map_lava.wgsl");
         let water = include_str!("../../../shaders/water.wgsl");
         let terrain = include_str!("../../../shaders/terrain.wgsl");
-        let combined = format!("{modern_sky}\n{smf_ground}\n{custom_fog}\n{water}\n{terrain}");
+        let combined =
+            format!("{modern_sky}\n{smf_ground}\n{custom_fog}\n{map_lava}\n{water}\n{terrain}");
         let module = naga::front::wgsl::parse_str(&combined);
         assert!(
             module.is_ok(),

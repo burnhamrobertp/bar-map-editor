@@ -287,88 +287,6 @@ fn water_shallow_scale(world_pos: vec3<f32>) -> f32 {
     return clamp(depth * 33.0 / max(camera.height_scale, 1e-4), 0.0, 1.0);
 }
 
-/// Hash → smoothed value noise → fbm chain, used by `shade_lava`
-/// for the molten-flow / vein pattern. Procedural rather than
-/// texture-sampled because the existing water normal map is encoded
-/// around 0.5 with small deltas, so length-based vein extraction
-/// from it saturates and the surface reads as a flat colour.
-fn lava_hash(p: vec2<f32>) -> f32 {
-    let h = dot(p, vec2<f32>(127.1, 311.7));
-    return fract(sin(h) * 43758.5453);
-}
-
-fn lava_noise(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let u = f * f * (vec2<f32>(3.0) - 2.0 * f);
-    return mix(
-        mix(lava_hash(i), lava_hash(i + vec2<f32>(1.0, 0.0)), u.x),
-        mix(
-            lava_hash(i + vec2<f32>(0.0, 1.0)),
-            lava_hash(i + vec2<f32>(1.0, 1.0)),
-            u.x,
-        ),
-        u.y,
-    );
-}
-
-fn lava_fbm(p: vec2<f32>) -> f32 {
-    var f = 0.0;
-    var amp = 0.5;
-    var pp = p;
-    for (var i: i32 = 0; i < 5; i = i + 1) {
-        f = f + amp * lava_noise(pp);
-        pp = pp * 2.0;
-        amp = amp * 0.5;
-    }
-    return f;
-}
-
-/// Shade a lava-plane fragment. Engine treats `mapinfo.water.damage > 0`
-/// as lava; in-game the result is rendered as actual molten material
-/// rather than a red-tinted version of the BumpWater surface (no
-/// reflection, no refraction, no caustics, self-illuminated). We mirror
-/// that: an opaque emissive base in the user-chosen surface colour with
-/// a domain-warped fbm carving hot veins out of darker cooled crust.
-fn shade_lava(world_pos: vec3<f32>) -> vec4<f32> {
-    let t = camera.time * 0.10;
-    // Render-space XZ sits in roughly [-0.5, 0.5] across the map; *60
-    // gives ~60 fbm cells across the map's longer axis, with 5 octaves
-    // of detail layered on top -- big enough that crust patches read
-    // at oblique angles, small enough that hot veins still read at
-    // overhead views.
-    let xz = world_pos.xz * 60.0;
-    // Two slow flow vectors deform the detail noise so the lava reads
-    // as molten currents dragging crust across hotter veins beneath
-    // (domain warp).
-    let flow_x = lava_fbm(xz * 0.3 + vec2<f32>(t, t * 0.5));
-    let flow_y = lava_fbm(xz * 0.3 - vec2<f32>(t * 0.7, t * 0.3));
-    let warp = vec2<f32>(flow_x, flow_y) * 2.5;
-    let n = lava_fbm(xz + warp + vec2<f32>(t * 0.3, 0.0));
-
-    let base = water_params.surface_color_alpha.rgb;
-    let crust = base * 0.15;
-    let mid = base;
-    let glow = base + vec3<f32>(0.40, 0.25, 0.05);
-
-    var col = mix(crust, mid, smoothstep(0.30, 0.55, n));
-    col = mix(col, glow, smoothstep(0.60, 0.85, n));
-
-    // Distance fog still applies (the lava plane sits in the
-    // atmosphere); reuse the same gate `shade_water` does.
-    if camera.fog_dists.y > 0.0 {
-        let view_dist = length(camera.camera_pos - world_pos);
-        let fog_factor = clamp(
-            (camera.fog_dists.y - view_dist)
-                / max(camera.fog_dists.y - camera.fog_dists.x, 1e-4),
-            0.0,
-            1.0,
-        );
-        col = mix(camera.fog_color.rgb, col, fog_factor);
-    }
-    return vec4<f32>(col, 1.0);
-}
-
 /// Shade a water-plane fragment.
 ///
 /// `world_pos` -- fragment world position (render space).
@@ -385,11 +303,13 @@ fn shade_water(
     screen_uv: vec2<f32>,
     frag_z: f32,
 ) -> vec4<f32> {
-    // Lava maps short-circuit the entire BumpWater pipeline -- the
-    // engine renders them as opaque emissive lava, not red-tinted
-    // water. Flag lives on `water_params.fresnel.w` (1.0 = lava).
+    // Lava maps short-circuit the entire BumpWater pipeline -- BAR
+    // renders them via a separate game-side gadget + shader
+    // (`bar-game/luarules/gadgets/map_lava.lua`), which the
+    // `widgets/map_lava` port mirrors. Flag lives on
+    // `water_params.fresnel.w` (1.0 = lava).
     if water_params.fresnel.w >= 0.5 {
-        return shade_lava(world_pos);
+        return shade_map_lava(world_pos, eye_dir);
     }
     // --- 1. Normal + depth-based attenuation ----------------------------
     let normal        = water_octave_normal(world_pos.xz, camera.time);
