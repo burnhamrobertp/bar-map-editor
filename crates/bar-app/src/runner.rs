@@ -1307,6 +1307,16 @@ fn compute_test_in_bar_keys(
     // Recipe parts that the bundler bakes into the binary artifacts
     // or the file-copy set. Anything not listed here is a mapinfo-
     // only field and lives in the full key further down.
+    //
+    // `name` and `version` are heavy inputs because they drive the
+    // archive identity (`name + " " + version`) AND the .sdd
+    // directory name. A rename has to invalidate the prior bundle so
+    // the launcher doesn't ask the engine for the old identity
+    // against a freshly-regenerated mapinfo (the symptom: "Dependent
+    // archive X not found" even though the .sdd is right there).
+    "ID".hash(&mut heavy);
+    recipe.name.hash(&mut heavy);
+    recipe.version.hash(&mut heavy);
     let s = &recipe.output.map_settings;
     "DIM".hash(&mut heavy);
     recipe.output.width.hash(&mut heavy);
