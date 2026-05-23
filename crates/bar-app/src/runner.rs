@@ -14,6 +14,23 @@ use eframe::egui;
 use crate::bar_install;
 use crate::layout_manager::LayoutManager;
 
+/// Fixed output basename for the Test-in-BAR bundle, dropped into
+/// `<bar-install>/data/maps/`. Using one BME-owned filename for
+/// every Test-in-BAR run (instead of one per recipe name) avoids:
+///   (a) clobbering the user's source archive when their .sd7
+///       happens to share a stem with the recipe -- this is what
+///       deleted `forge.sd7` in earlier sessions, and
+///   (b) accumulating leftover .sdd directories in the install's
+///       maps/ folder across many test runs.
+///
+/// The underscore prefix sorts it ahead of authored maps in
+/// alphabetised lobby lists and makes the "this is a BME artifact"
+/// intent obvious from the filename. The mapinfo identity inside
+/// the archive still comes from the recipe (Spring resolves
+/// archives by mapinfo `name + " " + version`, not by filename), so
+/// `MapName=` in the launch script lines up regardless.
+const TEST_IN_BAR_BUNDLE_NAME: &str = "_bme_test_in_bar.sdd";
+
 pub struct PendingExportDir {
     pub rx: mpsc::Receiver<Option<std::path::PathBuf>>,
     pub run_filter_label: Option<String>,
@@ -1167,11 +1184,54 @@ impl AppRunner {
                     test_project_dir.as_deref(),
                     Some(bar_engine::ArchiveFormat::Directory),
                 ) {
-                    Ok(results) => results
+                    Ok(results) => match results
                         .into_iter()
                         .find(|r| r.output_path.extension().and_then(|s| s.to_str()) == Some("sdd"))
-                        .map(|r| Ok((r.output_path, r.map_internal_name)))
-                        .unwrap_or_else(|| Err("Bundler produced no SDD".to_string())),
+                    {
+                        Some(r) => {
+                            // Rename the bundler's per-recipe output to the
+                            // fixed BME slot so we never leave behind a
+                            // `<recipe-name>.sdd` next to the user's
+                            // installed maps. See `TEST_IN_BAR_BUNDLE_NAME`
+                            // for why this is a single fixed path.
+                            let fixed_path = bundler_output_dir.join(TEST_IN_BAR_BUNDLE_NAME);
+                            if fixed_path.exists() {
+                                if let Err(e) = std::fs::remove_dir_all(&fixed_path) {
+                                    let _ = std::fs::remove_dir_all(&r.output_path);
+                                    Err(format!(
+                                        "Cannot clear previous Test-in-BAR slot \
+                                         {}: {e}",
+                                        fixed_path.display()
+                                    ))
+                                } else {
+                                    match std::fs::rename(&r.output_path, &fixed_path) {
+                                        Ok(()) => Ok((fixed_path, r.map_internal_name)),
+                                        Err(e) => {
+                                            let _ = std::fs::remove_dir_all(&r.output_path);
+                                            Err(format!(
+                                                "Cannot move bundle to Test-in-BAR \
+                                                 slot {}: {e}",
+                                                fixed_path.display()
+                                            ))
+                                        }
+                                    }
+                                }
+                            } else {
+                                match std::fs::rename(&r.output_path, &fixed_path) {
+                                    Ok(()) => Ok((fixed_path, r.map_internal_name)),
+                                    Err(e) => {
+                                        let _ = std::fs::remove_dir_all(&r.output_path);
+                                        Err(format!(
+                                            "Cannot move bundle to Test-in-BAR \
+                                             slot {}: {e}",
+                                            fixed_path.display()
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                        None => Err("Bundler produced no SDD".to_string()),
+                    },
                     Err(e) => Err(format!("Bundler error: {e}")),
                 },
                 Err(e) => Err(format!("Graph evaluation failed: {e:?}")),
