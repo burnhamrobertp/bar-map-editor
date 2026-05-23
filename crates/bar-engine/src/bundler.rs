@@ -333,42 +333,19 @@ fn execute_single_bundler(
     // archive (the DirectoryPackager copies on top without clearing,
     // which is fine for fresh outputs but wrong on repeat runs of
     // the Test-in-BAR fast path).
+    //
+    // NOTE: only the EXACT same path gets cleared here. Previously we
+    // also removed any same-stem archive in any of the {sd7, sdz,
+    // sdd} extensions on the theory that they were stale prior BME
+    // outputs -- but Test-in-BAR writes into `<install>/data/maps/`,
+    // which is the same directory the user keeps their installed
+    // `.sd7` source maps in. Stem collisions are common (importing
+    // `forge.sd7` produces a recipe whose Test-in-BAR output is
+    // `forge.sdd`) and the cleanup was deleting the user's source
+    // archive. The engine can resolve identity collisions on its own
+    // load order; data loss is the worse failure mode.
     if matches!(archive_format, ArchiveFormat::Directory) && final_output_path.exists() {
         let _ = std::fs::remove_dir_all(&final_output_path);
-    }
-    // Also remove sibling archives with the same base name but a
-    // different extension (e.g. a stale `final_composition.sd7`
-    // left over from before BME switched to `.sdd` output). The
-    // engine matches archives by mapinfo MapName, not filename --
-    // two archives in `maps/` claiming the same map produces
-    // unpredictable load order. Clean them up so the *current*
-    // output is unambiguously the one the engine picks.
-    if let (Some(parent), Some(stem)) = (
-        final_output_path.parent(),
-        final_output_path.file_stem().and_then(|s| s.to_str()),
-    ) {
-        for ext in ["sd7", "sdz", "sdd"] {
-            let sibling = parent.join(format!("{stem}.{ext}"));
-            if sibling == final_output_path || !sibling.exists() {
-                continue;
-            }
-            let result = if sibling.is_dir() {
-                std::fs::remove_dir_all(&sibling)
-            } else {
-                std::fs::remove_file(&sibling)
-            };
-            match result {
-                Ok(()) => tracing::debug!(
-                    path = %sibling.display(),
-                    "Bundler: removed stale sibling archive"
-                ),
-                Err(e) => tracing::warn!(
-                    path = %sibling.display(),
-                    err = %e,
-                    "Bundler: failed to remove stale sibling archive"
-                ),
-            }
-        }
     }
     let packager = create_packager(&archive_format);
     let layout = &config.packaging.layout;
@@ -384,32 +361,25 @@ fn execute_single_bundler(
         final_output_path.display()
     );
 
-    // Spring archive ID is `display_name .. " " .. version` from
-    // mapinfo.lua. Some authored maps put the version inside the
-    // `name` field too -- naive concatenation then produces a doubled
-    // identity the engine can't resolve. The patterns we strip:
-    //   "Onyx Cauldron 2.2.3"  -> base "Onyx Cauldron", version "2.2.3"
-    //   "Forge v2.3"           -> base "Forge",         version "2.3"
-    //   "Map_v1.0"             -> base "Map",           version "1.0"
-    // Try each variant with each separator; first match wins.
+    // Spring archive ID is `name .. " " .. version` from
+    // mapinfo.lua. Whatever string we build here is what the
+    // launcher's `MapName=` field will ask for, and the engine
+    // resolves that against archives by reading each archive's
+    // mapinfo and computing the same concatenation. So as long as
+    // we use the same `display_name` (= recipe.name = mapinfo.name)
+    // and `version` (= recipe.version = mapinfo.version) on both
+    // sides, identities line up.
+    //
+    // Previous attempt: strip a trailing version suffix from
+    // `display_name` to avoid doubling when an author baked the
+    // version into `name`. That broke Test-in-BAR -- the script
+    // asked for the stripped form but the archive's own
+    // mapinfo.lua still had the un-stripped name, so identities
+    // disagreed. The author's choice to embed the version in
+    // `name` is their choice; the engine handles the resulting
+    // doubled identity fine because it's just a string compare.
     let map_internal_name = match plan.version.as_deref().filter(|v| !v.is_empty()) {
-        Some(v) => {
-            let mut base = plan.display_name.as_str();
-            let v_lower = format!("v{v}");
-            let v_upper = format!("V{v}");
-            let suffix_candidates = [v.to_string(), v_lower, v_upper];
-            'outer: for sfx in &suffix_candidates {
-                if let Some(trimmed) = base.strip_suffix(sfx.as_str()) {
-                    for sep in [' ', '_'] {
-                        if let Some(stripped) = trimmed.strip_suffix(sep) {
-                            base = stripped;
-                            break 'outer;
-                        }
-                    }
-                }
-            }
-            format!("{} {}", base, v)
-        }
+        Some(v) => format!("{} {}", plan.display_name, v),
         None => plan.display_name.clone(),
     };
 
