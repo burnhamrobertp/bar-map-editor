@@ -2,8 +2,13 @@
 ///
 /// UV encoding for special geometry types:
 /// - Regular terrain: uv in [0,1]x[0,1] -- vertex shader samples heightmap GPU-side for Y.
-/// - Skirt / bottom cap: uv.y = 2.0 -- world-space position passed through directly.
+/// - Edge skirt / bottom cap: uv.y = 2.0 -- world-space position passed through directly.
+///   Fragment shader falls through to the height-color path.
 /// - Water / lava plane: uv.x = -1.0 -- world-space position passed through directly.
+/// - Mirrored map-edge extension: uv = (playable_u, 4.0 + playable_v) -- vertex shader
+///   samples the heightmap at the encoded playable UV (so the mirror takes the playable
+///   area's terrain shape) and the fragment shader samples the albedo at the same UV
+///   then dims it. Port of BAR's `map_edge_extension2.lua` widget; Preview-only.
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct TerrainVertex {
@@ -229,22 +234,145 @@ pub fn generate_terrain_skirts_and_cap(
     (vertices, indices)
 }
 
+/// Mirrored map-edge extension: 8 grid quadrants surrounding the
+/// playable area, each filled with a mirrored copy of the playable
+/// terrain. Port of BAR's `luaui/Widgets/map_edge_extension2.lua`.
+///
+/// Each grid cell is a quad with vertices carrying:
+/// - `position.xz`: world XZ in the mirror quadrant (outside the
+///   playable area).
+/// - `position.y = 0`: signals the vertex shader to derive Y by
+///   sampling the heightmap at the encoded playable UV.
+/// - `uv = (playable_u, 4.0 + playable_v)`: the playable-area UV the
+///   vertex's content is mirrored from. Both shader stages key off
+///   `uv.y > 3.5` to recognise this geometry; the playable UV is
+///   `(uv.x, uv.y - 4.0)`.
+///
+/// `quadrant_grid_n` controls tessellation per quadrant -- 32 is fine
+/// at typical preview camera distances and keeps the vertex budget at
+/// ~9k for the whole extension.
+pub fn generate_map_edge_extension(
+    x_extent: f32,
+    z_extent: f32,
+    quadrant_grid_n: u32,
+) -> (Vec<TerrainVertex>, Vec<u32>) {
+    let n = (quadrant_grid_n as usize).max(2);
+    let mut vertices = Vec::new();
+    let mut indices = Vec::new();
+
+    // Eight quadrants: (xq, zq) chooses west/centre/east and north/
+    // centre/south. (0, 0) is the playable area itself -- skip.
+    for xq in -1i32..=1 {
+        for zq in -1i32..=1 {
+            if xq == 0 && zq == 0 {
+                continue;
+            }
+            let base = vertices.len() as u32;
+            // Quadrant world-space extents. The quadrant footprint is
+            // 2 * extent in the corresponding axis direction so the
+            // mirror tile is the same size as the playable area; for
+            // the centre rows/cols (xq == 0 or zq == 0) we still use
+            // the playable extent in that axis so the strip aligns
+            // with the playable edge.
+            let q_x_min = match xq {
+                -1 => -3.0 * x_extent,
+                0 => -x_extent,
+                _ => x_extent,
+            };
+            let q_x_max = match xq {
+                -1 => -x_extent,
+                0 => x_extent,
+                _ => 3.0 * x_extent,
+            };
+            let q_z_min = match zq {
+                -1 => -3.0 * z_extent,
+                0 => -z_extent,
+                _ => z_extent,
+            };
+            let q_z_max = match zq {
+                -1 => -z_extent,
+                0 => z_extent,
+                _ => 3.0 * z_extent,
+            };
+
+            for iz in 0..n {
+                for ix in 0..n {
+                    let s = ix as f32 / (n - 1) as f32;
+                    let t = iz as f32 / (n - 1) as f32;
+                    let wx = q_x_min + s * (q_x_max - q_x_min);
+                    let wz = q_z_min + t * (q_z_max - q_z_min);
+                    // Playable UV = the reflected position in [0, 1].
+                    // For the X axis: in the WEST quadrant (xq = -1)
+                    // the world X ranges from -3x to -x; we want the
+                    // playable U to mirror across the west edge, i.e.
+                    // U(-x) = 0, U(-3x) = 1. Linear: U = (-wx - x) /
+                    // (2x). The east quadrant mirrors the other way.
+                    // The centre row (xq = 0) uses the same U as the
+                    // playable area.
+                    let pu = match xq {
+                        -1 => (-wx - x_extent) / (2.0 * x_extent),
+                        0 => (wx + x_extent) / (2.0 * x_extent),
+                        _ => 1.0 - (wx - x_extent) / (2.0 * x_extent),
+                    };
+                    let pv = match zq {
+                        -1 => (-wz - z_extent) / (2.0 * z_extent),
+                        0 => (wz + z_extent) / (2.0 * z_extent),
+                        _ => 1.0 - (wz - z_extent) / (2.0 * z_extent),
+                    };
+                    let pu = pu.clamp(0.0, 1.0);
+                    let pv = pv.clamp(0.0, 1.0);
+                    vertices.push(TerrainVertex {
+                        position: [wx, 0.0, wz],
+                        normal: [0.0, 1.0, 0.0],
+                        uv: [pu, 4.0 + pv],
+                    });
+                }
+            }
+            for iz in 0..(n - 1) {
+                for ix in 0..(n - 1) {
+                    let tl = base + (iz * n + ix) as u32;
+                    let tr = base + (iz * n + ix + 1) as u32;
+                    let bl = base + ((iz + 1) * n + ix) as u32;
+                    let br = base + ((iz + 1) * n + ix + 1) as u32;
+                    indices.push(tl);
+                    indices.push(bl);
+                    indices.push(tr);
+                    indices.push(tr);
+                    indices.push(bl);
+                    indices.push(br);
+                }
+            }
+        }
+    }
+
+    (vertices, indices)
+}
+
 /// Water / lava plane at world-Y = `water_y`.
+/// `span_multiplier` scales the plane's footprint relative to the
+/// playable extent -- pass `1.0` for a plane that fits the playable
+/// area exactly; pass `3.0` when the map-edge extension is enabled
+/// so the water surface continues out across the mirrored quadrants
+/// (matches engine BumpWater rendering, which covers the entire
+/// visible scene at sea level, not just the playable footprint).
 /// Returns empty vecs when `water_y < 0` (no water).
 pub fn generate_water_plane(
     x_extent: f32,
     z_extent: f32,
     water_y: f32,
+    span_multiplier: f32,
 ) -> (Vec<TerrainVertex>, Vec<u32>) {
     if water_y < 0.0 {
         return (Vec::new(), Vec::new());
     }
+    let span_x = x_extent * span_multiplier;
+    let span_z = z_extent * span_multiplier;
     let mut vertices = Vec::new();
     for &(px, pz) in &[
-        (-x_extent, -z_extent),
-        (x_extent, -z_extent),
-        (x_extent, z_extent),
-        (-x_extent, z_extent),
+        (-span_x, -span_z),
+        (span_x, -span_z),
+        (span_x, span_z),
+        (-span_x, span_z),
     ] {
         vertices.push(TerrainVertex {
             position: [px, water_y, pz],
@@ -311,18 +439,31 @@ mod tests {
 
     #[test]
     fn water_plane_absent_when_negative() {
-        let (verts, idxs) = generate_water_plane(0.5, 0.5, -1.0);
+        let (verts, idxs) = generate_water_plane(0.5, 0.5, -1.0, 1.0);
         assert!(verts.is_empty());
         assert!(idxs.is_empty());
     }
 
     #[test]
     fn water_plane_present_when_nonnegative() {
-        let (verts, idxs) = generate_water_plane(0.5, 0.5, 0.1);
+        let (verts, idxs) = generate_water_plane(0.5, 0.5, 0.1, 1.0);
         assert_eq!(verts.len(), 4);
         assert_eq!(idxs.len(), 6);
         for v in &verts {
             assert!((v.uv[0] - (-1.0)).abs() < 1e-4, "water uv.x must be -1");
         }
+    }
+
+    #[test]
+    fn water_plane_scales_with_span_multiplier() {
+        let (verts, _) = generate_water_plane(0.5, 0.5, 0.1, 3.0);
+        let max_x = verts
+            .iter()
+            .map(|v| v.position[0].abs())
+            .fold(0.0_f32, f32::max);
+        assert!(
+            (max_x - 1.5).abs() < 1e-4,
+            "span 3.0 over extent 0.5 should reach |x| = 1.5, got {max_x}"
+        );
     }
 }

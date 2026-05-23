@@ -253,7 +253,9 @@ fn cmd_run(
     let executor = CpuExecutor;
     let start = Instant::now();
 
-    // If --target is specified, use the codec-based export path (backward compat shortcut)
+    // --target chooses the codec-based export path (`spring-smf`,
+    // `raw-layers`, or a user TOML file). Bypasses bundler-node
+    // discovery for one-shot CLI exports.
     if let Some(target_id) = target {
         let written = bar_engine::export_with_target(
             &graph,
@@ -286,13 +288,19 @@ fn cmd_run(
     let bundler_nodes = bar_engine::find_bundler_nodes(&graph);
     if !bundler_nodes.is_empty() || bundler_filter.is_some() {
         // Evaluate graph first
-        let results = bar_graph::evaluate_graph(&graph, &executor, w, h)
+        let results = bar_graph::evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
             .context("Failed to evaluate graph")?;
 
         // Execute bundlers
-        let bundler_results =
-            bar_engine::execute_bundlers(&graph, &results, &recipe, output_dir, bundler_filter)
-                .context("Bundler execution failed")?;
+        let bundler_results = bar_engine::execute_bundlers(
+            &graph,
+            &results,
+            &recipe,
+            output_dir,
+            bundler_filter,
+            recipe_path.parent(),
+        )
+        .context("Bundler execution failed")?;
 
         let elapsed = start.elapsed();
         if bundler_results.is_empty() {
@@ -440,11 +448,42 @@ fn cmd_import(sd7_path: &Path, output_dir: Option<&Path>) -> Result<()> {
     let out_dir = output_dir.unwrap_or(&default_out);
 
     let start = Instant::now();
-    let project = bar_engine::import_sd7_to_project(sd7_path, out_dir)
-        .with_context(|| format!("Failed to import {}", sd7_path.display()))?;
-
-    let project_name = sanitize_filename(&project.recipe.name);
+    // Extract directly into a .barproj at the user-chosen location so
+    // the post-import save below just writes recipe.json + layout.json
+    // alongside the already-extracted contents. Both GUI and CLI flow
+    // through the same `import_sd7_to_project` to keep identity-field
+    // parsing in one place.
+    let project_name = sanitize_filename(
+        sd7_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("imported_map"),
+    );
     let project_path = out_dir.join(format!("{project_name}.barproj"));
+    let (project, pending_assets, raw_files) =
+        bar_engine::import_sd7_to_project(sd7_path, &project_path)
+            .with_context(|| format!("Failed to import {}", sd7_path.display()))?;
+
+    // Pending binary assets / raw files land under `<proj>/assets/`
+    // so the executor can resolve their `asset_id`s back to disk
+    // paths on next load.
+    if !pending_assets.is_empty() || !raw_files.is_empty() {
+        let assets_dir = project_path.join("assets");
+        std::fs::create_dir_all(&assets_dir).ok();
+        for asset in &pending_assets {
+            let path = assets_dir.join(format!("{}.bin", asset.id.0));
+            let _ = bar_project::write_asset_file(&path, asset.header, &asset.data);
+        }
+        for raw in &raw_files {
+            let dest = assets_dir.join(format!("{}.{}", raw.id.0, raw.extension));
+            if let Some(src) = &raw.source_path {
+                let _ = std::fs::copy(src, &dest);
+            } else {
+                let _ = std::fs::write(&dest, &raw.data);
+            }
+        }
+    }
+
     project
         .save(&project_path)
         .with_context(|| format!("Failed to save project to {}", project_path.display()))?;
@@ -459,10 +498,10 @@ fn cmd_import(sd7_path: &Path, output_dir: Option<&Path>) -> Result<()> {
         "  Map size:  {}×{}",
         project.recipe.output.width, project.recipe.output.height
     );
+    let _ms_resolved = project.recipe.output.map_settings.resolved();
     println!(
         "  Height:    {:.0}..{:.0} world units",
-        project.recipe.output.map_settings.min_height,
-        project.recipe.output.map_settings.max_height
+        _ms_resolved.min_height, _ms_resolved.max_height
     );
     println!("  Project:   {}", project_path.display());
     println!("  Heightmap: {}", out_dir.join("heightmap.png").display());
@@ -478,7 +517,6 @@ fn cmd_targets() -> Result<()> {
         let target = registry.get_target(id).unwrap();
         println!("  {} — {}", id, target.name);
         println!("    Codec:   {}", target.codec);
-        println!("    Version: {}", target.version);
         println!("    Layers:  {}", target.layers.len());
         println!();
     }
@@ -522,10 +560,8 @@ fn cmd_preview(
         .context("Failed to build graph from project recipe")?;
 
     let (w, h) = (project.recipe.output.width, project.recipe.output.height);
-    let (min_h, max_h) = (
-        project.recipe.output.map_settings.min_height,
-        project.recipe.output.map_settings.max_height,
-    );
+    let _ms_rs = project.recipe.output.map_settings.resolved();
+    let (min_h, max_h) = (_ms_rs.min_height, _ms_rs.max_height);
 
     // Resolve any project-relative paths in the recipe so the executor can
     // read the on-disk files. Mirrors what the GUI does at apply_project.
@@ -537,7 +573,7 @@ fn cmd_preview(
     // Evaluate via the CPU executor — mirrors GUI's preview path which
     // (in headless mode) uses CpuExecutor too.
     let executor = CpuExecutor;
-    let outputs = evaluate_graph(&graph, &executor, w, h)
+    let outputs = evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
         .map_err(|e| anyhow::anyhow!("Graph evaluation failed: {e:?}"))?;
 
     // Find the heightmap and (optionally) the texture wired to the first
@@ -553,7 +589,7 @@ fn cmd_preview(
         .or_else(|| get_texture_output(&graph, &outputs));
 
     // Compute the same height_scale / extent / water_y the GUI uses.
-    let (height_scale, water_y, x_extent, z_extent) = {
+    let (height_scale, height_range_elmos, water_y, x_extent, z_extent, elmo_per_render_xz) = {
         let pw = (w as f32 - 1.0).max(1.0);
         let ph = (h as f32 - 1.0).max(1.0);
         let pm = pw.max(ph);
@@ -566,7 +602,12 @@ fn cmd_preview(
         } else {
             -1.0
         };
-        (hs, wy, xe, ze)
+        // Render-space XZ is [-xe, xe], world-space is [-pw*4, pw*4]
+        // elmos (each heightmap pixel = 8 elmos, pw=w-1 pixels wide).
+        // elmos_per_render_x = (pw * 8) / (2 * xe).
+        let epx = pw * 4.0 / xe.max(1e-4);
+        let epz = ph * 4.0 / ze.max(1e-4);
+        (hs, hr, wy, xe, ze, [epx, epz])
     };
 
     // Diagnostic: actual data range vs the SMF header's nominal range. A
@@ -609,8 +650,10 @@ fn cmd_preview(
         pollster::block_on(GpuContext::new_standalone()).context("Failed to create wgpu device")?;
 
     // Set up the renderer at the requested output resolution.
+    // BAR-faithful: non-sRGB target so the GPU doesn't gamma-encode
+    // on write -- matches BAR's pipeline.
     let mut renderer =
-        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8UnormSrgb);
+        TerrainRenderer::new(&gpu.device, &gpu.queue, wgpu::TextureFormat::Rgba8Unorm);
     renderer.resize(&gpu.device, out_w, out_h);
     renderer.update_heightmap(
         &gpu.device,
@@ -623,24 +666,95 @@ fn cmd_preview(
             water_y,
             water_color: [0.2, 0.45, 0.75],
             grid_n: mesh_lod,
+            height_range_elmos,
+            elmo_per_render_xz,
+            include_edge_extension: false,
         },
     );
     if let Some(ref tex) = texture {
         renderer.update_albedo(&gpu.device, &gpu.queue, tex);
     }
+
+    // Build and upload feature instances using the same coordinate math as
+    // build_feature_instances in bar-app.
+    {
+        use bar_render::FeatureInstance;
+        use glam::{Mat4, Quat, Vec3};
+
+        let pw = (w as f32 - 1.0).max(1.0);
+        let ph = (h as f32 - 1.0).max(1.0);
+        let pm = pw.max(ph);
+        let xe = (0.5 * pw / pm).min(0.5);
+        let ze = (0.5 * ph / pm).min(0.5);
+        let height_range = (max_h - min_h).abs().max(1.0);
+        let hs = (height_range / (pm * 8.0)).max(0.005);
+        // Default 2 Spring squares (16 elmos) footprint; no catalog in CLI mode.
+        let default_fp = 2.0_f32;
+        let sx = default_fp / pm;
+        let sy = sx;
+        let sz = sx;
+
+        let instances: Vec<FeatureInstance> = project
+            .recipe
+            .features
+            .iter()
+            .map(|f| {
+                let rx = (f.x / (pw * 8.0) - 0.5) * 2.0 * xe;
+                let rz = (f.z / (ph * 8.0) - 0.5) * 2.0 * ze;
+                // Sample heightmap at feature XZ to match terrain surface.
+                let h_render = {
+                    let hx = (f.x / (pw * 8.0)).clamp(0.0, 1.0)
+                        * (heightmap.width().saturating_sub(1)) as f32;
+                    let hz = (f.z / (ph * 8.0)).clamp(0.0, 1.0)
+                        * (heightmap.height().saturating_sub(1)) as f32;
+                    heightmap.get(hx as u32, hz as u32).unwrap_or(0.0) * hs
+                };
+                let ry = if f.y.abs() < 0.01 {
+                    h_render
+                } else {
+                    ((f.y - min_h) / height_range) * hs
+                };
+                let transform = Mat4::from_scale_rotation_translation(
+                    Vec3::new(sx, sy, sz),
+                    Quat::from_rotation_y(-f.angle.to_radians()),
+                    Vec3::new(rx, ry, rz),
+                );
+                let cols = transform.to_cols_array_2d();
+                FeatureInstance {
+                    col0: cols[0],
+                    col1: cols[1],
+                    col2: cols[2],
+                    col3: cols[3],
+                    tint: [1.0, 0.5, 0.0, 1.0],
+                }
+            })
+            .collect();
+
+        println!("Feature instances: {}", instances.len());
+        renderer.update_feature_instances(&gpu.device, &Default::default(), &instances);
+    }
+
+    // Drive lighting and water uniforms from the project's MapSettings --
+    // same source the GUI uses (see `live_smf_lighting` in
+    // `bar-app::viewport`, which also passes through this `From` impl
+    // now). Without it the CLI rendered with default zero-water
+    // SmfLighting, which made headless debugging useless.
+    let ms = &project.recipe.output.map_settings;
+    let ms_rs = ms.resolved();
+    let smf_lighting = bar_render::SmfLighting::from(ms);
     let frame = bar_render::PreviewFrame {
         height_scale,
         x_extent,
         z_extent,
         water_y,
-        water_color: [0.2, 0.45, 0.75],
+        water_color: ms_rs.water.base_color,
         // CLI always uses the high-pass (full) shader -- the low-pass is for
         // the GUI's progressive refinement, not relevant headlessly.
         quality_high: true,
         time: 0.0,
-        // CLI doesn't read MapSettings.lighting yet -- fall back to engine
-        // defaults so the renderer still produces a sensible image.
-        smf_lighting: bar_render::SmfLighting::default(),
+        smf_lighting,
+        height_range_elmos,
+        elmo_per_render_xz,
     };
 
     // Camera with user-supplied angles.
@@ -684,7 +798,33 @@ fn load_project_for_preview(path: &Path) -> Result<bar_engine::Project> {
         Some("sd7") => {
             let scan = bar_engine::extract_sd7_to_work_dir(path)
                 .with_context(|| format!("Failed to extract {}", path.display()))?;
-            Ok(bar_engine::scan_to_project(&scan))
+            let (project, pending_assets, raw_files) = bar_engine::scan_to_project(&scan);
+            let temp_dir = std::env::temp_dir().join("bar-editor-assets");
+            // Write pending binary assets to temp so executors can read them.
+            if !pending_assets.is_empty() {
+                for asset in &pending_assets {
+                    let ap = temp_dir.join(format!("{}.bin", asset.id.0));
+                    if let Err(e) = bar_engine::write_asset_file(&ap, asset.header, &asset.data) {
+                        eprintln!("Warning: failed to write temp asset: {e}");
+                    }
+                }
+            }
+            // Write raw files (ImportedTexture .smt + .idx).
+            if !raw_files.is_empty() {
+                let _ = std::fs::create_dir_all(&temp_dir);
+                for raw in &raw_files {
+                    let dest = temp_dir.join(format!("{}.{}", raw.id.0, raw.extension));
+                    let ok = if let Some(src) = &raw.source_path {
+                        std::fs::copy(src, &dest).is_ok()
+                    } else {
+                        std::fs::write(&dest, &raw.data).is_ok()
+                    };
+                    if !ok {
+                        eprintln!("Warning: failed to write raw temp asset");
+                    }
+                }
+            }
+            Ok(project)
         }
         _ => bar_engine::Project::load(path)
             .with_context(|| format!("Failed to load {}", path.display())),
@@ -716,6 +856,28 @@ fn resolve_relative_paths_in_graph(graph: &mut bar_graph::GraphEngine, project_d
                 if r != s {
                     node.params
                         .insert((*key).to_string(), ParamValue::String(r));
+                }
+            }
+        }
+        if matches!(
+            node.node_type,
+            NodeType::PaintedHeightmap | NodeType::PaintedTexture
+        ) {
+            if let Some(ParamValue::String(id)) = node.params.get("asset_id").cloned() {
+                if !id.is_empty() {
+                    // Try project assets dir first, then temp dir.
+                    let project_asset = project_dir.join("assets").join(format!("{id}.bin"));
+                    let path_str = if project_asset.exists() {
+                        project_asset.to_string_lossy().into_owned()
+                    } else {
+                        std::env::temp_dir()
+                            .join("bar-editor-assets")
+                            .join(format!("{id}.bin"))
+                            .to_string_lossy()
+                            .into_owned()
+                    };
+                    node.params
+                        .insert("asset_path".to_string(), ParamValue::String(path_str));
                 }
             }
         }

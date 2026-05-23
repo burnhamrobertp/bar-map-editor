@@ -7,10 +7,12 @@ license.workspace = true
 
 [dependencies]
 bytemuck = { workspace = true }
+ddsfile = { workspace = true }
 image = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]

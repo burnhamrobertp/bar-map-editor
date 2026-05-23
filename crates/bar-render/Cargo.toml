@@ -7,10 +7,12 @@ license.workspace = true
 
 [dependencies]
 bar-data = { workspace = true }
+bar-project = { workspace = true }
 wgpu = { workspace = true }
 bytemuck = { workspace = true }
 glam = { workspace = true }
 tracing = { workspace = true }
+image = { workspace = true }
 
 
 [dev-dependencies]

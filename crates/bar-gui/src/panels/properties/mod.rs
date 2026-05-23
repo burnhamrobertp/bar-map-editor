@@ -12,7 +12,6 @@
 //!   macro-parameter binding editor
 //! - `painted_heightmap` -- PaintedHeightmap brush settings
 //! - `painted_texture` -- PaintedTexture brush settings
-//! - `sculpt` -- Sculpt brush settings + delta heatmap
 //!
 //! All of those add `impl BarEditorApp { ... }` blocks in their
 //! respective files; methods stay on `BarEditorApp` rather than free
@@ -25,7 +24,6 @@ pub(crate) mod layout_generator;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
-pub(crate) mod sculpt;
 pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
@@ -330,9 +328,6 @@ impl BarEditorApp {
                 } else if node_type == NodeType::PaintedTexture {
                     ui.separator();
                     self.draw_painted_texture_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::Sculpt {
-                    ui.separator();
-                    self.draw_sculpt_properties(ui, node_id, &node_params);
                 } else if node_type == NodeType::TextureWeightmap {
                     ui.separator();
                     self.draw_texture_weightmap_properties(ui, node_id, &node_params);

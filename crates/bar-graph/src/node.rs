@@ -72,11 +72,6 @@ pub enum NodeType {
 
     /// A 2D sculpt layer. Takes a heightmap input, applies a sequence of
     /// recorded brush dabs (stored as JSON in `params["dabs"]`), and
-    /// outputs the modified heightmap. Works for any greyscale layer
-    /// (terrain height, metalmap, typemap) — wire it wherever you need
-    /// hand-authored edits mid-pipeline.
-    Sculpt,
-
     // Mask Operations
     MaskThreshold,
     MaskInvert,
@@ -100,6 +95,12 @@ pub enum NodeType {
     /// as the Bundler's texture input or for compositing with derived
     /// textures. Resolution is fixed at 256 for now.
     PaintedTexture,
+    /// An imported Spring Map Texture (.smt) stored in the project's
+    /// asset directory. Outputs a Color buffer assembled from the SMT
+    /// tile atlas at the requested texture resolution. Source-only node;
+    /// no inputs. Runtime params `asset_path` and `tile_index_path` are
+    /// injected at load time and stripped before save.
+    ImportedTexture,
 
     // Additional Generators
     FileInput,
@@ -155,9 +156,16 @@ pub enum NodeType {
     /// Selects between two heightmap inputs based on a mask threshold.
     MaskSelect,
 
-    // Bundler/Packaging
-    /// Packages graph outputs into a deliverable archive.
-    Bundler,
+    // Final Composition (terminal node)
+    /// The end of every project's node graph: composites paint layers
+    /// (heightmap delta, color RGBA overlay, metalmap / typemap sparse
+    /// overlay) on top of the procedural inputs and exposes the result
+    /// to the bundler / export action buttons. Singleton -- exactly one
+    /// per project, auto-created at bootstrap, can't be deleted. Inputs
+    /// mirror everything the SD7 export consumes (heightmap, texture,
+    /// normalmap, metalmap, typemap, grassmap, specular, files). Paint
+    /// layers are edited from Sculpt3D, not the inspector.
+    FinalComposition,
     /// External file reference included in a bundle without modification.
     FileReference,
 
@@ -165,12 +173,6 @@ pub enum NodeType {
     /// Holds all extra files from an extracted .sd7 that should pass through to the bundler
     /// without processing (lua configs, sounds, textures, etc.).
     PassThrough,
-    /// Mid-pipeline tap point. Pure passthrough — its heightmap output
-    /// equals its heightmap input. Exists to give the user an explicit
-    /// "show me what the map looks like here" anchor that can be
-    /// targeted by the 3D viewport without committing to making the
-    /// surrounding subgraph a Bundler.
-    Preview,
     /// External input boundary of a SubGraph. Placeable only inside a
     /// subgraph. From OUTSIDE the collapsed subgraph it appears as one
     /// external input port on the collapsed block; from INSIDE it
@@ -366,22 +368,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
-        // Preview is a terminal sink — drives the 3D viewport but
-        // produces nothing downstream. Heightmap is required (no
-        // mesh = nothing to draw); texture / normal_map / specular_map
-        // are optional layers the renderer composites on top.
-        // Decoupled from the Bundler on purpose: export and preview
-        // are separate concerns.
-        NodeType::Preview => (
-            vec![
-                Port::new("heightmap", "Heightmap", PortKind::Heightmap),
-                Port::new("texture", "Texture", PortKind::Color),
-                Port::new("normal_map", "Normal Map", PortKind::Color),
-                Port::new("specular_map", "Specular Map", PortKind::Heightmap),
-            ],
-            vec![],
-        ),
-
         // Combiners
         NodeType::Blend => (
             vec![
@@ -514,14 +500,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Specular", PortKind::Heightmap)],
         ),
 
-        NodeType::Sculpt => (
-            vec![
-                Port::new("input", "Input", PortKind::Heightmap),
-                Port::new("mask", "Mask", PortKind::Mask),
-            ],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
-
         // Mask: generates a mask output
         NodeType::Mask => (
             vec![
@@ -542,6 +520,10 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         // map. Output is a Color buffer suitable for the Bundler's
         // texture input.
         NodeType::PaintedTexture => (
+            vec![],
+            vec![Port::new("output", "Texture", PortKind::Color)],
+        ),
+        NodeType::ImportedTexture => (
             vec![],
             vec![Port::new("output", "Texture", PortKind::Color)],
         ),
@@ -683,8 +665,12 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
 
-        // --- Bundler/Packaging ---
-        NodeType::Bundler => (
+        // FinalComposition: singleton terminal node. Its inputs are
+        // what the export pipeline consumes (heightmap, texture,
+        // normalmap, metalmap, typemap, grassmap, specular, files).
+        // No outputs -- nothing downstream of FC exists in the user's
+        // node graph; the export reads FC's eval result directly.
+        NodeType::FinalComposition => (
             vec![
                 Port::new("heightmap", "Heightmap", PortKind::Heightmap),
                 Port::new("texture", "Texture", PortKind::Color),
@@ -695,7 +681,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("specular", "Specular", PortKind::Heightmap),
                 Port::new_many("files", "Files", PortKind::FileList),
             ],
-            vec![], // terminal node — action buttons rendered directly in node body
+            vec![],
         ),
 
         NodeType::FileReference => (vec![], vec![Port::new("file", "File", PortKind::File)]),

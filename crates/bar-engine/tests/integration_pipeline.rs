@@ -95,12 +95,13 @@ fn test_complex_recipe_with_combiners() {
     use std::collections::HashMap;
 
     let recipe = Recipe {
-        schema_version: bar_project::RECIPE_SCHEMA_VERSION,
         name: "Complex Test".to_string(),
         shortname: None,
         description: String::new(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes: vec![
             RecipeNode {
                 key: "perlin".to_string(),
@@ -137,7 +138,7 @@ fn test_complex_recipe_with_combiners() {
             },
             RecipeNode {
                 key: "out".to_string(),
-                node_type: NodeType::Bundler,
+                node_type: NodeType::FinalComposition,
                 label: "Export".to_string(),
                 params: HashMap::new(),
             },
@@ -208,12 +209,13 @@ fn test_recipe_with_erosion_pipeline() {
     use std::collections::HashMap;
 
     let recipe = Recipe {
-        schema_version: bar_project::RECIPE_SCHEMA_VERSION,
         name: "Erosion Test".to_string(),
         shortname: None,
         description: "Tests hydraulic erosion in pipeline".to_string(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes: vec![
             RecipeNode {
                 key: "noise".to_string(),
@@ -248,7 +250,7 @@ fn test_recipe_with_erosion_pipeline() {
             },
             RecipeNode {
                 key: "out".to_string(),
-                node_type: NodeType::Bundler,
+                node_type: NodeType::FinalComposition,
                 label: "Export".to_string(),
                 params: HashMap::new(),
             },
@@ -310,12 +312,13 @@ fn test_mask_operations_pipeline() {
     use std::collections::HashMap;
 
     let recipe = Recipe {
-        schema_version: bar_project::RECIPE_SCHEMA_VERSION,
         name: "Mask Test".to_string(),
         shortname: None,
         description: "Tests mask threshold, invert, blur, and apply".to_string(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes: vec![
             RecipeNode {
                 key: "terrain".to_string(),
@@ -360,7 +363,7 @@ fn test_mask_operations_pipeline() {
             },
             RecipeNode {
                 key: "out".to_string(),
-                node_type: NodeType::Bundler,
+                node_type: NodeType::FinalComposition,
                 label: "Export".to_string(),
                 params: HashMap::new(),
             },

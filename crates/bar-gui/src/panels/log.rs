@@ -33,17 +33,71 @@ impl BarEditorApp {
                     if ui.small_button(t!("editor.log.clear")).clicked() {
                         self.dialog.log_buffer.clear();
                     }
-                    ui.weak(format!("({} entries)", self.dialog.log_buffer.len()));
+                    ui.weak(t!(
+                        "editor.log.entries_count",
+                        n = self.dialog.log_buffer.len()
+                    ));
+                    ui.separator();
+                    // Per-level visibility toggles. Each button reads
+                    // its current state from `log_levels_visible` and
+                    // flips that level on click; multiple levels can
+                    // be on / off independently.
+                    for (label, level) in [
+                        ("INF", LogLevel::Info),
+                        ("WRN", LogLevel::Warning),
+                        ("ERR", LogLevel::Error),
+                        ("DBG", LogLevel::Debug),
+                    ] {
+                        let visible = self.dialog.log_levels_visible.is_visible(level);
+                        let btn = egui::Button::new(
+                            egui::RichText::new(label)
+                                .monospace()
+                                .color(level_color(level)),
+                        )
+                        .selected(visible);
+                        if ui.add(btn).clicked() {
+                            self.dialog.log_levels_visible.set(level, !visible);
+                            self.dialog.log_buffer.mark_needs_scroll();
+                        }
+                    }
+                    ui.separator();
+                    // Text search box.
+                    ui.label(t!("editor.log.filter_label"));
+                    let search = ui.add(
+                        egui::TextEdit::singleline(&mut self.dialog.log_search)
+                            .desired_width(150.0),
+                    );
+                    if search.changed() {
+                        // Reset scroll when filter changes.
+                        self.dialog.log_buffer.mark_needs_scroll();
+                    }
+                    if !self.dialog.log_search.is_empty()
+                        && ui
+                            .small_button("x")
+                            .on_hover_text(t!("editor.log.clear_filter_hint"))
+                            .clicked()
+                    {
+                        self.dialog.log_search.clear();
+                    }
                 });
                 ui.separator();
 
                 let needs_scroll = self.dialog.log_buffer.take_needs_scroll();
+                let levels_visible = self.dialog.log_levels_visible;
+                let search_lower = self.dialog.log_search.to_lowercase();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false; 2])
                     .show(ui, |ui| {
-                        ui.set_min_width(ui.available_width());
                         for entry in self.dialog.log_buffer.entries() {
-                            ui.horizontal(|ui| {
+                            if !levels_visible.is_visible(entry.level) {
+                                continue;
+                            }
+                            if !search_lower.is_empty()
+                                && !entry.message.to_lowercase().contains(&search_lower)
+                            {
+                                continue;
+                            }
+                            ui.horizontal_wrapped(|ui| {
                                 ui.label(
                                     egui::RichText::new(format!("{:8.1}s", entry.elapsed_secs))
                                         .monospace()
@@ -55,9 +109,12 @@ impl BarEditorApp {
                                         .strong()
                                         .color(level_color(entry.level)),
                                 );
-                                ui.label(
-                                    egui::RichText::new(&entry.message)
-                                        .color(level_color(entry.level)),
+                                ui.add(
+                                    egui::Label::new(
+                                        egui::RichText::new(&entry.message)
+                                            .color(level_color(entry.level)),
+                                    )
+                                    .wrap(),
                                 );
                             });
                         }

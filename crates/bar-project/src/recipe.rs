@@ -1,4 +1,4 @@
-//! Recipe format: a versioned, human-friendly serializable graph configuration.
+//! Recipe format: a human-friendly serializable graph configuration.
 //!
 //! Recipes use stable string keys for nodes (not internal IDs) and validate
 //! on load by constructing the graph through proper APIs.
@@ -11,19 +11,11 @@ use serde::{Deserialize, Serialize};
 
 use bar_graph::{GraphEngine, Node, NodeId, NodeType, ParamValue, PortId};
 
-/// On-disk format version for `Recipe`. Bumped whenever a structural
-/// change to the recipe schema lands that needs a migration step (a
-/// renamed field, a new required field with no sensible default, a
-/// reorganised section). Loaders branch on this value to apply
-/// migrations; absence in older files is treated as `1` via
-/// `serde(default)`.
-///
-/// Bump this AND add a migration in `Recipe::load`/`Recipe::from_json`
-/// in the same commit. Never bump silently.
-pub const RECIPE_SCHEMA_VERSION: u32 = 1;
-
-fn default_schema_version() -> u32 {
-    1
+/// Default `depend` list for new recipes. Every BAR map references
+/// `Map Helper v1` to get the common mapconfig loaders, so the
+/// default is the conservative thing.
+fn default_depend() -> Vec<String> {
+    vec!["Map Helper v1".to_string()]
 }
 
 /// A complete pipeline recipe — the on-disk format for the editor's graphs.
@@ -34,12 +26,6 @@ fn default_schema_version() -> u32 {
 /// should keep its own copy.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Recipe {
-    /// On-disk schema version. Use `RECIPE_SCHEMA_VERSION` for new
-    /// recipes; older files without the field load as `1` via
-    /// `default_schema_version`. Migrations live in the load path,
-    /// not in field-level `serde(alias = …)` patches.
-    #[serde(default = "default_schema_version", rename = "schema_version")]
-    pub schema_version: u32,
     /// Human-readable map name. Becomes mapinfo's `name` and the
     /// stem of generated map files (`<name>.smf`, `<name>.smt`).
     pub name: String,
@@ -62,6 +48,18 @@ pub struct Recipe {
     /// bundler falls back to `"1.0"`.
     #[serde(default)]
     pub version: Option<String>,
+    /// Optional short tooltip text shown by the lobby when the user
+    /// hovers the map name. Free-form; typically a sentence or two.
+    /// Becomes mapinfo's `tip` field.
+    #[serde(default)]
+    pub tip: Option<String>,
+    /// Archives this map's content depends on. Becomes mapinfo's
+    /// `depend = { ... }` table. Almost universally
+    /// `["Map Helper v1"]` for BAR maps -- the helper archive
+    /// supplies the boilerplate gadgets and includes mapconfig
+    /// authors rely on. Empty vec writes no `depend` entry.
+    #[serde(default = "default_depend")]
+    pub depend: Vec<String>,
     /// Node definitions, keyed by stable string IDs.
     pub nodes: Vec<RecipeNode>,
     /// Connections between node ports.
@@ -89,6 +87,32 @@ pub struct PlacedFeature {
     pub angle: f32,
     #[serde(default)]
     pub taken_damage: i16,
+    /// Where this feature originated -- and therefore where it must
+    /// land on re-export. SMF-native placements go in the SMF feature
+    /// section (capped at 31-char names by the engine reader at
+    /// `SMFMapFile.h:62`). FeaturePlacer-set features go in
+    /// `mapconfig/featureplacer/set.lua` (no length limit; spawned at
+    /// runtime by the FP_featureplacer gadget). Conflating the two
+    /// is what causes the engine's SMF feature reader to truncate
+    /// long names mid-string and crash on the resulting garbled type.
+    #[serde(default)]
+    pub source: FeatureSource,
+}
+
+/// Where a `PlacedFeature` came from at import time. Determines the
+/// destination on re-export.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureSource {
+    /// Stored in the source SMF's feature section. Re-exported to the
+    /// same section -- names MUST fit in 31 chars (engine constraint).
+    #[default]
+    Smf,
+    /// Stored in `mapconfig/featureplacer/set.lua`, spawned at runtime
+    /// by the FP_featureplacer gadget. Re-exported to set.lua; engine
+    /// never reads it through the SMF feature section, so name length
+    /// is unconstrained.
+    FeaturePlacerSet,
 }
 
 /// A node in the recipe, identified by a stable string key.
@@ -140,41 +164,42 @@ pub struct OutputConfig {
 /// The bundler generates `mapinfo.lua` from `Recipe` + this struct on every
 /// SD7 export; nothing else may produce a mapinfo.lua (a PassThrough or
 /// FileReference with that destination is rejected at validation time).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct MapSettings {
-    /// Minimum height in Spring world units.
-    pub min_height: f32,
-    /// Maximum height in Spring world units.
-    pub max_height: f32,
-    /// Map hardness (100 = default).
-    pub map_hardness: u32,
-    /// Gravity constant.
-    pub gravity: f32,
-    /// Water damage per second.
-    pub water_damage: f32,
+    /// Heights and physics scalars are `Option<T>` so the recipe
+    /// captures "user-set / present in source mapinfo" vs "fall
+    /// through to engine default" without a hidden equality check.
+    /// See `engine_defaults.rs` for the values `None` resolves to.
+    pub min_height: Option<f32>,
+    pub max_height: Option<f32>,
+    pub map_hardness: Option<u32>,
+    pub gravity: Option<f32>,
 
     /// Detail Normal Texture Set (DNTS) — paths to tiling textures for each terrain type.
     /// Up to 4 entries (one per splat channel).
     #[serde(default)]
     pub detail_textures: Vec<DetailTexture>,
 
-    /// Whether the map is deformable.
-    pub deformable: bool,
-    /// `voidWater` — when true, water doesn't render at all; the
-    /// area below sea level is just empty space. Useful for sky-
-    /// island maps.
-    pub void_water: bool,
-    /// `voidGround` — when true, the ground texture is replaced by
-    /// transparency outside the heightmap's positive range. Niche;
-    /// off by default.
-    pub void_ground: bool,
-    /// Tidal strength.
-    pub tidal_strength: f32,
-    /// Maximum metal extraction value.
-    pub max_metal: f32,
-    /// Extractor radius.
-    pub extractor_radius: f32,
+    pub deformable: Option<bool>,
+    pub void_water: Option<bool>,
+    pub void_ground: Option<bool>,
+    pub tidal_strength: Option<f32>,
+    pub max_metal: Option<f32>,
+    pub extractor_radius: Option<f32>,
+    /// Engine `autoShowMetal`. Toggles the F4 "metal map" overlay
+    /// being shown by default at game start.
+    pub auto_show_metal: Option<bool>,
+    /// Engine `replace = { ... }` table -- string-keyed table of
+    /// archive-name replacements. Almost always empty on real maps;
+    /// modelled here so an empty `{}` survives round-trip.
+    #[serde(default)]
+    pub replace: ReplaceTable,
+    /// Engine `terrainTypes` table. Per-type-index movement / hardness
+    /// data the engine reads for each terrain type. Empty when the
+    /// source mapinfo didn't define any.
+    #[serde(default)]
+    pub terrain_types: Vec<TerrainTypeEntry>,
 
     /// Atmosphere settings.
     #[serde(default)]
@@ -186,10 +211,151 @@ pub struct MapSettings {
     #[serde(default)]
     pub water: WaterSettings,
 
+    /// Height-based custom fog (mapinfo `custom.fog`).
+    #[serde(default)]
+    pub custom_fog: CustomFogSettings,
+
+    /// Grass widget configuration (mapinfo `custom.grassConfig`).
+    #[serde(default)]
+    pub custom_grass: CustomGrassSettings,
+
+    /// Volumetric-cloud widget settings (mapinfo `custom.clouds`).
+    /// Drives the in-game cloud renderer; round-trips through the
+    /// recipe so re-bundles preserve the source's authored values.
+    #[serde(default)]
+    pub custom_clouds: CustomCloudsSettings,
+
+    /// EFX audio reverb / passfilter / preset (mapinfo `sound`).
+    #[serde(default)]
+    pub sound: SoundSettings,
+
+    /// Per-map asset filenames from mapinfo `resources = { ... }`.
+    #[serde(default)]
+    pub resources: ResourcesSettings,
+
+    /// User-chosen minimap source file (basename inside `passthrough/`).
+    /// `None` falls back to the SMF-embedded minimap sidecar on import,
+    /// and to a freshly generated minimap derived from the terrain
+    /// texture on bundle. Not part of mapinfo.lua; the SMF binary
+    /// embeds the minimap as a DXT1 chunk.
+    #[serde(default)]
+    pub minimap: Option<String>,
+
     /// Team start positions as [(x, z)] in Spring world coordinates.
     /// If empty, auto-generated at 25%/75% corners.
     #[serde(default)]
     pub start_positions: Vec<[u32; 2]>,
+}
+
+/// Volumetric clouds widget configuration (mapinfo `custom.clouds`).
+/// Authored per-map; the in-game widget reads each field at runtime.
+/// Every field is `Option<T>` so an unset cloud key in the source
+/// stays unset on round-trip (the widget falls back to its own
+/// defaults).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CustomCloudsSettings {
+    pub speed: Option<f32>,
+    pub color: Option<[f32; 3]>,
+    pub height: Option<f32>,
+    pub bottom: Option<f32>,
+    pub fade_alt: Option<f32>,
+    pub scale: Option<f32>,
+    pub opacity: Option<f32>,
+    pub clamp_to_map: Option<bool>,
+    pub sun_penetration: Option<f32>,
+}
+
+/// Engine `replace = { [key] = "value" }` map. Almost always empty
+/// on real maps; modelled as `Option<HashMap>` so an empty `{}` from
+/// the source round-trips as a `Some(empty)` rather than a `None`.
+/// Distinguishes "source had no replace block" from "source had an
+/// empty replace block" -- the latter still emits `replace = {}` in
+/// the bundle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReplaceTable {
+    /// Whether the source declared a `replace = ...` key at all.
+    /// Drives whether we emit the (often empty) block on bundle.
+    pub declared: bool,
+    /// The key-value entries inside the table (rare in real maps).
+    pub entries: Vec<(String, String)>,
+}
+
+/// One entry from the `terrainTypes` table. The engine indexes these
+/// by terrain-type-id (0-255) to drive per-type movement / damage /
+/// track-receiving behaviour. Real maps usually define a small number
+/// of explicit entries plus a fall-through default.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TerrainTypeEntry {
+    /// Terrain-type index (the `[N] =` key inside the table).
+    pub index: u32,
+    pub name: Option<String>,
+    pub hardness: Option<f32>,
+    pub receive_tracks: Option<bool>,
+    /// Per-unit-type movespeed multipliers (`moveSpeeds = { tank = 1.0,
+    /// kbot = 1.0, hover = 1.0, ship = 1.0 }`). Stored as a list so
+    /// the round-trip preserves declaration order; engine consumes by
+    /// key name.
+    pub move_speeds: Vec<(String, f32)>,
+}
+
+/// EFX audio settings (mapinfo `sound = { preset, passfilter, reverb }`).
+/// Preserves the per-map EFX preset + passfilter so audio rendering
+/// round-trips. The reverb sub-block (a dozen-plus OpenAL EFX
+/// parameters) is rare on real maps -- most leave it as a comment
+/// block -- so we don't model it field-by-field; it's an acceptable
+/// round-trip loss until a map demands it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SoundSettings {
+    pub preset: Option<String>,
+    pub passfilter_gainlf: Option<f32>,
+    pub passfilter_gainhf: Option<f32>,
+}
+
+/// Fully-resolved view of MapSettings -- every `Option<T>` replaced by
+/// its effective value via the per-field engine default. The renderer
+/// and the validator both consume this so they never need to branch on
+/// `Option`. The bundler emits only the original `Option`-valued
+/// fields when `Some`.
+#[derive(Debug, Clone)]
+pub struct ResolvedMapSettings {
+    pub min_height: f32,
+    pub max_height: f32,
+    pub map_hardness: u32,
+    pub gravity: f32,
+    pub deformable: bool,
+    pub void_water: bool,
+    pub void_ground: bool,
+    pub tidal_strength: f32,
+    pub max_metal: f32,
+    pub extractor_radius: f32,
+    pub atmosphere: ResolvedAtmosphere,
+    pub lighting: ResolvedLighting,
+    pub water: ResolvedWater,
+    pub custom_grass: ResolvedGrassSettings,
+}
+
+impl MapSettings {
+    pub fn resolved(&self) -> ResolvedMapSettings {
+        use crate::engine_defaults as ed;
+        ResolvedMapSettings {
+            min_height: self.min_height.unwrap_or(ed::MAP_MIN_HEIGHT),
+            max_height: self.max_height.unwrap_or(ed::MAP_MAX_HEIGHT),
+            map_hardness: self.map_hardness.unwrap_or(ed::MAP_HARDNESS),
+            gravity: self.gravity.unwrap_or(ed::MAP_GRAVITY),
+            deformable: self.deformable.unwrap_or(!ed::MAP_NOT_DEFORMABLE),
+            void_water: self.void_water.unwrap_or(ed::MAP_VOID_WATER),
+            void_ground: self.void_ground.unwrap_or(ed::MAP_VOID_GROUND),
+            tidal_strength: self.tidal_strength.unwrap_or(ed::MAP_TIDAL_STRENGTH),
+            max_metal: self.max_metal.unwrap_or(ed::MAP_MAX_METAL),
+            extractor_radius: self.extractor_radius.unwrap_or(ed::MAP_EXTRACTOR_RADIUS),
+            atmosphere: self.atmosphere.resolved(),
+            lighting: self.lighting.resolved(),
+            water: self.water.resolved(),
+            custom_grass: self.custom_grass.resolved(),
+        }
+    }
 }
 
 /// Detail texture entry for DNTS.
@@ -207,91 +373,500 @@ fn default_tex_scale() -> f32 {
 }
 
 /// Atmosphere configuration for mapinfo.lua.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+///
+/// The wind / fog fields drive gameplay + the engine's standard distance fog.
+/// The `sun_*`, `sky_*`, `cloud_*` fields feed the procedural sky shader
+/// (`shaders/recoil/modern_sky.wgsl`) so each map gets its authored sky
+/// instead of a single hard-coded one. `skybox` is the asset name for a
+/// cubemap DDS; not currently rendered, but stored so it round-trips
+/// through `.barproj` and is available when cubemap skybox support lands.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct AtmosphereSettings {
+    pub min_wind: Option<f32>,
+    pub max_wind: Option<f32>,
+    pub fog_start: Option<f32>,
+    pub fog_end: Option<f32>,
+    pub fog_color: Option<[f32; 3]>,
+    pub sun_color: Option<[f32; 3]>,
+    pub sky_color: Option<[f32; 3]>,
+    pub sky_dir: Option<[f32; 3]>,
+    pub cloud_density: Option<f32>,
+    pub cloud_color: Option<[f32; 3]>,
+    pub skybox: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedAtmosphere {
     pub min_wind: f32,
     pub max_wind: f32,
     pub fog_start: f32,
     pub fog_end: f32,
     pub fog_color: [f32; 3],
+    pub sun_color: [f32; 3],
+    pub sky_color: [f32; 3],
+    pub sky_dir: [f32; 3],
+    pub cloud_density: f32,
+    pub cloud_color: [f32; 3],
+    pub skybox: String,
 }
 
-impl Default for AtmosphereSettings {
-    fn default() -> Self {
-        Self {
-            min_wind: 5.0,
-            max_wind: 25.0,
-            fog_start: 0.1,
-            fog_end: 1.0,
-            fog_color: [0.7, 0.7, 0.8],
+impl AtmosphereSettings {
+    pub fn resolved(&self) -> ResolvedAtmosphere {
+        use crate::engine_defaults as ed;
+        ResolvedAtmosphere {
+            min_wind: self.min_wind.unwrap_or(ed::ATMOSPHERE_MIN_WIND),
+            max_wind: self.max_wind.unwrap_or(ed::ATMOSPHERE_MAX_WIND),
+            fog_start: self.fog_start.unwrap_or(ed::ATMOSPHERE_FOG_START),
+            fog_end: self.fog_end.unwrap_or(ed::ATMOSPHERE_FOG_END),
+            fog_color: self.fog_color.unwrap_or(ed::ATMOSPHERE_FOG_COLOR),
+            sun_color: self.sun_color.unwrap_or(ed::ATMOSPHERE_SUN_COLOR),
+            sky_color: self.sky_color.unwrap_or(ed::ATMOSPHERE_SKY_COLOR),
+            sky_dir: self.sky_dir.unwrap_or(ed::ATMOSPHERE_SKY_DIR),
+            cloud_density: self.cloud_density.unwrap_or(ed::ATMOSPHERE_CLOUD_DENSITY),
+            cloud_color: self.cloud_color.unwrap_or(ed::ATMOSPHERE_CLOUD_COLOR),
+            skybox: self.skybox.clone().unwrap_or_default(),
         }
     }
 }
 
+/// Asset references from mapinfo's `resources = { ... }` block. These
+/// are filename-only references (`detailTex = "detailtexblurred.bmp"`);
+/// the renderer resolves them against the `.barproj/passthrough/`
+/// tree at load time. Empty string = unspecified, fall back to the
+/// engine's "no detail" default in the shader.
+///
+/// Currently only `detail_tex` is wired -- the engine has many more
+/// (`specularTex`, `splatDistrTex`, `splatDetailTex`, four detail
+/// normal textures, etc). The struct exists so they can be added
+/// incrementally without further schema migrations.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ResourcesSettings {
+    /// Legacy single detail texture (mapinfo `detailTex`). Tiles
+    /// across the map; the shader subtracts 0.5 to centre it so the
+    /// texture both lightens and darkens the base diffuse.
+    pub detail_tex: String,
+    /// 4-channel splat distribution map (mapinfo `splatDistrTex`).
+    /// Each channel R/G/B/A weights one splat-detail texture.
+    pub splat_distr_tex: String,
+    /// Four splat-detail-normal textures (mapinfo `splatDetailNormalTex1`
+    /// through `4`). Used by the engine's `SMF_DETAIL_NORMAL_TEXTURE_SPLATTING`
+    /// path. RGB encodes a tangent-space normal perturbation; alpha
+    /// (when `splat_detail_normal_diffuse_alpha = true`) is the
+    /// per-pixel detail brightness contribution.
+    pub splat_detail_normal_tex_1: String,
+    pub splat_detail_normal_tex_2: String,
+    pub splat_detail_normal_tex_3: String,
+    pub splat_detail_normal_tex_4: String,
+    /// When true, the alpha channel of each splat-detail-normal texture
+    /// provides the detail brightness (Aurelia sets this). When false,
+    /// only the normal perturbation is used and detail brightness is
+    /// constant 0.
+    pub splat_detail_normal_diffuse_alpha: bool,
+    /// Per-channel UV scale for splat-detail sampling (mapinfo
+    /// `splats.texScales`). `None` = source mapinfo didn't carry a
+    /// `splats` block, so the runtime falls back to engine defaults
+    /// (1.0 per channel). Aurelia: `{0.0032, 0.0063, 0.0044, 0.0055}`.
+    pub splat_tex_scales: Option<[f32; 4]>,
+    /// Per-channel mix multiplier (mapinfo `splats.texMults`).
+    pub splat_tex_mults: Option<[f32; 4]>,
+    /// Per-pixel reflection-strength mask (mapinfo `skyReflectModTex`).
+    /// When set, the terrain shader samples this 2D texture to decide
+    /// where the skybox cubemap reflects on the surface. Pixels with
+    /// rgb=(0,0,0) get no reflection; (1,1,1) gets full reflection.
+    /// Engine path: `SMF_SKY_REFLECTIONS`.
+    pub sky_reflect_mod_tex: String,
+    /// Per-pixel specular-strength texture (mapinfo `specularTex`).
+    /// Engine path: `SMF_SPECULAR_LIGHTING`. When set, the terrain shader
+    /// samples this texture instead of using the global
+    /// `groundSpecularColor` -- `texture.rgb` = per-pixel specular color,
+    /// `texture.a * 16` = per-pixel specular exponent. Most natural
+    /// terrain has near-zero values here (only water pools / metal /
+    /// ice are visibly reflective); without this texture, the shader
+    /// applies the global `groundSpecularColor` everywhere, which is
+    /// why maps like Ascendancy (`groundSpecularColor = {0.5, 0.5, 0.5}`)
+    /// were producing sun-side hotspots across the whole map.
+    pub specular_tex: String,
+    /// Texture sampled by BAR's `map_edge_extension2` LuaUI widget to
+    /// fill the area outside the playable map (mapinfo `grassShadingTex`).
+    /// Engine declares this as the `MAP_BASE_GRASS_TEX` and falls back
+    /// to the SMF-embedded minimap when unset. Maps like Onyx Cauldron
+    /// set this to a custom rocky texture so the "off-map" region
+    /// reads as cliffs / ocean rather than a mirror of the playable
+    /// area. Independent of the engine grass renderer (BAR doesn't
+    /// use that drawer).
+    pub grass_shading_tex: String,
+    /// Self-illumination texture (mapinfo `lightEmissionTex` — read by
+    /// the engine from the `resources = { ... }` table even though the
+    /// C++ struct stores it under `smf`, see
+    /// `bar-recoil/rts/Map/MapInfo.cpp:357,368`). Engine path
+    /// `SMF_LIGHT_EMISSION` (`SMFFragProg.glsl:392-401`): unshadowed
+    /// glow term that overrides the underlying fragment colour by
+    /// `(1 - emit.a)` weighted blend. Empty string == no emission.
+    pub light_emission_tex: String,
+    /// Tangent-space normal perturbation texture (mapinfo
+    /// `detailNormalTex`, engine path `SMF_BLEND_NORMALS`,
+    /// `SMFFragProg.glsl:299-307`). Sampled at the world-XZ
+    /// normalised UV; alpha gates the mix weight that perturbs the
+    /// surface normal. Empty string == no perturbation.
+    pub detail_normal_tex: String,
+    /// Basic 4-channel colour splat texture (mapinfo
+    /// `splatDetailTex` singular, engine path
+    /// `SMF_DETAIL_TEXTURE_SPLATTING`, `SMFFragProg.glsl:80-85,
+    /// 159-169`). Mutually exclusive with the normal-splat path;
+    /// modern BAR maps use the normal-splat variant. Empty string
+    /// == no basic-splat contribution.
+    pub splat_detail_tex: String,
+}
+
 /// Lighting configuration for mapinfo.lua.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct LightingSettings {
+    pub sun_dir: Option<[f32; 3]>,
+    pub sun_intensity: Option<f32>,
+    pub ground_ambient: Option<[f32; 3]>,
+    pub ground_diffuse: Option<[f32; 3]>,
+    pub ground_specular: Option<[f32; 3]>,
+    pub spec_exponent: Option<f32>,
+    pub ground_shadow_density: Option<f32>,
+    /// Per-unit-model shadow strength (mapinfo `unitShadowDensity`).
+    /// Mirror of ground_shadow_density but applied to unit models;
+    /// engine reads from `lightTable.GetFloat("unitShadowDensity")`.
+    pub unit_shadow_density: Option<f32>,
+    pub unit_ambient: Option<[f32; 3]>,
+    pub unit_diffuse: Option<[f32; 3]>,
+    pub unit_specular: Option<[f32; 3]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedLighting {
     pub sun_dir: [f32; 3],
+    pub sun_intensity: f32,
     pub ground_ambient: [f32; 3],
     pub ground_diffuse: [f32; 3],
     pub ground_specular: [f32; 3],
     pub spec_exponent: f32,
+    pub ground_shadow_density: f32,
+    pub unit_shadow_density: f32,
+    pub unit_ambient: [f32; 3],
+    pub unit_diffuse: [f32; 3],
+    pub unit_specular: [f32; 3],
 }
 
-impl Default for LightingSettings {
-    fn default() -> Self {
-        Self {
-            sun_dir: [0.0, 1.0, 2.0],
-            ground_ambient: [0.5, 0.5, 0.5],
-            ground_diffuse: [0.5, 0.5, 0.5],
-            ground_specular: [0.1, 0.1, 0.1],
-            spec_exponent: 10.0,
+impl LightingSettings {
+    pub fn resolved(&self) -> ResolvedLighting {
+        use crate::engine_defaults as ed;
+        ResolvedLighting {
+            sun_dir: self.sun_dir.unwrap_or(ed::LIGHTING_SUN_DIR),
+            sun_intensity: self.sun_intensity.unwrap_or(ed::LIGHTING_SUN_INTENSITY),
+            ground_ambient: self.ground_ambient.unwrap_or(ed::LIGHTING_GROUND_AMBIENT),
+            ground_diffuse: self.ground_diffuse.unwrap_or(ed::LIGHTING_GROUND_DIFFUSE),
+            ground_specular: self.ground_specular.unwrap_or(ed::LIGHTING_GROUND_SPECULAR),
+            spec_exponent: self.spec_exponent.unwrap_or(ed::LIGHTING_SPEC_EXPONENT),
+            ground_shadow_density: self
+                .ground_shadow_density
+                .unwrap_or(ed::LIGHTING_GROUND_SHADOW_DENSITY),
+            // Engine `unitShadowDensity` default mirrors ground_shadow_density
+            // when omitted (`MapInfo.cpp::ReadLight`).
+            unit_shadow_density: self
+                .unit_shadow_density
+                .unwrap_or(ed::LIGHTING_GROUND_SHADOW_DENSITY),
+            unit_ambient: self.unit_ambient.unwrap_or(ed::LIGHTING_GROUND_AMBIENT),
+            unit_diffuse: self.unit_diffuse.unwrap_or(ed::LIGHTING_GROUND_DIFFUSE),
+            unit_specular: self.unit_specular.unwrap_or(ed::LIGHTING_GROUND_SPECULAR),
         }
     }
 }
 
-/// Water configuration for mapinfo.lua.
+/// Height-based "custom" fog (mapinfo's `custom.fog = { color, height, fogatten }`
+/// block). Not part of the engine's core SMF/BumpWater pipeline; in-game it's
+/// applied by a Lua widget that tints fragments below `height` by `color`,
+/// attenuated by `atten` per elmo of depth. We do the same thing here as a
+/// final post-pass in the terrain and water fragment shaders so previews
+/// match the in-game look (this is what gives underwater terrain its deep
+/// blue cast on maps like Aurelia, where the SMF water-absorption alone
+/// leaves the seabed too warm).
+///
+/// `enabled` gates the whole pass; when false the shaders bypass the mix.
+/// `height_elmos` is the resolved height (mapinfo allows "40%" of MaxHeight
+/// which the importer must resolve into absolute elmos before storing here).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
+pub struct CustomFogSettings {
+    pub enabled: bool,
+    pub color: [f32; 3],
+    pub height_elmos: f32,
+    pub atten: f32,
+}
+
+impl Default for CustomFogSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            color: [0.0, 0.0, 0.0],
+            height_elmos: 0.0,
+            atten: 0.0,
+        }
+    }
+}
+
+/// Grass widget configuration (mapinfo `custom.grassConfig`). Driven
+/// by BAR's `map_grass_gl4` LuaUI widget (`bar-game/luaui/Widgets/
+/// map_grass_gl4.lua`). When `dist_tga` is `None` or empty the widget
+/// is considered disabled for the map -- BAR's widget similarly
+/// requires this asset to be present before it generates any blades.
+///
+/// Every field is `Option<T>`: `None` means "not set in source mapinfo
+/// and not edited by the user", which the renderer/emitter resolves
+/// to the engine default at the point of use via [`resolved`]. The
+/// emitter writes a field to the bundled mapinfo only when it is
+/// `Some`, so a round-tripped map never carries values the original
+/// author didn't explicitly set.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct CustomGrassSettings {
+    pub dist_tga: Option<String>,
+    pub blade_color_tex: Option<String>,
+    pub max_size: Option<f32>,
+    pub min_size: Option<f32>,
+    pub patch_resolution: Option<u32>,
+    pub patch_placement_jitter: Option<f32>,
+    pub map_color_factor: Option<f32>,
+    pub map_color_base: Option<f32>,
+    pub alpha_threshold: Option<f32>,
+    pub shadow_factor: Option<f32>,
+    pub grass_brightness: Option<f32>,
+    pub fade_start: Option<f32>,
+    pub fade_end: Option<f32>,
+    pub wind_strength: Option<f32>,
+    pub wind_scale: Option<f32>,
+    pub wind_sample_scale: Option<f32>,
+    pub grass_wind_mult: Option<f32>,
+}
+
+/// Fully-resolved grass settings: every `Option<T>` field of
+/// [`CustomGrassSettings`] is replaced by its effective value
+/// (user-explicit -> source-mapinfo-parsed -> engine default).
+/// Produced by [`CustomGrassSettings::resolved`]; consumed by the
+/// renderer at the top of each frame so render code never branches
+/// on `Option`.
+#[derive(Debug, Clone)]
+pub struct ResolvedGrassSettings {
+    pub dist_tga: String,
+    pub blade_color_tex: String,
+    pub max_size: f32,
+    pub min_size: f32,
+    pub patch_resolution: u32,
+    pub patch_placement_jitter: f32,
+    pub map_color_factor: f32,
+    pub map_color_base: f32,
+    pub alpha_threshold: f32,
+    pub shadow_factor: f32,
+    pub grass_brightness: f32,
+    pub fade_start: f32,
+    pub fade_end: f32,
+    pub wind_strength: f32,
+    pub wind_scale: f32,
+    pub wind_sample_scale: f32,
+    pub grass_wind_mult: f32,
+}
+
+impl CustomGrassSettings {
+    pub fn resolved(&self) -> ResolvedGrassSettings {
+        use crate::engine_defaults as ed;
+        ResolvedGrassSettings {
+            dist_tga: self.dist_tga.clone().unwrap_or_default(),
+            blade_color_tex: self.blade_color_tex.clone().unwrap_or_default(),
+            max_size: self.max_size.unwrap_or(ed::GRASS_MAX_SIZE),
+            min_size: self.min_size.unwrap_or(ed::GRASS_MIN_SIZE),
+            patch_resolution: self.patch_resolution.unwrap_or(ed::GRASS_PATCH_RESOLUTION),
+            patch_placement_jitter: self
+                .patch_placement_jitter
+                .unwrap_or(ed::GRASS_PATCH_PLACEMENT_JITTER),
+            map_color_factor: self.map_color_factor.unwrap_or(ed::GRASS_MAP_COLOR_FACTOR),
+            map_color_base: self.map_color_base.unwrap_or(ed::GRASS_MAP_COLOR_BASE),
+            alpha_threshold: self.alpha_threshold.unwrap_or(ed::GRASS_ALPHA_THRESHOLD),
+            shadow_factor: self.shadow_factor.unwrap_or(ed::GRASS_SHADOW_FACTOR),
+            grass_brightness: self.grass_brightness.unwrap_or(ed::GRASS_BRIGHTNESS),
+            fade_start: self.fade_start.unwrap_or(ed::GRASS_FADE_START),
+            fade_end: self.fade_end.unwrap_or(ed::GRASS_FADE_END),
+            wind_strength: self.wind_strength.unwrap_or(ed::GRASS_WIND_STRENGTH),
+            wind_scale: self.wind_scale.unwrap_or(ed::GRASS_WIND_SCALE),
+            wind_sample_scale: self
+                .wind_sample_scale
+                .unwrap_or(ed::GRASS_WIND_SAMPLE_SCALE),
+            grass_wind_mult: self.grass_wind_mult.unwrap_or(ed::GRASS_WIND_MULT),
+        }
+    }
+
+    /// True when the widget should render: a non-empty distribution mask
+    /// is the BAR widget's minimum requirement (`map_grass_gl4.lua:857-892`).
+    pub fn is_enabled(&self) -> bool {
+        self.dist_tga
+            .as_deref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false)
+    }
+}
+
+/// Water configuration for mapinfo.lua. Defaults match Recoil's
+/// `rts/Map/MapInfo.cpp` (where the engine's BumpWater shader gets its
+/// per-map values from). Keys we don't parse from mapinfo yet still have
+/// reasonable defaults so a freshly-created project renders sensibly.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct WaterSettings {
+    /// Water vs lava toggle. In BAR, `mapinfo.water.damage > 0` is what
+    /// flips the engine's "water" volume into lava behaviour at
+    /// runtime -- there's no separate `lava = true` flag. BME models
+    /// the choice explicitly here so the editor UI can present
+    /// distinct forms for the two modes and so the exporter can force
+    /// `damage = 0` in water mode regardless of what's stored.
+    pub is_lava: Option<bool>,
+    pub damage: Option<f32>,
+    pub absorb: Option<[f32; 3]>,
+    pub base_color: Option<[f32; 3]>,
+    pub min_color: Option<[f32; 3]>,
+    pub surface_color: Option<[f32; 3]>,
+    pub surface_alpha: Option<f32>,
+    pub diffuse_color: Option<[f32; 3]>,
+    pub specular_color: Option<[f32; 3]>,
+    pub ambient_factor: Option<f32>,
+    pub diffuse_factor: Option<f32>,
+    pub specular_factor: Option<f32>,
+    pub specular_power: Option<f32>,
+    pub fresnel_min: Option<f32>,
+    pub fresnel_max: Option<f32>,
+    pub fresnel_power: Option<f32>,
+    pub reflection_distortion: Option<f32>,
+    pub perlin_amplitude: Option<f32>,
+    pub blur_base: Option<f32>,
+    pub blur_exponent: Option<f32>,
+    pub caustics_resolution: Option<f32>,
+    pub caustics_strength: Option<f32>,
+    pub wave_offset_factor: Option<f32>,
+    pub wave_foam_distortion: Option<f32>,
+    pub wave_foam_intensity: Option<f32>,
+    pub wave_length: Option<f32>,
+    /// Engine `water.forceRendering`. Forces the water draw pass even
+    /// when the camera is fully above the water plane.
+    pub force_rendering: Option<bool>,
+    /// `water.hasWaterPlane`. When true the engine draws a flat
+    /// infinite water plane behind the map edges.
+    pub has_water_plane: Option<bool>,
+    /// `water.numTiles`. Tile-count multiplier for the water bump
+    /// normal-map sample frequency.
+    pub num_tiles: Option<u32>,
+    pub perlin_start_freq: Option<f32>,
+    pub perlin_lacunarity: Option<f32>,
+    pub plane_color: Option<[f32; 3]>,
+    /// `water.repeatX` / `water.repeatY`. Optional fixed-pixel UV
+    /// repeat counts that override the engine's screen-space default.
+    pub repeat_x: Option<f32>,
+    pub repeat_y: Option<f32>,
+    /// `water.shoreWaves`. Engine toggle for the foam ring along
+    /// shorelines.
+    pub shore_waves: Option<bool>,
+    /// `water.normalTexture`. Filename of a 2D bump-normal tile
+    /// override; engine falls back to its built-in pattern when unset.
+    pub normal_texture: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedWater {
+    /// Water vs lava mode. See [`WaterSettings::is_lava`].
+    pub is_lava: bool,
     pub damage: f32,
     pub absorb: [f32; 3],
     pub base_color: [f32; 3],
     pub min_color: [f32; 3],
+    pub surface_color: [f32; 3],
+    pub surface_alpha: f32,
+    pub diffuse_color: [f32; 3],
+    pub specular_color: [f32; 3],
+    pub ambient_factor: f32,
+    pub diffuse_factor: f32,
+    pub specular_factor: f32,
+    pub specular_power: f32,
+    pub fresnel_min: f32,
+    pub fresnel_max: f32,
+    pub fresnel_power: f32,
+    pub reflection_distortion: f32,
+    pub perlin_amplitude: f32,
+    pub blur_base: f32,
+    pub blur_exponent: f32,
+    pub caustics_resolution: f32,
+    pub caustics_strength: f32,
+    pub wave_offset_factor: f32,
+    pub wave_foam_distortion: f32,
+    pub wave_foam_intensity: f32,
+    pub wave_length: f32,
+    pub force_rendering: bool,
+    pub has_water_plane: bool,
+    pub num_tiles: u32,
+    pub perlin_start_freq: f32,
+    pub perlin_lacunarity: f32,
+    pub plane_color: [f32; 3],
+    pub repeat_x: f32,
+    pub repeat_y: f32,
+    pub shore_waves: bool,
+    pub normal_texture: String,
 }
 
-impl Default for WaterSettings {
-    fn default() -> Self {
-        Self {
-            damage: 0.0,
-            absorb: [0.0, 0.0, 0.0],
-            base_color: [0.6, 0.6, 0.8],
-            min_color: [0.0, 0.0, 0.0],
-        }
-    }
-}
-
-impl Default for MapSettings {
-    fn default() -> Self {
-        Self {
-            min_height: 0.0,
-            max_height: 800.0,
-            map_hardness: 100,
-            gravity: 130.0,
-            water_damage: 0.0,
-            detail_textures: Vec::new(),
-            deformable: true,
-            void_water: false,
-            void_ground: false,
-            tidal_strength: 0.0,
-            max_metal: 0.02,
-            extractor_radius: 500.0,
-            atmosphere: AtmosphereSettings::default(),
-            lighting: LightingSettings::default(),
-            water: WaterSettings::default(),
-            start_positions: Vec::new(),
+impl WaterSettings {
+    pub fn resolved(&self) -> ResolvedWater {
+        use crate::engine_defaults as ed;
+        ResolvedWater {
+            // Default to water (false) when unset. Importer overrides
+            // this from `damage > 0` so existing lava maps land in
+            // lava mode at SD7-import time.
+            is_lava: self.is_lava.unwrap_or(false),
+            damage: self.damage.unwrap_or(ed::WATER_DAMAGE),
+            absorb: self.absorb.unwrap_or(ed::WATER_ABSORB),
+            base_color: self.base_color.unwrap_or(ed::WATER_BASE_COLOR),
+            min_color: self.min_color.unwrap_or(ed::WATER_MIN_COLOR),
+            surface_color: self.surface_color.unwrap_or(ed::WATER_SURFACE_COLOR),
+            surface_alpha: self.surface_alpha.unwrap_or(ed::WATER_SURFACE_ALPHA),
+            diffuse_color: self.diffuse_color.unwrap_or(ed::WATER_DIFFUSE_COLOR),
+            specular_color: self.specular_color.unwrap_or(ed::WATER_SPECULAR_COLOR),
+            ambient_factor: self.ambient_factor.unwrap_or(ed::WATER_AMBIENT_FACTOR),
+            diffuse_factor: self.diffuse_factor.unwrap_or(ed::WATER_DIFFUSE_FACTOR),
+            specular_factor: self.specular_factor.unwrap_or(ed::WATER_SPECULAR_FACTOR),
+            specular_power: self.specular_power.unwrap_or(ed::WATER_SPECULAR_POWER),
+            fresnel_min: self.fresnel_min.unwrap_or(ed::WATER_FRESNEL_MIN),
+            fresnel_max: self.fresnel_max.unwrap_or(ed::WATER_FRESNEL_MAX),
+            fresnel_power: self.fresnel_power.unwrap_or(ed::WATER_FRESNEL_POWER),
+            reflection_distortion: self
+                .reflection_distortion
+                .unwrap_or(ed::WATER_REFLECTION_DISTORTION),
+            perlin_amplitude: self.perlin_amplitude.unwrap_or(ed::WATER_PERLIN_AMPLITUDE),
+            blur_base: self.blur_base.unwrap_or(ed::WATER_BLUR_BASE),
+            blur_exponent: self.blur_exponent.unwrap_or(ed::WATER_BLUR_EXPONENT),
+            caustics_resolution: self
+                .caustics_resolution
+                .unwrap_or(ed::WATER_CAUSTICS_RESOLUTION),
+            caustics_strength: self
+                .caustics_strength
+                .unwrap_or(ed::WATER_CAUSTICS_STRENGTH),
+            // Shore-foam params don't have engine constants documented
+            // here yet -- treat unset as zero so the foam pass stays
+            // dormant for maps that didn't enable it.
+            wave_offset_factor: self.wave_offset_factor.unwrap_or(0.0),
+            wave_foam_distortion: self.wave_foam_distortion.unwrap_or(0.05),
+            wave_foam_intensity: self.wave_foam_intensity.unwrap_or(0.5),
+            wave_length: self.wave_length.unwrap_or(0.15),
+            force_rendering: self.force_rendering.unwrap_or(false),
+            has_water_plane: self.has_water_plane.unwrap_or(false),
+            num_tiles: self.num_tiles.unwrap_or(4),
+            perlin_start_freq: self.perlin_start_freq.unwrap_or(8.0),
+            perlin_lacunarity: self.perlin_lacunarity.unwrap_or(3.0),
+            plane_color: self.plane_color.unwrap_or([0.0, 0.5, 0.5]),
+            repeat_x: self.repeat_x.unwrap_or(0.0),
+            repeat_y: self.repeat_y.unwrap_or(0.0),
+            shore_waves: self.shore_waves.unwrap_or(true),
+            normal_texture: self.normal_texture.clone().unwrap_or_default(),
         }
     }
 }
@@ -316,34 +891,10 @@ impl Recipe {
     }
 
     /// Parse a recipe from a JSON string.
-    ///
-    /// Reads `schema_version` first and refuses to load anything
-    /// newer than the build understands — better to fail loudly than
-    /// to silently drop unrecognised fields. Older versions are
-    /// migrated in-place through `migrate_to_current`.
     pub fn from_json(json: &str) -> Result<Self> {
-        let mut recipe: Self = serde_json::from_str(json).context("Failed to parse recipe JSON")?;
-        if recipe.schema_version > RECIPE_SCHEMA_VERSION {
-            bail!(
-                "Recipe schema_version {} is newer than this build supports ({}); \
-                 upgrade bar-editor to open it.",
-                recipe.schema_version,
-                RECIPE_SCHEMA_VERSION,
-            );
-        }
-        recipe.migrate_to_current();
+        let recipe: Self = serde_json::from_str(json).context("Failed to parse recipe JSON")?;
         recipe.validate()?;
         Ok(recipe)
-    }
-
-    /// Apply any field-level migrations needed to bring an older
-    /// schema version up to `RECIPE_SCHEMA_VERSION`. Today there are
-    /// no migrations — this is a placeholder so future bumps have an
-    /// obvious home and don't regress into ad-hoc branches scattered
-    /// through the load path.
-    fn migrate_to_current(&mut self) {
-        // v1 → vN migrations land here, oldest-first.
-        self.schema_version = RECIPE_SCHEMA_VERSION;
     }
 
     /// Serialize this recipe to a pretty-printed JSON string.
@@ -529,12 +1080,13 @@ impl Recipe {
     /// Generate a sample recipe demonstrating the format.
     pub fn sample() -> Self {
         Self {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Sample Terrain".to_string(),
             shortname: None,
             description: "A basic ridged noise terrain with blur smoothing".to_string(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "base_terrain".to_string(),
@@ -572,7 +1124,7 @@ impl Recipe {
                 },
                 RecipeNode {
                     key: "output".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: "Export".to_string(),
                     params: HashMap::new(),
                 },
@@ -647,12 +1199,13 @@ mod tests {
     #[test]
     fn test_invalid_recipe_zero_dimensions() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Bad".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![RecipeNode {
                 key: "noise".to_string(),
                 node_type: NodeType::PerlinNoise,
@@ -673,12 +1226,13 @@ mod tests {
     #[test]
     fn test_invalid_recipe_bad_connection() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Bad".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "noise".to_string(),
@@ -688,7 +1242,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -706,12 +1260,13 @@ mod tests {
     #[test]
     fn test_invalid_recipe_duplicate_keys() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Bad".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "dupe".to_string(),
@@ -721,7 +1276,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "dupe".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -731,43 +1286,6 @@ mod tests {
             features: Vec::new(),
         };
         assert!(recipe.validate().is_err());
-    }
-
-    #[test]
-    fn schema_version_defaults_to_one_when_absent() {
-        // Old recipes (pre-versioning) had no `schema_version`
-        // field; serde's `default` should fill it in as 1 so the
-        // load path doesn't reject them.
-        let json = r#"{
-            "name": "legacy",
-            "nodes": [{"key": "n", "type": "PerlinNoise", "params": {}}],
-            "connections": [],
-            "output": {"width": 256, "height": 256}
-        }"#;
-        let recipe = Recipe::from_json(json).expect("legacy recipe should load");
-        assert_eq!(recipe.schema_version, RECIPE_SCHEMA_VERSION);
-    }
-
-    #[test]
-    fn schema_version_newer_than_build_is_rejected() {
-        // Loaders must refuse to silently drop unknown fields when
-        // the file declares a schema newer than the build supports.
-        let json = format!(
-            r#"{{
-                "schema_version": {},
-                "name": "future",
-                "nodes": [{{"key": "n", "type": "PerlinNoise", "params": {{}}}}],
-                "connections": [],
-                "output": {{"width": 256, "height": 256}}
-            }}"#,
-            RECIPE_SCHEMA_VERSION + 1,
-        );
-        let err = Recipe::from_json(&json).expect_err("newer schema must error");
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("schema_version") && msg.contains("newer"),
-            "error should mention schema_version + newer; got: {msg}",
-        );
     }
 
     #[test]
@@ -781,7 +1299,6 @@ mod tests {
         // `{"String": "..."}` — that *parses* fine but fails the
         // schema validator we wired into `Recipe::validate`.
         let json = r#"{
-            "schema_version": 1,
             "name": "typo",
             "nodes": [
                 {"key": "n", "type": "Blur",
@@ -800,12 +1317,10 @@ mod tests {
 
     #[test]
     fn recipe_with_unknown_param_loads_anyway() {
-        // Unknown keys are tolerated — old projects with deprecated
-        // params should still load. (See `param_spec` module docs;
-        // this becomes strict if we ever bump the schema_version
-        // and want to enforce it.)
+        // Unknown keys are tolerated so older / hand-edited recipes
+        // with deprecated params still load. See `param_spec` module
+        // docs for the per-node strictness story.
         let json = r#"{
-            "schema_version": 1,
             "name": "extra",
             "nodes": [
                 {"key": "n", "type": "Blur",
@@ -820,15 +1335,6 @@ mod tests {
         Recipe::from_json(json).expect("unknown keys must not block load");
     }
 
-    #[test]
-    fn schema_version_round_trips_through_save_load() {
-        let recipe = Recipe::sample();
-        assert_eq!(recipe.schema_version, RECIPE_SCHEMA_VERSION);
-        let json = recipe.to_json().unwrap();
-        let loaded = Recipe::from_json(&json).unwrap();
-        assert_eq!(loaded.schema_version, RECIPE_SCHEMA_VERSION);
-    }
-
     // Recipe round-trip scenarios: these mirror the three ways a user
     // creates or opens a project in the editor.
 
@@ -837,12 +1343,13 @@ mod tests {
     #[test]
     fn manual_project_recipe_roundtrip() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Manual test".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "noise".to_string(),
@@ -852,7 +1359,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -892,19 +1399,20 @@ mod tests {
             },
         };
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Alpine 8x8".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 make_subout("sub_terrain", "Output"), // was "Heightmap" before recompute ran
                 make_subout("sub_texture", "Texture"), // was "Color"
                 make_subout("sub_slope", "Slope"),    // was "Heightmap"
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },
@@ -946,12 +1454,13 @@ mod tests {
     #[test]
     fn painted_heightmap_to_bundler_roundtrip() {
         let recipe = Recipe {
-            schema_version: RECIPE_SCHEMA_VERSION,
             name: "Import test".to_string(),
             shortname: None,
             description: String::new(),
             author: None,
             version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
             nodes: vec![
                 RecipeNode {
                     key: "hm".to_string(),
@@ -966,7 +1475,7 @@ mod tests {
                 },
                 RecipeNode {
                     key: "out".to_string(),
-                    node_type: NodeType::Bundler,
+                    node_type: NodeType::FinalComposition,
                     label: String::new(),
                     params: HashMap::new(),
                 },

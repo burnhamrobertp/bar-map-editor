@@ -9,7 +9,7 @@
 use std::time::Instant;
 
 use crate::editor::PendingPropsOpen;
-use crate::log::{LogBuffer, LogLevel};
+use crate::log::{LogBuffer, LogLevel, LogLevelVisibility};
 
 /// Outcome of the "delete group" confirmation modal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,19 +30,6 @@ pub struct PassthroughEdit {
     pub archive_path: String,
     pub content: String,
     pub is_dirty: bool,
-}
-
-/// Floating in-app text editor -- used by the Edit Map Info button and any
-/// future "open this file" action. Lives outside the side panels so it can
-/// be resized and scrolled freely.
-#[derive(Debug, Clone)]
-pub struct FileEditor {
-    /// Absolute path on disk; what we read from and write back to.
-    pub(crate) abs_path: String,
-    /// Bundle-relative path (forward slashes) for display.
-    pub(crate) archive_path: String,
-    pub(crate) content: String,
-    pub(crate) is_dirty: bool,
 }
 
 /// Action waiting on the user's response to an unsaved-changes confirmation.
@@ -98,7 +85,9 @@ pub(crate) const CONFIRM_KEY_DELETE_CONNECTED_NODE: &str = "delete_connected_nod
 /// Friendly label for one of the confirmation keys.
 pub(crate) fn confirm_key_display_name(key: &str) -> String {
     match key {
-        CONFIRM_KEY_DELETE_CONNECTED_NODE => "Delete a node that has wires connected".to_string(),
+        CONFIRM_KEY_DELETE_CONNECTED_NODE => {
+            crate::t!("editor.prefs.confirmations.key.delete_connected_node")
+        }
         other => other.to_string(),
     }
 }
@@ -107,11 +96,44 @@ pub(crate) fn confirm_key_display_name(key: &str) -> String {
 pub struct DialogState {
     pub show_validation_panel: bool,
     pub show_inspector: bool,
-    pub show_mapinfo_editor: bool,
+    // ── Action-bar modals ────────────────────────────────────────
+    // Each `show_<name>_editor` toggles its own modal in
+    // `panels::action_bar_modals`. They used to share a single
+    // `show_mapinfo_editor` + `MapInfoTab`, but the tab strip is
+    // gone -- every action-bar button now opens / closes its own
+    // modal directly.
+    pub show_identity_editor: bool,
+    pub show_dimensions_editor: bool,
+    pub show_physics_editor: bool,
+    pub show_atmosphere_editor: bool,
+    pub show_fog_editor: bool,
+    pub show_lighting_editor: bool,
+    pub show_water_editor: bool,
+    pub show_resources_editor: bool,
+    pub show_grass_editor: bool,
+    pub show_map_edge_editor: bool,
+    /// Snapshot captured the moment a `render_field` widget began
+    /// editing (drag started or text input gained focus). Pushed
+    /// onto the undo stack when the same widget commits (drag
+    /// stopped, lost focus, or atomic change like a checkbox
+    /// toggle). One slot is enough because only one widget can be
+    /// in active-edit state at a time -- if the user clicks a
+    /// different field, that field's `gained_focus` fires AFTER the
+    /// previous field's `lost_focus`, so the slot is empty before
+    /// the next edit starts. See `panels::field_editor` for the
+    /// state machine.
+    pub(crate) field_edit_in_progress: Option<crate::undo::Snapshot>,
+    /// Pre-drag snapshot for a spawn marker the user is currently
+    /// dragging on the canvas inspector. Mirrors
+    /// `field_edit_in_progress` -- one drag = one undo entry,
+    /// captured at drag-start and pushed at drag-stop.
+    pub(crate) spawn_drag_in_progress: Option<crate::undo::Snapshot>,
+    /// Whether the Assemble Map wizard is currently open. The wizard's
+    /// per-page state (current page, accumulated picks) lives on
+    /// [`crate::panels::assemble_map::AssembleMapState`].
+    pub show_assemble_map: bool,
     pub show_settings: bool,
     pub show_about: bool,
-    /// True while the "pick which file is the map info" picker modal is open.
-    pub show_map_info_picker: bool,
     /// True for one frame after the user accepts an unsaved-changes
     /// close so `bar-app` can let the window actually close.
     pub allow_close: bool,
@@ -120,11 +142,14 @@ pub struct DialogState {
     /// Pending action blocked on the unsaved-changes confirm dialog.
     /// `Some` means a modal is currently open.
     pub(crate) pending_action: Option<PendingAction>,
-    /// In-app floating text editor (Edit Map Info / future "open
-    /// file" triggers). `None` when no editor is open.
-    pub(crate) file_editor: Option<FileEditor>,
     /// True when the log window is visible.
     pub(crate) show_log: bool,
+    /// Per-level visibility toggles for the log window. Each level is
+    /// independently shown or hidden; default is "show all". The button
+    /// row in `panels::log` flips the matching entry on click.
+    pub(crate) log_levels_visible: LogLevelVisibility,
+    /// Text search filter for the log window.
+    pub(crate) log_search: String,
     /// Level of the most recent status_message (drives footer color).
     pub(crate) status_level: LogLevel,
     /// Session-scoped ring buffer of all logged messages.

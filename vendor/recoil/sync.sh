@@ -29,6 +29,8 @@ SHADERS=(
     SMFVertProg.glsl
     SMFShadingTextureFragProg.glsl
     SMFShadingTextureVertProg.glsl
+    SMFBorderVertProg.glsl
+    SMFBorderFragProg.glsl
     BumpWaterFS.glsl
     BumpWaterVS.glsl
     ModernSkyFS.glsl

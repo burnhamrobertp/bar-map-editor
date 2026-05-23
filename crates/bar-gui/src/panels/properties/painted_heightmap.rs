@@ -18,9 +18,23 @@ impl BarEditorApp {
     ) {
         const DISPLAY: f32 = 240.0;
 
+        // Hand-painted heightmaps are always square; the imported path
+        // can be rectangular but isn't user-editable here. Prefer the
+        // legacy `resolution` param for the brush canvas and fall back
+        // to min(width, height) for imported nodes.
         let mut resolution = match node_params.get("resolution") {
             Some(ParamValue::UInt(n)) => (*n).max(1) as usize,
-            _ => 256,
+            _ => {
+                let w = match node_params.get("width") {
+                    Some(ParamValue::UInt(n)) => (*n).max(1) as usize,
+                    _ => 256,
+                };
+                let h = match node_params.get("height") {
+                    Some(ParamValue::UInt(n)) => (*n).max(1) as usize,
+                    _ => w,
+                };
+                w.min(h)
+            }
         };
         let data_str = match node_params.get("data") {
             Some(ParamValue::String(s)) => s.clone(),

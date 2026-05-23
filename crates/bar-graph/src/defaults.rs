@@ -238,49 +238,67 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("snow_specular", ParamValue::Float(0.7)),
             ("snow_height", ParamValue::Float(0.85)),
         ],
-        NodeType::Sculpt => vec![
-            // Hex-encoded flat u8 delta buffer (one byte per pixel).
-            // 128 = no change; 0 = maximum subtract; 255 = maximum add.
-            // Empty string means no deltas applied -- node is a pure passthrough.
-            // Format and encoding identical to PaintedHeightmap.
-            ("data", ParamValue::String(String::new())),
-            // Canvas resolution. Same power-of-two choices as PaintedHeightmap.
-            // Locked once the user has painted (non-empty data).
-            ("resolution", ParamValue::UInt(256)),
-            // Max delta magnitude: delta_applied = (v - 128) / 128 * scale.
-            // 0.5 = max +-50% change relative to the input value.
-            ("scale", ParamValue::Float(0.5)),
-        ],
-        NodeType::Bundler => vec![
-            // bar-editor only ever exports spring-smf packaged as
-            // 7z (the BAR map format). Those format choices used to
-            // be exposed as `target` / `archive_format` params; they
-            // were dropped because there's nothing to vary. Leave
-            // map_name + output_path: those genuinely differ per map.
-            ("map_name", ParamValue::String("my_map".to_string())),
-            ("output_path", ParamValue::String("{name}.sd7".to_string())),
+        // FinalComposition stores its paint-layer state as a pair of
+        // (asset_id, asset_path) params per paintable kind. asset_id is
+        // a UUID stamped on layer creation and persisted in the recipe;
+        // asset_path is the absolute path on disk, injected at load
+        // time by `resolve_relative_paths` and never persisted. An
+        // empty asset_id means "no layer" -- FC's executor treats the
+        // corresponding input as pure pass-through. The four paintable
+        // kinds are heightmap, color (texture), metalmap, and typemap;
+        // the rest (normalmap, grassmap, specular, files) are always
+        // pass-through and have no layer storage.
+        NodeType::FinalComposition => vec![
+            (
+                "heightmap_layer_asset_id",
+                ParamValue::String(String::new()),
+            ),
+            (
+                "heightmap_layer_asset_path",
+                ParamValue::String(String::new()),
+            ),
+            ("color_layer_asset_id", ParamValue::String(String::new())),
+            ("color_layer_asset_path", ParamValue::String(String::new())),
+            ("metalmap_layer_asset_id", ParamValue::String(String::new())),
+            (
+                "metalmap_layer_asset_path",
+                ParamValue::String(String::new()),
+            ),
+            ("typemap_layer_asset_id", ParamValue::String(String::new())),
+            (
+                "typemap_layer_asset_path",
+                ParamValue::String(String::new()),
+            ),
         ],
         NodeType::FileReference => vec![
             ("path", ParamValue::String(String::new())),
             ("bundle_path", ParamValue::String(String::new())),
         ],
         NodeType::PaintedHeightmap => vec![
-            // Hex-encoded greyscale pixel grid (each pixel is one u8).
-            // Empty until the user paints. The buffer is sized to
-            // `resolution × resolution` on first paint.
-            ("data", ParamValue::String(String::new())),
+            // UUID of the binary asset file holding the greyscale pixel grid.
+            // Empty until the user paints for the first time.
+            ("asset_id", ParamValue::String(String::new())),
+            // Absolute path injected at load time; never persisted.
+            ("asset_path", ParamValue::String(String::new())),
             // Canvas resolution. Power-of-two values map cleanly to
-            // BAR's 64-px square grid. 256 is the practical default —
-            // smaller (64, 128) for masks, larger (512) for primary
-            // hand-drawn terrain.
+            // BAR's 64-px square grid.
             ("resolution", ParamValue::UInt(256)),
+            // How the executor resamples the asset to eval
+            // resolution. "smooth" (bilinear) for continuous data
+            // like heightmap delta layers; "nearest" for quantised
+            // data like the engine's metalmap / typemap. Set to
+            // "nearest" at import time on the Metal Map / Type Map
+            // nodes by `bar_project::scan_to_project` so single-pixel
+            // metal spots round-trip without bilinear-blur dilution.
+            ("sampling", ParamValue::String("smooth".to_string())),
         ],
         NodeType::PaintedTexture => vec![
-            // Hex-encoded RGB pixel grid (3 bytes per pixel). Empty
-            // until the user paints. Resolution is fixed at 256.
-            ("data", ParamValue::String(String::new())),
-            // Current brush colour as packed 0xRRGGBB. Lives in the
-            // node so the most-recent colour persists across edits.
+            // UUID of the binary asset file holding the RGB pixel grid.
+            // Empty until the user paints for the first time.
+            ("asset_id", ParamValue::String(String::new())),
+            // Absolute path injected at load time; never persisted.
+            ("asset_path", ParamValue::String(String::new())),
+            // Current brush colour as packed 0xRRGGBB.
             ("brush_color", ParamValue::String("8B7355".to_string())),
         ],
         NodeType::Voronoi => vec![
@@ -642,7 +660,6 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (BiasGain, "bias") | (BiasGain, "gain") => (0.0, 1.0),
         (Displacement, "strength") => (0.0, 1.0),
         (Blend, "factor") => (0.0, 1.0),
-        (Sculpt, "scale") => (0.0, 1.0),
         // Erosion
         (HydraulicErosion, "erosion_rate") | (HydraulicErosion, "deposition_rate") => (0.0, 0.1),
         (ThermalErosion, "talus_angle") => (0.0, 1.0),

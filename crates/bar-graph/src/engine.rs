@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
-use crate::node::{Node, NodeId};
+use crate::node::{Node, NodeId, NodeType};
 use crate::port::PortId;
 
 #[derive(Error, Debug)]
@@ -18,6 +18,9 @@ pub enum GraphError {
 
     #[error("port not found: {0:?}")]
     PortNotFound(PortId),
+
+    #[error("node is undeletable (singleton terminal): {0:?}")]
+    NodeUndeletable(NodeId),
 }
 
 /// A connection between two ports.
@@ -68,14 +71,37 @@ impl GraphEngine {
     }
 
     /// Remove a node and all its connections.
+    ///
+    /// `FinalComposition` is a singleton terminal node and is refused
+    /// here -- nothing in the editor should ever delete it (it's the
+    /// only path output reaches the bundler), and silently letting
+    /// the call through would corrupt the project. Callers should
+    /// gate their delete UI on `can_delete_node` first to avoid even
+    /// surfacing the option.
     pub fn remove_node(&mut self, id: NodeId) -> Result<(), GraphError> {
-        if self.nodes.remove(&id).is_none() {
+        if let Some(node) = self.nodes.get(&id) {
+            if node.node_type == NodeType::FinalComposition {
+                return Err(GraphError::NodeUndeletable(id));
+            }
+        } else {
             return Err(GraphError::NodeNotFound(id));
         }
+        self.nodes.remove(&id);
         self.connections
             .retain(|c| c.from.node_id != id && c.to.node_id != id);
         self.revision += 1;
         Ok(())
+    }
+
+    /// Whether the given node is allowed to be deleted via the
+    /// canvas / Properties panel. Returns `false` for the project's
+    /// singleton `FinalComposition` (and `false` for unknown ids,
+    /// which the UI should also skip).
+    pub fn can_delete_node(&self, id: NodeId) -> bool {
+        self.nodes
+            .get(&id)
+            .map(|n| n.node_type != NodeType::FinalComposition)
+            .unwrap_or(false)
     }
 
     /// Connect an output port to an input port.
@@ -342,7 +368,7 @@ mod tests {
         let mut engine = GraphEngine::new();
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-        let output = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let output = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
         let noise_id = engine.add_node(noise);
         let output_id = engine.add_node(output);
 
@@ -365,7 +391,7 @@ mod tests {
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
         let blur = Node::new(NodeId(0), NodeType::Blur, "Blur");
-        let output = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let output = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
 
         let noise_id = engine.add_node(noise);
         let blur_id = engine.add_node(blur);
@@ -418,7 +444,7 @@ mod tests {
         // add_node
         let r0 = engine.revision();
         let a = engine.add_node(Node::new(NodeId(0), NodeType::PerlinNoise, "A"));
-        let b = engine.add_node(Node::new(NodeId(0), NodeType::Bundler, "B"));
+        let b = engine.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "B"));
         assert!(engine.revision() > r0, "add_node should bump revision");
 
         // connect

@@ -21,9 +21,14 @@ impl NodeExecutor for CpuExecutor {
         node_type: &NodeType,
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
-        width: u32,
-        height: u32,
+        hm_width: u32,
+        hm_height: u32,
+        tex_width: u32,
+        tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
+        // Heightmap nodes use hm_width/hm_height throughout; re-bind so
+        // all existing references below compile without change.
+        let (width, height) = (hm_width, hm_height);
         let mut outputs = HashMap::new();
 
         match node_type {
@@ -122,33 +127,6 @@ impl NodeExecutor for CpuExecutor {
                 let hm = apply_curve(&input, params);
                 let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
-            }
-            NodeType::Preview => {
-                // Preview is a real node: its executor receives
-                // upstream values via its declared input ports
-                // exactly like any other node. We pass them
-                // through into the runtime output map under the
-                // same names so the 3D viewport can read them via
-                // the standard `outputs[node_id][port_name]`
-                // accessor — no special "find Preview nodes
-                // globally and inspect their incoming wires"
-                // pathway. The node has no declared output ports
-                // (nothing downstream consumes it), but its
-                // runtime output map is what the viewport reads
-                // from, the same way the viewport for any node
-                // would.
-                if let Some(v) = inputs.get("heightmap") {
-                    outputs.insert("heightmap".to_string(), v.clone());
-                }
-                if let Some(v) = inputs.get("texture") {
-                    outputs.insert("texture".to_string(), v.clone());
-                }
-                if let Some(v) = inputs.get("normal_map") {
-                    outputs.insert("normal_map".to_string(), v.clone());
-                }
-                if let Some(v) = inputs.get("specular_map") {
-                    outputs.insert("specular_map".to_string(), v.clone());
-                }
             }
 
             NodeType::SubgraphInput | NodeType::SubgraphOutput => {
@@ -312,6 +290,7 @@ impl NodeExecutor for CpuExecutor {
                     ctrl.as_ref(),
                     mask.as_ref(),
                 );
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -322,6 +301,7 @@ impl NodeExecutor for CpuExecutor {
                 let color = generate_rock_soil(&input, slope.as_ref(), params);
                 let color =
                     apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -332,6 +312,7 @@ impl NodeExecutor for CpuExecutor {
                 let color = generate_vegetation(&input, slope.as_ref(), params);
                 let color =
                     apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -369,7 +350,7 @@ impl NodeExecutor for CpuExecutor {
                 }
 
                 if layers.is_empty() {
-                    let out = ColorBuffer::new(width, height).unwrap();
+                    let out = ColorBuffer::new(tex_width, tex_height).unwrap();
                     outputs.insert("output".to_string(), PortValue::Color(out));
                 } else {
                     let w = layers[0].tex.width();
@@ -447,6 +428,7 @@ impl NodeExecutor for CpuExecutor {
                 let color = apply_color_ramp(&input, params);
                 let color =
                     apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
@@ -459,6 +441,7 @@ impl NodeExecutor for CpuExecutor {
                 // Neutral normal = flat surface [0.5, 0.5, 1.0, 1.0] in tangent space
                 let color =
                     apply_color_modulation([0.5, 0.5, 1.0, 1.0], color, None, mask.as_ref());
+                let color = resize_color_to_tex(color, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(color));
             }
             NodeType::GrassMap => {
@@ -493,32 +476,92 @@ impl NodeExecutor for CpuExecutor {
             }
 
             NodeType::PaintedHeightmap => {
-                let data_str = get_string(params, "data", "");
-                let src_res = get_uint(params, "resolution", 256).max(1);
-                let pixels = hex_decode_mask(data_str);
-                let hm = painted_grayscale_to_heightmap(pixels, src_res, width, height);
+                // `resolution` is a legacy single-dim fallback used when
+                // the asset file is missing; if width / height params are
+                // present (new rectangular recipes) they take precedence.
+                let res_fallback = get_uint(params, "resolution", 256).max(1);
+                let fallback_w = get_uint(params, "width", res_fallback).max(1);
+                let fallback_h = get_uint(params, "height", res_fallback).max(1);
+                let asset_path = get_string(params, "asset_path", "");
+                // `sampling` selects bilinear vs nearest-neighbour when
+                // the asset's source resolution differs from the eval
+                // resolution. Default "smooth" (bilinear) for continuous
+                // data like heightmap delta layers; "nearest" must be
+                // set on import for quantised data (engine metalmap /
+                // typemap) where pixel values carry integer meaning and
+                // averaging neighbours corrupts the engine readback. The
+                // import boundary in `scan.rs` stamps this for the
+                // auto-created Metal Map / Type Map nodes.
+                let sampling = match get_string(params, "sampling", "smooth") {
+                    "nearest" => GrayscaleSampling::Nearest,
+                    _ => GrayscaleSampling::Bilinear,
+                };
+                let hm = read_painted_heightmap_asset(
+                    asset_path, fallback_w, fallback_h, width, height, sampling,
+                );
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
-            NodeType::Sculpt => {
-                let input = get_input_heightmap(inputs, "input")?;
-                let mask = get_optional_heightmap(inputs, "mask");
-                let data_str = get_string(params, "data", "");
-                let mut sculpted = input.clone();
-                if !data_str.is_empty() {
-                    let src_res = get_uint(params, "resolution", 256).max(1);
-                    let scale = get_float(params, "scale", 0.5);
-                    let pixels = hex_decode_mask(data_str);
-                    apply_sculpt_delta(&mut sculpted, &pixels, src_res, scale);
+            NodeType::FinalComposition => {
+                // For non-paintable kinds (normalmap, grassmap,
+                // specular, files), FC is a pure pass-through: forward
+                // input to same-named output verbatim.
+                for port_name in ["normalmap", "grassmap", "specular"] {
+                    if let Some(value) = inputs.get(port_name) {
+                        outputs.insert(port_name.to_string(), value.clone());
+                    }
                 }
-                // Mask confines sculpt delta to specific areas (mask=0: original, mask=1: sculpted)
-                let hm = apply_modulation(&input, sculpted, None, mask.as_ref());
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+                // Paintable kinds (heightmap, texture, metalmap,
+                // typemap) consult a per-kind layer asset; when the
+                // asset_path is empty, FC is pass-through for that
+                // kind too. When present, the layer's bytes are
+                // composited on top of the input.
+                composite_heightmap_layer(
+                    inputs,
+                    &mut outputs,
+                    params,
+                    "heightmap",
+                    "heightmap_layer_asset_path",
+                );
+                composite_heightmap_layer(
+                    inputs,
+                    &mut outputs,
+                    params,
+                    "metalmap",
+                    "metalmap_layer_asset_path",
+                );
+                composite_heightmap_layer(
+                    inputs,
+                    &mut outputs,
+                    params,
+                    "typemap",
+                    "typemap_layer_asset_path",
+                );
+                composite_color_layer(
+                    inputs,
+                    &mut outputs,
+                    params,
+                    "texture",
+                    "color_layer_asset_path",
+                );
             }
             NodeType::PaintedTexture => {
-                let data_str = get_string(params, "data", "");
-                let pixels = hex_decode_mask(data_str);
-                let tex = painted_rgb_to_color_buffer(pixels, PAINTED_TEXTURE_RES, width, height);
+                let path = get_string(params, "asset_path", "");
+                // Imported textures can be any rectangular resolution;
+                // hand-painted textures are square at PAINTED_TEXTURE_RES.
+                // Read the header so we honour both.
+                let (src_w, src_h, pixels) = if path.is_empty() {
+                    (PAINTED_TEXTURE_RES, PAINTED_TEXTURE_RES, Vec::new())
+                } else {
+                    match bar_project::read_asset_file(std::path::Path::new(path)) {
+                        Ok((header, data)) => (header.width.max(1), header.height.max(1), data),
+                        Err(e) => {
+                            tracing::warn!(path, error = %e, "Failed to read texture asset");
+                            (PAINTED_TEXTURE_RES, PAINTED_TEXTURE_RES, Vec::new())
+                        }
+                    }
+                };
+                let tex = painted_rgb_to_color_buffer(pixels, src_w, src_h, tex_width, tex_height);
                 outputs.insert("output".to_string(), PortValue::Color(tex));
             }
 
@@ -725,8 +768,62 @@ impl NodeExecutor for CpuExecutor {
                 );
             }
 
-            NodeType::Bundler => {
-                // Terminal node — inputs are collected after graph evaluation by execute_bundlers().
+            NodeType::ImportedTexture => {
+                let asset_path = get_string(params, "asset_path", "");
+                let idx_path = get_string(params, "tile_index_path", "");
+                let tiles_x = get_uint(params, "tiles_x", 0);
+                let tiles_y = get_uint(params, "tiles_y", 0);
+                let color =
+                    if asset_path.is_empty() || idx_path.is_empty() || tiles_x == 0 || tiles_y == 0
+                    {
+                        ColorBuffer::new(tex_width, tex_height).unwrap()
+                    } else {
+                        let tiles_result = (|| {
+                            let file = std::fs::File::open(asset_path).ok()?;
+                            bar_data::smt::read_smt(&mut std::io::BufReader::new(file)).ok()
+                        })();
+                        let idx_result = std::fs::read(idx_path).ok();
+                        match (tiles_result, idx_result) {
+                            (Some(tiles), Some(idx_bytes)) => {
+                                let tile_indices: Vec<i32> = idx_bytes
+                                    .chunks(4)
+                                    .map(|b| i32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+                                    .collect();
+                                let rgba = assemble_texture_preview(
+                                    &tiles,
+                                    &tile_indices,
+                                    tiles_x,
+                                    tiles_y,
+                                    tex_width,
+                                    tex_height,
+                                );
+                                let mut buf = ColorBuffer::new(tex_width, tex_height).unwrap();
+                                for (i, px) in rgba.chunks(4).enumerate() {
+                                    let x = (i as u32) % tex_width;
+                                    let y = (i as u32) / tex_width;
+                                    buf.set(
+                                        x,
+                                        y,
+                                        [
+                                            px[0] as f32 / 255.0,
+                                            px[1] as f32 / 255.0,
+                                            px[2] as f32 / 255.0,
+                                            1.0,
+                                        ],
+                                    );
+                                }
+                                buf
+                            }
+                            _ => {
+                                tracing::warn!(
+                                    asset_path,
+                                    "ImportedTexture: failed to read SMT or tile index"
+                                );
+                                ColorBuffer::new(tex_width, tex_height).unwrap()
+                            }
+                        }
+                    };
+                outputs.insert("output".to_string(), PortValue::Color(color));
             }
 
             NodeType::PassThrough => {
@@ -827,6 +924,17 @@ fn sample_color_nn(tex: &ColorBuffer, ox: u32, oy: u32, ow: u32, oh: u32) -> [f3
     let sy = ((oy as f32 / oh as f32) * tex.height() as f32) as u32;
     tex.get(sx.min(tex.width() - 1), sy.min(tex.height() - 1))
         .unwrap_or([0.0; 4])
+}
+
+/// Resize a ColorBuffer to (tw, th) only when dimensions differ.
+/// Bridge nodes (heightmap-in, color-out) generate at hm dims then call this
+/// to match the working/compile texture resolution.
+fn resize_color_to_tex(cb: ColorBuffer, tw: u32, th: u32) -> ColorBuffer {
+    if cb.width() == tw && cb.height() == th {
+        cb
+    } else {
+        cb.resize(tw, th)
+    }
 }
 
 fn get_input_heightmap(
@@ -2408,37 +2516,19 @@ fn apply_chooser(a: &Heightmap, b: &Heightmap, mask: &Heightmap) -> Heightmap {
     Heightmap::frbar_data(w, h, data).unwrap()
 }
 
-/// Decode a hex-encoded painted mask string into pixel bytes.
-/// Non-hex characters are skipped. Returns empty Vec on empty/invalid input.
-fn hex_decode_mask(s: &str) -> Vec<u8> {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len() / 2);
-    let mut i = 0;
-    while i + 1 < bytes.len() {
-        let hi = (bytes[i] as char).to_digit(16);
-        let lo = (bytes[i + 1] as char).to_digit(16);
-        if let (Some(h), Some(l)) = (hi, lo) {
-            out.push((h << 4 | l) as u8);
-        }
-        i += 2;
-    }
-    out
-}
-
+/// Read raw pixel bytes from a binary asset file at `path`.
 /// Source resolution for the `PaintedTexture` node's brush canvas.
 /// Fixed for now; could be made a param like PaintedHeightmap.
 pub(crate) const PAINTED_TEXTURE_RES: u32 = 256;
 
 /// Apply a sculpt delta buffer onto a heightmap in place.
-/// `pixels` is a flat u8 array at `src_res × src_res`: 128 = no change,
+/// `pixels` is a flat u8 array at `src_w x src_h`: 128 = no change,
 /// 0 = max subtract, 255 = max add. `scale` controls the maximum magnitude
-/// of the applied delta (e.g. 0.5 = max ±50% shift). If `pixels` is empty
+/// of the applied delta (e.g. 0.5 = max +/-50% shift). If `pixels` is empty
 /// or wrong length the heightmap is left unchanged.
-fn apply_sculpt_delta(hm: &mut Heightmap, pixels: &[u8], src_res: u32, scale: f32) {
+fn apply_sculpt_delta(hm: &mut Heightmap, pixels: &[u8], src_w: u32, src_h: u32, scale: f32) {
     let out_w = hm.width();
     let out_h = hm.height();
-    let src_w = src_res;
-    let src_h = src_res;
     if pixels.len() != (src_w as usize) * (src_h as usize) {
         return;
     }
@@ -2468,24 +2558,266 @@ fn apply_sculpt_delta(hm: &mut Heightmap, pixels: &[u8], src_res: u32, scale: f3
     }
 }
 
-/// Bilinearly scale a painted greyscale image at `src_res × src_res`
-/// up/down to the output dims and normalise `[0,255] → [0.0, 1.0]`.
-/// `src_res` comes from the node's `resolution` param.
-fn painted_grayscale_to_heightmap(
-    pixels: Vec<u8>,
-    src_res: u32,
+/// FinalComposition heightmap-kind composite: read the layer asset at
+/// `path_param` and apply it on top of the input value, writing the
+/// result to the same-named output port. Falls through to pure
+/// pass-through if the layer asset path is unset or empty.
+///
+/// Semantics depend on the layer's `AssetKind`:
+/// - `GrayscaleU8` -- delta encoding (128 = neutral, 0 = max negative,
+///   255 = max positive). Applied via `apply_sculpt_delta` with a
+///   fixed scale of `0.5` for now (matches the legacy `Sculpt` node).
+///   Used for the heightmap layer.
+/// - `GrayscaleU8` with sentinel byte 0xFF -- "untouched" overlay.
+///   Painted pixels (byte < 0xFF) overwrite the input value;
+///   untouched pixels pass the input through. Used for metalmap /
+///   typemap layers where the meaning of the value is quantised
+///   (terrain-type ID, metal density) and "blend" doesn't make sense.
+///   For these kinds the resolution must match the input; if it
+///   doesn't we degrade to pass-through.
+/// - `GrayscaleF32` -- not used for layers (PaintedHeightmap nodes
+///   use F32, FC layers use U8); accepting it here would let it
+///   silently misbehave.
+fn composite_heightmap_layer(
+    inputs: &HashMap<String, PortValue>,
+    outputs: &mut HashMap<String, PortValue>,
+    params: &HashMap<String, ParamValue>,
+    port_name: &str,
+    path_param: &str,
+) {
+    let Some(input_value) = inputs.get(port_name) else {
+        return;
+    };
+    let PortValue::Heightmap(input_hm) = input_value else {
+        // Wrong port kind on input; pass it through unchanged.
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    };
+    let asset_path = get_string(params, path_param, "");
+    if asset_path.is_empty() {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    }
+    let path = std::path::Path::new(asset_path);
+    let Ok((header, data)) = bar_project::read_asset_file(path) else {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    };
+    let mut composited = input_hm.clone();
+    let src_w = header.width.max(1);
+    let src_h = header.height.max(1);
+    match (header.kind, port_name) {
+        // Heightmap layer: delta encoding.
+        (bar_project::AssetKind::GrayscaleU8, "heightmap") => {
+            apply_sculpt_delta(&mut composited, &data, src_w, src_h, 0.5);
+        }
+        // Metalmap / typemap layer: sentinel-overlay (byte 0xFF = untouched).
+        (bar_project::AssetKind::GrayscaleU8, "metalmap")
+        | (bar_project::AssetKind::GrayscaleU8, "typemap") => {
+            apply_sentinel_overlay(&mut composited, &data, src_w, src_h);
+        }
+        _ => {
+            // Unsupported (kind, port) -- pass through.
+        }
+    }
+    outputs.insert(port_name.to_string(), PortValue::Heightmap(composited));
+}
+
+/// FinalComposition color-kind composite: alpha-mask overlay. Painted
+/// pixels (alpha > 0) replace the input pixel; alpha == 0 passes the
+/// input through. Layer asset is `RgbaU8`. Falls through to
+/// pass-through if the layer is unset, can't be read, or the kind tag
+/// is wrong.
+fn composite_color_layer(
+    inputs: &HashMap<String, PortValue>,
+    outputs: &mut HashMap<String, PortValue>,
+    params: &HashMap<String, ParamValue>,
+    port_name: &str,
+    path_param: &str,
+) {
+    let Some(input_value) = inputs.get(port_name) else {
+        return;
+    };
+    let PortValue::Color(input_cb) = input_value else {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    };
+    let asset_path = get_string(params, path_param, "");
+    if asset_path.is_empty() {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    }
+    let path = std::path::Path::new(asset_path);
+    let Ok((header, data)) = bar_project::read_asset_file(path) else {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    };
+    if !matches!(header.kind, bar_project::AssetKind::RgbaU8) {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    }
+    let expected = (header.width as usize) * (header.height as usize) * 4;
+    if data.len() != expected {
+        outputs.insert(port_name.to_string(), input_value.clone());
+        return;
+    }
+    let mut composited = input_cb.clone();
+    let layer_w = header.width as f32;
+    let layer_h = header.height as f32;
+    let out_w = composited.width();
+    let out_h = composited.height();
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            // Map output pixel to nearest layer pixel (no bilinear yet;
+            // alpha-mask paint doesn't benefit much from interpolation).
+            let lx = ((ox as f32 / out_w.max(1) as f32) * layer_w) as u32;
+            let ly = ((oy as f32 / out_h.max(1) as f32) * layer_h) as u32;
+            let lx = lx.min(header.width.saturating_sub(1));
+            let ly = ly.min(header.height.saturating_sub(1));
+            let idx = ((ly * header.width + lx) * 4) as usize;
+            let a = data[idx + 3];
+            if a == 0 {
+                continue;
+            }
+            let r = data[idx] as f32 / 255.0;
+            let g = data[idx + 1] as f32 / 255.0;
+            let b = data[idx + 2] as f32 / 255.0;
+            let af = a as f32 / 255.0;
+            let base = composited.get(ox, oy).unwrap_or([0.0; 4]);
+            let new = [
+                base[0] * (1.0 - af) + r * af,
+                base[1] * (1.0 - af) + g * af,
+                base[2] * (1.0 - af) + b * af,
+                1.0,
+            ];
+            composited.set(ox, oy, new);
+        }
+    }
+    outputs.insert(port_name.to_string(), PortValue::Color(composited));
+}
+
+/// Apply a sentinel-overlay layer to a heightmap in place. Each byte
+/// in `pixels` is either `0xFF` (untouched -- input passes through) or
+/// `0..=0xFE` (painted -- byte value / 254 replaces input). Used for
+/// quantised kinds (metalmap, typemap) where blending doesn't make
+/// sense and a per-pixel "did the user paint here" mask is needed.
+fn apply_sentinel_overlay(hm: &mut Heightmap, pixels: &[u8], src_w: u32, src_h: u32) {
+    if pixels.len() != (src_w as usize) * (src_h as usize) {
+        return;
+    }
+    let out_w = hm.width();
+    let out_h = hm.height();
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            // Nearest-neighbour sample of the layer (preserves the
+            // quantised semantics; bilinear would alias terrain-type
+            // IDs at boundaries).
+            let lx = ((ox as f32 / out_w.max(1) as f32) * src_w as f32) as u32;
+            let ly = ((oy as f32 / out_h.max(1) as f32) * src_h as f32) as u32;
+            let lx = lx.min(src_w.saturating_sub(1));
+            let ly = ly.min(src_h.saturating_sub(1));
+            let byte = pixels[(ly * src_w + lx) as usize];
+            if byte == 0xFF {
+                continue;
+            }
+            let v = byte as f32 / 254.0;
+            let _ = hm.set(ox, oy, v);
+        }
+    }
+}
+
+/// Read a `PaintedHeightmap` asset, dispatching on its pixel format.
+/// Brush-painted assets are still 8-bit (the brush dab range is captured
+/// at u8 granularity); SD7-imported asset are f32 to preserve the full
+/// SMF height precision (16-bit native; u8 storage was visibly terraced).
+fn read_painted_heightmap_asset(
+    asset_path: &str,
+    fallback_w: u32,
+    fallback_h: u32,
+    out_w: u32,
+    out_h: u32,
+    sampling: GrayscaleSampling,
+) -> Heightmap {
+    if asset_path.is_empty() {
+        return painted_grayscale_to_heightmap(
+            Vec::new(),
+            fallback_w,
+            fallback_h,
+            out_w,
+            out_h,
+            sampling,
+        );
+    }
+    match bar_project::read_asset_file(std::path::Path::new(asset_path)) {
+        Ok((header, data)) => {
+            let src_w = header.width.max(1);
+            let src_h = header.height.max(1);
+            match header.kind {
+                bar_project::AssetKind::GrayscaleU8 => {
+                    painted_grayscale_to_heightmap(data, src_w, src_h, out_w, out_h, sampling)
+                }
+                bar_project::AssetKind::GrayscaleF32 => {
+                    painted_f32_to_heightmap(&data, src_w, src_h, out_w, out_h)
+                }
+                other => {
+                    tracing::warn!(
+                        asset_path,
+                        ?other,
+                        "PaintedHeightmap asset has non-grayscale kind; falling back to zero heightmap",
+                    );
+                    painted_grayscale_to_heightmap(
+                        Vec::new(),
+                        fallback_w,
+                        fallback_h,
+                        out_w,
+                        out_h,
+                        sampling,
+                    )
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!(asset_path, error = %e, "Failed to read PaintedHeightmap asset");
+            painted_grayscale_to_heightmap(
+                Vec::new(),
+                fallback_w,
+                fallback_h,
+                out_w,
+                out_h,
+                sampling,
+            )
+        }
+    }
+}
+
+/// Bilinearly resample a `src_w x src_h` f32 heightmap (stored as
+/// little-endian f32 bytes) into a `out_w x out_h` `Heightmap`. Sample
+/// values are clamped to `[0, 1]` to match the contract of the rest of
+/// the heightmap pipeline.
+fn painted_f32_to_heightmap(
+    bytes: &[u8],
+    src_w: u32,
+    src_h: u32,
     out_w: u32,
     out_h: u32,
 ) -> Heightmap {
-    let src_w = src_res;
-    let src_h = src_res;
-
-    // Fill with zeros if no painted data
-    let pixels = if pixels.len() == (src_w as usize) * (src_h as usize) {
-        pixels
-    } else {
-        vec![0u8; (src_w as usize) * (src_h as usize)]
-    };
+    let expected = (src_w as usize)
+        .saturating_mul(src_h as usize)
+        .saturating_mul(4);
+    if bytes.len() != expected || src_w == 0 || src_h == 0 {
+        // Wrong size -- produce a flat zero heightmap so downstream nodes
+        // still have something to operate on.
+        return Heightmap::frbar_data(
+            out_w,
+            out_h,
+            vec![0.0f32; (out_w as usize) * (out_h as usize)],
+        )
+        .unwrap();
+    }
+    let src: Vec<f32> = bytes
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
 
     let mut data = vec![0.0f32; (out_w as usize) * (out_h as usize)];
     for oy in 0..out_h {
@@ -2498,15 +2830,88 @@ fn painted_grayscale_to_heightmap(
             let y1 = (y0 + 1).min(src_h - 1);
             let fx = sx - sx.floor();
             let fy = sy - sy.floor();
-
-            let v00 = pixels[(y0 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
-            let v10 = pixels[(y0 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
-            let v01 = pixels[(y1 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
-            let v11 = pixels[(y1 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+            let v00 = src[(y0 as usize) * (src_w as usize) + x0 as usize];
+            let v10 = src[(y0 as usize) * (src_w as usize) + x1 as usize];
+            let v01 = src[(y1 as usize) * (src_w as usize) + x0 as usize];
+            let v11 = src[(y1 as usize) * (src_w as usize) + x1 as usize];
             let v = v00 * (1.0 - fx) * (1.0 - fy)
                 + v10 * fx * (1.0 - fy)
                 + v01 * (1.0 - fx) * fy
                 + v11 * fx * fy;
+            data[(oy as usize) * (out_w as usize) + ox as usize] = v.clamp(0.0, 1.0);
+        }
+    }
+    Heightmap::frbar_data(out_w, out_h, data).unwrap()
+}
+
+/// Bilinearly scale a painted greyscale image at `src_w x src_h`
+/// up/down to the output dims and normalise `[0,255] -> [0.0, 1.0]`.
+/// Sampling mode for `painted_grayscale_to_heightmap`. Smooth
+/// (bilinear) is correct for continuous data like heightmap-delta
+/// paint layers; Nearest preserves quantised data like the
+/// engine's metalmap / typemap, where each u8 value is an integer
+/// reading (metal density, terrain-type id) and averaging
+/// neighbouring values is semantically meaningless. Bilinear-blurring
+/// a sparse metal map dilutes single-pixel spots into faint blobs
+/// that the engine's spot-finder later mis-aggregates (or filters
+/// out entirely via the `maxValue = 15` gate in `gui_metalspots`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum GrayscaleSampling {
+    Bilinear,
+    Nearest,
+}
+
+fn painted_grayscale_to_heightmap(
+    pixels: Vec<u8>,
+    src_w: u32,
+    src_h: u32,
+    out_w: u32,
+    out_h: u32,
+    sampling: GrayscaleSampling,
+) -> Heightmap {
+    // Fill with zeros if no painted data
+    let pixels = if pixels.len() == (src_w as usize) * (src_h as usize) {
+        pixels
+    } else {
+        vec![0u8; (src_w as usize) * (src_h as usize)]
+    };
+
+    let mut data = vec![0.0f32; (out_w as usize) * (out_h as usize)];
+    for oy in 0..out_h {
+        for ox in 0..out_w {
+            let sx = ox as f32 * (src_w as f32 - 1.0) / (out_w as f32 - 1.0).max(1.0);
+            let sy = oy as f32 * (src_h as f32 - 1.0) / (out_h as f32 - 1.0).max(1.0);
+            let v = match sampling {
+                GrayscaleSampling::Bilinear => {
+                    let x0 = sx as u32;
+                    let y0 = sy as u32;
+                    let x1 = (x0 + 1).min(src_w - 1);
+                    let y1 = (y0 + 1).min(src_h - 1);
+                    let fx = sx - sx.floor();
+                    let fy = sy - sy.floor();
+                    let v00 = pixels[(y0 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
+                    let v10 = pixels[(y0 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+                    let v01 = pixels[(y1 as usize) * (src_w as usize) + x0 as usize] as f32 / 255.0;
+                    let v11 = pixels[(y1 as usize) * (src_w as usize) + x1 as usize] as f32 / 255.0;
+                    v00 * (1.0 - fx) * (1.0 - fy)
+                        + v10 * fx * (1.0 - fy)
+                        + v01 * (1.0 - fx) * fy
+                        + v11 * fx * fy
+                }
+                GrayscaleSampling::Nearest => {
+                    // Round, not floor, so cells at the half-pixel
+                    // boundary land on the nearer source pixel rather
+                    // than systematically biasing toward the lower
+                    // index (which on a 64 -> 1536 upsample would
+                    // leave the rightmost column of every 24-px block
+                    // un-mapped).
+                    let sx_round = (sx + 0.5) as u32;
+                    let sy_round = (sy + 0.5) as u32;
+                    let sx_c = sx_round.min(src_w.saturating_sub(1));
+                    let sy_c = sy_round.min(src_h.saturating_sub(1));
+                    pixels[(sy_c as usize) * (src_w as usize) + sx_c as usize] as f32 / 255.0
+                }
+            };
             data[(oy as usize) * (out_w as usize) + ox as usize] = v;
         }
     }
@@ -2518,12 +2923,13 @@ fn painted_grayscale_to_heightmap(
 /// `ColorBuffer` (RGBA with alpha = 1.0).
 fn painted_rgb_to_color_buffer(
     pixels: Vec<u8>,
-    src_res: u32,
+    src_w: u32,
+    src_h: u32,
     out_w: u32,
     out_h: u32,
 ) -> ColorBuffer {
-    let src_w = src_res as usize;
-    let src_h = src_res as usize;
+    let src_w = src_w as usize;
+    let src_h = src_h as usize;
     let expected = src_w * src_h * 3;
 
     // Fall back to opaque mid-grey if no painted data — same shape
@@ -2936,47 +3342,42 @@ mod tests {
     use bar_graph::{GraphEngine, Node, NodeId, PortId};
 
     #[test]
-    fn preview_node_passes_inputs_through_as_outputs() {
-        // Preview is a real node: its executor takes upstream
-        // values via its declared input ports and re-emits them as
-        // runtime outputs under the same names. That's what lets
-        // the 3D viewport read its data via the standard
-        // `outputs[node_id][port_name]` accessor — same shape any
-        // consumer uses for any other node, no special-case
-        // "global ingest" path.
-        let executor = CpuExecutor;
-        let mut hm = Heightmap::new(8, 8).unwrap();
-        for y in 0..8 {
-            for x in 0..8 {
-                hm.set(x, y, ((x * 7 + y) as f32) / 100.0).unwrap();
-            }
-        }
-        let inputs = HashMap::from([("heightmap".to_string(), PortValue::Heightmap(hm.clone()))]);
-        let result = executor
-            .execute(&NodeType::Preview, &HashMap::new(), &inputs, 8, 8)
-            .unwrap();
-        let PortValue::Heightmap(out) = result
-            .get("heightmap")
-            .expect("Preview should re-emit `heightmap` from its input")
-        else {
-            panic!("expected Heightmap port value");
-        };
-        for y in 0..8 {
-            for x in 0..8 {
-                assert!((out.get(x, y).unwrap() - hm.get(x, y).unwrap()).abs() < 1e-6);
-            }
-        }
-    }
-
-    #[test]
-    fn preview_node_emits_no_unrequested_ports() {
-        // With no inputs supplied, the runtime output map is empty.
-        // (Preview only re-emits what it received.)
-        let executor = CpuExecutor;
-        let result = executor
-            .execute(&NodeType::Preview, &HashMap::new(), &HashMap::new(), 8, 8)
-            .unwrap();
-        assert!(result.is_empty());
+    fn nearest_neighbour_preserves_single_metal_spot_through_upsample() {
+        // Metalmap regression: a single-pixel metal spot at value 200
+        // in a 4x4 source must survive an upsample to 12x12 with peak
+        // value intact. With the previous bilinear path the same
+        // upsample dilutes the peak to ~140; the engine's spot
+        // finder then sees a smeared cluster instead of the original
+        // discrete spot.
+        let mut pixels = vec![0u8; 16];
+        pixels[5] = 200; // (1, 1) in a 4x4 grid
+        let hm = painted_grayscale_to_heightmap(
+            pixels.clone(),
+            4,
+            4,
+            12,
+            12,
+            GrayscaleSampling::Nearest,
+        );
+        // Peak should be the original value normalised.
+        let peak = hm.data().iter().cloned().fold(0.0f32, f32::max);
+        let expected = 200.0 / 255.0;
+        assert!(
+            (peak - expected).abs() < 1e-4,
+            "nearest peak should be {expected}, got {peak}",
+        );
+        // Bilinear sanity-check: same upsample with bilinear gives a
+        // strictly lower peak (the spot is averaged with zero
+        // neighbours), confirming the round-trip degradation the
+        // engine's spot-finder was running into.
+        let blurred =
+            painted_grayscale_to_heightmap(pixels, 4, 4, 12, 12, GrayscaleSampling::Bilinear);
+        let bilinear_peak = blurred.data().iter().cloned().fold(0.0f32, f32::max);
+        assert!(
+            bilinear_peak < expected * 0.95,
+            "bilinear should dilute the peak below 95% of source (got {bilinear_peak} vs expected < {})",
+            expected * 0.95,
+        );
     }
 
     #[test]
@@ -2995,7 +3396,7 @@ mod tests {
         )]);
         let inputs = HashMap::new();
         let result = executor
-            .execute(&NodeType::PassThrough, &params, &inputs, 1, 1)
+            .execute(&NodeType::PassThrough, &params, &inputs, 1, 1, 1, 1)
             .unwrap();
         let PortValue::FileList(list) = result.get("files").unwrap() else {
             panic!("Expected FileList output");
@@ -3015,7 +3416,7 @@ mod tests {
         ]);
         let inputs = HashMap::new();
         let result = executor
-            .execute(&NodeType::PerlinNoise, &params, &inputs, 64, 64)
+            .execute(&NodeType::PerlinNoise, &params, &inputs, 64, 64, 64, 64)
             .unwrap();
 
         let output = result.get("output").unwrap();
@@ -3035,7 +3436,7 @@ mod tests {
         let mut graph = GraphEngine::new();
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-        let bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let bundler = Node::new(NodeId(0), NodeType::FinalComposition, "Final Composition");
         let noise_id = graph.add_node(noise);
         let bundler_id = graph.add_node(bundler);
 
@@ -3060,7 +3461,7 @@ mod tests {
             )
             .unwrap();
 
-        let results = bar_graph::evaluate_graph(&graph, &executor, 64, 64).unwrap();
+        let results = bar_graph::evaluate_graph(&graph, &executor, 64, 64, 64, 64).unwrap();
         let hm = bar_graph::get_heightmap_output(&graph, &results).unwrap();
 
         assert_eq!(hm.width(), 64);
@@ -3085,7 +3486,7 @@ mod tests {
         let params = HashMap::from([("factor".to_string(), ParamValue::Float(0.5))]);
 
         let result = executor
-            .execute(&NodeType::Blend, &params, &inputs, 4, 4)
+            .execute(&NodeType::Blend, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         let output = result.get("output").unwrap();
         match output {
@@ -3105,7 +3506,7 @@ mod tests {
             ("mode".to_string(), ParamValue::String("f1".to_string())),
         ]);
         let result = executor
-            .execute(&NodeType::Voronoi, &params, &HashMap::new(), 64, 64)
+            .execute(&NodeType::Voronoi, &params, &HashMap::new(), 64, 64, 64, 64)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3128,7 +3529,7 @@ mod tests {
             ParamValue::String("vertical".to_string()),
         )]);
         let result = executor
-            .execute(&NodeType::Gradient, &params, &HashMap::new(), 8, 8)
+            .execute(&NodeType::Gradient, &params, &HashMap::new(), 8, 8, 8, 8)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3149,7 +3550,7 @@ mod tests {
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
 
         let result = executor
-            .execute(&NodeType::Normalize, &HashMap::new(), &inputs, 8, 8)
+            .execute(&NodeType::Normalize, &HashMap::new(), &inputs, 8, 8, 8, 8)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3176,7 +3577,7 @@ mod tests {
         ]);
 
         let result = executor
-            .execute(&NodeType::BiasGain, &params, &inputs, 4, 4)
+            .execute(&NodeType::BiasGain, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3207,7 +3608,7 @@ mod tests {
         ]);
 
         let result = executor
-            .execute(&NodeType::MaskSelect, &HashMap::new(), &inputs, 4, 4)
+            .execute(&NodeType::MaskSelect, &HashMap::new(), &inputs, 4, 4, 4, 4)
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {
@@ -3294,7 +3695,7 @@ mod tests {
             ("mask".to_string(), PortValue::Mask(mask)),
         ]);
         let result = executor
-            .execute(&NodeType::Add, &HashMap::new(), &inputs, 2, 2)
+            .execute(&NodeType::Add, &HashMap::new(), &inputs, 2, 2, 2, 2)
             .unwrap();
         let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
             panic!("expected heightmap")
@@ -3318,7 +3719,7 @@ mod tests {
             ("mask".to_string(), PortValue::Mask(mask)),
         ]);
         let result = executor
-            .execute(&NodeType::Blend, &params, &inputs, 2, 2)
+            .execute(&NodeType::Blend, &params, &inputs, 2, 2, 2, 2)
             .unwrap();
         let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
             panic!("expected heightmap")
@@ -3347,7 +3748,15 @@ mod tests {
         let params = HashMap::from([("iterations".to_string(), ParamValue::UInt(2000))]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::HydraulicErosion, &params, &inputs, 64, 64)
+            .execute(
+                &NodeType::HydraulicErosion,
+                &params,
+                &inputs,
+                64,
+                64,
+                64,
+                64,
+            )
             .unwrap();
         for port in ["output", "flow", "wear", "deposit"] {
             let val = result.get(port).expect(port);
@@ -3372,7 +3781,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::FlowSelect, &params, &inputs, 8, 1)
+            .execute(&NodeType::FlowSelect, &params, &inputs, 8, 1, 8, 1)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3406,7 +3815,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::SelectConvexity, &params, &inputs, 16, 16)
+            .execute(&NodeType::SelectConvexity, &params, &inputs, 16, 16, 16, 16)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3440,7 +3849,15 @@ mod tests {
         params.insert("height_0".to_string(), ParamValue::Float(0.8));
         params.insert("falloff_0".to_string(), ParamValue::Float(0.5));
         let result = executor
-            .execute(&NodeType::LayoutGenerator, &params, &HashMap::new(), 32, 32)
+            .execute(
+                &NodeType::LayoutGenerator,
+                &params,
+                &HashMap::new(),
+                32,
+                32,
+                32,
+                32,
+            )
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3466,7 +3883,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm.clone()))]);
         let result = executor
-            .execute(&NodeType::Transform, &params, &inputs, 4, 4)
+            .execute(&NodeType::Transform, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3496,7 +3913,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm.clone()))]);
         let result = executor
-            .execute(&NodeType::Transform, &params, &inputs, 8, 1)
+            .execute(&NodeType::Transform, &params, &inputs, 8, 1, 8, 1)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3524,7 +3941,7 @@ mod tests {
             ("warp_y".to_string(), PortValue::Heightmap(neutral)),
         ]);
         let result = executor
-            .execute(&NodeType::Warp, &params, &inputs, 4, 4)
+            .execute(&NodeType::Warp, &params, &inputs, 4, 4, 4, 4)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3562,7 +3979,7 @@ mod tests {
             ("warp_y".to_string(), PortValue::Heightmap(wy)),
         ]);
         let result = executor
-            .execute(&NodeType::Warp, &params, &inputs, 8, 8)
+            .execute(&NodeType::Warp, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3589,7 +4006,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::Stratify, &params, &inputs, 8, 1)
+            .execute(&NodeType::Stratify, &params, &inputs, 8, 1, 8, 1)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3613,7 +4030,7 @@ mod tests {
         let params = HashMap::from([("radius".to_string(), ParamValue::Float(1.5))]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::MaskExpand, &params, &inputs, 8, 8)
+            .execute(&NodeType::MaskExpand, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3645,7 +4062,7 @@ mod tests {
         let params = HashMap::from([("radius".to_string(), ParamValue::Float(1.5))]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::MaskShrink, &params, &inputs, 8, 8)
+            .execute(&NodeType::MaskShrink, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3674,7 +4091,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8)
+            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");
@@ -3701,7 +4118,7 @@ mod tests {
         ]);
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
         let result = executor
-            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8)
+            .execute(&NodeType::SelectAspect, &params, &inputs, 8, 8, 8, 8)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");

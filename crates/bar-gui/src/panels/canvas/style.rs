@@ -78,8 +78,7 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Displacement
         | NodeType::Transform
         | NodeType::Warp
-        | NodeType::Stratify
-        | NodeType::Sculpt => tokens::NODE_CAT_FILTER,
+        | NodeType::Stratify => tokens::NODE_CAT_FILTER,
 
         NodeType::Blend
         | NodeType::Add
@@ -115,11 +114,10 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::MaskExpand
         | NodeType::MaskShrink => tokens::NODE_CAT_MASK,
 
-        NodeType::Bundler | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
+        NodeType::FinalComposition | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
 
-        NodeType::PassThrough => tokens::NODE_CAT_SOURCE,
+        NodeType::PassThrough | NodeType::ImportedTexture => tokens::NODE_CAT_SOURCE,
 
-        NodeType::Preview => tokens::NODE_CAT_PREVIEW,
         // Distinct dark teal — boundary markers, not generators/filters/combiners.
         NodeType::SubgraphInput | NodeType::SubgraphOutput => tokens::NODE_CAT_IO,
     }

@@ -20,12 +20,22 @@ pub enum ComputeError {
 pub struct GpuContext {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
+    /// True when the device supports BC texture compression (DXT1/BC1 etc.).
+    /// Required for the Preview layout's native-resolution BC1 texture upload.
+    pub supports_bc: bool,
 }
 
 impl GpuContext {
     /// Create a GPU context from existing device and queue (e.g., from eframe's RenderState).
     pub fn from_existing(device: wgpu::Device, queue: wgpu::Queue) -> Self {
-        Self { device, queue }
+        let supports_bc = device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        Self {
+            device,
+            queue,
+            supports_bc,
+        }
     }
 
     /// Create a standalone GPU context (requests its own adapter and device).
@@ -51,15 +61,29 @@ impl GpuContext {
             adapter_info.name, adapter_info.backend
         );
 
+        let bc_available = adapter
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
+        let bc_feature = if bc_available {
+            wgpu::Features::TEXTURE_COMPRESSION_BC
+        } else {
+            wgpu::Features::empty()
+        };
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("bar-compute"),
-                    required_features: wgpu::Features::empty(),
+                    required_features: bc_feature,
                     required_limits: wgpu::Limits {
                         // Allow larger storage buffers for high-res heightmaps (8K = 256MB)
                         max_storage_buffer_binding_size: 512 * 1024 * 1024,
                         max_buffer_size: 512 * 1024 * 1024,
+                        // Terrain pipeline binds 5 groups (camera, textures,
+                        // water_planes, heightmap, shadow). Default cap is 4
+                        // which rejects the shadow group when running CLI /
+                        // headless previews.
+                        max_bind_groups: 8.min(adapter.limits().max_bind_groups),
                         ..wgpu::Limits::default()
                     },
                     ..Default::default()
@@ -68,7 +92,11 @@ impl GpuContext {
             )
             .await?;
 
-        Ok(Self { device, queue })
+        Ok(Self {
+            device,
+            queue,
+            supports_bc: bc_available,
+        })
     }
 }
 
@@ -129,9 +157,14 @@ impl ComputeDevice {
 
     /// Get a GpuContext referencing this device (cheap clone, Arc-based internally).
     pub fn as_context(&self) -> GpuContext {
+        let supports_bc = self
+            .device
+            .features()
+            .contains(wgpu::Features::TEXTURE_COMPRESSION_BC);
         GpuContext {
             device: self.device.clone(),
             queue: self.queue.clone(),
+            supports_bc,
         }
     }
 }

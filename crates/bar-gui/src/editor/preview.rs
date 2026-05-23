@@ -1,8 +1,7 @@
 //! Preview-and-export state owned by `BarEditorApp`.
 //!
-//! Tracks which node drives the 3D viewport, whether the viewport is
-//! visible, and the one-frame "run" / "test in BAR" pulses that
-//! `bar-app` polls each frame to kick off background export jobs.
+//! Tracks one-frame "run" / "test in BAR" / "compile" pulses that
+//! `bar-app` polls each frame to kick off background jobs.
 //!
 //! These all reset to defaults on project switch (cleared by
 //! `BarEditorApp::reset_session_state` via `PreviewState::reset`).
@@ -41,6 +40,10 @@ pub enum ExportStatus {
     All,
     /// One specific Bundler is exporting; others remain idle.
     One(NodeId),
+    /// "Test in BAR" pressed -- the bundle pipeline is running to
+    /// produce a .sdd into the BAR install. Distinguished from `All`
+    /// so the spinner draws on the BAR button instead of Bundle.
+    TestInBar,
 }
 
 impl ExportStatus {
@@ -58,11 +61,6 @@ impl ExportStatus {
 /// Grouped editor preview / export state. See module docs.
 #[derive(Default, Debug, Clone)]
 pub struct PreviewState {
-    /// Is the preview window open?
-    pub open: bool,
-    /// Which node feeds the 3D viewport. `None` => the renderer shows
-    /// the empty/no-mesh state.
-    pub node: Option<NodeId>,
     /// Set to `true` for one frame when the user clicks the toolbar
     /// "Run" button. `bar-app` consumes this via `take_run_requested`.
     pub run_requested: bool,
@@ -70,27 +68,30 @@ pub struct PreviewState {
     /// `bar-app` consumes via `take_test_in_bar`.
     pub test_in_bar_requested: bool,
     /// Set when the user runs a single bundler node (rather than all).
-    /// `bar-app` consumes via `take_run_bundler_node`.
-    pub run_bundler_node: Option<NodeId>,
+    /// `bar-app` consumes via `take_run_export_node`.
+    pub run_export_node: Option<NodeId>,
     /// Live export busy-state. Set by `bar-app` to gate the run buttons
     /// in the GUI.
     pub export_status: ExportStatus,
+    /// Set to `true` for one frame when the user clicks "Compile".
+    /// `bar-app` consumes via `take_compile_requested`.
+    pub compile_requested: bool,
+    /// True while a compile is running. Set by `bar-app`.
+    pub compile_running: bool,
+    /// Pulsed when the user clicks the Compile button while a compile
+    /// is already running. `bar-app` consumes via `take_cancel_compile`.
+    pub cancel_compile_requested: bool,
+    /// Pulsed when the user clicks the BAR or Bundle button while the
+    /// corresponding export is running. `bar-app` consumes via
+    /// `take_cancel_export`.
+    pub cancel_export_requested: bool,
+    /// Set to `true` for one frame when the Preview layout wants bar-app
+    /// to load the compiled SMT as a BC1 GPU texture. Consumed via
+    /// `take_bc_texture_requested`.
+    pub bc_texture_requested: bool,
 }
 
 impl PreviewState {
-    /// Whether the preview window is currently open.
-    pub fn is_open(&self) -> bool {
-        self.open
-    }
-
-    pub fn set_open(&mut self, v: bool) {
-        self.open = v;
-    }
-
-    pub fn node(&self) -> Option<NodeId> {
-        self.node
-    }
-
     /// Consume the one-frame "run" pulse. Returns `true` once after
     /// the user clicks Run, then resets.
     pub fn take_run_requested(&mut self) -> bool {
@@ -103,8 +104,8 @@ impl PreviewState {
     }
 
     /// Consume the one-frame "run this specific bundler node" pulse.
-    pub fn take_run_bundler_node(&mut self) -> Option<NodeId> {
-        self.run_bundler_node.take()
+    pub fn take_run_export_node(&mut self) -> Option<NodeId> {
+        self.run_export_node.take()
     }
 
     pub fn export_status(&self) -> ExportStatus {
@@ -113,6 +114,27 @@ impl PreviewState {
 
     pub fn set_export_status(&mut self, s: ExportStatus) {
         self.export_status = s;
+    }
+
+    /// Consume the one-frame "compile" pulse.
+    pub fn take_compile_requested(&mut self) -> bool {
+        std::mem::take(&mut self.compile_requested)
+    }
+
+    /// Consume the one-frame "cancel compile" pulse.
+    pub fn take_cancel_compile(&mut self) -> bool {
+        std::mem::take(&mut self.cancel_compile_requested)
+    }
+
+    /// Consume the one-frame "cancel export" pulse (covers both
+    /// Test-in-BAR and Bundle).
+    pub fn take_cancel_export(&mut self) -> bool {
+        std::mem::take(&mut self.cancel_export_requested)
+    }
+
+    /// Consume the one-frame "load BC1 texture" pulse.
+    pub fn take_bc_texture_requested(&mut self) -> bool {
+        std::mem::take(&mut self.bc_texture_requested)
     }
 
     /// Reset to defaults. Called by `BarEditorApp::reset_session_state`

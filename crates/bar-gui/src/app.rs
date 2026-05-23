@@ -9,8 +9,10 @@ use crate::undo::UndoHistory;
 // Re-export icon painters so that `use crate::app::*` in panel modules keeps
 // finding them after they moved to panels/icons.rs.
 pub(crate) use crate::panels::icons::{
-    draw_io_icon, paint_bar_icon, paint_busy_dot, paint_export_icon, paint_inspector_icon,
-    paint_map_info_icon, paint_mapinfo_form_icon, paint_startbox_icon,
+    draw_io_icon, paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
+    paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lava_icon,
+    paint_lighting_icon, paint_map_edge_icon, paint_physics_icon, paint_publish_icon,
+    paint_resources_icon, paint_water_icon,
 };
 
 // Welcome-panel template list lives in `panels::welcome` now.
@@ -96,7 +98,7 @@ pub(crate) fn parse_subgraph_binding(
 /// One-shot context-menu action carried out after the menu closes,
 /// since the menu closure can't borrow `self` mutably while iterating
 /// `self.visuals.groups`.
-pub(crate) use crate::editor::{CanvasView, MapInfoTab, ValidationFilter};
+pub(crate) use crate::editor::{CanvasView, ValidationFilter};
 
 pub(crate) enum GroupOp {
     CreateWith(NodeId),
@@ -133,9 +135,8 @@ pub(crate) fn blend(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32
 }
 
 pub(crate) use crate::dialog::{
-    confirm_key_display_name, ConfirmAction, ConfirmDialog, DialogState, FileEditor,
-    GroupDeleteChoice, PassthroughEdit, PendingAction, UnsavedDecision,
-    CONFIRM_KEY_DELETE_CONNECTED_NODE,
+    confirm_key_display_name, ConfirmAction, ConfirmDialog, DialogState, GroupDeleteChoice,
+    PassthroughEdit, PendingAction, UnsavedDecision, CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
 pub(crate) use crate::editor::DragConnection;
 
@@ -181,29 +182,31 @@ pub use crate::editor::ExportStatus;
 /// + a match arm in `layouts::dispatch::draw_active`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Layout {
-    /// Today's editor: top toolbar, left palette, centre canvas,
-    /// right contextual properties, bottom status bar, with
-    /// floating windows for inspector / map info / validation /
-    /// settings / about.
+    /// Node graph editor: left palette, central canvas, contextual
+    /// properties, floating dialogs. No 3D viewport -- switch to
+    /// Sculpt3D or use a future split layout for side-by-side editing.
     #[default]
-    Standard,
-    /// Full-width 3D viewport with brush controls on the right.
+    NodeGraph,
+    /// Full-width 3D viewport with brush controls on the left.
     /// Writes brush strokes to `SculptState` directly; the
-    /// export pipeline merges them onto graph output at bundle
-    /// time.
+    /// export pipeline merges them onto graph output at bundle time.
     Sculpt3D,
+    /// Read-only 3D viewport showing the compiled native-resolution
+    /// BC1 texture. Available only when a compile has been run.
+    Preview,
 }
 
 impl Layout {
     /// All variants in display order. Index 0 gets Ctrl+1, index 1 gets
     /// Ctrl+2, etc. Extend this slice when new layouts are added.
-    pub const ALL: &'static [Layout] = &[Layout::Standard, Layout::Sculpt3D];
+    pub const ALL: &'static [Layout] = &[Layout::NodeGraph, Layout::Sculpt3D, Layout::Preview];
 
     /// i18n key for this layout's display name.
     pub(crate) fn i18n_key(self) -> &'static str {
         match self {
-            Layout::Standard => "editor.menu.node_graph",
+            Layout::NodeGraph => "editor.menu.node_graph",
             Layout::Sculpt3D => "editor.menu.sculpt_3d",
+            Layout::Preview => "editor.menu.preview",
         }
     }
 }
@@ -220,6 +223,9 @@ pub struct BarEditorApp {
     pub canvas: crate::editor::CanvasState,
     pub map: crate::editor::MapState,
     pub(crate) history: UndoHistory,
+    /// Side table holding interned paint-asset bytes referenced by undo
+    /// snapshots. Each entry is content-hashed so equal bytes dedupe.
+    pub(crate) paint_history: crate::paint_history::PaintHistoryStore,
     pub project: crate::project::ProjectState,
     /// Raw window + display handles of the editor's main window. Used
     /// to parent native file dialogs so they belong to the editor
@@ -238,6 +244,14 @@ pub struct BarEditorApp {
     pub dialog: DialogState,
     pub validation: crate::editor::ValidationState,
     pub props: crate::editor::PropsPanelState,
+    /// Per-session state for the Map Edge action-bar panel (preview
+    /// texture cache so flipping the modal doesn't re-decode the file).
+    pub map_edge: crate::panels::action_bar_modals::map_edge::MapEdgePanelState,
+    /// Per-session state for the Dimensions modal (minimap preview cache).
+    pub dimensions: crate::panels::action_bar_modals::dimensions::DimensionsPanelState,
+    /// Per-session state for the Assemble Map wizard. Holds the
+    /// current page and the in-progress picks until Finish / Cancel.
+    pub assemble_map: crate::panels::assemble_map::AssembleMapState,
     pub paint: PaintSession,
     /// In-flight drag from the node palette (set when pointer starts
     /// dragging an item, cleared on pointer release).
@@ -248,6 +262,98 @@ pub struct BarEditorApp {
     /// Active top-level UI layout. Loaded from settings on launch,
     /// persisted via `set_active_layout`.
     pub(crate) active_layout: Layout,
+    /// Set by `bar-app` from `GpuContext::supports_bc` on startup. Tells
+    /// the Preview layout whether BC1 texture upload is available.
+    pub supports_bc: bool,
+    /// Sorted list of feature type names from the loaded catalog.
+    /// Populated by `bar-app` when the feature catalog is loaded.
+    pub feature_palette_names: Vec<String>,
+    /// Live text filter typed into the feature library search box.
+    /// Empty = show every catalog entry; otherwise case-insensitive
+    /// substring match against the lowercased type name.
+    pub(crate) feature_filter: String,
+    /// Feature type currently selected in the feature palette for placement.
+    /// When Some, clicking on the 3D terrain places a feature of this type.
+    pub selected_feature_type: Option<String>,
+    /// Spring heading the next placed feature will be created with. Set by
+    /// the rotate gesture (Ctrl+scroll / horizontal scroll) while the user
+    /// is in placement mode. Persists across placements so the user can
+    /// drop a row of identically-oriented features without re-rotating.
+    pub pending_placement_angle: f32,
+    /// Translucent ghost of the to-be-placed feature, anchored at the
+    /// cursor's terrain projection. Set by viewport input each frame
+    /// while placement mode is active and the cursor is over the
+    /// terrain; cleared otherwise. Drawn alongside committed features
+    /// at reduced alpha so the user can preview position + rotation
+    /// before the click commits.
+    pub placement_ghost: Option<bar_project::recipe::PlacedFeature>,
+    /// Viewport debug overlay toggles, exposed via the gear button in
+    /// the Sculpt3D / Preview viewports. Session-only state -- not
+    /// persisted across project loads.
+    pub viewport_debug: ViewportDebug,
+    /// Egui texture handles for rendered S3O thumbnails, keyed by
+    /// lowercase feature type name. Populated by bar-app's runner
+    /// when it drains `feature_thumb_requests`. Storing the handle
+    /// (rather than just the `TextureId`) ties the GPU texture's
+    /// lifetime to the cache entry -- dropping it via `remove` frees
+    /// the egui side automatically.
+    pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureHandle>,
+    /// Lowercase feature type names whose thumbnail the palette wants
+    /// rendered. Bar-app's runner reads + clears entries it has
+    /// fulfilled; the palette only inserts when a name is in neither
+    /// `feature_thumb_cache` nor `feature_thumb_pending`, so the set
+    /// converges rather than churning every frame.
+    pub feature_thumb_requests: std::collections::HashSet<String>,
+    /// Names the runner has kicked an S3O load for but hasn't yet
+    /// uploaded a mesh + rendered a thumbnail. Used as a gate so the
+    /// palette doesn't re-request every frame while a load is in
+    /// flight. Cleared by the runner when the mesh arrives (so the
+    /// palette re-fires the request and the thumbnail renders) or
+    /// when the load fails terminally.
+    pub feature_thumb_pending: std::collections::HashSet<String>,
+}
+
+/// Per-session viewport debug toggles. Surfaced via a small gear menu
+/// in the Sculpt3D / Preview viewports.
+#[derive(Clone, Copy, Debug)]
+pub struct ViewportDebug {
+    /// When true, render a corner overlay with the camera's world-space
+    /// position + orientation. Useful when reproducing rendering bugs
+    /// against specific viewpoints.
+    pub show_camera_readout: bool,
+    /// Exponent fed into the gamma post-pass uniform. 1.0 disables the
+    /// correction (raw perceptual pixels through eframe's swapchain --
+    /// visibly too bright), 2.2 applies the full display gamma decode
+    /// (overshoots dark because egui_wgpu's compose does partial gamma
+    /// handling already). Tuned visually against in-engine ref shots.
+    pub gamma_exponent: f32,
+    /// Grass-shader debug output selector. Bypasses the full blend
+    /// pipeline so individual sampling stages can be inspected:
+    ///   0 = normal output
+    ///   1 = raw `map_color` (grassShadingTex sample)
+    ///   2 = raw blade-colour sample
+    ///   3 = post-blend rgb (before modulator)
+    /// Fed into `grass_params.dbg.x`.
+    pub grass_debug_output: i32,
+    /// Grass alpha-test technique:
+    ///   0 = hashed alpha (Wronski 2017 stochastic discard, BME default)
+    ///   1 = binary discard at ALPHATHRESHOLD only -- matches the
+    ///       engine widget's `frag.glsl:48` gate, without the MSAA +
+    ///       AtoC path BME can't reproduce at sample_count=1.
+    /// Useful for isolating whether the silhouette character comes
+    /// from the alpha-test technique or from the colour pipeline.
+    pub grass_alpha_test_mode: u32,
+}
+
+impl Default for ViewportDebug {
+    fn default() -> Self {
+        Self {
+            show_camera_readout: false,
+            gamma_exponent: 1.5,
+            grass_debug_output: 0,
+            grass_alpha_test_mode: 0,
+        }
+    }
 }
 
 impl Default for BarEditorApp {
@@ -268,6 +374,7 @@ impl Default for BarEditorApp {
                 ..Default::default()
             },
             history: UndoHistory::default(),
+            paint_history: crate::paint_history::PaintHistoryStore::new(),
             project: crate::project::ProjectState::default(),
             parent_window_handles: None,
             preview: crate::editor::PreviewState::default(),
@@ -275,29 +382,52 @@ impl Default for BarEditorApp {
             dialog: DialogState::default(),
             validation: crate::editor::ValidationState::default(),
             props: crate::editor::PropsPanelState::default(),
+            map_edge: crate::panels::action_bar_modals::map_edge::MapEdgePanelState::default(),
+            dimensions: crate::panels::action_bar_modals::dimensions::DimensionsPanelState::default(
+            ),
+            assemble_map: crate::panels::assemble_map::AssembleMapState::default(),
             paint: PaintSession::default(),
             palette_drag: None,
             palette_filter: String::new(),
             settings: Settings::default(),
             active_layout: Layout::default(),
+            supports_bc: false,
+            feature_palette_names: Vec::new(),
+            feature_filter: String::new(),
+            selected_feature_type: None,
+            pending_placement_angle: 0.0,
+            placement_ghost: None,
+            viewport_debug: ViewportDebug::default(),
+            feature_thumb_cache: std::collections::HashMap::new(),
+            feature_thumb_requests: std::collections::HashSet::new(),
+            feature_thumb_pending: std::collections::HashSet::new(),
         }
     }
 }
 
 impl BarEditorApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        // Extend egui's default font fallbacks with whatever broad-
-        // coverage symbol font the host OS ships. Without this the
-        // editor falls back to grey "missing glyph" boxes for things
-        // like bullets, arrows, and the multiplication sign in
-        // dimension labels.
-        crate::state::install_system_symbol_font(&cc.egui_ctx);
+        // Bundle BAR's Exo2 family and the host OS's symbol coverage
+        // into a single FontDefinitions and register them once. Both
+        // sets are needed up front: BAR's font powers the metal-spot
+        // labels (and is available as `FontFamily::Name("bar")` for
+        // other in-engine-style overlays); the system symbol fallback
+        // keeps egui from rendering grey "missing glyph" boxes for
+        // bullets, arrows, and the multiplication sign.
+        crate::state::install_custom_fonts(&cc.egui_ctx);
         let mut app = Self::default();
         app.settings = Settings::load();
         // Restore the layout the user last had selected, falling
         // back to `Default` when settings are absent or pre-date
         // the field.
         app.active_layout = app.settings.active_layout;
+        // Sculpt3D is currently hidden from the UI (see Layout::ALL).
+        // Coerce a stale persisted choice back to the default so the
+        // user lands somewhere visible on launch.
+        if !Layout::ALL.contains(&app.active_layout) {
+            app.active_layout = Layout::default();
+            app.settings.active_layout = app.active_layout;
+        }
         // Drop recents that no longer exist on disk so the menu stays useful.
         app.settings.recent_files.retain(|p| p.exists());
         // Reopen the most-recently-loaded project on launch so the
@@ -338,6 +468,14 @@ impl BarEditorApp {
         &self.settings
     }
 
+    /// Set the selected BAR game archive used for the feature catalog and
+    /// persist the change to disk. Called from bar-app when auto-detection
+    /// finds an archive the user hasn't configured yet.
+    pub fn set_game_archive(&mut self, path: std::path::PathBuf) {
+        self.settings.selected_game_archive = Some(path);
+        self.settings.save();
+    }
+
     /// True when the user is currently looking at a subgraph tab —
     /// the palette uses this to gate the "SubGraph IO" group so
     /// `SubgraphInput`/`SubgraphOutput` can't be dropped at the
@@ -367,19 +505,18 @@ impl BarEditorApp {
     pub(crate) fn map_settings_mut(&mut self) -> &mut bar_project::MapSettings {
         self.map.settings_mut()
     }
+    /// Read-only access to MapSettings. Used by `bar-app` to read fields
+    /// (e.g. `atmosphere.skybox`) that drive asset loading at the
+    /// renderer side.
+    pub fn map_settings(&self) -> &bar_project::MapSettings {
+        &self.map.settings
+    }
     pub(crate) fn map_dimensions_mut(&mut self) -> (&mut u32, &mut u32) {
         self.map.dimensions_mut()
     }
     pub(crate) fn map_height_range_mut(&mut self) -> (&mut f32, &mut f32) {
         self.map.height_range_mut()
     }
-    pub(crate) fn mapinfo_tab_now(&self) -> MapInfoTab {
-        self.validation.mapinfo_tab()
-    }
-    pub(crate) fn set_mapinfo_tab(&mut self, tab: MapInfoTab) {
-        self.validation.set_mapinfo_tab(tab);
-    }
-
     /// Mutable access to the live paint session — brush, sculpt
     /// lock, and per-layer paint caches. The 2D inspector and
     /// properties panel both need to mutate brush state and
@@ -403,6 +540,11 @@ impl BarEditorApp {
     /// Mark the project as dirty (unsaved changes pending).
     pub(crate) fn mark_dirty(&mut self) {
         self.project.is_dirty = true;
+        self.project.compile_dirty = true;
+        // Bumping the commit counter feeds the validation
+        // fingerprint, so a re-validation fires on the next frame
+        // after any committable input event (blur, drag-stop, etc.).
+        self.project.commits = self.project.commits.wrapping_add(1);
     }
 
     /// Append a message to the log buffer. Info/Warning/Error also update
@@ -557,38 +699,6 @@ impl BarEditorApp {
     /// Edits write directly into `self.map.settings` and the recipe-side
     /// mirror fields. On save those values are folded into the project's
     /// `Recipe` and `MapSettings`.
-    /// Map Info modal - see `crate::panels::mapinfo_editor`.
-    pub(crate) fn draw_mapinfo_editor_window(&mut self, ctx: &egui::Context) {
-        crate::panels::mapinfo_editor::draw(self, ctx);
-    }
-
-    pub(crate) fn handle_edit_map_info_clicked(&mut self) {
-        // mapinfo.lua is generated by the bundler from `MapSettings`,
-        // not picked from a passed-through file anymore (the older
-        // "designate a file in your project as the map info" flow
-        // is gone). Clicking the toolbar button toggles the
-        // structured Map Settings modal — that's where every
-        // mapinfo field is edited now.
-        self.dialog.show_mapinfo_editor = !self.dialog.show_mapinfo_editor;
-    }
-
-    /// Load `abs_path` from disk and open the in-app editor for it.
-    pub(crate) fn open_file_editor(&mut self, abs_path: String, archive_path: String) {
-        let content = match std::fs::read_to_string(&abs_path) {
-            Ok(s) => s,
-            Err(e) => {
-                self.dialog.status_message = Some(format!("Failed to read file: {e}"));
-                return;
-            }
-        };
-        self.dialog.file_editor = Some(FileEditor {
-            abs_path,
-            archive_path,
-            content,
-            is_dirty: false,
-        });
-    }
-
     /// Perform the actual node deletion (the destructive-confirm path runs
     /// the dialog first; the no-confirm path calls this directly).
     /// Delete a SubGraph + every member node it owns, in one undo
@@ -617,13 +727,12 @@ impl BarEditorApp {
             self.selection.group = None;
         }
         for nid in &members {
+            if !self.graph.can_delete_node(*nid) {
+                continue;
+            }
             let _ = self.graph.remove_node(*nid);
             self.visuals.node_visuals.remove(nid);
             self.remove_node_from_group(*nid);
-            if self.preview.node == Some(*nid) {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
         }
         self.project.passthrough_edit = None;
         self.clear_selection();
@@ -632,23 +741,28 @@ impl BarEditorApp {
     pub(crate) fn delete_selected_node(&mut self) {
         // Snapshot the IDs to delete: the primary plus everything else
         // in the multi-selection set. (The set always includes the
-        // primary by invariant.)
-        let to_delete: Vec<NodeId> = if !self.selection.nodes.is_empty() {
+        // primary by invariant.) FinalComposition is filtered out
+        // here -- it's the singleton terminal node and deleting it
+        // would orphan everything downstream of the eval graph.
+        let raw: Vec<NodeId> = if !self.selection.nodes.is_empty() {
             self.selection.nodes.iter().copied().collect()
         } else if let Some(id) = self.selection.node {
             vec![id]
         } else {
             return;
         };
+        let to_delete: Vec<NodeId> = raw
+            .into_iter()
+            .filter(|id| self.graph.can_delete_node(*id))
+            .collect();
+        if to_delete.is_empty() {
+            return;
+        }
         self.push_undo("Delete node");
         for node_id in &to_delete {
             let _ = self.graph.remove_node(*node_id);
             self.visuals.node_visuals.remove(node_id);
             self.remove_node_from_group(*node_id);
-            if self.preview.node == Some(*node_id) {
-                self.preview.node = None;
-                self.preview.open = false;
-            }
         }
         self.project.passthrough_edit = None;
         self.clear_selection();
@@ -677,23 +791,43 @@ impl BarEditorApp {
         &mut self.graph
     }
 
+    /// Current sun direction with engine-faithful renormalisation
+    /// applied. Read by the in-viewport sun gizmo so the gizmo
+    /// position stays on the configured arc even when the recipe
+    /// stores an un-normalised vector. Falls back to the engine
+    /// default when no override is set.
+    pub fn sun_dir_normalised(&self) -> [f32; 3] {
+        let raw = self.map.settings.lighting.resolved().sun_dir;
+        let v = glam::Vec3::from(raw);
+        let n = v.length();
+        let unit = if n.is_finite() && n > 1e-6 {
+            v / n
+        } else {
+            glam::Vec3::from(bar_project::engine_defaults::LIGHTING_SUN_DIR).normalize()
+        };
+        [unit.x, unit.y, unit.z]
+    }
+
+    /// Set the sun direction from a UI gizmo drag. Bypasses the
+    /// schema renderer (which produces one undo entry per axis edit
+    /// session) so a continuous spherical drag commits as a single
+    /// undo entry -- caller pushes that entry on drag-start. Marks
+    /// the project dirty so the validation + autosave + compile-
+    /// dirty hooks fire normally.
+    pub fn set_sun_dir(&mut self, dir: [f32; 3]) {
+        self.map.settings_mut().lighting.sun_dir = Some(dir);
+        self.mark_dirty();
+    }
+
     /// SMF ground shading inputs sourced from `MapSettings.lighting`
     /// and `MapSettings.water`. Snapshot of the values an in-engine
     /// renderer would read for the same map. Consumers (bar-app's
     /// preview pipeline) clone this each frame; never store.
     pub fn smf_lighting(&self) -> SmfLightingSnapshot {
-        let lit = &self.map.settings.lighting;
-        let w = &self.map.settings.water;
-        SmfLightingSnapshot {
-            sun_dir: lit.sun_dir,
-            ground_ambient: lit.ground_ambient,
-            ground_diffuse: lit.ground_diffuse,
-            ground_specular: lit.ground_specular,
-            specular_exponent: lit.spec_exponent,
-            water_absorb: w.absorb,
-            water_base: w.base_color,
-            water_min: w.min_color,
-        }
+        // Single source of truth: MapSettings -> bar_render::SmfLighting.
+        // GUI + CLI + viewport all go through the same `From` impl in
+        // bar-render, so there's no second-copy drift.
+        SmfLightingSnapshot::from(&self.map.settings)
     }
 
     /// Composite cache key for the 3D preview's input state. Bumps
@@ -712,22 +846,29 @@ impl BarEditorApp {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let mut h = DefaultHasher::new();
-        // Hash the upstream subgraph of the preview node so that changes
-        // to disconnected nodes don't trigger a re-render.
-        if let Some(pn) = self.preview.node {
-            self.graph.upstream_content_hash(pn).hash(&mut h);
+        // Hash upstream of the first Bundler so disconnected nodes
+        // don't trigger a re-render; fall back to full graph revision.
+        let bundler_id = self
+            .graph
+            .nodes()
+            .iter()
+            .find(|(_, n)| n.node_type == bar_graph::NodeType::FinalComposition)
+            .map(|(id, _)| *id);
+        if let Some(bn) = bundler_id {
+            self.graph.upstream_content_hash(bn).hash(&mut h);
         } else {
             self.graph.revision().hash(&mut h);
         }
-        self.preview
-            .node
-            .map(|n| n.0)
-            .unwrap_or(u64::MAX)
-            .hash(&mut h);
         self.map.width.hash(&mut h);
         self.map.height.hash(&mut h);
         self.map.min_height.to_bits().hash(&mut h);
         self.map.max_height.to_bits().hash(&mut h);
+        // Paint asset bytes live outside the graph (in
+        // `<project>/assets/*.bin`), so changing them doesn't bump
+        // `upstream_content_hash`. Mix in a counter that's incremented
+        // by paint-asset restores in `restore_snapshot` so any paint
+        // mutation re-fires eval.
+        self.paint.asset_revision.hash(&mut h);
         h.finish()
     }
 
@@ -741,27 +882,44 @@ impl BarEditorApp {
     /// must come from this snapshot.
     pub fn recipe_for_export(&self) -> bar_project::Recipe {
         bar_project::Recipe {
-            schema_version: bar_project::RECIPE_SCHEMA_VERSION,
+            // Recipe `name` is the engine-visible map identity (used
+            // to build the archive ID `name .. " " .. version`).
+            // Prefer the source-mapinfo name from `recipe_meta` (set
+            // by `apply_project` on import); only fall back to the
+            // `.barproj` directory stem for projects that have no
+            // source mapinfo (freshly created). Without this, the
+            // bundler emits the lowercase slug as the engine's map
+            // name and the script's `MapName=` lookup misses the
+            // archive.
             name: self
-                .project
-                .path
-                .as_ref()
-                .and_then(|p| p.file_stem())
-                .map(|s| s.to_string_lossy().to_string())
+                .map
+                .recipe_meta
+                .name
+                .clone()
+                .filter(|s| !s.is_empty())
+                .or_else(|| {
+                    self.project
+                        .path
+                        .as_ref()
+                        .and_then(|p| p.file_stem())
+                        .map(|s| s.to_string_lossy().to_string())
+                })
                 .or_else(|| self.project.loaded_name.clone())
                 .unwrap_or_else(|| "Untitled".to_string()),
             shortname: self.map.recipe_meta.shortname.clone(),
             description: self.map.recipe_meta.description.clone(),
             author: self.map.recipe_meta.author.clone(),
             version: self.map.recipe_meta.version.clone(),
+            tip: self.map.recipe_meta.tip.clone(),
+            depend: self.map.recipe_meta.depend.clone(),
             nodes: Vec::new(),
             connections: Vec::new(),
             output: bar_project::OutputConfig {
                 width: self.map.width,
                 height: self.map.height,
                 map_settings: bar_project::MapSettings {
-                    min_height: self.map.min_height,
-                    max_height: self.map.max_height,
+                    min_height: Some(self.map.min_height),
+                    max_height: Some(self.map.max_height),
                     ..self.map.settings.clone()
                 },
             },
@@ -774,21 +932,15 @@ impl BarEditorApp {
         self.log_info(msg);
     }
 
+    /// Log a message at an explicit level. Used by the tracing bridge in bar-app.
+    pub fn log_at(&mut self, level: crate::LogLevel, msg: impl Into<String>) {
+        self.log(level, msg);
+    }
+
     /// Clear the status message.
     pub fn clear_status(&mut self) {
         self.dialog.status_message = None;
         self.dialog.status_level = LogLevel::Info;
-    }
-
-    /// Returns a display label for the preview window title. Lives on
-    /// `BarEditorApp` (rather than `PreviewState`) because it needs the
-    /// node label out of `self.graph`.
-    pub fn preview_node_label(&self) -> String {
-        self.preview
-            .node()
-            .and_then(|id| self.graph.get_node(id))
-            .map(|n| format!("3D Preview — {}", n.label))
-            .unwrap_or_else(|| "3D Preview".to_string())
     }
 
     /// Push the latest evaluated heightmap so the 2D inspector can show
@@ -804,14 +956,11 @@ impl BarEditorApp {
         self.paint.heightmap_rev = self.paint.heightmap_rev.wrapping_add(1);
     }
 
-    /// True when the viewport's primary mouse button should sculpt rather
-    /// than orbit. The Sculpt3D layout is unconditionally a sculpting
-    /// surface; otherwise requires the inspector to be open in Sculpt mode.
-    pub fn is_sculpt_input_active(&self) -> bool {
-        if self.active_layout == Layout::Sculpt3D {
-            return true;
-        }
-        self.paint.inspector_mode == InspectorMode::Sculpt && self.dialog.show_inspector
+    pub fn sculpt_input_active(&self) -> bool {
+        self.paint.brush.tool != BrushTool::Pointer
+            && (self.active_layout == Layout::Sculpt3D
+                || (self.paint.inspector_mode == InspectorMode::Sculpt
+                    && self.dialog.show_inspector))
     }
 
     /// Current brush radius in heightmap pixels. The 3D viewport
@@ -837,9 +986,7 @@ impl eframe::App for BarEditorApp {
 }
 
 impl BarEditorApp {
-    /// The currently selected top-level UI layout. Today only
-    /// `Layout::Standard` exists; future variants are surfaced via
-    /// the toolbar layout-switcher and persisted in user settings.
+    /// The currently selected top-level UI layout.
     pub fn active_layout(&self) -> Layout {
         self.active_layout
     }
@@ -858,7 +1005,6 @@ impl BarEditorApp {
         // Close windows that are only meaningful in the layout we just left.
         // Map info editor is the exception -- it spans all layouts.
         self.dialog.show_inspector = false;
-        self.dialog.file_editor = None;
         self.dialog.show_validation_panel = false;
         self.props.active = None;
         self.dialog.pending_props_open = None;

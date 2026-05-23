@@ -1,9 +1,12 @@
-//! Sculpt3D layout -- left layer panel + central 3D viewport.
+//! Sculpt3D layout -- left feature panel + central 3D viewport.
 //!
-//! The layer panel derives its contents from the live node graph via
-//! `compute_sculpt_layers`. Selecting a layer sets
-//! `paint.selected_sculpt_layer`; brush strokes then write into that
-//! node's live buffer and flush to node params on stroke end.
+//! Currently scoped to feature placement only. The brush / sculpt
+//! flow (FC paint-layer composite, live-paint buffers, layer
+//! selection) is on hold -- the Composition Layers section that
+//! would expose it is commented out below, which makes the
+//! conditional brush-tool palette unreachable. The dispatch wiring
+//! and paint-state types stay in place so the on-hold subsystem can
+//! be brought back without re-threading anything.
 //!
 //! The central panel is left unclaimed here -- bar-app draws the 3D
 //! viewport there after this function returns.
@@ -12,7 +15,7 @@ use eframe::egui;
 use eframe::egui::Color32;
 
 use crate::app::{BarEditorApp, BrushTool};
-use crate::panels::canvas::sculpt_layers::{compute_sculpt_layers, SculptLayerEntry};
+use crate::t;
 
 /// Draw the Sculpt3D layout.
 pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -26,204 +29,170 @@ pub fn draw(app: &mut BarEditorApp, ctx: &egui::Context, _frame: &mut eframe::Fr
 }
 
 fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
-    let entries = compute_sculpt_layers(&app.graph);
-
-    // --- LAYERS section ---
+    // Features pseudo-layer -- always present at the top of the
+    // sculpt-side list. Selecting it switches the brush to Pointer
+    // (no sculpting) and clears any FC layer selection.
+    let features_selected = app.paint.brush.tool == BrushTool::Pointer;
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        ui.strong("Layers");
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.small_button("+").clicked() {
-                add_paint_layer(app);
-            }
-        });
-    });
-    ui.separator();
-
-    if entries.is_empty() {
-        ui.weak("Add a Bundler node to enable sculpting.");
-    } else {
-        egui::ScrollArea::vertical()
-            .max_height(300.0)
-            .show(ui, |ui| {
-                for entry in &entries {
-                    draw_layer_row(app, ui, entry);
-                }
-            });
-    }
-
-    ui.add_space(8.0);
-    ui.separator();
-
-    // --- TOOLS section ---
-    ui.strong("Tools");
-    ui.add_space(4.0);
-
-    let selected_kind = app
-        .paint
-        .selected_sculpt_layer
-        .and_then(|id| app.graph.get_node(id))
-        .map(|n| n.node_type.clone());
-
-    let has_terrain = app.paint.heightmap.is_some();
-
-    match selected_kind {
-        Some(bar_graph::NodeType::PaintedHeightmap) | Some(bar_graph::NodeType::Sculpt) => {
-            ui.horizontal_wrapped(|ui| {
-                let cur = app.paint.brush.tool;
-                for tool in [
-                    BrushTool::Raise,
-                    BrushTool::Lower,
-                    BrushTool::Smooth,
-                    BrushTool::Flatten,
-                ] {
-                    if ui.selectable_label(cur == tool, tool.label()).clicked() {
-                        app.paint.brush.tool = tool;
-                    }
-                }
-            });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
-            }
-        }
-        Some(bar_graph::NodeType::PaintedTexture) => {
-            ui.horizontal(|ui| {
-                ui.label("Colour");
-                let [r, g, b] = app.paint.brush.color_rgb;
-                let mut c = egui::Color32::from_rgb(r, g, b);
-                if ui.color_edit_button_srgba(&mut c).changed() {
-                    app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
-                }
-            });
-            if !has_terrain {
-                draw_no_terrain_hint(app, ui);
-            }
-        }
-        _ => {
-            ui.weak("Select a paintable layer.");
-        }
-    }
-
-    ui.add_space(8.0);
-    ui.separator();
-
-    // --- BRUSH sliders ---
-    ui.strong("Brush");
-    ui.add_space(4.0);
-    egui::Grid::new("sculpt_brush_params")
-        .num_columns(2)
-        .spacing([8.0, 4.0])
-        .show(ui, |ui| {
-            ui.label("Radius");
-            ui.add(crate::panels::widgets::ParamSlider::new(
-                &mut app.paint.brush.radius_px,
-                0.5,
-                96.0,
-            ));
-            ui.end_row();
-            ui.label("Strength");
-            ui.add(crate::panels::widgets::ParamSlider::new(
-                &mut app.paint.brush.strength,
-                0.001,
-                0.2,
-            ));
-            ui.end_row();
-            ui.label("Falloff");
-            ui.add(crate::panels::widgets::ParamSlider::new(
-                &mut app.paint.brush.falloff,
-                0.5,
-                4.0,
-            ));
-            ui.end_row();
-        });
-}
-
-fn draw_layer_row(app: &mut BarEditorApp, ui: &mut egui::Ui, entry: &SculptLayerEntry) {
-    let indent_px = entry.indent as f32 * 16.0;
-    let is_selected =
-        !entry.is_compositor && app.paint.selected_sculpt_layer == Some(entry.node_id);
-    let node_id = entry.node_id;
-    let is_compositor = entry.is_compositor;
-    let is_paintable = entry.is_paintable;
-    let label = entry.label.clone();
-    let channel = entry.channel.clone();
-
-    let clicked = ui
+    if ui
         .horizontal(|ui| {
-            if indent_px > 0.0 {
-                ui.add_space(indent_px);
-            }
-            paint_channel_dot(ui, &channel);
-            if is_compositor {
-                ui.weak(format!("> {}", label));
-                false
-            } else {
-                let label_text = if is_paintable {
-                    label
-                } else {
-                    format!("{} [locked]", label)
-                };
-                ui.selectable_label(is_selected, &label_text).clicked()
-            }
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+            ui.painter()
+                .circle_filled(rect.center(), 4.0, Color32::from_rgb(255, 165, 60));
+            ui.selectable_label(features_selected, t!("editor.sculpt3d.features_layer"))
+                .clicked()
         })
-        .inner;
-
-    if clicked {
-        app.paint.selected_sculpt_layer = Some(node_id);
+        .inner
+    {
+        app.paint.brush.tool = BrushTool::Pointer;
+        app.paint.selected_sculpt_layer = None;
+        app.paint.selected_fc_layer = None;
     }
-}
 
-fn paint_channel_dot(ui: &mut egui::Ui, channel: &str) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
-    ui.painter()
-        .circle_filled(rect.center(), 4.0, channel_color(channel));
-}
+    // --- COMPOSITION LAYERS (on hold) ---
+    // The FC paint-layer subsystem is paused; rendering this section
+    // would expose entry points into the broken brush flow. The block
+    // is commented out rather than deleted so the on-hold subsystem
+    // can be reattached without re-threading the UI. With this block
+    // gone, `paint.selected_fc_layer` stays None and `brush.tool`
+    // stays Pointer, which short-circuits both the conditional
+    // brush-tool palette below and the sculpt-dab path in
+    // `viewport.rs::handle_camera_input`.
+    /*
+    ui.add_space(8.0);
+    ui.strong("Layers");
+    ui.separator();
+    for kind in [
+        crate::FCLayerKind::Heightmap,
+        crate::FCLayerKind::Color,
+        crate::FCLayerKind::Metalmap,
+        crate::FCLayerKind::Typemap,
+    ] {
+        let selected = app.paint.selected_fc_layer == Some(kind);
+        if ui.selectable_label(selected, kind.label()).clicked() {
+            app.paint.selected_fc_layer = Some(kind);
+            app.paint.selected_sculpt_layer = None;
+            if kind == crate::FCLayerKind::Heightmap
+                && matches!(app.paint.brush.tool, BrushTool::Pointer)
+            {
+                app.paint.brush.tool = BrushTool::Raise;
+            }
+            if kind != crate::FCLayerKind::Heightmap
+                && matches!(app.paint.brush.tool, BrushTool::Pointer)
+            {
+                app.paint.brush.tool = BrushTool::Raise;
+            }
+        }
+    }
 
-fn channel_color(channel: &str) -> Color32 {
-    match channel {
-        "heightmap" => Color32::from_rgb(100, 200, 100),
-        "texture" => Color32::from_rgb(180, 100, 220),
-        "metalmap" => Color32::from_rgb(220, 120, 60),
-        "typemap" => Color32::from_rgb(80, 140, 210),
-        "grassmap" => Color32::from_rgb(80, 195, 140),
-        "specular" => Color32::from_rgb(210, 195, 70),
-        "normalmap" => Color32::from_rgb(130, 90, 210),
-        _ => Color32::from_rgb(160, 160, 160),
+    ui.add_space(8.0);
+    ui.separator();
+    */
+
+    if app.paint.brush.tool == BrushTool::Pointer {
+        crate::panels::feature_library::draw(app, ui);
+    } else {
+        // --- TOOLS section ---
+        ui.strong(t!("editor.sculpt3d.tools_heading"));
+        ui.add_space(4.0);
+
+        let fc_kind = app.paint.selected_fc_layer;
+        let has_terrain = app.paint.heightmap.is_some();
+
+        match fc_kind {
+            Some(crate::FCLayerKind::Heightmap) => {
+                ui.horizontal_wrapped(|ui| {
+                    let cur = app.paint.brush.tool;
+                    for tool in [
+                        BrushTool::Raise,
+                        BrushTool::Lower,
+                        BrushTool::Smooth,
+                        BrushTool::Flatten,
+                    ] {
+                        if ui.selectable_label(cur == tool, tool.label()).clicked() {
+                            app.paint.brush.tool = tool;
+                        }
+                    }
+                });
+            }
+            Some(crate::FCLayerKind::Color) => {
+                // Color layer: stamp the picked colour at brush
+                // radius. No tool variants -- the only operation is
+                // "paint this colour".
+                ui.horizontal(|ui| {
+                    ui.label(t!("common.colour"));
+                    let [r, g, b] = app.paint.brush.color_rgb;
+                    let mut c = egui::Color32::from_rgb(r, g, b);
+                    if ui.color_edit_button_srgba(&mut c).changed() {
+                        app.paint.brush.color_rgb = [c.r(), c.g(), c.b()];
+                    }
+                });
+            }
+            Some(kind @ (crate::FCLayerKind::Metalmap | crate::FCLayerKind::Typemap)) => {
+                // Value-stamp kinds: pick a value in [0, 1], stamp
+                // touched pixels with it. (A proper terrain-type-ID
+                // picker for typemap is a UX follow-up.)
+                let label = if kind == crate::FCLayerKind::Metalmap {
+                    t!("editor.sculpt3d.metal_density")
+                } else {
+                    t!("editor.sculpt3d.type_id")
+                };
+                ui.horizontal(|ui| {
+                    ui.label(label);
+                    ui.add(egui::Slider::new(
+                        &mut app.paint.brush.paint_value,
+                        0.0..=1.0,
+                    ));
+                });
+            }
+            None => {
+                ui.weak(t!("editor.sculpt3d.select_layer_hint"));
+            }
+        }
+        if fc_kind.is_some() && !has_terrain {
+            draw_no_terrain_hint(app, ui);
+        }
+
+        ui.add_space(8.0);
+        ui.separator();
+
+        // --- BRUSH sliders ---
+        ui.strong(t!("editor.sculpt3d.brush_heading"));
+        ui.add_space(4.0);
+        egui::Grid::new("sculpt_brush_params")
+            .num_columns(2)
+            .spacing([8.0, 4.0])
+            .show(ui, |ui| {
+                ui.label(t!("editor.inspector.brush_radius"));
+                ui.add(crate::panels::widgets::ParamSlider::new(
+                    &mut app.paint.brush.radius_px,
+                    0.5,
+                    96.0,
+                ));
+                ui.end_row();
+                ui.label(t!("editor.inspector.brush_strength"));
+                ui.add(crate::panels::widgets::ParamSlider::new(
+                    &mut app.paint.brush.strength,
+                    0.001,
+                    0.2,
+                ));
+                ui.end_row();
+                ui.label(t!("editor.inspector.brush_falloff"));
+                ui.add(crate::panels::widgets::ParamSlider::new(
+                    &mut app.paint.brush.falloff,
+                    0.5,
+                    4.0,
+                ));
+                ui.end_row();
+            });
     }
 }
 
 fn draw_no_terrain_hint(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.weak("No terrain loaded --");
-        if ui.small_button("Run preview").clicked() {
+        ui.weak(t!("editor.sculpt3d.no_terrain"));
+        if ui.small_button(t!("editor.sculpt3d.run_preview")).clicked() {
             app.preview.run_requested = true;
         }
     });
-}
-
-/// Create a disconnected PaintedHeightmap node and notify the user to wire it.
-fn add_paint_layer(app: &mut BarEditorApp) {
-    use crate::state::NodeVisual;
-    use bar_graph::{Node, NodeId, NodeType};
-
-    let label = app.next_label_for("Painted Layer");
-    let node = Node::new(NodeId(0), NodeType::PaintedHeightmap, &label);
-    let id = app.graph.add_node(node);
-
-    // Place it near the top-left of the visible canvas area.
-    let pos = app.canvas.offset + egui::vec2(80.0, 80.0);
-    app.visuals.node_visuals.insert(
-        id,
-        NodeVisual {
-            position: egui::pos2(pos.x, pos.y),
-            size: egui::vec2(150.0, 80.0),
-        },
-    );
-    app.push_undo("Add paint layer");
-    app.paint.selected_sculpt_layer = Some(id);
-    app.mark_dirty();
-    app.dialog.toast = Some((
-        format!("Added '{}' -- wire it into the canvas.", label),
-        std::time::Instant::now(),
-    ));
 }

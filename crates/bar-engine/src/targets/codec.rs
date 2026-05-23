@@ -1,6 +1,6 @@
 //! Export codec trait: the interface for format-specific export logic.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
@@ -20,8 +20,17 @@ pub struct WrittenFiles {
 /// The export plan computed before writing.
 #[derive(Debug)]
 pub struct ExportPlan {
-    /// Map name (used in file names and the `name` field of mapinfo.lua).
+    /// Filesystem slug used for output filenames and SMF basename
+    /// (`maps/<map_name>.smf`). Lowercased, underscore-separated.
     pub map_name: String,
+    /// Human-readable map name from `recipe.name` -- the value
+    /// emitted into `mapinfo.lua` as `name = "..."`. The engine
+    /// builds the archive identifier as `display_name .. " " ..
+    /// version`, so this MUST match the name used at lookup time
+    /// (script `MapName=`); keep it distinct from the filesystem
+    /// slug, which can drop the version for fast-iteration `.sdd`
+    /// outputs while the mapinfo identity stays stable.
+    pub display_name: String,
     /// Optional shortname used by mapinfo.lua. Omitted when `None`.
     pub shortname: Option<String>,
     /// Free-form description used by mapinfo.lua.
@@ -30,12 +39,21 @@ pub struct ExportPlan {
     pub author: Option<String>,
     /// Optional version string used by mapinfo.lua.
     pub version: Option<String>,
+    /// Optional lobby-tooltip text used by mapinfo.lua's `tip`.
+    pub tip: Option<String>,
+    /// Archive dependencies used by mapinfo.lua's `depend` table.
+    /// Empty vec writes no `depend` entry.
+    pub depend: Vec<String>,
     /// Resolved dimensions for all layers.
     pub dimensions: DimensionSet,
     /// Map settings (heights, atmosphere, lighting, etc.).
     pub settings: MapSettings,
     /// Feature placements to write into the SMF feature section.
     pub features: Vec<PlacedFeature>,
+    /// Absolute path to the `.barproj` directory, when available. Used by
+    /// codecs to fast-path compiled assets (e.g. skip re-encoding the SMT
+    /// when a current compiled copy exists).
+    pub project_dir: Option<PathBuf>,
 }
 
 /// Trait for format-specific export implementations.

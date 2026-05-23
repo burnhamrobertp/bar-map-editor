@@ -34,8 +34,10 @@ pub trait NodeExecutor: Send + Sync {
         node_type: &NodeType,
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
-        width: u32,
-        height: u32,
+        hm_width: u32,
+        hm_height: u32,
+        tex_width: u32,
+        tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError>;
 }
 
@@ -63,8 +65,10 @@ pub trait NodeExecutor: Send + Sync {
 pub fn evaluate_graph_with_progress(
     graph: &GraphEngine,
     executor: &dyn NodeExecutor,
-    width: u32,
-    height: u32,
+    hm_width: u32,
+    hm_height: u32,
+    tex_width: u32,
+    tex_height: u32,
     on_progress: &dyn Fn(&str),
 ) -> Result<NodeOutputs, EvalError> {
     let eval_order = graph.topological_sort()?;
@@ -88,7 +92,15 @@ pub fn evaluate_graph_with_progress(
 
         // Execute the node. Per-node failures are localised: the
         // failing node produces nothing; everything else proceeds.
-        match executor.execute(&node.node_type, &node.params, &inputs, width, height) {
+        match executor.execute(
+            &node.node_type,
+            &node.params,
+            &inputs,
+            hm_width,
+            hm_height,
+            tex_width,
+            tex_height,
+        ) {
             Ok(node_outputs) => {
                 outputs.insert(node_id, node_outputs);
             }
@@ -107,10 +119,20 @@ pub fn evaluate_graph_with_progress(
 pub fn evaluate_graph(
     graph: &GraphEngine,
     executor: &dyn NodeExecutor,
-    width: u32,
-    height: u32,
+    hm_width: u32,
+    hm_height: u32,
+    tex_width: u32,
+    tex_height: u32,
 ) -> Result<NodeOutputs, EvalError> {
-    evaluate_graph_with_progress(graph, executor, width, height, &|_| {})
+    evaluate_graph_with_progress(
+        graph,
+        executor,
+        hm_width,
+        hm_height,
+        tex_width,
+        tex_height,
+        &|_| {},
+    )
 }
 
 /// Get the heightmap wired to the Bundler's `heightmap` port.
@@ -120,14 +142,26 @@ pub fn get_heightmap_output(graph: &GraphEngine, outputs: &NodeOutputs) -> Optio
 
 /// Get a heightmap suitable for the interactive preview.
 ///
-/// Prefers the value wired to the Bundler's `heightmap` port. Falls back to
-/// the last evaluated Heightmap in topological order so the viewport stays
-/// live even in simple graphs without a Bundler.
+/// When the graph contains a Bundler, ONLY the value wired to its
+/// `heightmap` port is used -- disconnections show up in the viewport as
+/// the heightmap going away, which is the user-visible behaviour you'd
+/// expect from unhooking the wire.
+///
+/// When the graph has no Bundler at all (early bring-up, stub graphs,
+/// CLI tests with synthetic recipes), we fall back to the last evaluated
+/// Heightmap in topological order so the viewport stays live. Previously
+/// this fallback fired any time the Bundler's `heightmap` port was unwired,
+/// which silently masked disconnections -- the disconnected node was still
+/// being evaluated and its output was being picked up by the topo walk.
 pub fn get_preview_heightmap(graph: &GraphEngine, outputs: &NodeOutputs) -> Option<Heightmap> {
-    if let Some(hm) = get_bundler_heightmap(graph, outputs, "heightmap") {
-        return Some(hm);
+    let has_bundler = graph
+        .nodes()
+        .iter()
+        .any(|(_, n)| n.node_type == NodeType::FinalComposition);
+    if has_bundler {
+        return get_bundler_heightmap(graph, outputs, "heightmap");
     }
-    // Fallback: last Heightmap value in topo order
+    // No Bundler: fall back to the last Heightmap value in topo order.
     if let Ok(order) = graph.topological_sort() {
         for &node_id in order.iter().rev() {
             if let Some(node_outputs) = outputs.get(&node_id) {
@@ -263,7 +297,7 @@ fn get_bundler_heightmap(
     port: &str,
 ) -> Option<Heightmap> {
     for (node_id, node) in graph.nodes() {
-        if node.node_type == NodeType::Bundler {
+        if node.node_type == NodeType::FinalComposition {
             for conn in graph.connections() {
                 if conn.to.node_id == *node_id && conn.to.port_name == port {
                     if let Some(upstream) = outputs.get(&conn.from.node_id) {
@@ -285,7 +319,7 @@ fn get_bundler_color(
     port: &str,
 ) -> Option<bar_data::ColorBuffer> {
     for (node_id, node) in graph.nodes() {
-        if node.node_type == NodeType::Bundler {
+        if node.node_type == NodeType::FinalComposition {
             for conn in graph.connections() {
                 if conn.to.node_id == *node_id && conn.to.port_name == port {
                     if let Some(upstream) = outputs.get(&conn.from.node_id) {
@@ -315,9 +349,12 @@ mod tests {
             node_type: &NodeType,
             _params: &HashMap<String, ParamValue>,
             inputs: &HashMap<String, PortValue>,
-            width: u32,
-            height: u32,
+            hm_width: u32,
+            hm_height: u32,
+            _tex_width: u32,
+            _tex_height: u32,
         ) -> Result<HashMap<String, PortValue>, EvalError> {
+            let (width, height) = (hm_width, hm_height);
             let mut outputs = HashMap::new();
 
             match node_type {
@@ -326,7 +363,7 @@ mod tests {
                         .map_err(|e| EvalError::Compute(e.to_string()))?;
                     outputs.insert("output".to_string(), PortValue::Heightmap(hm));
                 }
-                NodeType::Bundler => {
+                NodeType::FinalComposition => {
                     // Terminal node — pass inputs through keyed by port name
                     for (k, v) in inputs {
                         outputs.insert(k.clone(), v.clone());
@@ -349,7 +386,7 @@ mod tests {
         let mut graph = GraphEngine::new();
 
         let noise = Node::new(NodeId(0), NodeType::PerlinNoise, "Noise");
-        let bundler = Node::new(NodeId(0), NodeType::Bundler, "Bundler");
+        let bundler = Node::new(NodeId(0), NodeType::FinalComposition, "Bundler");
         let noise_id = graph.add_node(noise);
         let bundler_id = graph.add_node(bundler);
 
@@ -367,7 +404,7 @@ mod tests {
             .unwrap();
 
         let executor = TestExecutor;
-        let results = evaluate_graph(&graph, &executor, 64, 64).unwrap();
+        let results = evaluate_graph(&graph, &executor, 64, 64, 64, 64).unwrap();
 
         // Both nodes should have outputs
         assert!(results.contains_key(&noise_id));

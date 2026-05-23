@@ -1,5 +1,8 @@
-//! Standard layout -- node graph editor with left palette, central
+//! NodeGraph layout -- node graph editor with left palette, central
 //! canvas, plus all floating windows (inspector, map info, etc.).
+//!
+//! No 3D viewport -- use the Sculpt3D layout, or a future split layout,
+//! to view the terrain alongside the graph.
 //!
 //! The shell (menu bar, status bar, action bar, modals) is drawn by
 //! `dispatch::draw_active` before this function is called, so this
@@ -191,11 +194,10 @@ impl BarEditorApp {
                 }
                 // Cancel hint when not over canvas
                 if !is_over_canvas {
-                    painter.text(
+                    crate::panels::icons::paint_cancel_x(
+                        &painter,
                         egui::pos2(ghost_rect.center().x, ghost_rect.center().y + 6.0),
-                        egui::Align2::CENTER_CENTER,
-                        "✕",
-                        egui::FontId::proportional(18.0),
+                        7.0,
                         egui::Color32::from_rgb(220, 80, 80),
                     );
                 }

@@ -26,6 +26,8 @@ pub struct BarGameVersion {
     pub label: String,
     /// Value written to `GameType=` in the startscript.
     pub archive_name: String,
+    /// Full path to the archive on disk. `None` for rapid/synthetic entries.
+    pub path: Option<std::path::PathBuf>,
 }
 
 /// One available engine version shown in the version picker.
@@ -91,6 +93,7 @@ impl BarVersions {
         let mut games = vec![BarGameVersion {
             label: "Beyond All Reason (latest)".to_string(),
             archive_name: "Beyond All Reason $VERSION".to_string(),
+            path: None,
         }];
         games.extend(collect_games(&data_dir.join("games")));
 
@@ -109,6 +112,7 @@ impl BarVersions {
         &self,
         sd7_path: &Path,
         map_internal_name: &str,
+        map_squares: (u32, u32),
         game_idx: usize,
         engine_idx: usize,
     ) -> Result<LaunchOutcome, LaunchError> {
@@ -122,9 +126,33 @@ impl BarVersions {
             .file_name()
             .ok_or_else(|| LaunchError::Sd7Unreadable("path has no filename".into()))?;
         let dest = self.maps_dir.join(file_name);
-        std::fs::copy(sd7_path, &dest).map_err(|e| {
-            LaunchError::CopyFailed(format!("{} -> {}: {e}", sd7_path.display(), dest.display()))
-        })?;
+        // Skip the copy when the source is already inside `maps/`
+        // (Test-in-BAR fast path writes the .sdd directory there
+        // directly). Also handles repeat-launch where the previous
+        // .sd7 is already at the destination.
+        let already_in_place = sd7_path == dest.as_path();
+        if !already_in_place {
+            if sd7_path.is_dir() {
+                if dest.exists() {
+                    let _ = std::fs::remove_dir_all(&dest);
+                }
+                copy_dir_recursive(sd7_path, &dest).map_err(|e| {
+                    LaunchError::CopyFailed(format!(
+                        "{} -> {}: {e}",
+                        sd7_path.display(),
+                        dest.display()
+                    ))
+                })?;
+            } else {
+                std::fs::copy(sd7_path, &dest).map_err(|e| {
+                    LaunchError::CopyFailed(format!(
+                        "{} -> {}: {e}",
+                        sd7_path.display(),
+                        dest.display()
+                    ))
+                })?;
+            }
+        }
 
         let game = self
             .games
@@ -142,26 +170,62 @@ impl BarVersions {
         // when searching inside the archive, so the name must NOT include an
         // extension (e.g. use "my_map 0.1", not "my_map.sd7").
         //
-        // StartPosType=2: players click to place on the minimap.
+        // Map-testing setup -- the local player joins as a spectator
+        // so they can fly the whole map without being constrained to
+        // one team's view / commander. Two AI teams play each other
+        // so neither team auto-wins (one team alive -> game over ->
+        // post-game UI overlays the viewport). The spectator has free
+        // camera + no LOS restrictions.
+        //
+        // When the BAR button grows a "choose how to test" modal
+        // (gameplay vs spectator vs solo etc.), the script generator
+        // will live behind a `LaunchMode` enum; for now this single
+        // form covers the iteration use case.
+        //
+        // StartPosType=3 (ChooseBeforeGame) lets the script pin each
+        // team's spawn via `StartPosX`/`StartPosZ`. Without explicit
+        // positions, AI-only matches default to spawning every team
+        // on top of each other at map center -- commanders mash into
+        // melee on tick 1 and one team blinks out, ending the match
+        // before the camera even settles. World units are spring map
+        // squares * 8 (each square = 8x8 world units); we drop one
+        // team near the (0.2, 0.2) corner and the other near (0.8,
+        // 0.8) so they're on opposite ends regardless of map shape.
+        //
+        // TODO: parse mapinfo.lua's `teams = { [N] = { startPos } }`
+        // table when present and use those instead -- some maps ship
+        // hand-picked starts that should win over the corner default.
+        // Also: once BAR's gameconfig start-box format is mapped,
+        // honour `<gameconfig>/map_startboxes.lua` so the spawn
+        // reflects the configured "start box centre" for that gametype.
+        let (msq_x, msq_y) = map_squares;
+        let world_x = (msq_x.max(1) * 8) as f32;
+        let world_z = (msq_y.max(1) * 8) as f32;
+        let t0_x = (world_x * 0.2) as i32;
+        let t0_z = (world_z * 0.2) as i32;
+        let t1_x = (world_x * 0.8) as i32;
+        let t1_z = (world_z * 0.8) as i32;
         // MyPlayerNum + IsHost are required to initialise the local player slot.
         // TeamLeader in every [TEAMn] must be a valid player number (0 = host).
         let script = format!(
             "[GAME]\n{{\n\
             \tMapName={map_internal_name};\n\
             \tGameType={game};\n\
-            \tStartPosType=2;\n\
+            \tStartPosType=3;\n\
             \tGameStartDelay=4;\n\
             \tMyPlayerNum=0;\n\
             \tMyPlayerName=MapTester;\n\
             \tIsHost=1;\n\
             \n\
+            \t[PLAYER0]\n\t{{\n\t\tName=MapTester;\n\t\tSpectator=1;\n\t}}\n\
+            \n\
             \t[ALLYTEAM0]\n\t{{\n\t\tNumAllies=0;\n\t}}\n\
-            \t[TEAM0]\n\t{{\n\t\tAllyTeam=0;\n\t\tTeamLeader=0;\n\t}}\n\
-            \t[PLAYER0]\n\t{{\n\t\tName=MapTester;\n\t\tTeam=0;\n\t}}\n\
+            \t[TEAM0]\n\t{{\n\t\tAllyTeam=0;\n\t\tTeamLeader=0;\n\t\tStartPosX={t0_x};\n\t\tStartPosZ={t0_z};\n\t}}\n\
+            \t[AI0]\n\t{{\n\t\tName=BARb0;\n\t\tShortName=BARb;\n\t\tTeam=0;\n\t\tHost=0;\n\t\tIsFromDemo=0;\n\t}}\n\
             \n\
             \t[ALLYTEAM1]\n\t{{\n\t\tNumAllies=0;\n\t}}\n\
-            \t[TEAM1]\n\t{{\n\t\tAllyTeam=1;\n\t\tTeamLeader=0;\n\t}}\n\
-            \t[AI0]\n\t{{\n\t\tName=BARb;\n\t\tShortName=BARb;\n\t\tTeam=1;\n\t\tHost=0;\n\t\tIsFromDemo=0;\n\t}}\n\
+            \t[TEAM1]\n\t{{\n\t\tAllyTeam=1;\n\t\tTeamLeader=0;\n\t\tStartPosX={t1_x};\n\t\tStartPosZ={t1_z};\n\t}}\n\
+            \t[AI1]\n\t{{\n\t\tName=BARb1;\n\t\tShortName=BARb;\n\t\tTeam=1;\n\t\tHost=0;\n\t\tIsFromDemo=0;\n\t}}\n\
             }}\n",
             game = game.archive_name,
         );
@@ -192,6 +256,24 @@ impl BarVersions {
             map_name: map_internal_name.to_string(),
         })
     }
+}
+
+/// Recursively copy a directory's contents. Used when the Test-in-BAR
+/// fast path produces a `.sdd` directory in a different filesystem
+/// from `maps/` (cross-drive `rename` would fail, so we copy instead).
+fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let dest = dst.join(entry.file_name());
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest)?;
+        }
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -262,11 +344,13 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
                 return None;
             }
             let mtime = entry.metadata().ok()?.modified().ok()?;
+            let full_path = entry.path();
             Some((
                 mtime,
                 BarGameVersion {
                     label: name.clone(),
                     archive_name: name,
+                    path: Some(full_path),
                 },
             ))
         })

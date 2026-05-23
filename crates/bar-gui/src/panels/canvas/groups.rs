@@ -518,7 +518,7 @@ impl BarEditorApp {
         self.dialog.pending_props_open = None;
         let default_size = match node_type {
             NodeType::PassThrough => egui::vec2(180.0, 200.0),
-            NodeType::Bundler => egui::vec2(210.0, 240.0),
+            NodeType::FinalComposition => egui::vec2(210.0, 240.0),
             NodeType::SubgraphInput | NodeType::SubgraphOutput => IO_NODE_SIZE,
             // Start at the correct height for its default port count (2 inputs).
             NodeType::TextureWeightmap => egui::vec2(150.0, PORT_Y_BASE + 2.0 * PORT_Y_STEP + 10.0),
@@ -547,12 +547,6 @@ impl BarEditorApp {
                 group.member_ids.insert(id);
                 self.visuals.node_to_group.insert(id, scope);
             }
-        }
-        // Auto-open the 3D preview when a Bundler is created so the user
-        // immediately sees the viewport associated with this export node.
-        if node_type == NodeType::Bundler {
-            self.preview.open = true;
-            self.preview.node = Some(id);
         }
     }
 }

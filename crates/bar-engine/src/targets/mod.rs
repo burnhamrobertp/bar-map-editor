@@ -12,6 +12,7 @@ mod codec;
 mod config;
 mod dimensions;
 mod layers;
+mod lua_table;
 mod packager;
 mod packaging;
 mod raw_layers;

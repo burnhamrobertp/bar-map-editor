@@ -24,21 +24,26 @@ pub struct ProjectState {
     /// Drives the title bar's dirty asterisk and the unsaved-changes
     /// confirmation dialog.
     pub is_dirty: bool,
+    /// Monotonic counter bumped every time the project takes a
+    /// committable mutation (every `mark_dirty()` call). The
+    /// validation fingerprint reads this so any atomic field commit
+    /// -- text-input blur, drag-stopped, colour-picked, etc. --
+    /// drives a validation refresh on the next frame, without
+    /// needing the fingerprint to enumerate every recipe field.
+    pub commits: u64,
     /// Timestamp of the last successful autosave, used as the gate
     /// for the autosave-interval timer.
     pub last_autosave_at: Option<Instant>,
-    /// Next slot index (0-based) to write to on autosave. Increments
-    /// modulo `settings.autosave_slot_count` each write. Reset to 0
-    /// when a new project is opened so slot rotation restarts cleanly.
-    pub autosave_slot: u32,
-    /// Bundle path (archive-relative, forward slashes) of the file
-    /// the user has designated as the project's map-info file. None
-    /// means the user hasn't picked one yet.
-    pub map_info_file: Option<String>,
     /// Set by `bar-app` after a `.sd7` extraction lands on disk; the
     /// editor's per-frame poll picks it up and opens the resulting
     /// project.
     pub sd7_open_request: Option<std::path::PathBuf>,
+    /// Set by `bar-app` while a `.sd7` import is in flight; the GUI
+    /// renders a centered progress modal whenever this is `Some`.
+    /// The string is the current import step (e.g. "Extracting
+    /// archive"). `bar-app` clears this to `None` when the worker
+    /// signals success or failure.
+    pub import_status: Option<String>,
     /// Receiver for an in-flight Open dialog. The native file dialog
     /// runs on a worker thread and the result lands here.
     pub pending_open_rx: Option<std::sync::mpsc::Receiver<Option<std::path::PathBuf>>>,
@@ -48,6 +53,21 @@ pub struct ProjectState {
     /// open). `bar-app` consumes this via `take_graph_reset` to flush
     /// GPU preview state.
     pub graph_reset: bool,
+    /// `true` when the graph or params have changed since the last
+    /// successful compile. Cleared by `bar-app` after `compile_project`
+    /// succeeds.
+    pub compile_dirty: bool,
+    /// Pulsed `true` when features are populated from a new project load
+    /// (barproj or sd7). `bar-app` consumes this to trigger S3O model loading.
+    pub features_changed: bool,
+    /// Timestamp of the last successful compile in this session. `None`
+    /// until the user has compiled at least once.
+    pub compiled_at: Option<Instant>,
+    /// Set by `bar-app` after SD7 extraction to the map's work directory.
+    /// `save_project` reads this once and copies `objects3d/` and
+    /// `features/` into the `.barproj` so the project is self-contained,
+    /// then clears this field.
+    pub pending_map_data_dir: Option<std::path::PathBuf>,
 }
 
 impl ProjectState {

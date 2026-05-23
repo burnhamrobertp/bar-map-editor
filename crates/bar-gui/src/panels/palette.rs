@@ -98,13 +98,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Shrink", NodeType::MaskShrink),
     ];
 
-    let sculpt = [("2D Sculpt", NodeType::Sculpt)];
-
-    let output = [
-        ("Preview", NodeType::Preview),
-        ("Bundler", NodeType::Bundler),
-    ];
-
     let sources = [
         ("Pass-Through", NodeType::PassThrough),
         ("File Reference", NodeType::FileReference),
@@ -166,9 +159,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Mask Apply", NodeType::MaskApply),
         ("Mask Expand", NodeType::MaskExpand),
         ("Mask Shrink", NodeType::MaskShrink),
-        ("2D Sculpt", NodeType::Sculpt),
-        ("Preview", NodeType::Preview),
-        ("Bundler", NodeType::Bundler),
         ("Pass-Through", NodeType::PassThrough),
         ("File Reference", NodeType::FileReference),
     ];
@@ -274,13 +264,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         palette_group!(ui, "Colorizers", colorizers);
         palette_group!(ui, "Splat / Maps", splat_maps);
         palette_group!(ui, "Masks", masks);
-        palette_group!(ui, "Sculpt", sculpt);
-        palette_group!(ui, "Output", output);
         palette_group!(ui, "Sources", sources);
 
         // Macros -- pre-built SubGraphs that drop as a complete chunk
-        // of graph wired up for a typical map archetype. Drop one,
-        // wire its output to a Bundler, you're done.
+        // of graph wired up for a typical map archetype. Drop one and
+        // wire it into Final Composition's inputs.
         ui.collapsing("Macros", |ui| {
             for group in crate::macros::BUILTIN_MACRO_GROUPS {
                 ui.collapsing(group.name, |ui| {

@@ -7,7 +7,6 @@
 //! preserves any in-place edits the user has made between sessions.
 
 use std::collections::hash_map::DefaultHasher;
-use std::fmt::Write as _;
 use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
@@ -15,8 +14,9 @@ use std::time::{Duration, SystemTime};
 use anyhow::{Context, Result};
 use bar_data::smt::TILE_SIZE;
 use directories::ProjectDirs;
+use image::{ImageBuffer, Luma};
 
-pub use bar_project::WorkDirScan;
+pub use bar_project::{WorkDirScan, SMF_MINIMAP_SIDE_CAR};
 
 /// Root of all extracted SD7 work directories. Falls back to the OS temp dir
 /// if a per-user cache directory cannot be resolved.
@@ -51,26 +51,85 @@ fn work_dir_for(archive: &Path) -> PathBuf {
 /// If the work directory already exists and is non-empty, extraction is skipped
 /// so that any edits the user has made are preserved.
 pub fn extract_sd7_to_work_dir(archive: &Path) -> Result<WorkDirScan> {
+    extract_sd7_to_work_dir_with_progress(archive, &|_| {})
+}
+
+/// Variant that reports the current step to a caller-supplied
+/// callback. Used by the GUI so it can show a centered progress
+/// modal during import. The callback is invoked synchronously from
+/// whichever thread is driving extraction; if the caller is using a
+/// worker thread, they typically forward updates via an `mpsc`
+/// channel so the GUI thread can pick them up on its next frame.
+///
+/// Step strings are short user-facing labels (e.g. "Extracting
+/// archive"). The callback is called at the START of each phase --
+/// missing intermediate progress is fine; the goal is to keep the
+/// user from staring at a frozen screen, not to give precise
+/// fraction-done feedback.
+///
+/// The callback type is bare `dyn Fn(&str)` (no `Send`/`Sync` bound)
+/// since extraction runs on a single thread; callers that capture
+/// non-Sync senders (e.g. `mpsc::Sender`) can pass their closure
+/// directly without `Arc<Mutex<_>>` gymnastics.
+pub fn extract_sd7_to_work_dir_with_progress(
+    archive: &Path,
+    progress: &dyn Fn(&str),
+) -> Result<WorkDirScan> {
+    let work_dir = work_dir_for(archive);
+    extract_sd7_to_dir_with_progress(archive, &work_dir, progress)
+}
+
+/// Extract `.sd7` into a caller-chosen directory and scan its
+/// contents. Used by the unified import flow (both GUI and CLI go
+/// through this) -- the GUI's "Import .sd7" prompts the user for a
+/// destination .barproj directory, the CLI's `bar-cli import` takes
+/// `--out-dir` directly, and both then call into this function so
+/// downstream recipe construction lives in one place.
+///
+/// If `dest` already exists and is non-empty, extraction is skipped
+/// so any edits the user has made are preserved. Caller is
+/// responsible for choosing whether `dest` is a project dir (.barproj)
+/// or a transient work dir.
+pub fn extract_sd7_to_dir_with_progress(
+    archive: &Path,
+    dest: &Path,
+    progress: &dyn Fn(&str),
+) -> Result<WorkDirScan> {
     let stem = archive
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("map");
     let map_name = stem.to_string();
-    let work_dir = work_dir_for(archive);
 
-    let should_extract = !work_dir.exists()
-        || std::fs::read_dir(&work_dir)
+    let should_extract = !dest.exists()
+        || std::fs::read_dir(dest)
             .map(|mut d| d.next().is_none())
             .unwrap_or(true);
 
     if should_extract {
-        std::fs::create_dir_all(&work_dir)
-            .with_context(|| format!("Failed to create work directory: {}", work_dir.display()))?;
-        sevenz_rust::decompress_file(archive, &work_dir)
-            .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
+        progress("Preparing destination directory");
+        std::fs::create_dir_all(dest)
+            .with_context(|| format!("Failed to create destination: {}", dest.display()))?;
+        progress("Extracting archive");
+        // Per-entry hook so the modal shows the file currently being
+        // extracted. sevenz-rust's bare `decompress_file` blocks for
+        // the entire decompression with no inner feedback, which made
+        // the modal read as frozen on large maps. We delegate the
+        // actual extraction to `default_entry_extract_fn` and only
+        // wrap the progress emission.
+        sevenz_rust::decompress_file_with_extract_fn(archive, dest, |entry, reader, dest_path| {
+            if !entry.is_directory() {
+                let label = format!("Extracting {}", entry.name());
+                progress(&label);
+            }
+            sevenz_rust::default_entry_extract_fn(entry, reader, dest_path)
+        })
+        .with_context(|| format!("Failed to extract '{}'", archive.display()))?;
+    } else {
+        progress("Reusing existing destination");
     }
 
-    scan_work_dir(work_dir, map_name)
+    scan_work_dir(dest.to_path_buf(), map_name, progress)
 }
 
 /// Delete work directories under [`work_dir_root`] whose mtime is older than
@@ -102,13 +161,18 @@ pub fn prune_old_work_dirs(max_age: Duration) {
     }
 }
 
-fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
+fn scan_work_dir(
+    work_dir: PathBuf,
+    map_name: String,
+    progress: &dyn Fn(&str),
+) -> Result<WorkDirScan> {
     let mut smf_abs: Option<PathBuf> = None;
     let mut smf_rel: Option<PathBuf> = None;
     let mut smt_abs: Option<PathBuf> = None;
     let mut smt_rel: Option<PathBuf> = None;
     let mut passthrough_files: Vec<(PathBuf, PathBuf)> = Vec::new();
 
+    progress("Scanning files");
     scan_dir_recursive(
         &work_dir,
         &work_dir,
@@ -120,9 +184,19 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
     )?;
 
     // Read SMF: extract header metadata plus heightmap/metalmap/typemap pixel data.
+    if smf_abs.is_none() {
+        tracing::warn!("No .smf file found in extracted .sd7 archive");
+    }
+    progress("Reading heightmap");
     let smf_data = smf_abs.as_ref().and_then(|abs| {
         let file = std::fs::File::open(abs).ok()?;
-        bar_data::SmfMap::read(&mut std::io::BufReader::new(file)).ok()
+        match bar_data::SmfMap::read(&mut std::io::BufReader::new(file)) {
+            Ok(map) => Some(map),
+            Err(e) => {
+                tracing::warn!(path = %abs.display(), error = %e, "Failed to read SMF; map data nodes will be missing");
+                None
+            }
+        }
     });
 
     let (tile_grid, map_dims, header_range) = smf_data
@@ -135,50 +209,103 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         })
         .unwrap_or((None, None, None));
 
-    let mapinfo_override = std::fs::read_to_string(work_dir.join("mapinfo.lua"))
-        .ok()
-        .and_then(|s| crate::importer::parse_mapinfo_smf_heights(&s));
+    // Decode the SMF-embedded minimap once at extract time and write it
+    // to a fixed sidecar in the work dir. The runtime grass-shading-tex
+    // fallback loads this PNG when `mapinfo.resources.grassShadingTex` is
+    // unset -- matching the engine's `MAP_BASE_GRASS_TEX` semantics
+    // (custom override OR minimap). Persistence copies the file into the
+    // .barproj on save so the fallback keeps working after reload.
+    if let Some(ref smf) = smf_data {
+        if !smf.minimap_dxt1.is_empty() {
+            if let Some((rgba, w, h)) = bar_data::decode_smf_minimap_base(&smf.minimap_dxt1) {
+                let dest = work_dir.join(SMF_MINIMAP_SIDE_CAR);
+                let png_buf = image::RgbaImage::from_raw(w, h, rgba);
+                match png_buf {
+                    Some(img) => {
+                        if let Err(e) = img.save(&dest) {
+                            tracing::warn!(error = %e, dest = %dest.display(), "Failed to write SMF minimap sidecar");
+                        }
+                    }
+                    None => tracing::warn!("SMF minimap RGBA buffer size mismatch"),
+                }
+            } else {
+                tracing::warn!("SMF minimap DXT1 chunk too small to decode");
+            }
+        }
+    }
+
+    let mapinfo_lua: Option<String> = std::fs::read_to_string(work_dir.join("mapinfo.lua")).ok();
+    let mapinfo_override = mapinfo_lua
+        .as_deref()
+        .and_then(bar_project::parse_mapinfo_smf_heights);
     let height_range = mapinfo_override.or(header_range);
 
-    // Extract and embed heightmap, metalmap, typemap as hex-encoded u8 grids.
-    // PaintedHeightmap supports up to 512; downsample to the largest power-of-2 <= 512.
-    const MAX_RES: u32 = 512;
+    // Heightmap is stored at native SMF resolution as f32 bytes -- 8-bit
+    // quantisation was visible as terraced contour lines on any map with
+    // more than ~256 elevation levels (Ascendancy at 32 Spring-blocks /
+    // 4097-sample native made every gentle slope read as horizontal
+    // terraces). f32 costs 4x bytes per sample but preserves full SMF
+    // precision.
+    //
+    // The engine has NO hard cap on heightmap size -- the SMF format only
+    // requires `mapx % 128 == 0` (one Spring block = 128 samples), and the
+    // header uses signed-int storage. Practical limits come from GPU
+    // memory and runtime perf. BAR ships maps from ~8 blocks (1025
+    // samples) up to 64 blocks (8193 samples); 8192 covers everything
+    // shipped with f32 storage costing 256MB at the largest. If a map
+    // ever exceeds this, the cap should be bumped further -- it is NOT
+    // an engine limit, only a memory budget for the editor.
+    const MAX_HM_RES: u32 = 8192;
+    // Metal / type maps stay u8 (they're inherently quantised in the SMF
+    // format) and don't benefit from a higher resolution either. The 512
+    // cap is also just a memory-budget choice, not an engine constraint.
+    const MAX_OTHER_RES: u32 = 512;
 
-    let (heightmap_hex, heightmap_res) = smf_data
+    // Each plane keeps its native SMF aspect ratio. The cap clamps the
+    // larger axis at MAX_*_RES; the shorter axis is scaled proportionally
+    // so the asset stays at the source ratio (rectangular maps no longer
+    // lose half their data to a min(w,h) square crop).
+    let (heightmap_data, heightmap_w, heightmap_h) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.heightmap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_RES));
-            let pixels = downsample_f32_to_u8_square(smf.heightmap.data(), w, h, target);
-            (hex_encode(&pixels), target)
+            let (tw, th) = scale_to_cap(w, h, MAX_HM_RES);
+            let pixels = downsample_f32_to_f32_bytes(smf.heightmap.data(), w, h, tw, th);
+            (pixels, tw, th)
         })
         .unwrap_or_default();
 
-    let (metalmap_hex, metalmap_res) = smf_data
+    let (metalmap_data, metalmap_w, metalmap_h) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.metalmap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_RES));
-            let pixels = downsample_u8_to_square(&smf.metalmap, w, h, target);
-            (hex_encode(&pixels), target)
+            let (tw, th) = scale_to_cap(w, h, MAX_OTHER_RES);
+            // Max-preserving reducer (not nearest-neighbour) so single-
+            // pixel metal spots survive the downsample. Plain NN was
+            // dropping ~89% of them on Onyx-sized maps.
+            let pixels = downsample_u8_max_to_rect(&smf.metalmap, w, h, tw, th);
+            (pixels, tw, th)
         })
         .unwrap_or_default();
 
-    let (typemap_hex, typemap_res) = smf_data
+    let (typemap_data, typemap_w, typemap_h) = smf_data
         .as_ref()
         .map(|smf| {
             let (w, h) = smf.header.typemap_size();
-            let target = largest_pow2_leq(w.min(h).min(MAX_RES));
-            let pixels = downsample_u8_to_square(&smf.typemap, w, h, target);
-            (hex_encode(&pixels), target)
+            let (tw, th) = scale_to_cap(w, h, MAX_OTHER_RES);
+            let pixels = downsample_u8_to_rect(&smf.typemap, w, h, tw, th);
+            (pixels, tw, th)
         })
         .unwrap_or_default();
 
-    // Assemble SMT texture into a 256x256 RGB hex blob for PaintedTexture.
-    const TEX_RES: u32 = 256;
-    let (texture_hex, texture_res) =
+    // Assemble SMT texture as raw RGB bytes for PaintedTexture. The
+    // larger axis caps at TEX_RES; the shorter axis scales proportionally
+    // so non-square maps keep their full source aspect ratio.
+    progress("Reading texture tiles");
+    const TEX_RES: u32 = 2048;
+    let (texture_data, texture_w, texture_h) =
         if let (Some(smt_path), Some(smf)) = (smt_abs.as_ref(), smf_data.as_ref()) {
-            let result: Option<(String, u32)> = (|| {
+            let result: Option<(Vec<u8>, u32, u32)> = (|| {
                 let file = std::fs::File::open(smt_path).ok()?;
                 let tiles = bar_data::smt::read_smt(&mut std::io::BufReader::new(file)).ok()?;
                 let (tiles_x, tiles_y) = smf.header.tile_grid_size();
@@ -187,8 +314,7 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
                 }
                 let src_w = tiles_x * TILE_SIZE;
                 let src_h = tiles_y * TILE_SIZE;
-                let out_w = TEX_RES.min(src_w).max(1);
-                let out_h = TEX_RES.min(src_h).max(1);
+                let (out_w, out_h) = scale_to_cap(src_w, src_h, TEX_RES);
                 let rgba = crate::executor::assemble_texture_preview(
                     &tiles,
                     &smf.tile_indices,
@@ -197,16 +323,28 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
                     out_w,
                     out_h,
                 );
-                // Drop the alpha channel; PaintedTexture expects RGB (3 bytes/pixel).
                 let rgb: Vec<u8> = rgba.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
-                Some((hex_encode(&rgb), TEX_RES))
+                Some((rgb, out_w, out_h))
             })();
             result.unwrap_or_default()
         } else {
-            (String::new(), 0)
+            (Vec::new(), 0, 0)
         };
 
-    let features: Vec<bar_project::recipe::PlacedFeature> = smf_data
+    // Features: merge SMF-embedded features with Lua FeaturePlacer placements.
+    // Modern BAR maps store the bulk of their features in
+    // mapconfig/featureplacer/set.lua; the SMF section often has only a handful
+    // of legacy entries (or none).
+    //
+    // Each PlacedFeature carries a `source` tag so re-export routes them back
+    // to the correct location: SMF-native features into the SMF feature
+    // section (which the engine reader caps at 31-char names per
+    // `SMFMapFile.h:62`), FeaturePlacer-set features back into
+    // `mapconfig/featureplacer/set.lua` (no length limit; spawned by the
+    // gadget at runtime). Mixing the two would truncate long FP names in
+    // the SMF write and crash the engine on the garbled type string.
+    progress("Parsing feature placements");
+    let mut features: Vec<bar_project::recipe::PlacedFeature> = smf_data
         .as_ref()
         .map(|smf| {
             smf.features
@@ -216,13 +354,65 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
                     x: f.x,
                     y: f.y,
                     z: f.z,
-                    angle: f.angle,
+                    // SMF stores `MapFeatureStruct.rotation` in radians;
+                    // BME's `PlacedFeature.angle` is in Spring heading
+                    // units (full circle = 65536). Convert at the
+                    // import boundary so the rest of the codebase
+                    // (`build_feature_instances`, popover degree
+                    // display, rotation gesture, etc.) sees a single
+                    // consistent unit.
+                    angle: f.angle * 32768.0 / std::f32::consts::PI,
                     taken_damage: f.taken_damage,
+                    source: bar_project::recipe::FeatureSource::Smf,
                 })
                 .collect()
         })
         .unwrap_or_default();
 
+    let set_lua = work_dir
+        .join("mapconfig")
+        .join("featureplacer")
+        .join("set.lua");
+    if set_lua.exists() {
+        if let Ok(content) = std::fs::read_to_string(&set_lua) {
+            let lua_features = parse_feature_placer_set(&content);
+            tracing::debug!(count = lua_features.len(), "Parsed FeaturePlacer set.lua");
+            features.extend(lua_features);
+        }
+    }
+
+    // SMF `MEH_Vegetation` extra header -> `grassmap.png` next to
+    // the other extracted files. Mirrors BAR's
+    // `Spring.GetGrass(x,z)` fallback (`map_grass_gl4.lua:856-892`):
+    // when mapinfo doesn't specify `grassDistTGA`, the widget reads
+    // the SMF's built-in grass map instead. We materialise it here
+    // so the rest of the pipeline (which keys off filename in
+    // passthrough/) finds it without special-casing.
+    if let Some(ref smf) = smf_data {
+        if !smf.grass_map.is_empty() {
+            let grass_w = (smf.header.map_x.max(0) as u32) / 4;
+            let grass_h = (smf.header.map_y.max(0) as u32) / 4;
+            if grass_w > 0 && grass_h > 0 {
+                let grassmap_path = work_dir.join("grassmap.png");
+                if write_grassmap_png(&smf.grass_map, grass_w, grass_h, &grassmap_path).is_ok() {
+                    let rel = PathBuf::from("grassmap.png");
+                    if !passthrough_files
+                        .iter()
+                        .any(|(_, r)| r.to_string_lossy().eq_ignore_ascii_case("grassmap.png"))
+                    {
+                        passthrough_files.push((grassmap_path, rel));
+                    }
+                }
+            }
+        }
+    }
+
+    let tile_indices = smf_data
+        .as_ref()
+        .map(|s| s.tile_indices.clone())
+        .unwrap_or_default();
+
+    progress("Finalizing");
     Ok(WorkDirScan {
         work_dir,
         map_name,
@@ -234,28 +424,26 @@ fn scan_work_dir(work_dir: PathBuf, map_name: String) -> Result<WorkDirScan> {
         map_dims,
         height_range,
         passthrough_files,
-        heightmap_hex,
-        heightmap_res,
-        metalmap_hex,
-        metalmap_res,
-        typemap_hex,
-        typemap_res,
-        texture_hex,
-        texture_res,
+        heightmap_data,
+        heightmap_w,
+        heightmap_h,
+        metalmap_data,
+        metalmap_w,
+        metalmap_h,
+        typemap_data,
+        typemap_w,
+        typemap_h,
+        texture_data,
+        texture_w,
+        texture_h,
+        tile_indices,
         features,
+        mapinfo_lua,
     })
 }
 
-/// Encode bytes as lowercase hex (2 chars per byte).
-fn hex_encode(data: &[u8]) -> String {
-    let mut out = String::with_capacity(data.len() * 2);
-    for &b in data {
-        let _ = write!(out, "{:02x}", b);
-    }
-    out
-}
-
 /// Largest power of 2 that is <= `n`. Returns 1 for n == 0.
+#[cfg(test)]
 fn largest_pow2_leq(n: u32) -> u32 {
     if n == 0 {
         return 1;
@@ -267,7 +455,26 @@ fn largest_pow2_leq(n: u32) -> u32 {
     p
 }
 
+/// Scale `(w, h)` so the larger axis sits at `cap`, preserving aspect
+/// ratio; if the source is already within `cap` returns it unchanged.
+/// Returns at least `(1, 1)` even when one source axis is zero so
+/// downstream allocators never see empty dimensions.
+fn scale_to_cap(w: u32, h: u32, cap: u32) -> (u32, u32) {
+    if w == 0 || h == 0 {
+        return (1, 1);
+    }
+    let larger = w.max(h);
+    if larger <= cap {
+        return (w, h);
+    }
+    let scale = cap as f64 / larger as f64;
+    let tw = ((w as f64 * scale).round() as u32).max(1);
+    let th = ((h as f64 * scale).round() as u32).max(1);
+    (tw, th)
+}
+
 /// Bilinear downsample of an f32 [0,1] `w x h` grid into a `res x res` u8 grid.
+#[cfg(test)]
 fn downsample_f32_to_u8_square(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8> {
     let mut out = Vec::with_capacity((res * res) as usize);
     for oy in 0..res {
@@ -294,14 +501,93 @@ fn downsample_f32_to_u8_square(data: &[f32], w: u32, h: u32, res: u32) -> Vec<u8
     out
 }
 
-/// Nearest-neighbor downsample of a u8 `w x h` grid into a `res x res` square.
-fn downsample_u8_to_square(data: &[u8], w: u32, h: u32, res: u32) -> Vec<u8> {
-    let mut out = Vec::with_capacity((res * res) as usize);
-    for oy in 0..res {
-        for ox in 0..res {
-            let sx = (ox as u64 * w as u64 / res as u64).min(w as u64 - 1) as u32;
-            let sy = (oy as u64 * h as u64 / res as u64).min(h as u64 - 1) as u32;
+/// Bilinear downsample of an f32 [0,1] `w x h` grid into a `res x res` f32
+/// grid, returned as little-endian byte representation for asset storage.
+///
+/// Replaces `downsample_f32_to_u8_square` on the heightmap path. Quantising
+/// SMF height samples to 8-bit was visible as terraced contour lines on
+/// any map with more than ~256 effective elevation levels (Azurite hinted
+/// it, Ascendancy made it obvious -- 8m vertical range per step at 2000m
+/// total elevation). f32 storage preserves the full SMF precision.
+/// Write an 8-bit-per-pixel grayscale `grassmap.png`. Used to
+/// materialise the SMF `MEH_Vegetation` extra header into a file the
+/// rest of the pipeline keys off by filename.
+fn write_grassmap_png(data: &[u8], w: u32, h: u32, path: &Path) -> Result<()> {
+    let img: ImageBuffer<Luma<u8>, Vec<u8>> = ImageBuffer::from_raw(w, h, data.to_vec())
+        .context("Failed to construct grass map image buffer")?;
+    img.save(path)
+        .with_context(|| format!("Failed to write grass map PNG: {}", path.display()))
+}
+
+/// Bilinear downsample of an f32 [0,1] `w x h` grid into a `tw x th` f32
+/// grid, returned as little-endian f32 bytes for asset storage.
+fn downsample_f32_to_f32_bytes(data: &[f32], w: u32, h: u32, tw: u32, th: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((tw as usize) * (th as usize) * 4);
+    for oy in 0..th {
+        for ox in 0..tw {
+            let fx = (ox as f32 + 0.5) / tw as f32 * w as f32 - 0.5;
+            let fy = (oy as f32 + 0.5) / th as f32 * h as f32 - 0.5;
+            let x0 = (fx as i32).clamp(0, w as i32 - 1) as u32;
+            let y0 = (fy as i32).clamp(0, h as i32 - 1) as u32;
+            let x1 = (x0 + 1).min(w - 1);
+            let y1 = (y0 + 1).min(h - 1);
+            let dx = (fx - fx.floor()).max(0.0);
+            let dy = (fy - fy.floor()).max(0.0);
+            let v00 = data[(y0 * w + x0) as usize];
+            let v10 = data[(y0 * w + x1) as usize];
+            let v01 = data[(y1 * w + x0) as usize];
+            let v11 = data[(y1 * w + x1) as usize];
+            let v = v00 * (1.0 - dx) * (1.0 - dy)
+                + v10 * dx * (1.0 - dy)
+                + v01 * (1.0 - dx) * dy
+                + v11 * dx * dy;
+            out.extend_from_slice(&v.clamp(0.0, 1.0).to_le_bytes());
+        }
+    }
+    out
+}
+
+/// Nearest-neighbor downsample of a u8 `w x h` grid into a `tw x th` u8 grid.
+fn downsample_u8_to_rect(data: &[u8], w: u32, h: u32, tw: u32, th: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((tw as usize) * (th as usize));
+    for oy in 0..th {
+        for ox in 0..tw {
+            let sx = (ox as u64 * w as u64 / tw as u64).min(w as u64 - 1) as u32;
+            let sy = (oy as u64 * h as u64 / th as u64).min(h as u64 - 1) as u32;
             out.push(data[(sy * w + sx) as usize]);
+        }
+    }
+    out
+}
+
+/// Max-preserving downsample of a u8 `w x h` grid into a `tw x th` grid.
+/// For each output pixel, scans the corresponding source-pixel block and
+/// keeps the highest value rather than picking one corner. Used for the
+/// SMF metalmap so single-pixel high-metal spots survive the 1536x1536
+/// -> 512x512 reduction Onyx Cauldron (and similar) requires. With plain
+/// nearest-neighbour, each spot pixel had only a ~11% chance of being
+/// the sampled one and the other ~89% were silently dropped, which
+/// broke BAR's in-game metal-spot indicator widget on every round-tripped
+/// map.
+fn downsample_u8_max_to_rect(data: &[u8], w: u32, h: u32, tw: u32, th: u32) -> Vec<u8> {
+    let mut out = Vec::with_capacity((tw as usize) * (th as usize));
+    for oy in 0..th {
+        let sy0 = (oy as u64 * h as u64 / th as u64) as u32;
+        let sy1 = (((oy + 1) as u64 * h as u64 / th as u64) as u32).clamp(sy0 + 1, h);
+        for ox in 0..tw {
+            let sx0 = (ox as u64 * w as u64 / tw as u64) as u32;
+            let sx1 = (((ox + 1) as u64 * w as u64 / tw as u64) as u32).clamp(sx0 + 1, w);
+            let mut best = 0u8;
+            for sy in sy0..sy1 {
+                let row = (sy * w) as usize;
+                for sx in sx0..sx1 {
+                    let v = data[row + sx as usize];
+                    if v > best {
+                        best = v;
+                    }
+                }
+            }
+            out.push(best);
         }
     }
     out
@@ -341,6 +627,15 @@ fn scan_dir_recursive(
                     *smt_abs = Some(abs);
                     *smt_rel = Some(rel);
                 }
+                _ if is_recipe_owned_config(&rel) => {
+                    // Don't passthrough: the recipe is the source of
+                    // truth for this file's data after import, and the
+                    // exporter regenerates the file from the recipe.
+                    // Keeping it in passthrough would create two
+                    // sources of truth (drift trap on save / reload).
+                    // See `bar-map-format.md` for the full set of
+                    // config files BME structurally owns.
+                }
                 _ => {
                     pass.push((abs, rel));
                 }
@@ -350,25 +645,89 @@ fn scan_dir_recursive(
     Ok(())
 }
 
+/// True when `rel` (archive-relative path) is a configuration file
+/// BME parses structurally into the recipe and regenerates on export.
+/// Such files are deliberately omitted from `passthrough_files` at
+/// import time so the recipe stays the unambiguous source of truth.
+///
+/// Currently recognises:
+/// - `mapinfo.lua` at the archive root
+/// - `maphelper/mapinfo.lua` (stub forwarder some maps emit)
+///
+/// As BME grows parsers for the remaining structured config files
+/// listed in `bar-map-format.md` (`mapoptions.lua`,
+/// `mapconfig/featureplacer/*`, `mapconfig/map_startboxes.lua`,
+/// `mapconfig/map_metal_layout.lua`, etc.), each gets added here
+/// once its parse-into-recipe + regenerate-on-export pair lands.
+fn is_recipe_owned_config(rel: &Path) -> bool {
+    let normalized = rel
+        .to_string_lossy()
+        .replace('\\', "/")
+        .to_ascii_lowercase();
+    matches!(normalized.as_str(), "mapinfo.lua" | "maphelper/mapinfo.lua")
+}
+
+/// Parse a Spring FeaturePlacer `set.lua` and return placed features.
+///
+/// Each feature line looks like:
+/// `{ name = "oak_holly_b1", x = 10576, z = 4819, rot = -8813 },`
+///
+/// Coordinates are Spring world units (elmos). `rot` is encoded as an integer
+/// in the range [-32768, 32768] where 32768 corresponds to pi radians (the
+/// Spring 15-bit half-turn convention). We convert to degrees for storage.
+fn parse_feature_placer_set(content: &str) -> Vec<bar_project::recipe::PlacedFeature> {
+    let mut features = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if !line.starts_with('{') {
+            continue;
+        }
+
+        let name = extract_lua_string(line, "name");
+        let x = extract_lua_number(line, "x");
+        let z = extract_lua_number(line, "z");
+        let rot = extract_lua_number(line, "rot");
+
+        if let (Some(name), Some(x), Some(z)) = (name, x, z) {
+            // The FeaturePlacer gadget stores `rot` in Spring heading
+            // units (full circle = 65536); `PlacedFeature.angle` uses
+            // the same convention, so no conversion is needed here.
+            features.push(bar_project::recipe::PlacedFeature {
+                feature_type: name,
+                x,
+                y: 0.0,
+                z,
+                angle: rot.unwrap_or(0.0),
+                taken_damage: 0,
+                source: bar_project::recipe::FeatureSource::FeaturePlacerSet,
+            });
+        }
+    }
+
+    features
+}
+
+fn extract_lua_string(line: &str, key: &str) -> Option<String> {
+    let pat = format!("{key} = \"");
+    let start = line.find(&pat)? + pat.len();
+    let end = line[start..].find('"')? + start;
+    Some(line[start..end].to_string())
+}
+
+fn extract_lua_number(line: &str, key: &str) -> Option<f32> {
+    let pat = format!("{key} = ");
+    let start = line.find(&pat)? + pat.len();
+    let rest = &line[start..];
+    let end = rest
+        .find(|c: char| !c.is_ascii_digit() && c != '-' && c != '.')
+        .unwrap_or(rest.len());
+    rest[..end].parse::<f32>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn hex_encode_empty() {
-        assert_eq!(hex_encode(&[]), "");
-    }
-
-    #[test]
-    fn hex_encode_zero_and_max_bytes() {
-        assert_eq!(hex_encode(&[0x00]), "00");
-        assert_eq!(hex_encode(&[0xff]), "ff");
-    }
-
-    #[test]
-    fn hex_encode_multi_byte_lowercase() {
-        assert_eq!(hex_encode(&[0x0a, 0xb0, 0xff]), "0ab0ff");
-    }
 
     #[test]
     fn largest_pow2_leq_zero_returns_one() {
@@ -414,14 +773,77 @@ mod tests {
     #[test]
     fn downsample_u8_output_size() {
         let data = vec![128u8; 4 * 4];
-        let out = downsample_u8_to_square(&data, 4, 4, 2);
+        let out = downsample_u8_to_rect(&data, 4, 4, 2, 2);
         assert_eq!(out.len(), 4);
     }
 
     #[test]
     fn downsample_u8_uniform_preserves_value() {
         let data = vec![42u8; 8 * 8];
-        let out = downsample_u8_to_square(&data, 8, 8, 4);
+        let out = downsample_u8_to_rect(&data, 8, 8, 4, 4);
         assert!(out.iter().all(|&v| v == 42));
+    }
+
+    #[test]
+    fn downsample_u8_rect_keeps_non_square_shape() {
+        let data = vec![1u8; 8 * 4];
+        let out = downsample_u8_to_rect(&data, 8, 4, 4, 2);
+        assert_eq!(out.len(), 4 * 2);
+        assert!(out.iter().all(|&v| v == 1));
+    }
+
+    #[test]
+    fn downsample_f32_rect_keeps_non_square_shape() {
+        let data = vec![0.5f32; 8 * 4];
+        let out = downsample_f32_to_f32_bytes(&data, 8, 4, 4, 2);
+        assert_eq!(out.len(), 4 * 2 * 4);
+        let decoded: Vec<f32> = out
+            .chunks_exact(4)
+            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+            .collect();
+        assert_eq!(decoded.len(), 8);
+        assert!(decoded.iter().all(|&v| (v - 0.5).abs() < 1e-5));
+    }
+
+    #[test]
+    fn scale_to_cap_preserves_aspect_ratio_above_cap() {
+        // 16384x4096 (4:1) with cap=8192 should land at 8192x2048.
+        assert_eq!(scale_to_cap(16384, 4096, 8192), (8192, 2048));
+        // 4096x16384 (1:4) with cap=8192 -> 2048x8192.
+        assert_eq!(scale_to_cap(4096, 16384, 8192), (2048, 8192));
+    }
+
+    #[test]
+    fn scale_to_cap_passes_through_below_cap() {
+        // Non-power-of-2 below the cap should pass through unchanged.
+        assert_eq!(scale_to_cap(4097, 8192, 8192), (4097, 8192));
+        assert_eq!(scale_to_cap(513, 1025, 8192), (513, 1025));
+    }
+
+    #[test]
+    fn recipe_owned_config_recognises_mapinfo() {
+        assert!(is_recipe_owned_config(Path::new("mapinfo.lua")));
+        assert!(is_recipe_owned_config(Path::new("maphelper/mapinfo.lua")));
+        // Case-insensitive (Windows-extracted archives may upper-case).
+        assert!(is_recipe_owned_config(Path::new("MapInfo.lua")));
+        // Backslash path separators.
+        assert!(is_recipe_owned_config(Path::new(r"maphelper\mapinfo.lua")));
+    }
+
+    #[test]
+    fn recipe_owned_config_rejects_legitimate_passthrough() {
+        // Gameplay logic, lobby options, custom features, sounds,
+        // bitmaps -- all currently legitimate passthrough.
+        assert!(!is_recipe_owned_config(Path::new("LuaGaia/main.lua")));
+        assert!(!is_recipe_owned_config(Path::new("LuaRules/gadget.lua")));
+        assert!(!is_recipe_owned_config(Path::new("features/oak.lua")));
+        assert!(!is_recipe_owned_config(Path::new("mapoptions.lua")));
+        assert!(!is_recipe_owned_config(Path::new(
+            "mapconfig/featureplacer/set.lua"
+        )));
+        assert!(!is_recipe_owned_config(Path::new("bitmaps/foam.png")));
+        // A `mapinfo.lua` nested below `LuaGaia/` is NOT the canonical
+        // root mapinfo and should pass through verbatim.
+        assert!(!is_recipe_owned_config(Path::new("LuaGaia/mapinfo.lua")));
     }
 }

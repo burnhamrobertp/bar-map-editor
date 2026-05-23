@@ -44,7 +44,7 @@ pub const DXT1_TILE_BYTES: usize = (TILE_SIZE as usize / 4) * (TILE_SIZE as usiz
 ///
 /// Handles both opaque mode (color0 > color1, 4-color palette) and
 /// 1-bit-alpha mode (color0 <= color1, 3-color + transparent palette).
-fn decode_dxt1_block(block: &[u8; 8]) -> [[u8; 4]; 16] {
+pub fn decode_dxt1_block(block: &[u8; 8]) -> [[u8; 4]; 16] {
     let c0 = u16::from_le_bytes([block[0], block[1]]);
     let c1 = u16::from_le_bytes([block[2], block[3]]);
     let indices = u32::from_le_bytes([block[4], block[5], block[6], block[7]]);
@@ -143,6 +143,77 @@ pub fn read_smt<R: Read>(reader: &mut R) -> Result<Vec<Vec<u8>>, SmtError> {
         tiles.push(decode_tile_dxt1(&compressed));
     }
     Ok(tiles)
+}
+
+/// Read the SMT tile pool as raw compressed DXT1 bytes (base level only).
+///
+/// Unlike [`read_smt`], this does not decode to RGBA. Each returned Vec is
+/// exactly [`DXT1_TILE_BYTES`] bytes -- the base-level DXT1 data suitable
+/// for upload to a `Bc1RgbaUnorm` GPU texture.
+pub fn read_smt_raw<R: Read>(reader: &mut R) -> Result<Vec<Vec<u8>>, SmtError> {
+    let mut magic = [0u8; 16];
+    reader.read_exact(&mut magic)?;
+    let mut buf4 = [0u8; 4];
+    reader.read_exact(&mut buf4)?; // version
+    reader.read_exact(&mut buf4)?;
+    let num_tiles = i32::from_le_bytes(buf4).max(0) as usize;
+    reader.read_exact(&mut buf4)?; // tile_size (should be 32)
+    reader.read_exact(&mut buf4)?; // compression type (1 = DXT1)
+    let mut tiles = Vec::with_capacity(num_tiles);
+    for _ in 0..num_tiles {
+        let mut raw = vec![0u8; SMALL_TILE_SIZE];
+        reader.read_exact(&mut raw)?;
+        raw.truncate(DXT1_TILE_BYTES);
+        tiles.push(raw);
+    }
+    Ok(tiles)
+}
+
+/// Assemble a flat linear BC1 image from a tile pool and tile index.
+///
+/// Each element of `tile_pool` must be exactly [`DXT1_TILE_BYTES`] bytes
+/// (base-level DXT1 for a 32x32 tile). `tile_indices` maps (ty*tiles_x + tx)
+/// to a tile pool index. The returned bytes are suitable for upload to a
+/// `Bc1RgbaUnorm` wgpu texture of size `(tiles_x*32) x (tiles_y*32)`.
+pub fn assemble_bc1_linear(
+    tile_pool: &[Vec<u8>],
+    tile_indices: &[i32],
+    tiles_x: u32,
+    tiles_y: u32,
+) -> Vec<u8> {
+    const BLOCKS_PER_TILE: usize = 8; // 32 / 4
+    const BYTES_PER_BLOCK: usize = 8;
+    const BYTES_PER_TILE_BLOCK_ROW: usize = BLOCKS_PER_TILE * BYTES_PER_BLOCK; // 64
+
+    let tx_usize = tiles_x as usize;
+    let ty_usize = tiles_y as usize;
+    let blocks_per_image_row = tx_usize * BLOCKS_PER_TILE;
+    let total_bytes = tx_usize * ty_usize * DXT1_TILE_BYTES;
+    let mut out = vec![0u8; total_bytes];
+    let empty = vec![0u8; DXT1_TILE_BYTES];
+
+    for ty in 0..ty_usize {
+        for tx in 0..tx_usize {
+            let idx_pos = ty * tx_usize + tx;
+            let tile_idx = tile_indices.get(idx_pos).copied().unwrap_or(0).max(0) as usize;
+            let tile = tile_pool.get(tile_idx).unwrap_or(&empty);
+            let tile_bytes: &[u8] = if tile.len() >= DXT1_TILE_BYTES {
+                &tile[..DXT1_TILE_BYTES]
+            } else {
+                &empty
+            };
+
+            for br in 0..BLOCKS_PER_TILE {
+                let src = br * BYTES_PER_TILE_BLOCK_ROW;
+                let dst_row = ty * BLOCKS_PER_TILE + br;
+                let dst_col = tx * BLOCKS_PER_TILE;
+                let dst = (dst_row * blocks_per_image_row + dst_col) * BYTES_PER_BLOCK;
+                out[dst..dst + BYTES_PER_TILE_BLOCK_ROW]
+                    .copy_from_slice(&tile_bytes[src..src + BYTES_PER_TILE_BLOCK_ROW]);
+            }
+        }
+    }
+    out
 }
 
 // --------------------------------------------------------------------------
@@ -385,6 +456,39 @@ pub fn compress_image_dxt1(rgba8: &[u8], width: u32, height: u32) -> Vec<u8> {
 
 /// Spring minimap size: 9 mipmap levels of DXT1 1024×1024.
 pub const MINIMAP_SIZE: usize = 699048;
+
+/// Bytes for the base (1024x1024) DXT1 level of the SMF-embedded minimap.
+/// 1024/4 = 256 blocks per side, 8 bytes per BC1 block.
+pub const MINIMAP_BASE_DXT1_BYTES: usize = 256 * 256 * 8;
+
+/// Decode the base 1024x1024 mip of an SMF-embedded DXT1 minimap into
+/// 1024x1024 RGBA8. Returns `None` when `dxt1_bytes` doesn't carry at
+/// least the base mip ([`MINIMAP_BASE_DXT1_BYTES`]); upper mips are
+/// ignored because the GPU regenerates them at upload time.
+pub fn decode_smf_minimap_base(dxt1_bytes: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    if dxt1_bytes.len() < MINIMAP_BASE_DXT1_BYTES {
+        return None;
+    }
+    const SIDE: usize = 1024;
+    const BLOCKS_PER_SIDE: usize = SIDE / 4;
+    let mut rgba = vec![0u8; SIDE * SIDE * 4];
+    for by in 0..BLOCKS_PER_SIDE {
+        for bx in 0..BLOCKS_PER_SIDE {
+            let src = (by * BLOCKS_PER_SIDE + bx) * 8;
+            let block: [u8; 8] = dxt1_bytes[src..src + 8].try_into().ok()?;
+            let pixels = decode_dxt1_block(&block);
+            for dy in 0..4usize {
+                for dx in 0..4usize {
+                    let x = bx * 4 + dx;
+                    let y = by * 4 + dy;
+                    let dst = (y * SIDE + x) * 4;
+                    rgba[dst..dst + 4].copy_from_slice(&pixels[dy * 4 + dx]);
+                }
+            }
+        }
+    }
+    Some((rgba, SIDE as u32, SIDE as u32))
+}
 
 /// Generate a Spring-compatible minimap (DXT1, 9 mipmap levels, 699048 bytes).
 /// Input: 1024×1024 RGBA8 image data.

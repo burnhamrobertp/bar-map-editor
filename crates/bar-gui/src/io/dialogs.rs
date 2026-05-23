@@ -110,6 +110,28 @@ impl BarEditorApp {
         }
     }
 
+    /// Spawn a file picker for importing a `.sd7` archive. Reuses the same
+    /// `pending_open_rx` channel as `open_file_dialog_async`; only one dialog
+    /// can be in flight at a time regardless of type.
+    pub(crate) fn import_sd7_dialog_async(&mut self) {
+        if self.project.pending_open_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        let parent = self.parent_window();
+        std::thread::spawn(move || {
+            let mut dialog = rfd::FileDialog::new()
+                .set_title("Import SD7")
+                .add_filter("Spring Map Archive", &["sd7"]);
+            if let Some(parent) = &parent {
+                dialog = dialog.set_parent(parent);
+            }
+            let path = dialog.pick_file();
+            let _ = tx.send(path);
+        });
+        self.project.pending_open_rx = Some(rx);
+    }
+
     /// Spawn the Open file dialog on a worker thread so the egui
     /// main loop can keep rendering while the OS dialog is up. The
     /// result lands in `project.pending_open_rx` which `update` polls
@@ -121,15 +143,13 @@ impl BarEditorApp {
         let (tx, rx) = std::sync::mpsc::channel();
         let parent = self.parent_window();
         std::thread::spawn(move || {
-            let mut dialog = rfd::FileDialog::new()
-                .set_title("Open")
-                .add_filter("Supported Files", &["barproj", "sd7"])
-                .add_filter("BAR Map Editor Project", &["barproj"])
-                .add_filter("Spring Map Archive", &["sd7"]);
+            let mut dialog = rfd::FileDialog::new().set_title("Open Project (.barproj folder)");
             if let Some(parent) = &parent {
                 dialog = dialog.set_parent(parent);
             }
-            let path = dialog.pick_file();
+            // .barproj projects are directories; use pick_folder.
+            // .sd7 files can be opened via drag-drop or File > Import.
+            let path = dialog.pick_folder();
             let _ = tx.send(path);
         });
         self.project.pending_open_rx = Some(rx);

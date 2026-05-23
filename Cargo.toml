@@ -13,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.4"
+version = "0.2.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
 repository = "https://github.com/burnhamrobertp/bar-map-editor"
@@ -39,6 +39,10 @@ noise = "0.9"
 
 # Image I/O
 image = "0.25"
+# DDS parsing for skybox cubemaps -- `image` 0.25 has a DDS decoder but
+# it returns a 2D image, not the 6-face cubemap layout BAR uses. Use
+# `ddsfile` (the established Rust DDS parser) for that.
+ddsfile = "0.5"
 
 # Error handling
 anyhow = "1"
@@ -62,6 +66,9 @@ raw-window-handle = "0.6"
 # Platform directories
 directories = "6"
 
+# UUID generation for asset identifiers
+uuid = { version = "1", features = ["v4"] }
+
 # Math
 glam = "0.29"
 
@@ -73,8 +80,12 @@ toml = "0.8"
 
 # Archiving
 zip = "2"
+flate2 = "1"
 walkdir = "2"
 sevenz-rust = "0.6"
+
+# Lua evaluation for map-bundled feature definitions
+mlua = { version = "0.10", features = ["lua54", "vendored"] }
 
 # Cross-platform path handling
 path-slash = "0.2"

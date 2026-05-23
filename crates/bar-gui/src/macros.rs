@@ -164,7 +164,7 @@ pub fn instantiate(
         let n_ports = node.inputs.len().max(node.outputs.len());
         let default_size = match node.node_type {
             NodeType::PassThrough => egui::vec2(180.0, 200.0),
-            NodeType::Bundler => egui::vec2(210.0, 240.0),
+            NodeType::FinalComposition => egui::vec2(210.0, 240.0),
             _ => egui::vec2(
                 150.0,
                 (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0),

@@ -75,10 +75,7 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                     .collect();
                 keys.sort();
                 for k in &keys {
-                    ui.weak(format!(
-                        "  \u{2022} {}",
-                        crate::app::confirm_key_display_name(k)
-                    ));
+                    ui.weak(format!("  - {}", crate::app::confirm_key_display_name(k)));
                 }
                 if ui.button(t!("editor.prefs.confirmations.clear")).clicked() {
                     app.settings.suppressed_confirmations.clear();
@@ -96,6 +93,77 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
                 app.settings.restore_last_project = restore;
                 changed = true;
             }
+
+            ui.add_space(8.0);
+            ui.heading(t!("editor.prefs.game.heading"));
+            ui.weak(t!("editor.prefs.game.hint"));
+            ui.add_space(4.0);
+            ui.label(t!("editor.prefs.game.archive_label"));
+            ui.horizontal(|ui| {
+                let mut path_str = app
+                    .settings()
+                    .selected_game_archive
+                    .as_deref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut path_str)
+                        .hint_text(t!("editor.prefs.game.none"))
+                        .desired_width(320.0),
+                );
+                if response.lost_focus() {
+                    let trimmed = path_str.trim();
+                    if trimmed.is_empty() {
+                        app.settings.selected_game_archive = None;
+                    } else {
+                        app.settings.selected_game_archive =
+                            Some(std::path::PathBuf::from(trimmed));
+                    }
+                    changed = true;
+                }
+                if ui.button(t!("editor.prefs.game.browse")).clicked() {
+                    // pick_folder lets the user select .sdd directories (which
+                    // pick_file would navigate into instead of selecting).
+                    // For .sdz/.sd7 files, paste the path directly in the field.
+                    let picked = rfd::FileDialog::new().pick_folder();
+                    if let Some(path) = picked {
+                        app.settings.selected_game_archive = Some(path);
+                        changed = true;
+                    }
+                }
+                if app.settings().selected_game_archive.is_some()
+                    && ui.button(t!("editor.prefs.game.clear")).clicked()
+                {
+                    app.settings.selected_game_archive = None;
+                    changed = true;
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.heading(t!("editor.prefs.display.heading"));
+            ui.weak(t!("editor.prefs.display.hint"));
+            let mut grass = app.settings().display.grass;
+            if ui
+                .checkbox(&mut grass, t!("editor.prefs.display.grass"))
+                .changed()
+            {
+                app.settings.display.grass = grass;
+                changed = true;
+            }
+            // The "Advanced Map Shading" and "Advanced Model Shading"
+            // toggles are hidden from the UI today: they were intended
+            // as opt-in switches for additional fidelity beyond the
+            // baseline, but neither has any rendering attached yet --
+            // surfacing them would mislead users into thinking the
+            // checkboxes do something. The `DisplayPrefs` fields are
+            // kept (with `#[serde(default)]`) so any saved settings
+            // referencing them still load cleanly; the renderer
+            // plumbing (`TerrainRenderer::advanced_*_shading` +
+            // `terrain_detail_params.zw`) stays for the eventual
+            // implementations. See `docs/TODO.md` -- "Diagnose the
+            // model-shading disparity vs in-engine cus_gl4-on" and
+            // "Real `cus_gl4` port..." -- for the work that needs to
+            // land before these are worth showing again.
 
             ui.add_space(12.0);
             if let Some(p) = Settings::config_path() {
@@ -131,4 +199,40 @@ pub(crate) fn draw_about(app: &mut BarEditorApp, ctx: &egui::Context) {
             );
         });
     app.dialog.show_about = open;
+}
+
+/// Centered modal shown while a `.sd7` import is in flight. The
+/// step string comes from `app.project.import_status`, which
+/// `bar-app::runner` updates from the worker thread's progress
+/// callback. Cleared (modal closes) when the worker reports success
+/// or failure. Non-dismissable -- the import runs to completion
+/// regardless of user input, so no close button.
+pub(crate) fn draw_import_progress(app: &BarEditorApp, ctx: &egui::Context) {
+    let Some(step) = app.project.import_status.as_deref() else {
+        return;
+    };
+    egui::Window::new(t!("editor.import.title"))
+        .resizable(false)
+        .collapsible(false)
+        .title_bar(false)
+        .fixed_size(egui::vec2(340.0, 0.0))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.add_space(8.0);
+                ui.heading(t!("editor.import.title"));
+                ui.add_space(8.0);
+                ui.add(egui::Spinner::new().size(28.0));
+                ui.add_space(8.0);
+                // `Truncate` mode keeps the modal height stable as
+                // labels change length; egui adds an ellipsis if the
+                // step text overflows the fixed modal width.
+                ui.add(
+                    egui::Label::new(format!("{step}...")).wrap_mode(egui::TextWrapMode::Truncate),
+                );
+                ui.add_space(8.0);
+            });
+        });
+    // Keep the GUI loop ticking so the spinner animates.
+    ctx.request_repaint();
 }

@@ -23,8 +23,15 @@ pub fn export_smf(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let heightmap = get_heightmap_output(graph, &results)
         .context("No heightmap output node found — add a Heightmap Output node to the graph")?;
@@ -41,7 +48,7 @@ pub fn export_smf(
         path,
     )?;
 
-    tracing::info!("Exported SMF to {}", path.display());
+    tracing::debug!("Exported SMF to {}", path.display());
     Ok(())
 }
 
@@ -88,11 +95,6 @@ pub fn write_smf_full(
     Ok(())
 }
 
-/// Legacy wrapper for backward compat.
-pub fn write_smf(heightmap: &Heightmap, width: u32, height: u32, path: &Path) -> Result<()> {
-    write_smf_full(heightmap, None, None, width, height, path)
-}
-
 /// Export the graph's heightmap output as a 16-bit grayscale PNG.
 pub fn export_heightmap_png(
     graph: &GraphEngine,
@@ -101,15 +103,22 @@ pub fn export_heightmap_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let heightmap = get_heightmap_output(graph, &results)
         .context("No heightmap output node found — add a Heightmap Output node to the graph")?;
 
     write_heightmap_png(&heightmap, path)?;
 
-    tracing::info!("Exported heightmap PNG to {}", path.display());
+    tracing::debug!("Exported heightmap PNG to {}", path.display());
     Ok(())
 }
 
@@ -140,8 +149,15 @@ pub fn export_smt(
     height: u32,
     path: &Path,
 ) -> Result<(Vec<i32>, u32)> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let texture = get_texture_output(graph, &results)
         .context("No texture output found — add an Auto Texture → Bundler chain")?;
@@ -152,7 +168,7 @@ pub fn export_smt(
     let result = write_smt(&mut writer, &texture)
         .with_context(|| format!("Failed to write SMT: {}", path.display()))?;
 
-    tracing::info!("Exported SMT to {}", path.display());
+    tracing::debug!("Exported SMT to {}", path.display());
     Ok(result)
 }
 
@@ -164,15 +180,22 @@ pub fn export_texture_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let texture = get_texture_output(graph, &results)
         .context("No texture output found — add an Auto Texture → Bundler chain")?;
 
     write_color_png(&texture, path)?;
 
-    tracing::info!("Exported texture PNG to {}", path.display());
+    tracing::debug!("Exported texture PNG to {}", path.display());
     Ok(())
 }
 
@@ -184,8 +207,15 @@ pub fn export_normalmap_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let normalmap = get_normalmap_output(graph, &results).context(
         "No normal map output — connect a NormalMap node to the Bundler's normalmap port",
@@ -193,7 +223,7 @@ pub fn export_normalmap_png(
 
     write_color_png(&normalmap, path)?;
 
-    tracing::info!("Exported normal map PNG to {}", path.display());
+    tracing::debug!("Exported normal map PNG to {}", path.display());
     Ok(())
 }
 
@@ -205,15 +235,22 @@ pub fn export_grassmap_png(
     height: u32,
     path: &Path,
 ) -> Result<()> {
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let grassmap = get_grassmap_output(graph, &results)
         .context("No grass map output — connect a GrassMap node to the Bundler's grassmap port")?;
 
     write_heightmap_png(&grassmap, path)?;
 
-    tracing::info!("Exported grass map PNG to {}", path.display());
+    tracing::debug!("Exported grass map PNG to {}", path.display());
     Ok(())
 }
 
@@ -261,8 +298,15 @@ pub fn export_sd7_directory(
     let maps_dir = output_dir.join("maps");
     fs::create_dir_all(&maps_dir)?;
 
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     let heightmap = get_heightmap_output(graph, &results)
         .context("No heightmap output — add a Heightmap Output node")?;
@@ -283,7 +327,7 @@ pub fn export_sd7_directory(
         height,
         &smf_path,
     )?;
-    tracing::info!("Wrote SMF: {}", smf_path.display());
+    tracing::debug!("Wrote SMF: {}", smf_path.display());
 
     // Write SMT into maps/ subdirectory (if we have a texture)
     if let Some(ref tex) = texture {
@@ -291,12 +335,12 @@ pub fn export_sd7_directory(
         let file = File::create(&smt_path)?;
         let mut writer = BufWriter::new(file);
         write_smt(&mut writer, tex)?;
-        tracing::info!("Wrote SMT: {}", smt_path.display());
+        tracing::debug!("Wrote SMT: {}", smt_path.display());
 
         // Write diffuse preview PNG (at root for debugging)
         let tex_png_path = output_dir.join(format!("{}_diffuse.png", map_name));
         write_color_png(tex, &tex_png_path)?;
-        tracing::info!("Wrote diffuse preview: {}", tex_png_path.display());
+        tracing::debug!("Wrote diffuse preview: {}", tex_png_path.display());
     }
 
     // Write heightmap PNG (at root for debugging)
@@ -307,14 +351,14 @@ pub fn export_sd7_directory(
     if let Some(ref nmap) = normalmap {
         let nm_path = output_dir.join(format!("{}_normals.png", map_name));
         write_color_png(nmap, &nm_path)?;
-        tracing::info!("Wrote normal map: {}", nm_path.display());
+        tracing::debug!("Wrote normal map: {}", nm_path.display());
     }
 
     // Write grass map (if present)
     if let Some(ref gmap) = grassmap {
         let gm_path = output_dir.join(format!("{}_grass.png", map_name));
         write_heightmap_png(gmap, &gm_path)?;
-        tracing::info!("Wrote grass map: {}", gm_path.display());
+        tracing::debug!("Wrote grass map: {}", gm_path.display());
     }
 
     // Write mapinfo.lua at root of archive
@@ -323,18 +367,23 @@ pub fn export_sd7_directory(
     let mapinfo = generate_mapinfo(map_name, map_x, map_y, settings);
     let mapinfo_path = output_dir.join("mapinfo.lua");
     fs::write(&mapinfo_path, mapinfo)?;
-    tracing::info!("Wrote mapinfo: {}", mapinfo_path.display());
+    tracing::debug!("Wrote mapinfo: {}", mapinfo_path.display());
 
     tracing::info!("SD7 directory export complete: {}", output_dir.display());
     Ok(())
 }
 
-/// Generate a mapinfo.lua using configurable settings.
+/// Generate a mapinfo.lua using configurable settings. Legacy
+/// export-path emitter (the codec at `targets/spring_smf.rs` is the
+/// modern path that emits only user-explicit fields). This one
+/// resolves Option overrides up front for compatibility with the
+/// older formatting block.
 fn generate_mapinfo(name: &str, map_x: u32, map_y: u32, settings: &MapSettings) -> String {
-    let deformable_str = if settings.deformable { "false" } else { "true" };
-    let atm = &settings.atmosphere;
-    let lit = &settings.lighting;
-    let wat = &settings.water;
+    let rs = settings.resolved();
+    let deformable_str = if rs.deformable { "false" } else { "true" };
+    let atm = &rs.atmosphere;
+    let lit = &rs.lighting;
+    let wat = &rs.water;
 
     // World-space dimensions (elmos) = squares × squareSize
     let world_x = map_x * 8;
@@ -448,14 +497,14 @@ fn generate_mapinfo(name: &str, map_x: u32, map_y: u32, settings: &MapSettings) 
 
 return mapinfo
 "#,
-        hardness = settings.map_hardness,
+        hardness = rs.map_hardness,
         deformable = deformable_str,
-        gravity = settings.gravity,
-        tidal = settings.tidal_strength,
-        max_metal = settings.max_metal,
-        extractor_radius = settings.extractor_radius,
-        min_height = settings.min_height,
-        max_height = settings.max_height,
+        gravity = rs.gravity,
+        tidal = rs.tidal_strength,
+        max_metal = rs.max_metal,
+        extractor_radius = rs.extractor_radius,
+        min_height = rs.min_height,
+        max_height = rs.max_height,
         atm_min_wind = atm.min_wind,
         atm_max_wind = atm.max_wind,
         atm_fog_start = atm.fog_start,
@@ -476,7 +525,19 @@ return mapinfo
         spc_g = lit.ground_specular[1],
         spc_b = lit.ground_specular[2],
         spec_exp = lit.spec_exponent,
-        water_damage = wat.damage,
+        // Water mode forces damage to zero -- the BAR engine reads
+        // any positive `mapinfo.water.damage` as lava, so storing
+        // a stale lava value while the user is in water mode would
+        // turn the exported map into lava on Test-in-BAR. Lava mode
+        // emits the stored value as-is.
+        water_damage = if wat.is_lava { wat.damage } else { 0.0 },
+        // (`wat.is_lava` is a bool here, sourced from
+        // ResolvedWater, which defaults to false when the recipe
+        // hasn't expressed a preference. The
+        // forced-zero-in-water-mode rule still applies because
+        // this template emits `damage` unconditionally; the
+        // structured emitter in `targets/spring_smf.rs` is the
+        // path where unset damage stays unset.)
         abs_r = wat.absorb[0],
         abs_g = wat.absorb[1],
         abs_b = wat.absorb[2],
@@ -538,8 +599,15 @@ pub fn export_with_target(
     })?;
 
     // Evaluate graph
-    let results =
-        evaluate_graph(graph, executor, width, height).context("Failed to evaluate graph")?;
+    let results = evaluate_graph(
+        graph,
+        executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .context("Failed to evaluate graph")?;
 
     // Build layer set
     let layers = LayerSet {
@@ -556,15 +624,27 @@ pub fn export_with_target(
     let dims = codec.compute_dimensions(&config, width, height);
 
     // Create export plan
+    let display_name = {
+        let trimmed = recipe.name.trim();
+        if trimmed.is_empty() {
+            map_name.to_string()
+        } else {
+            trimmed.to_string()
+        }
+    };
     let plan = ExportPlan {
         map_name: map_name.to_string(),
+        display_name,
         shortname: recipe.shortname.clone(),
         description: recipe.description.clone(),
         author: recipe.author.clone(),
         version: recipe.version.clone(),
+        tip: recipe.tip.clone(),
+        depend: recipe.depend.clone(),
         dimensions: dims,
         settings: settings.clone(),
         features: recipe.features.clone(),
+        project_dir: None,
     };
 
     // Validate

@@ -33,7 +33,7 @@ fn build_graph() -> GraphEngine {
         .insert("seed".to_string(), ParamValue::UInt(0));
     let noise_id = graph.add_node(noise_node);
 
-    let mut bundler_node = Node::new(NodeId(0), NodeType::Bundler, "BAR Export");
+    let mut bundler_node = Node::new(NodeId(0), NodeType::FinalComposition, "BAR Export");
     bundler_node.params.insert(
         "target".to_string(),
         ParamValue::String("spring-smf".to_string()),
@@ -68,7 +68,7 @@ fn bench_graph_evaluation(c: &mut Criterion) {
             BenchmarkId::new("noise_to_bundler", size),
             &size,
             |b, &size| {
-                b.iter(|| evaluate_graph(&graph, &executor, size, size).unwrap());
+                b.iter(|| evaluate_graph(&graph, &executor, size, size, size, size).unwrap());
             },
         );
     }
@@ -88,12 +88,13 @@ fn bench_full_export(c: &mut Criterion) {
     for &size in RESOLUTIONS {
         group.bench_with_input(BenchmarkId::new("noise_to_sd7", size), &size, |b, &size| {
             let recipe = Recipe {
-                schema_version: bar_project::RECIPE_SCHEMA_VERSION,
                 name: "bench".to_string(),
                 shortname: None,
                 description: String::new(),
                 author: None,
                 version: None,
+                tip: None,
+                depend: vec!["Map Helper v1".to_string()],
                 nodes: Vec::new(),
                 connections: Vec::new(),
                 output: OutputConfig {
@@ -104,8 +105,8 @@ fn bench_full_export(c: &mut Criterion) {
                 features: Vec::new(),
             };
             b.iter(|| {
-                let outputs = evaluate_graph(&graph, &executor, size, size).unwrap();
-                let _ = execute_bundlers(&graph, &outputs, &recipe, &tmp, None);
+                let outputs = evaluate_graph(&graph, &executor, size, size, size, size).unwrap();
+                let _ = execute_bundlers(&graph, &outputs, &recipe, &tmp, None, None);
             });
         });
     }

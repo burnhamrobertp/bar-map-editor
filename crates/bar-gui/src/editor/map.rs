@@ -14,24 +14,26 @@ use bar_project::MapSettings;
 /// Plain-data snapshot of SMF ground-shading inputs (lighting +
 /// water-absorption). Returned by `BarEditorApp::smf_lighting` and
 /// consumed by `bar-app` to populate the renderer's per-frame
-/// `SmfLighting`. Lives in `bar-gui` so callers can read it without
-/// pulling in `bar-render` as a transitive dep.
-#[derive(Clone, Copy, Debug)]
-pub struct SmfLightingSnapshot {
-    pub sun_dir: [f32; 3],
-    pub ground_ambient: [f32; 3],
-    pub ground_diffuse: [f32; 3],
-    pub ground_specular: [f32; 3],
-    pub specular_exponent: f32,
-    pub water_absorb: [f32; 3],
-    pub water_base: [f32; 3],
-    pub water_min: [f32; 3],
-}
+/// uniforms. There is exactly one shape for this; `bar-render`
+/// defines it and we re-export the same type so the GUI, the
+/// renderer, and the CLI cannot drift out of sync on field order
+/// or units. (Previously a copy lived here as
+/// `SmfLightingSnapshot`, the renderer had its own
+/// `SmfLighting`, and the CLI handcopied between them — easy
+/// for one site to forget a field.)
+pub type SmfLightingSnapshot = bar_render::SmfLighting;
 
 /// Recipe identity block: the values that show up in the Map Info /
 /// About dialog and end up in the `.barproj` recipe header.
-#[derive(Default, Clone, Debug)]
+#[derive(Clone, Debug)]
 pub struct RecipeMeta {
+    /// Human-readable map name (`mapinfo.name`). The engine builds the
+    /// archive identifier from `name .. " " .. version`, so this is
+    /// the value players see and which the script's `MapName=` must
+    /// match. When `None`, the bundler falls back to the `.barproj`
+    /// directory stem -- only sensible for fresh projects that never
+    /// had a source mapinfo to import a real name from.
+    pub name: Option<String>,
     /// Optional shortname (`mapinfo.shortname`). Omitted from mapinfo.lua when `None`.
     pub shortname: Option<String>,
     /// Free-form description (`mapinfo.description`). Empty string is omitted.
@@ -41,6 +43,26 @@ pub struct RecipeMeta {
     /// Optional version string. Omitted from mapinfo.lua when `None`.
     /// When set, becomes part of the Spring archive identity: `name .. " " .. version`.
     pub version: Option<String>,
+    /// Optional short tooltip text shown by the lobby on hover.
+    /// Becomes mapinfo's `tip`. Omitted when `None`.
+    pub tip: Option<String>,
+    /// Archive dependencies (`mapinfo.depend`). Default is
+    /// `["Map Helper v1"]`; rarely changed.
+    pub depend: Vec<String>,
+}
+
+impl Default for RecipeMeta {
+    fn default() -> Self {
+        Self {
+            name: None,
+            shortname: None,
+            description: String::new(),
+            author: None,
+            version: None,
+            tip: None,
+            depend: vec!["Map Helper v1".to_string()],
+        }
+    }
 }
 
 /// Project map metadata + UI shadow state. See module docs.
@@ -64,9 +86,13 @@ pub struct MapState {
     /// Index of the spawn marker currently being dragged in the 2D
     /// inspector (None if no drag in progress).
     pub dragging_spawn: Option<usize>,
-    /// Feature placements preserved from the last .sd7 import.
-    /// Editable in the sculpt view in a future iteration.
+    /// Feature placements (imported from .sd7 and/or placed by the user).
     pub features: Vec<PlacedFeature>,
+    /// Index into `features` of the currently selected feature (for deletion).
+    pub selected_feature_idx: Option<usize>,
+    /// Set to true when features are added/removed via the placement tool.
+    /// Consumed by the layout manager to trigger a GPU instance rebuild.
+    pub features_placement_dirty: bool,
 }
 
 impl MapState {

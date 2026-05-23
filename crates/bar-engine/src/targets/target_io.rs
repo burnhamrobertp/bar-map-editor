@@ -71,7 +71,6 @@ mod tests {
         assert_eq!(config.id, "test-target");
         assert_eq!(config.codec, "spring-smf");
         // Defaults should be applied
-        assert_eq!(config.schema_version, 1);
         assert_eq!(config.codec_params.square_size, 8);
     }
 }

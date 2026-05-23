@@ -49,7 +49,11 @@ pub struct SmfFeaturePlacement {
     /// World Y position (engine snaps to terrain; typically 0 at import).
     pub y: f32,
     pub z: f32,
-    /// Rotation angle in degrees (Spring convention).
+    /// Y-axis rotation in radians, matching what Spring writes into the
+    /// `MapFeatureStruct.rotation` field. Callers that need Spring's
+    /// engine "heading" units (`-32768..32767`, full circle = 65536) or
+    /// degrees convert at the BME boundary -- this struct stays faithful
+    /// to the SMF binary format.
     pub angle: f32,
     pub taken_damage: i16,
 }
@@ -235,6 +239,14 @@ pub struct SmfMap {
     pub minimap_dxt1: Vec<u8>,
     /// Feature placements read from or written to the SMF feature section.
     pub features: Vec<SmfFeaturePlacement>,
+    /// Built-in vegetation map stored as a `MEH_Vegetation` extra header
+    /// (`SMFFormat.h:103`). `mapx/4 * mapy/4` bytes, one byte per
+    /// quarter-resolution cell: 0 = no grass, 1+ = grass present at
+    /// that cell. Used by BAR's `map_grass_gl4` widget as the
+    /// distribution-mask fallback when no per-map `grassDistTGA` is
+    /// specified in mapinfo (`map_grass_gl4.lua:857-892`). Empty
+    /// when the SMF has no vegetation extra header.
+    pub grass_map: Vec<u8>,
 }
 
 impl SmfMap {
@@ -258,6 +270,7 @@ impl SmfMap {
             tile_indices: Vec::new(),
             minimap_dxt1: Vec::new(),
             features: Vec::new(),
+            grass_map: Vec::new(),
         })
     }
 
@@ -294,74 +307,167 @@ impl SmfMap {
         // Read tilesmap section to get SMT filename and tile index map.
         // Section layout: numTileFiles:i32, numTiles:i32,
         //   then per file: numTilesInFile:i32 + null-terminated filename,
-        //   then tile_indices:[i32; tiles_x * tiles_y].
+        //   then tile_indices:[i32; numTiles].
+        // Use the stored numTiles from the header (not a re-derived count) to match
+        // exactly what the engine wrote. Failures here are non-fatal -- we can still
+        // import heightmap/metalmap/typemap without the tile data.
         let mut smt_filename = String::new();
         let mut tile_indices = Vec::new();
         if header.tilesmap_ptr > 0 {
-            reader.seek(SeekFrom::Start(header.tilesmap_ptr as u64))?;
-            let num_tile_files = read_i32(reader)?.max(0) as usize;
-            let _total_tiles = read_i32(reader)?;
+            let tile_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(header.tilesmap_ptr as u64))?;
+                let num_tile_files = read_i32(reader)?.max(0) as usize;
+                let total_tiles = read_i32(reader)?.max(0) as usize;
 
-            for _ in 0..num_tile_files {
-                let _tiles_in_file = read_i32(reader)?;
-                // Null-terminated filename
-                let mut name_bytes = Vec::new();
-                let mut b = [0u8; 1];
-                loop {
-                    reader.read_exact(&mut b)?;
-                    if b[0] == 0 {
-                        break;
+                for _ in 0..num_tile_files {
+                    let _tiles_in_file = read_i32(reader)?;
+                    let mut name_bytes = Vec::new();
+                    let mut b = [0u8; 1];
+                    loop {
+                        reader.read_exact(&mut b)?;
+                        if b[0] == 0 {
+                            break;
+                        }
+                        name_bytes.push(b[0]);
                     }
-                    name_bytes.push(b[0]);
+                    if smt_filename.is_empty() {
+                        smt_filename = String::from_utf8_lossy(&name_bytes).into_owned();
+                    }
                 }
-                if smt_filename.is_empty() {
-                    smt_filename = String::from_utf8_lossy(&name_bytes).into_owned();
-                }
-            }
 
-            // Tile index map dimensions
-            let tile_res = (header.tile_size / header.square_size).max(1) as u32;
-            let tiles_x = header.map_x as u32 / tile_res;
-            let tiles_y = header.map_y as u32 / tile_res;
-            let num_indices = (tiles_x * tiles_y) as usize;
-            tile_indices.reserve(num_indices);
-            for _ in 0..num_indices {
-                tile_indices.push(read_i32(reader)?);
+                tile_indices.reserve(total_tiles);
+                for _ in 0..total_tiles {
+                    tile_indices.push(read_i32(reader)?);
+                }
+                Ok(())
+            })();
+            if let Err(e) = tile_result {
+                tracing::warn!(error = %e, "SMF tile section unreadable; tile data skipped");
             }
         }
 
-        // Read feature section
+        // Read feature section. Non-fatal: features are optional for map import.
         let mut features = Vec::new();
         if header.featuremap_ptr > 0 {
-            reader.seek(SeekFrom::Start(header.featuremap_ptr as u64))?;
-            let num_types = read_i32(reader)?.max(0) as usize;
-            let num_feature_records = read_i32(reader)?.max(0) as usize;
+            let feat_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(header.featuremap_ptr as u64))?;
+                let num_types = read_i32(reader)?.max(0) as usize;
+                let num_feature_records = read_i32(reader)?.max(0) as usize;
 
-            let mut type_names: Vec<String> = Vec::with_capacity(num_types);
-            for _ in 0..num_types {
-                let mut name_buf = [0u8; 256];
-                reader.read_exact(&mut name_buf)?;
-                let end = name_buf.iter().position(|&b| b == 0).unwrap_or(256);
-                type_names.push(String::from_utf8_lossy(&name_buf[..end]).into_owned());
+                // Feature type names: null-terminated variable-length strings (Recoil format).
+                let mut type_names: Vec<String> = Vec::with_capacity(num_types);
+                for _ in 0..num_types {
+                    let mut name_bytes = Vec::new();
+                    let mut b = [0u8; 1];
+                    loop {
+                        reader.read_exact(&mut b)?;
+                        if b[0] == 0 {
+                            break;
+                        }
+                        name_bytes.push(b[0]);
+                    }
+                    type_names.push(String::from_utf8_lossy(&name_bytes).into_owned());
+                }
+
+                for _ in 0..num_feature_records {
+                    let type_idx = read_i32(reader)?.max(0) as usize;
+                    let x = read_f32(reader)?;
+                    let y = read_f32(reader)?;
+                    let z = read_f32(reader)?;
+                    let angle = read_f32(reader)?;
+                    let taken_damage = read_i16(reader)?;
+                    let _pad = read_i16(reader)?;
+                    let feature_type = type_names.get(type_idx).cloned().unwrap_or_default();
+                    features.push(SmfFeaturePlacement {
+                        feature_type,
+                        x,
+                        y,
+                        z,
+                        angle,
+                        taken_damage,
+                    });
+                }
+                Ok(())
+            })();
+            if let Err(e) = feat_result {
+                tracing::warn!(error = %e, "SMF feature section unreadable; features skipped");
             }
+        }
 
-            for _ in 0..num_feature_records {
-                let type_idx = read_i32(reader)?.max(0) as usize;
-                let x = read_f32(reader)?;
-                let y = read_f32(reader)?;
-                let z = read_f32(reader)?;
-                let angle = read_f32(reader)?;
-                let taken_damage = read_i16(reader)?;
-                let _pad = read_i16(reader)?;
-                let feature_type = type_names.get(type_idx).cloned().unwrap_or_default();
-                features.push(SmfFeaturePlacement {
-                    feature_type,
-                    x,
-                    y,
-                    z,
-                    angle,
-                    taken_damage,
-                });
+        // Read the DXT1-compressed minimap chunk. The engine writes a
+        // fixed-size payload of 9 mip levels starting from 1024x1024 (see
+        // `crate::smt::MINIMAP_SIZE`); read all of it so the chain is
+        // preserved for callers that want filtered downsamples, but a
+        // partial read is non-fatal (some older SMF files truncate after
+        // mip 0).
+        let mut minimap_dxt1 = Vec::new();
+        if header.minimap_ptr > 0 {
+            let mm_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(header.minimap_ptr as u64))?;
+                let mut buf = vec![0u8; crate::smt::MINIMAP_SIZE];
+                let mut read_total = 0usize;
+                while read_total < buf.len() {
+                    match reader.read(&mut buf[read_total..])? {
+                        0 => break,
+                        n => read_total += n,
+                    }
+                }
+                buf.truncate(read_total);
+                minimap_dxt1 = buf;
+                Ok(())
+            })();
+            if let Err(e) = mm_result {
+                tracing::warn!(error = %e, "SMF minimap section unreadable; minimap skipped");
+            }
+        }
+
+        // Vegetation extra header (`SMFFormat.h::MEH_Vegetation = 1`),
+        // mirroring `SMFMapFile.cpp::ReadGrassMap`. Walk every extra
+        // header after the main SMF header; for each one read its
+        // `(size, type)` 8-byte preamble, and if `type == 1` follow
+        // its 4-byte file-offset to read `mapx/4 * mapy/4` bytes of
+        // grass-density data. Other extra-header types get skipped
+        // by `(size - 8)` bytes. Non-fatal: a malformed extra-header
+        // chain just leaves `grass_map` empty.
+        let mut grass_map: Vec<u8> = Vec::new();
+        if header.num_extra_headers > 0 {
+            let grass_result: Result<(), Sd7Error> = (|| {
+                reader.seek(SeekFrom::Start(SmfHeader::SIZE as u64))?;
+                for _ in 0..header.num_extra_headers {
+                    let size = read_i32(reader)?;
+                    let ty = read_i32(reader)?;
+                    const MEH_VEGETATION: i32 = 1;
+                    if ty == MEH_VEGETATION {
+                        let pos = read_i32(reader)?;
+                        let after_pos = reader.stream_position()?;
+                        let map_x = header.map_x.max(0) as usize;
+                        let map_y = header.map_y.max(0) as usize;
+                        let grass_size = (map_x / 4) * (map_y / 4);
+                        if grass_size > 0 && pos > 0 {
+                            reader.seek(SeekFrom::Start(pos as u64))?;
+                            grass_map = vec![0u8; grass_size];
+                            reader.read_exact(&mut grass_map)?;
+                        }
+                        reader.seek(SeekFrom::Start(after_pos))?;
+                        // Skip rest of this header (matches engine's
+                        // `size - 8 - 4` since we already consumed
+                        // the 4-byte `pos`).
+                        let rest = (size as i64) - 8 - 4;
+                        if rest > 0 {
+                            reader.seek(SeekFrom::Current(rest))?;
+                        }
+                    } else {
+                        let rest = (size as i64) - 8;
+                        if rest > 0 {
+                            reader.seek(SeekFrom::Current(rest))?;
+                        }
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(e) = grass_result {
+                tracing::warn!(error = %e, "SMF extra-header chain unreadable; grass map skipped");
+                grass_map.clear();
             }
         }
 
@@ -372,8 +478,9 @@ impl SmfMap {
             typemap,
             smt_filename,
             tile_indices,
-            minimap_dxt1: Vec::new(),
+            minimap_dxt1,
             features,
+            grass_map,
         })
     }
 
@@ -417,8 +524,9 @@ impl SmfMap {
                 type_names.push(feat.feature_type.clone());
             }
         }
-        // Feature section: numTypes(4) + numFeatures(4) + type_table(n*256) + records(m*24).
-        let feature_section_size = (8 + type_names.len() * 256 + self.features.len() * 24) as i32;
+        // Feature section: numTypes(4) + numFeatures(4) + null-terminated type names + records(m*24).
+        let name_bytes_total: usize = type_names.iter().map(|n| n.len() + 1).sum();
+        let feature_section_size = (8 + name_bytes_total + self.features.len() * 24) as i32;
 
         // Calculate offsets sequentially
         let heightmap_ptr = SmfHeader::SIZE as i32;
@@ -491,13 +599,10 @@ impl SmfMap {
         // Write feature section
         write_i32(writer, type_names.len() as i32)?;
         write_i32(writer, self.features.len() as i32)?;
-        // Type name table: 256 bytes each, null-padded.
+        // Type name table: null-terminated variable-length strings (Recoil format).
         for name in &type_names {
-            let mut name_buf = [0u8; 256];
-            let bytes = name.as_bytes();
-            let copy_len = bytes.len().min(255);
-            name_buf[..copy_len].copy_from_slice(&bytes[..copy_len]);
-            writer.write_all(&name_buf)?;
+            writer.write_all(name.as_bytes())?;
+            writer.write_all(&[0u8])?;
         }
         // Feature records: 24 bytes each.
         for feat in &self.features {
@@ -653,7 +758,7 @@ mod tests {
                 x: 512.0,
                 y: 0.0,
                 z: 768.0,
-                angle: 1.57,
+                angle: std::f32::consts::FRAC_PI_2,
                 taken_damage: 0,
             },
             SmfFeaturePlacement {
@@ -670,7 +775,7 @@ mod tests {
                 x: 300.0,
                 y: 0.0,
                 z: 400.0,
-                angle: 3.14,
+                angle: std::f32::consts::PI,
                 taken_damage: 0,
             },
         ];
@@ -684,11 +789,11 @@ mod tests {
         assert_eq!(loaded.features[0].feature_type, "arborreal");
         assert!((loaded.features[0].x - 512.0).abs() < 0.001);
         assert!((loaded.features[0].z - 768.0).abs() < 0.001);
-        assert!((loaded.features[0].angle - 1.57).abs() < 0.001);
+        assert!((loaded.features[0].angle - std::f32::consts::FRAC_PI_2).abs() < 0.001);
         assert_eq!(loaded.features[1].feature_type, "GeoTherm_Lava_Rock");
         assert_eq!(loaded.features[1].taken_damage, 5);
         assert_eq!(loaded.features[2].feature_type, "arborreal");
-        assert!((loaded.features[2].angle - 3.14).abs() < 0.001);
+        assert!((loaded.features[2].angle - std::f32::consts::PI).abs() < 0.001);
     }
 
     #[test]

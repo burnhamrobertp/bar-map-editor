@@ -50,7 +50,17 @@ pub(crate) fn draw_path_tree(
         let id = ui.make_persistent_id(("pt_dir", depth, dir_name));
         egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true)
             .show_header(ui, |ui| {
-                ui.label(egui::RichText::new(format!("📁 {}", dir_name)).strong());
+                let icon_h = ui.text_style_height(&egui::TextStyle::Body);
+                let (icon_rect, _) =
+                    ui.allocate_exact_size(egui::vec2(icon_h, icon_h), egui::Sense::hover());
+                if ui.is_rect_visible(icon_rect) {
+                    crate::panels::icons::paint_folder_icon(
+                        &ui.painter_at(icon_rect),
+                        icon_rect,
+                        ui.visuals().text_color(),
+                    );
+                }
+                ui.label(egui::RichText::new(dir_name).strong());
             })
             .body(|ui| {
                 draw_path_tree(ui, child, depth + 1, edit_request);
@@ -61,10 +71,34 @@ pub(crate) fn draw_path_tree(
             ui.label(file_name).on_hover_text(archive.as_str());
             // Right-align the edit button by filling the rest of the row.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if is_text_file(archive)
-                    && ui.small_button("✏").on_hover_text("Edit file").clicked()
-                {
-                    *edit_request = Some((abs.clone(), archive.clone()));
+                if is_text_file(archive) {
+                    let icon_size = egui::vec2(16.0, 16.0);
+                    let (icon_rect, icon_resp) =
+                        ui.allocate_exact_size(icon_size, egui::Sense::click());
+                    if ui.is_rect_visible(icon_rect) {
+                        if icon_resp.hovered() {
+                            ui.painter_at(icon_rect).rect_filled(
+                                icon_rect,
+                                2.0,
+                                ui.visuals().widgets.hovered.bg_fill,
+                            );
+                        }
+                        let color = if icon_resp.hovered() {
+                            ui.visuals().strong_text_color()
+                        } else {
+                            ui.visuals().text_color()
+                        };
+                        crate::panels::icons::paint_pencil_icon(
+                            &ui.painter_at(icon_rect),
+                            icon_rect,
+                            color,
+                        );
+                    }
+                    let clicked = icon_resp.clicked();
+                    icon_resp.on_hover_text("Edit file");
+                    if clicked {
+                        *edit_request = Some((abs.clone(), archive.clone()));
+                    }
                 }
             });
         });

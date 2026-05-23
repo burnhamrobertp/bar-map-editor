@@ -56,11 +56,12 @@ impl NodeExecutor for HybridExecutor {
         node_type: &NodeType,
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
-        width: u32,
-        height: u32,
+        hm_width: u32,
+        hm_height: u32,
+        tex_width: u32,
+        tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
-        // Use GPU for noise nodes at sufficient resolution.
-        // Worley is excluded — its cellular algorithm is not implemented in the shader.
+        // GPU paths handle heightmap nodes only -- they use hm dims.
         let noise_type = match node_type {
             NodeType::PerlinNoise => Some(NoiseType::Perlin),
             NodeType::SimplexNoise => Some(NoiseType::Simplex),
@@ -69,13 +70,12 @@ impl NodeExecutor for HybridExecutor {
         };
 
         if let Some(nt) = noise_type {
-            if width >= GPU_NOISE_THRESHOLD && height >= GPU_NOISE_THRESHOLD {
-                return self.execute_gpu_noise(nt, params, width, height);
+            if hm_width >= GPU_NOISE_THRESHOLD && hm_height >= GPU_NOISE_THRESHOLD {
+                return self.execute_gpu_noise(nt, params, hm_width, hm_height);
             }
         }
 
-        // Use GPU for erosion at sufficient resolution
-        if width >= GPU_FILTER_THRESHOLD && height >= GPU_FILTER_THRESHOLD {
+        if hm_width >= GPU_FILTER_THRESHOLD && hm_height >= GPU_FILTER_THRESHOLD {
             match node_type {
                 NodeType::HydraulicErosion => {
                     return self.execute_gpu_hydraulic_erosion(params, inputs);
@@ -91,8 +91,9 @@ impl NodeExecutor for HybridExecutor {
         }
 
         // Delegate everything else to CPU
-        self.cpu_fallback
-            .execute(node_type, params, inputs, width, height)
+        self.cpu_fallback.execute(
+            node_type, params, inputs, hm_width, hm_height, tex_width, tex_height,
+        )
     }
 }
 

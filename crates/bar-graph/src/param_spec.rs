@@ -17,12 +17,12 @@
 //! - **Type mismatch is hard-fail.** A param declared `Float` cannot
 //!   silently be loaded as `Int`; the recipe is rejected. Type
 //!   collisions are always a hand-edit error or a deliberate format
-//!   change that wants a `schema_version` bump.
-//! - **Unknown keys are warnings (today: silent), not errors.** Old
-//!   projects that carry params from removed node-type variants need
-//!   to load. The unknown key is dropped on load; the user sees no
-//!   regression. A future strict mode can opt into hard-fail here
-//!   once the recipe schema version stabilises.
+//!   change.
+//! - **Unknown keys are warnings (today: silent), not errors.** Hand-
+//!   edited recipes that carry params from removed node-type variants
+//!   still load; the unknown key is dropped silently. Tighten to
+//!   hard-fail here if the schema stabilises and stray keys become
+//!   useful to surface.
 
 use std::collections::HashMap;
 
@@ -249,7 +249,6 @@ mod tests {
         NodeType::NormalMap,
         NodeType::GrassMap,
         NodeType::SpecularMap,
-        NodeType::Sculpt,
         // Mask operations
         NodeType::MaskThreshold,
         NodeType::MaskInvert,
@@ -262,6 +261,7 @@ mod tests {
         NodeType::Curve,
         NodeType::PaintedHeightmap,
         NodeType::PaintedTexture,
+        NodeType::ImportedTexture,
         // Additional generators
         NodeType::FileInput,
         NodeType::Voronoi,
@@ -287,11 +287,10 @@ mod tests {
         // Additional combiners
         NodeType::MaskSelect,
         // Bundler/packaging
-        NodeType::Bundler,
+        NodeType::FinalComposition,
         NodeType::FileReference,
         // Source nodes
         NodeType::PassThrough,
-        NodeType::Preview,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
     ];
@@ -302,7 +301,7 @@ mod tests {
         // NODE_TYPES_FOR_TEST. Update this constant AND the array when you add a variant.
         // (A compile-time version of this check requires nightly variant_count; this
         // test is the stable equivalent.)
-        const EXPECTED_VARIANT_COUNT: usize = 62;
+        const EXPECTED_VARIANT_COUNT: usize = 61;
         assert_eq!(
             NODE_TYPES_FOR_TEST.len(),
             EXPECTED_VARIANT_COUNT,

@@ -15,9 +15,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
-use bar_engine::recipe::{
-    MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode, RECIPE_SCHEMA_VERSION,
-};
+use bar_engine::recipe::{MapSettings, OutputConfig, Recipe, RecipeConnection, RecipeNode};
 use bar_engine::CpuExecutor;
 use bar_graph::{evaluate_graph, NodeType, ParamValue, PortValue};
 
@@ -102,8 +100,15 @@ pub fn run(
         .build_graph()
         .context("Recipe graph construction failed")?;
     let executor = CpuExecutor;
-    let outputs = evaluate_graph(&graph, &executor, width, height)
-        .map_err(|e| anyhow!("Graph evaluation failed: {e:?}"))?;
+    let outputs = evaluate_graph(
+        &graph,
+        &executor,
+        width,
+        height,
+        (width - 1) * 8,
+        (height - 1) * 8,
+    )
+    .map_err(|e| anyhow!("Graph evaluation failed: {e:?}"))?;
 
     // Pull the heightmap out of the bundler input.
     let bundler_id = bar_engine::find_bundler_nodes(&graph)
@@ -287,7 +292,7 @@ fn build_recipe(
     // Add the Bundler.
     nodes.push(RecipeNode {
         key: "_bundler".to_string(),
-        node_type: NodeType::Bundler,
+        node_type: NodeType::FinalComposition,
         label: "Bundler".to_string(),
         params: HashMap::new(),
     });
@@ -314,12 +319,13 @@ fn build_recipe(
     });
 
     Ok(Recipe {
-        schema_version: RECIPE_SCHEMA_VERSION,
         name: format!("preview-{}", template.name),
         shortname: None,
         description: String::new(),
         author: None,
         version: None,
+        tip: None,
+        depend: vec!["Map Helper v1".to_string()],
         nodes,
         connections,
         output: OutputConfig {

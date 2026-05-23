@@ -14,6 +14,7 @@ bar-compute = { workspace = true }
 bar-data = { workspace = true }
 bar-engine = { workspace = true }
 bar-graph = { workspace = true }
+bar-project = { workspace = true }
 bar-render = { workspace = true }
 bar-gui = { workspace = true }
 eframe = { workspace = true }
