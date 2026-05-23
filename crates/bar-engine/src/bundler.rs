@@ -63,6 +63,7 @@ pub fn execute_bundlers(
         filter_label,
         project_dir,
         None,
+        None,
     )
 }
 
@@ -72,6 +73,16 @@ pub fn execute_bundlers(
 /// takes ~10s to 7z-compress; writing the same content as a directory
 /// is well under a second. The engine accepts both `.sd7` and `.sdd`
 /// from the `maps/` directory transparently.
+///
+/// `identity_suffix`, when set, is appended verbatim to the
+/// `mapinfo.version` written into the bundle AND to the
+/// `BundlerResult.map_internal_name` returned to the caller. The
+/// recipe on disk is NOT modified. Used by Test-in-BAR so the test
+/// bundle's archive identity (`name + " " + version`) differs from
+/// any source archive the user has installed in BAR's `maps/`
+/// folder, preventing the engine from picking up the wrong archive
+/// on identity collision. Pass `None` for the normal deliverable
+/// export path.
 pub fn execute_bundlers_with_format(
     graph: &GraphEngine,
     outputs: &NodeOutputs,
@@ -80,6 +91,7 @@ pub fn execute_bundlers_with_format(
     filter_label: Option<&str>,
     project_dir: Option<&Path>,
     archive_format_override: Option<ArchiveFormat>,
+    identity_suffix: Option<&str>,
 ) -> Result<Vec<BundlerResult>> {
     let bundler_ids = find_bundler_nodes(graph);
     let mut results = Vec::new();
@@ -102,6 +114,7 @@ pub fn execute_bundlers_with_format(
             output_dir,
             project_dir,
             archive_format_override,
+            identity_suffix,
         )
         .with_context(|| format!("Failed to execute bundler '{}'", node.label))?;
 
@@ -120,6 +133,7 @@ fn execute_single_bundler(
     output_dir: &Path,
     project_dir: Option<&Path>,
     archive_format_override: Option<ArchiveFormat>,
+    identity_suffix: Option<&str>,
 ) -> Result<BundlerResult> {
     let width = recipe.output.width;
     let height = recipe.output.height;
@@ -209,14 +223,19 @@ fn execute_single_bundler(
     // Compute dimensions
     let dims = codec.compute_dimensions(&config, width, height);
 
-    // Create export plan
+    // Create export plan. The `version` field carries the optional
+    // identity_suffix so the emitted mapinfo's `name + " " + version`
+    // and the bundler's `map_internal_name` stay in lockstep. The
+    // recipe on disk is untouched -- we clone the version and append
+    // here, leaving `recipe.version` alone.
+    let plan_version = apply_identity_suffix(recipe.version.as_deref(), identity_suffix);
     let plan = ExportPlan {
         map_name: map_name.clone(),
         display_name: display_name.clone(),
         shortname: recipe.shortname.clone(),
         description: recipe.description.clone(),
         author: recipe.author.clone(),
-        version: recipe.version.clone(),
+        version: plan_version,
         tip: recipe.tip.clone(),
         depend: recipe.depend.clone(),
         dimensions: dims,
@@ -525,6 +544,7 @@ pub fn regenerate_mapinfo_in_bundle(
     recipe: &Recipe,
     bundle_dir: &Path,
     project_dir: Option<&Path>,
+    identity_suffix: Option<&str>,
 ) -> Result<()> {
     let bundler_ids = find_bundler_nodes(graph);
     let bundler_id = bundler_ids
@@ -561,13 +581,14 @@ pub fn regenerate_mapinfo_in_bundle(
         .ok_or_else(|| anyhow::anyhow!("Missing spring-smf codec"))?
         .compute_dimensions(&config, recipe.output.width, recipe.output.height);
 
+    let plan_version = apply_identity_suffix(recipe.version.as_deref(), identity_suffix);
     let plan = ExportPlan {
         map_name: map_name.clone(),
         display_name,
         shortname: recipe.shortname.clone(),
         description: recipe.description.clone(),
         author: recipe.author.clone(),
-        version: recipe.version.clone(),
+        version: plan_version,
         tip: recipe.tip.clone(),
         depend: recipe.depend.clone(),
         dimensions: dims.clone(),
@@ -595,6 +616,21 @@ pub fn regenerate_mapinfo_in_bundle(
     std::fs::write(&dest, final_lua)
         .with_context(|| format!("Failed to write {}", dest.display()))?;
     Ok(())
+}
+
+/// Append a runtime identity-suffix to a recipe version. Used by
+/// Test-in-BAR so the bundle's archive identity is distinct from
+/// any source map the user has installed -- the suffix lives only
+/// for the lifetime of the bundle, never reaches the saved recipe.
+/// `None` suffix or empty version returns the original unchanged
+/// (the suffix is meaningless without a base version, and the
+/// regular bundle path always passes `None`).
+fn apply_identity_suffix(version: Option<&str>, suffix: Option<&str>) -> Option<String> {
+    match (version, suffix) {
+        (Some(v), Some(s)) if !v.is_empty() && !s.is_empty() => Some(format!("{v}{s}")),
+        (Some(v), _) => Some(v.to_string()),
+        _ => None,
+    }
 }
 
 /// Slug-ify the recipe's name + version into a BAR-style archive

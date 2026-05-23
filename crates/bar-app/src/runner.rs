@@ -31,6 +31,16 @@ use crate::layout_manager::LayoutManager;
 /// `MapName=` in the launch script lines up regardless.
 const TEST_IN_BAR_BUNDLE_NAME: &str = "_bme_test_in_bar.sdd";
 
+/// Suffix appended to `mapinfo.version` (and the launcher's
+/// `MapName=`) for Test-in-BAR bundles. Keeps the test archive's
+/// engine identity (`name + " " + version`) distinct from the user's
+/// installed source -- avoids load-order ambiguity when both
+/// archives are present in `<install>/data/maps/`. Lobby map name
+/// reads e.g. "Forge v2.3 2.3 [BME Test]" so the user can tell at a
+/// glance they're in the dev build, not the source map. Runtime-only;
+/// never persisted into the recipe.
+const TEST_IN_BAR_IDENTITY_SUFFIX: &str = " [BME Test]";
+
 pub struct PendingExportDir {
     pub rx: mpsc::Receiver<Option<std::path::PathBuf>>,
     pub run_filter_label: Option<String>,
@@ -1134,6 +1144,7 @@ impl AppRunner {
                     &recipe,
                     &prev_sdd,
                     self.app.project.path.as_deref(),
+                    Some(TEST_IN_BAR_IDENTITY_SUFFIX),
                 ) {
                     Ok(()) => {
                         self.test_in_bar_cache =
@@ -1183,6 +1194,7 @@ impl AppRunner {
                     None,
                     test_project_dir.as_deref(),
                     Some(bar_engine::ArchiveFormat::Directory),
+                    Some(TEST_IN_BAR_IDENTITY_SUFFIX),
                 ) {
                     Ok(results) => match results
                         .into_iter()
