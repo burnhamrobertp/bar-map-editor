@@ -531,6 +531,24 @@ impl eframe::App for AppRunner {
         // Run the bar-gui frame (menus, palette, properties, modals, layout panels).
         self.app.update(ctx, frame);
 
+        // Consume `graph_reset` here, BEFORE the features_changed
+        // handler below spawns the model loader. `apply_project` (in
+        // bar-gui) sets both flags on a project switch; if the layout
+        // manager's `reset()` ran after `spawn_model_loader`, the
+        // loader would query the prior project's renderer for which
+        // models are already loaded, filter those names out of the
+        // queue, and then the renderer would be wiped on the
+        // layout_manager.update call later in this frame -- leaving
+        // those shared types unloaded on the fresh renderer and
+        // rendering them as green placeholder cubes. (See
+        // viewport.rs::build_feature_instances for the green-cube
+        // branch.) `layout_manager.update` still calls
+        // `take_graph_reset()` defensively; once the signal has been
+        // consumed here it's a no-op.
+        if self.app.project.take_graph_reset() {
+            self.layout_manager.reset(&self.gpu_context);
+        }
+
         // Feature catalog: detect archive change, poll background load.
         let desired_archive = self.app.settings().selected_game_archive.clone();
         if desired_archive != self.catalog_archive_path {
@@ -577,26 +595,31 @@ impl eframe::App for AppRunner {
         if self.app.project.features_changed {
             self.app.project.features_changed = false;
             self.model_rx = None; // cancel prior loader for a different map
-                                  // On barproj reload no SD7 extraction runs, so map_work_dir may be
-                                  // None. Check whether the project dir has objects3d/ copied in
-                                  // (happens on first save after import); if so, use it as the map
-                                  // data root so S3O models and feature defs are found without any
-                                  // reference to the original archive.
-            if self.map_work_dir.is_none() {
-                if let Some(ref project_dir) = self.app.project.path.clone() {
-                    if project_dir.join("objects3d").is_dir() {
-                        let map_catalog = FeatureCatalog::from_dir(project_dir);
-                        if !map_catalog.is_empty() {
-                            if let Some(ref mut catalog) = self.feature_catalog {
-                                catalog.merge(map_catalog);
-                                let mut names: Vec<String> =
-                                    catalog.features.keys().cloned().collect();
-                                names.sort();
-                                self.app.feature_palette_names = names;
-                            }
+                                  // Reset the map-data root unconditionally. A prior SD7
+                                  // import or .barproj open may have set it; if we don't
+                                  // clear here, switching from project A to project B keeps
+                                  // the worker pointed at A's objects3d/, so B's map-
+                                  // bundled features fail to locate their S3O and render
+                                  // as catalog-known-but-no-mesh placeholders (green).
+            self.map_work_dir = None;
+            if let Some(ref project_dir) = self.app.project.path.clone() {
+                if project_dir.join("objects3d").is_dir() {
+                    // FeatureCatalog::merge is first-write-wins, so map-
+                    // specific defs from a prior project that share a
+                    // name with B's persist. Rare for game-archive
+                    // features (same def across maps); for distinct
+                    // map-bundled features with name collisions this is
+                    // a known follow-up.
+                    let map_catalog = FeatureCatalog::from_dir(project_dir);
+                    if !map_catalog.is_empty() {
+                        if let Some(ref mut catalog) = self.feature_catalog {
+                            catalog.merge(map_catalog);
+                            let mut names: Vec<String> = catalog.features.keys().cloned().collect();
+                            names.sort();
+                            self.app.feature_palette_names = names;
                         }
-                        self.map_work_dir = Some(project_dir.clone());
                     }
+                    self.map_work_dir = Some(project_dir.clone());
                 }
             }
             self.spawn_model_loader(ctx);
