@@ -26,7 +26,8 @@
       "save_failed": "Save failed: %{error}",
       "extracting": "Extracting %{name}…",
       "opened": "Opened: %{name}",
-      "autosaved": "Autosaved"
+      "autosaved": "Autosaved",
+      "not_barproj": "Not a .barproj project directory: %{path}"
     },
     "prefs": {
       "title": "Preferences",
@@ -53,11 +54,13 @@
       },
       "game": {
         "heading": "Game Data",
+        "install_label": "BAR install path:",
+        "install_none": "(not set — Test in BAR disabled)",
         "archive_label": "Feature catalog archive:",
         "none": "(not set)",
         "browse": "Browse...",
         "clear": "Clear",
-        "hint": "Point to a BAR game archive (.sdz or .sdd) to render map features"
+        "hint": "BAR install path is the directory containing Beyond-All-Reason.exe; used by Test in BAR. Feature catalog archive points to the game archive (.sdz / .sdd) used to render map features."
       },
       "display": {
         "heading": "Display",

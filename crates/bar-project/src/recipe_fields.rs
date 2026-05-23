@@ -1478,30 +1478,31 @@ pub static WATER_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Lava (curated subset of WaterSettings rendered when
-// `WaterSettings::is_lava == true`. Damage gates the engine's
-// water-vs-lava behaviour and is required >= 1; the rest are the
-// underwater-volume / surface / surface-lighting fields that still
-// make sense on lava. Water-only physics -- Fresnel, perlin wave
-// normals, shore foam, refraction blur, caustics, sun specular,
-// flat plane -- are intentionally absent.)
+// Lava (`MapSettings::lava` -- driven by bar-game's `map_lava`
+// gadget, which BAR enables via a chain of triggers: archive
+// `mapconfig/lava.lua`, game-side `common/configs/LavaMaps/<MapName>`
+// match, `mapinfo.water.damage > 0` fallback, mod option). Fields
+// mirror the keys bar-game's `modules/lava.lua` reads.
 // ──────────────────────────────────────────────────────────────────
 
 pub static LAVA_SPECS: &[FieldSpec<MapSettings>] = &[
     FieldSpec {
-        id: "water.damage",
+        id: "lava.damage",
         label: "Damage / sec",
-        description: Some("Continuous damage applied to units immersed in the lava volume."),
+        description: Some(
+            "Continuous damage applied to units immersed in lava. Engine \
+             treats `< 1` as zero, so values below that round to no damage.",
+        ),
         kind: FieldKind::F32 {
             hard: (1.0, 10000.0),
             soft: Some((1.0, 1000.0)),
             unit: "/s",
         },
-        default: DefaultValue::F32(1.0),
-        get: |s| FieldValue::F32(s.water.damage),
+        default: DefaultValue::F32(ed::LAVA_DAMAGE),
+        get: |s| FieldValue::F32(s.lava.damage),
         set: |s, v| {
             if let FieldValue::F32(x) = v {
-                s.water.damage = x;
+                s.lava.damage = x;
             }
         },
         category: categories::WATER,
@@ -1509,143 +1510,221 @@ pub static LAVA_SPECS: &[FieldSpec<MapSettings>] = &[
         blocks_export: false,
     },
     FieldSpec {
-        id: "water.absorb",
-        label: "Absorb",
-        description: Some("Per-elmo light attenuation through the lava volume."),
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::WATER_ABSORB),
-        get: |s| FieldValue::Color(s.water.absorb),
+        id: "lava.color_correction",
+        label: "Colour correction",
+        description: Some(
+            "Final RGB multiplier on the lava colour. The dominant per-map \
+             visual lever -- acid-green lava maps use vec3(0.26, 1.0, 0.03), \
+             classic orange uses vec3(1, 1, 1), purple uses vec3(0.3, 0.1, 1.5).",
+        ),
+        kind: FieldKind::Vec3 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 2.0)),
+        },
+        default: DefaultValue::Vec3(ed::LAVA_COLOR_CORRECTION),
+        get: |s| FieldValue::Vec3(s.lava.color_correction),
         set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.water.absorb = x;
+            if let FieldValue::Vec3(x) = v {
+                s.lava.color_correction = x;
             }
         },
         category: categories::WATER,
-        group: "Underwater colour",
+        group: "Appearance",
         blocks_export: false,
     },
     FieldSpec {
-        id: "water.base_color",
-        label: "Base colour (shallow)",
-        description: None,
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::WATER_BASE_COLOR),
-        get: |s| FieldValue::Color(s.water.base_color),
-        set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.water.base_color = x;
-            }
-        },
-        category: categories::WATER,
-        group: "Underwater colour",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "water.min_color",
-        label: "Min colour (deep)",
-        description: None,
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::WATER_MIN_COLOR),
-        get: |s| FieldValue::Color(s.water.min_color),
-        set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.water.min_color = x;
-            }
-        },
-        category: categories::WATER,
-        group: "Underwater colour",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "water.surface_color",
-        label: "Surface colour",
-        description: None,
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::WATER_SURFACE_COLOR),
-        get: |s| FieldValue::Color(s.water.surface_color),
-        set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.water.surface_color = x;
-            }
-        },
-        category: categories::WATER,
-        group: "Surface",
-        blocks_export: false,
-    },
-    FieldSpec {
-        id: "water.surface_alpha",
-        label: "Surface alpha",
-        description: None,
+        id: "lava.uv_scale",
+        label: "UV scale",
+        description: Some("Number of texture tiles across the map's longer axis."),
         kind: FieldKind::F32 {
-            hard: (0.0, 1.0),
-            soft: Some((0.0, 1.0)),
+            hard: (0.1, 100.0),
+            soft: Some((0.5, 20.0)),
             unit: "",
         },
-        default: DefaultValue::F32(ed::WATER_SURFACE_ALPHA),
-        get: |s| FieldValue::F32(s.water.surface_alpha),
+        default: DefaultValue::F32(ed::LAVA_UV_SCALE),
+        get: |s| FieldValue::F32(s.lava.uv_scale),
         set: |s, v| {
             if let FieldValue::F32(x) = v {
-                s.water.surface_alpha = x;
+                s.lava.uv_scale = x;
             }
         },
         category: categories::WATER,
-        group: "Surface",
+        group: "Appearance",
         blocks_export: false,
     },
     FieldSpec {
-        id: "water.diffuse_color",
-        label: "Diffuse colour",
-        description: None,
-        kind: FieldKind::Color,
-        default: DefaultValue::Color(ed::WATER_DIFFUSE_COLOR),
-        get: |s| FieldValue::Color(s.water.diffuse_color),
+        id: "lava.diffuse_emit_tex",
+        label: "Diffuse + emit texture",
+        description: Some(
+            "RGB = base colour, A = emission mask. Default `lava2_diffuseemit.dds` \
+             ships bundled (CC0). Some maps override with `lava7_diffuseemit.dds` \
+             for a more rocky look.",
+        ),
+        kind: FieldKind::OptionText { max_len: Some(256) },
+        default: DefaultValue::Empty,
+        get: |s| FieldValue::OptionText(s.lava.diffuse_emit_tex.clone()),
         set: |s, v| {
-            if let FieldValue::Color(x) = v {
-                s.water.diffuse_color = x;
+            if let FieldValue::OptionText(x) = v {
+                s.lava.diffuse_emit_tex = x;
             }
         },
         category: categories::WATER,
-        group: "Surface lighting",
+        group: "Appearance",
         blocks_export: false,
     },
     FieldSpec {
-        id: "water.ambient_factor",
-        label: "Ambient factor",
-        description: None,
+        id: "lava.normal_height_tex",
+        label: "Normal + height texture",
+        description: Some("RGB = tangent normal, A = parallax height."),
+        kind: FieldKind::OptionText { max_len: Some(256) },
+        default: DefaultValue::Empty,
+        get: |s| FieldValue::OptionText(s.lava.normal_height_tex.clone()),
+        set: |s, v| {
+            if let FieldValue::OptionText(x) = v {
+                s.lava.normal_height_tex = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Appearance",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "lava.coast_color",
+        label: "Coast colour",
+        description: Some("RGB added at the shoreline ramp."),
+        kind: FieldKind::Vec3 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 3.0)),
+        },
+        default: DefaultValue::Vec3(ed::LAVA_COAST_COLOR),
+        get: |s| FieldValue::Vec3(s.lava.coast_color),
+        set: |s, v| {
+            if let FieldValue::Vec3(x) = v {
+                s.lava.coast_color = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Coast",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "lava.coast_width",
+        label: "Coast width",
+        description: Some("How wide the shoreline coast band is, in elmos."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 1000.0),
+            soft: Some((0.0, 100.0)),
+            unit: "elmos",
+        },
+        default: DefaultValue::F32(ed::LAVA_COAST_WIDTH),
+        get: |s| FieldValue::F32(s.lava.coast_width),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.lava.coast_width = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Coast",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "lava.coast_light_boost",
+        label: "Coast light boost",
+        description: Some("Extra brightness added at the coast (fog-light pass)."),
         kind: FieldKind::F32 {
             hard: (0.0, 10.0),
             soft: Some((0.0, 2.0)),
             unit: "",
         },
-        default: DefaultValue::F32(ed::WATER_AMBIENT_FACTOR),
-        get: |s| FieldValue::F32(s.water.ambient_factor),
+        default: DefaultValue::F32(ed::LAVA_COAST_LIGHT_BOOST),
+        get: |s| FieldValue::F32(s.lava.coast_light_boost),
         set: |s, v| {
             if let FieldValue::F32(x) = v {
-                s.water.ambient_factor = x;
+                s.lava.coast_light_boost = x;
             }
         },
         category: categories::WATER,
-        group: "Surface lighting",
+        group: "Coast",
         blocks_export: false,
     },
     FieldSpec {
-        id: "water.diffuse_factor",
-        label: "Diffuse factor",
-        description: None,
+        id: "lava.swirl_freq",
+        label: "Swirl frequency",
+        description: Some("How fast the main lava texture swirls around."),
         kind: FieldKind::F32 {
-            hard: (0.0, 10.0),
-            soft: Some((0.0, 4.0)),
+            hard: (0.0, 1.0),
+            soft: Some((0.0, 0.1)),
             unit: "",
         },
-        default: DefaultValue::F32(ed::WATER_DIFFUSE_FACTOR),
-        get: |s| FieldValue::F32(s.water.diffuse_factor),
+        default: DefaultValue::F32(ed::LAVA_SWIRL_FREQ),
+        get: |s| FieldValue::F32(s.lava.swirl_freq),
         set: |s, v| {
             if let FieldValue::F32(x) = v {
-                s.water.diffuse_factor = x;
+                s.lava.swirl_freq = x;
             }
         },
         category: categories::WATER,
-        group: "Surface lighting",
+        group: "Animation",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "lava.swirl_amp",
+        label: "Swirl amplitude",
+        description: Some("How much the texture swirls; 0 disables swirl."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 1.0),
+            soft: Some((0.0, 0.05)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::LAVA_SWIRL_AMP),
+        get: |s| FieldValue::F32(s.lava.swirl_amp),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.lava.swirl_amp = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Animation",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "lava.specular_exp",
+        label: "Specular exponent",
+        description: Some("Sun specular sharpness on the lava surface."),
+        kind: FieldKind::F32 {
+            hard: (1.0, 1000.0),
+            soft: Some((1.0, 200.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::LAVA_SPECULAR_EXP),
+        get: |s| FieldValue::F32(s.lava.specular_exp),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.lava.specular_exp = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Lighting",
+        blocks_export: false,
+    },
+    FieldSpec {
+        id: "lava.specular_strength",
+        label: "Specular strength",
+        description: Some("Peak brightness of specular highlights."),
+        kind: FieldKind::F32 {
+            hard: (0.0, 10.0),
+            soft: Some((0.0, 2.0)),
+            unit: "",
+        },
+        default: DefaultValue::F32(ed::LAVA_SPECULAR_STRENGTH),
+        get: |s| FieldValue::F32(s.lava.specular_strength),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.lava.specular_strength = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Lighting",
         blocks_export: false,
     },
 ];

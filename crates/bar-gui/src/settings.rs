@@ -58,6 +58,18 @@ pub struct Settings {
     #[serde(default)]
     pub active_layout: crate::app::Layout,
 
+    /// Path to the BAR install root (the directory containing
+    /// `Beyond-All-Reason.exe` and the `data/` subdir). Used by
+    /// Test-in-BAR to locate `data/maps/`, the engine binaries
+    /// under `data/engine/<ver>/spring.exe`, and the game archives
+    /// under `data/games/`. Pre-populated by a one-shot
+    /// auto-detection on first launch; after that the configured
+    /// value is the only source of truth -- no env-var fallthrough.
+    /// `None` means the user has not set a path (or cleared it),
+    /// which gates Test-in-BAR off.
+    #[serde(default)]
+    pub bar_install_path: Option<PathBuf>,
+
     /// Path to the BAR game archive (.sdz or .sdd) used to build
     /// the feature type catalog. Set automatically on first launch
     /// when a BAR install is detected; user can override via Preferences.
@@ -146,6 +158,7 @@ impl Default for Settings {
             restore_last_project: default_restore_last_project(),
             window: None,
             active_layout: crate::app::Layout::default(),
+            bar_install_path: None,
             selected_game_archive: None,
             display: DisplayPrefs::default(),
         }

@@ -532,10 +532,25 @@ impl BarEditorApp {
                             ui.close_menu();
                         }
                         let mut recent_pick: Option<std::path::PathBuf> = None;
-                        let recent_empty = self.settings.recent_files.is_empty();
+                        // Hide the currently-open project from its own
+                        // Recent submenu -- re-picking it would just
+                        // be a no-op (and a confusing one if the user
+                        // has unsaved changes). Clone the filtered
+                        // list so the menu closure can mutate
+                        // `self.settings` (Clear recent) without a
+                        // borrow conflict.
+                        let current_project = self.project.path.clone();
+                        let recent_visible: Vec<std::path::PathBuf> = self
+                            .settings
+                            .recent_files
+                            .iter()
+                            .filter(|p| Some(p.as_path()) != current_project.as_deref())
+                            .cloned()
+                            .collect();
+                        let recent_empty = recent_visible.is_empty();
                         ui.add_enabled_ui(!recent_empty, |ui| {
                             ui.menu_button(t!("editor.menu.open_recent"), |ui| {
-                                for p in self.settings.recent_files.iter() {
+                                for p in &recent_visible {
                                     let label = p
                                         .file_name()
                                         .map(|s| s.to_string_lossy().into_owned())
@@ -1424,11 +1439,14 @@ impl BarEditorApp {
                         ),
                         // Water / Lava: same modal, but the action-bar
                         // affordance follows the map's current mode so
-                        // the user can tell at a glance which form will
-                        // open. Mode lives on `water.is_lava`; the
-                        // exporter and modal both key off the same
-                        // flag.
-                        if self.map_settings().water.is_lava.unwrap_or(false) {
+                        // the user can tell at a glance which form
+                        // will open. Mode lives on
+                        // `MapSettings::fluid_mode`; the exporter and
+                        // modal key off the same enum.
+                        if matches!(
+                            self.map_settings().fluid_mode,
+                            Some(bar_project::recipe::FluidMode::Lava)
+                        ) {
                             (
                                 paint_lava_icon as IconFn,
                                 (|d| &mut d.show_water_editor) as FlagFn,
