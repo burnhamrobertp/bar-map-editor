@@ -202,6 +202,39 @@ pub struct PreviewFrame {
     pub elmo_per_render_xz: [f32; 2],
 }
 
+/// Numeric subset of `bar_project::recipe::ResolvedLava` that the
+/// lava shader actually needs each frame. Carried on `SmfLighting`
+/// (which must stay `Copy`) and packed into `LavaParamsUniform`.
+/// Texture-filename fields from the recipe are intentionally
+/// excluded -- the renderer ships bundled CC0 textures and the
+/// per-map override path is not yet wired.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LavaShaderInputs {
+    pub uv_scale: f32,
+    pub color_correction: [f32; 3],
+    pub coast_color: [f32; 3],
+    pub coast_width: f32,
+    pub swirl_freq: f32,
+    pub swirl_amp: f32,
+    pub specular_exp: f32,
+    pub specular_strength: f32,
+}
+
+impl From<&bar_project::recipe::ResolvedLava> for LavaShaderInputs {
+    fn from(r: &bar_project::recipe::ResolvedLava) -> Self {
+        Self {
+            uv_scale: r.uv_scale,
+            color_correction: r.color_correction,
+            coast_color: r.coast_color,
+            coast_width: r.coast_width,
+            swirl_freq: r.swirl_freq,
+            swirl_amp: r.swirl_amp,
+            specular_exp: r.specular_exp,
+            specular_strength: r.specular_strength,
+        }
+    }
+}
+
 /// Engine-faithful SMF shading inputs. Ground / sun fields come from the
 /// `lighting` table in `mapinfo.lua`; water fields come from the `water`
 /// table, with defaults matching Recoil's `rts/Map/MapInfo.cpp`.
@@ -266,14 +299,17 @@ pub struct SmfLighting {
     /// the per-map coast-distance field. Gates the shader's foam
     /// stage so machines without a BAR install don't render garbage.
     pub foam_enabled: bool,
-    /// True when the map's water table represents lava
-    /// (`mapinfo.water.damage > 0` equivalent, stored as
-    /// `WaterSettings::is_lava`). Switches the water shader from
-    /// the engine-faithful BumpWater path (refraction + fresnel
-    /// reflection + caustics + foam) to an opaque emissive surface
-    /// so the result reads as molten lava instead of red-tinted
-    /// water.
-    pub is_lava: bool,
+    /// Active fluid mode -- mutually-exclusive Water vs Lava per
+    /// `MapSettings::fluid_mode`. When `Lava`, the water shader
+    /// short-circuits the engine BumpWater pipeline and delegates
+    /// to the `map_lava` widget overlay (uses `lava` below).
+    pub fluid_mode: bar_project::recipe::FluidMode,
+    /// Lava widget shader inputs -- only sampled when
+    /// `fluid_mode == Lava`. Slim numeric subset of
+    /// `ResolvedLava` so `SmfLighting` stays `Copy` (the textured-
+    /// asset filenames live elsewhere; the renderer's bundled
+    /// textures don't need per-map overrides yet).
+    pub lava: LavaShaderInputs,
     /// Height-based "custom" fog widget state. Applied as a final
     /// post-pass in the terrain shader -- not engine-native, but
     /// driven by the per-map `mapinfo.custom.fog` block that BAR's
@@ -513,7 +549,8 @@ impl From<&bar_project::MapSettings> for SmfLighting {
             wave_foam_intensity: w.wave_foam_intensity,
             wave_length: w.wave_length,
             foam_enabled: false,
-            is_lava: w.is_lava,
+            fluid_mode: rs.fluid_mode,
+            lava: LavaShaderInputs::from(&rs.lava),
             custom_fog: crate::widgets::custom_fog::CustomFogWidget::from_settings(ms),
             sun_color: atm.sun_color,
             sun_intensity: l.sun_intensity,
@@ -597,7 +634,8 @@ impl Default for SmfLighting {
             wave_foam_intensity: 0.5,
             wave_length: 0.15,
             foam_enabled: false,
-            is_lava: false,
+            fluid_mode: bar_project::recipe::FluidMode::Water,
+            lava: LavaShaderInputs::from(&bar_project::recipe::LavaSettings::default().resolved()),
             custom_fog: crate::widgets::custom_fog::CustomFogWidget::default(),
             sun_color: [1.0, 1.0, 1.0],
             sun_intensity: 1.0,
@@ -853,7 +891,8 @@ impl From<&SmfLighting> for WaterParamsUniform {
         // just dim the user's chosen lava color; pass it through at 1.0.
         const SURFACE_COLOR_SCALE: f32 = 0.4;
         const DIFFUSE_FACTOR_SCALE: f32 = 15.0;
-        let surface_scale = if l.is_lava { 1.0 } else { SURFACE_COLOR_SCALE };
+        let is_lava = matches!(l.fluid_mode, bar_project::recipe::FluidMode::Lava);
+        let surface_scale = if is_lava { 1.0 } else { SURFACE_COLOR_SCALE };
         Self {
             surface_color_alpha: [
                 l.water_surface_color[0] * surface_scale,
@@ -883,7 +922,7 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 l.water_fresnel_min,
                 l.water_fresnel_max,
                 l.water_fresnel_power.max(0.01),
-                if l.is_lava { 1.0 } else { 0.0 },
+                if is_lava { 1.0 } else { 0.0 },
             ],
             blur: [l.water_blur_base, l.water_blur_exponent, 0.0, 0.0],
             caustics: [
@@ -903,6 +942,51 @@ impl From<&SmfLighting> for WaterParamsUniform {
                 l.wave_foam_distortion,
                 l.wave_foam_intensity,
                 l.wave_length,
+            ],
+        }
+    }
+}
+
+/// Per-map lava widget uniform -- consumed by
+/// `shaders/widgets/map_lava.wgsl` when `WaterParams.fresnel.w >= 0.5`
+/// (lava-active flag). Field naming and units mirror the keys
+/// bar-game's `modules/lava.lua` reads; defaults come from
+/// `engine_defaults::LAVA_*`.
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable, Default, PartialEq)]
+struct LavaParamsUniform {
+    /// rgb = colour correction, a = uv scale
+    color_correction_uv: [f32; 4],
+    /// rgb = coast colour, a = coast width (elmos)
+    coast: [f32; 4],
+    /// x = swirl frequency, y = swirl amplitude, z = specular
+    /// exponent, w = specular strength
+    swirl_specular: [f32; 4],
+}
+
+const _: () = assert!(std::mem::size_of::<LavaParamsUniform>() == 48);
+
+impl From<&SmfLighting> for LavaParamsUniform {
+    fn from(l: &SmfLighting) -> Self {
+        let v = &l.lava;
+        Self {
+            color_correction_uv: [
+                v.color_correction[0],
+                v.color_correction[1],
+                v.color_correction[2],
+                v.uv_scale,
+            ],
+            coast: [
+                v.coast_color[0],
+                v.coast_color[1],
+                v.coast_color[2],
+                v.coast_width,
+            ],
+            swirl_specular: [
+                v.swirl_freq,
+                v.swirl_amp,
+                v.specular_exp.max(1.0),
+                v.specular_strength,
             ],
         }
     }
@@ -1068,6 +1152,11 @@ pub struct TerrainRenderer {
     /// in `render_internal` only fires on change instead of spamming every
     /// frame. Diagnostic only; not load-bearing.
     last_water_params: WaterParamsUniform,
+    /// Per-map lava surface uniform (`LavaParamsUniform`). Companion
+    /// to `water_params_buffer`; consumed by the `map_lava` widget
+    /// shader when the lava flag on `water_params.fresnel.w` is set.
+    lava_params_buffer: wgpu::Buffer,
+    last_lava_params: LavaParamsUniform,
     // ── Group 3: water_normal (bindings 0,1) + heightmap (binding 2) ─────────
     #[allow(dead_code)]
     water_normal_texture: wgpu::Texture,
@@ -1912,6 +2001,19 @@ impl TerrainRenderer {
                         ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                         count: None,
                     },
+                    // Lava per-map params -- consumed by the
+                    // `map_lava` widget shader when the lava-active
+                    // flag is set. 48-byte uniform.
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 16,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Buffer {
+                            ty: wgpu::BufferBindingType::Uniform,
+                            has_dynamic_offset: false,
+                            min_binding_size: None,
+                        },
+                        count: None,
+                    },
                 ],
             });
 
@@ -2613,6 +2715,23 @@ impl TerrainRenderer {
             bytemuck::bytes_of(&WaterParamsUniform::from(&SmfLighting::default())),
         );
 
+        // Lava widget per-map params uniform; companion to
+        // `water_params_buffer`. The shader reads it only when
+        // `water_params.fresnel.w >= 0.5` (lava-active flag), but the
+        // binding is always present so the bind group layout doesn't
+        // change with mode.
+        let lava_params_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("lava_params_uniform"),
+            size: std::mem::size_of::<LavaParamsUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        queue.write_buffer(
+            &lava_params_buffer,
+            0,
+            bytemuck::bytes_of(&LavaParamsUniform::from(&SmfLighting::default())),
+        );
+
         // Default refraction-depth texture: 1x1 depth = 1.0 (far). Used
         // before resize() creates the real one. With depth = 1.0 the
         // mixback computation yields 0 everywhere (nothing's closer
@@ -2854,6 +2973,10 @@ impl TerrainRenderer {
                         wgpu::BindGroupEntry {
                             binding: 15,
                             resource: wgpu::BindingResource::Sampler(&lava_sampler),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 16,
+                            resource: lava_params_buffer.as_entire_binding(),
                         },
                     ],
                 })
@@ -3212,6 +3335,8 @@ impl TerrainRenderer {
             map_grass,
             water_params_buffer,
             last_water_params: WaterParamsUniform::default(),
+            lava_params_buffer,
+            last_lava_params: LavaParamsUniform::default(),
             water_normal_texture,
             water_normal_sampler,
             water_normal_view,
@@ -4652,6 +4777,10 @@ impl TerrainRenderer {
                     binding: 15,
                     resource: wgpu::BindingResource::Sampler(&self.lava_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: self.lava_params_buffer.as_entire_binding(),
+                },
             ],
         });
     }
@@ -5302,6 +5431,10 @@ impl TerrainRenderer {
                     binding: 15,
                     resource: wgpu::BindingResource::Sampler(&self.lava_sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 16,
+                    resource: self.lava_params_buffer.as_entire_binding(),
+                },
             ],
         });
         self.reflection_view = Some(reflection_view);
@@ -5461,6 +5594,24 @@ impl TerrainRenderer {
             &self.water_params_buffer,
             0,
             bytemuck::bytes_of(&water_params),
+        );
+
+        // Companion upload for the lava widget. Same change-gated
+        // log pattern so per-map tuning sliders surface cleanly.
+        let lava_params = LavaParamsUniform::from(&self.smf_lighting);
+        if lava_params != self.last_lava_params {
+            tracing::debug!(
+                color_correction = ?lava_params.color_correction_uv,
+                coast = ?lava_params.coast,
+                swirl_specular = ?lava_params.swirl_specular,
+                "lava_params changed",
+            );
+            self.last_lava_params = lava_params;
+        }
+        queue.write_buffer(
+            &self.lava_params_buffer,
+            0,
+            bytemuck::bytes_of(&lava_params),
         );
 
         // Refresh the shadow uniform from the current sun + scene bounds.

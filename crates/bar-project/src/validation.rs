@@ -466,15 +466,16 @@ fn check_lighting(settings: &MapSettings, out: &mut Vec<Finding>) {
     );
 }
 
-/// Water block — non-negative damage, lava-mode damage >= 1, colours
-/// in range. Lava mode (`mapinfo.water.damage > 0` is engine-side what
-/// flips a water volume into lava) only makes sense when the damage
-/// is actually positive -- a value of 0 in lava mode would export as
-/// "lava with no damage," which the engine renders as water, and
-/// silently contradicts the user's choice.
+/// Water block -- non-negative damage, colour ranges, and (in lava
+/// mode) the lava-damage minimum. The lava gadget treats `damage < 1`
+/// as effectively "no damage," and that contradicts the user's
+/// explicit choice of lava mode, so flag it as an error.
 fn check_water(settings: &MapSettings, out: &mut Vec<Finding>) {
+    use crate::recipe::FluidMode;
     let rs = settings.resolved();
     let w = &rs.water;
+    let lava = &rs.lava;
+    let is_lava = settings.fluid_mode.unwrap_or_default() == FluidMode::Lava;
     if w.damage < 0.0 {
         out.push(
             Finding::err(
@@ -484,16 +485,16 @@ fn check_water(settings: &MapSettings, out: &mut Vec<Finding>) {
             .on_field("damage"),
         );
     }
-    if w.is_lava && w.damage < 1.0 {
+    if is_lava && lava.damage < 1.0 {
         out.push(
             Finding::err(
                 "water",
                 format!(
                     "Lava mode requires damage >= 1; current value is {}.",
-                    w.damage
+                    lava.damage
                 ),
             )
-            .on_field("damage"),
+            .on_field("lava.damage"),
         );
     }
     let color_check = |out: &mut Vec<Finding>, label: &str, field: &str, c: &[f32; 3]| {

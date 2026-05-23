@@ -39,8 +39,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     scrollbar_clearance(ui, |ui| {
                         let findings = FieldFindings::from(app.validation.findings());
-                        let is_lava = app.map_settings().water.is_lava.unwrap_or(false);
-                        if is_lava {
+                        if is_lava_mode(app) {
                             render_specs(ui, app, LAVA_SPECS, &findings);
                         } else {
                             render_specs(ui, app, WATER_SPECS, &findings);
@@ -50,12 +49,22 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         });
 }
 
+/// Read whether the active map is in lava mode. Wraps the
+/// `Option<FluidMode>` -> bool lookup so call sites stay terse.
+fn is_lava_mode(app: &BarEditorApp) -> bool {
+    matches!(
+        app.map_settings().fluid_mode,
+        Some(bar_project::recipe::FluidMode::Lava)
+    )
+}
+
 /// Custom title bar: "Water [switch] Lava" with the inactive label
 /// faded out. Clicking either label or the switch flips the mode.
 /// Includes the close (X) button so the user can still dismiss the
 /// modal without the default egui title bar.
 fn draw_title_row(app: &mut BarEditorApp, ui: &mut egui::Ui) {
-    let is_lava = app.map_settings().water.is_lava.unwrap_or(false);
+    use bar_project::recipe::FluidMode;
+    let is_lava = is_lava_mode(app);
     ui.horizontal(|ui| {
         let water_resp = title_label(ui, &t!("editor.modals.water.tab_water"), !is_lava);
         let switch_resp = title_switch(ui, is_lava);
@@ -72,14 +81,18 @@ fn draw_title_row(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             });
             app.history.push(snap);
             let settings = app.map_settings_mut();
-            settings.water.is_lava = Some(want_lava);
+            settings.fluid_mode = Some(if want_lava {
+                FluidMode::Lava
+            } else {
+                FluidMode::Water
+            });
             if want_lava {
-                // Snap damage up to the lava minimum so the form
-                // lands on a valid configuration. Preserves higher
-                // stored values.
-                let current = settings.water.damage.unwrap_or(0.0);
+                // Snap lava damage up to the engine minimum so the
+                // form lands on a valid configuration. Preserves
+                // higher stored values.
+                let current = settings.lava.damage.unwrap_or(0.0);
                 if current < LAVA_MIN_DAMAGE {
-                    settings.water.damage = Some(LAVA_MIN_DAMAGE);
+                    settings.lava.damage = Some(LAVA_MIN_DAMAGE);
                 }
             }
             app.mark_dirty();

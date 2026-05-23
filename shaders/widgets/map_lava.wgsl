@@ -30,22 +30,27 @@
 @group(2) @binding(14) var lava_distortion_tex: texture_2d<f32>;
 @group(2) @binding(15) var lava_sampler: sampler;
 
-// Config matching bar-game/modules/lava.lua defaults. Hardcoded
-// for now -- expose later via a `LavaConfig` uniform if the
-// editor wants per-map overrides.
-const LAVA_UV_SCALE: f32 = 2.0;
-const LAVA_GLOBAL_ROT_FREQ: f32 = 0.0001;
-const LAVA_GLOBAL_ROT_AMP: f32 = 0.05;
-const LAVA_COAST_WIDTH_ELMOS: f32 = 25.0;
+/// Per-map lava widget params. Field layout mirrors
+/// `bar-render`'s `LavaParamsUniform`. Defaults come from
+/// `bar-game/modules/lava.lua`; per-map overrides land here from
+/// `MapSettings::lava` whenever the user edits the lava modal.
+struct LavaParams {
+    /// rgb = colour correction multiplier, a = uv scale.
+    color_correction_uv: vec4<f32>,
+    /// rgb = coast colour added at shoreline ramp, a = coast width
+    /// in elmos.
+    coast: vec4<f32>,
+    /// x = swirl frequency, y = swirl amplitude (unused by the
+    /// global-rotation approximation below), z = specular
+    /// exponent, w = specular strength clamp.
+    swirl_specular: vec4<f32>,
+}
+
+@group(2) @binding(16) var<uniform> lava_params: LavaParams;
+
+// Internal shader-only constants (no per-map override yet).
 const LAVA_HEIGHT_OFFSET_ELMOS: f32 = 2.0;
-const LAVA_COAST_COLOR: vec3<f32> = vec3<f32>(2.0, 0.5, 0.0);
-const LAVA_SPECULAR_EXP: f32 = 64.0;
-const LAVA_SPECULAR_STRENGTH: f32 = 1.0;
-// Engine widget's `colorCorrection` multiplier (defaults to white,
-// per-map configs override with red/orange-shifted vectors -- e.g.
-// Forge.lua sets vec3(1.1, 1.0, 0.88)). Kept as a literal until the
-// per-map config plumbing lands.
-const LAVA_COLOR_CORRECTION: vec3<f32> = vec3<f32>(1.0, 1.0, 1.0);
+const LAVA_GLOBAL_ROT_AMP: f32 = 0.05;
 
 /// Sample the heightmap at world-XZ (render space). Mirrors the
 /// same texel-coord clamp that `water_shallow_scale` in water.wgsl
@@ -84,8 +89,9 @@ fn shade_map_lava(world_pos: vec3<f32>, eye_dir: vec3<f32>) -> vec4<f32> {
     let dist_raw = dist_tex.xy * 0.2 * 0.02;
 
     // Slow global plane rotation (engine `worldUV.xy +=
-    // vec2(sin(t*freq), cos(t*freq)) * amp`).
-    let rot_t = camera.time * LAVA_GLOBAL_ROT_FREQ;
+    // vec2(sin(t*freq), cos(t*freq)) * amp`). Uses the per-map
+    // swirl-frequency knob as the rotation rate.
+    let rot_t = camera.time * lava_params.swirl_specular.x;
     let global_rot = vec2<f32>(sin(rot_t), cos(rot_t)) * LAVA_GLOBAL_ROT_AMP;
 
     // Coast factor: how close is the underlying terrain to the
@@ -95,7 +101,7 @@ fn shade_map_lava(world_pos: vec3<f32>, eye_dir: vec3<f32>) -> vec4<f32> {
     let ground_y = lava_sample_ground_y(world_uv);
     let lava_y = camera.water_y;
     let elmo_to_render_y = camera.height_scale / max(camera.height_range_elmos, 1.0);
-    let coast_width_r = LAVA_COAST_WIDTH_ELMOS * elmo_to_render_y;
+    let coast_width_r = lava_params.coast.w * elmo_to_render_y;
     let height_offset_r = LAVA_HEIGHT_OFFSET_ELMOS * elmo_to_render_y;
     let cf_raw = clamp(
         (ground_y - lava_y + coast_width_r + height_offset_r) / max(coast_width_r, 1e-6),
@@ -119,7 +125,7 @@ fn shade_map_lava(world_pos: vec3<f32>, eye_dir: vec3<f32>) -> vec4<f32> {
     let distortion = dist_raw * clamp(0.5 + coast_factor, 0.2, 2.0);
 
     // Final sample UVs (engine: world_uv * uv_scale + distortion + swirl).
-    let sample_uv = world_uv * LAVA_UV_SCALE + distortion + global_rot;
+    let sample_uv = world_uv * lava_params.color_correction_uv.w + distortion + global_rot;
 
     let de = textureSample(lava_diffuse_emit_tex, lava_sampler, sample_uv);
     let nh = textureSample(lava_normal_height_tex, lava_sampler, sample_uv);
@@ -133,15 +139,15 @@ fn shade_map_lava(world_pos: vec3<f32>, eye_dir: vec3<f32>) -> vec4<f32> {
     var col = de.rgb * light_amount;
 
     // Coast colour boost (engine adds COASTCOLOR * coast_factor).
-    col = col + LAVA_COAST_COLOR * coast_factor;
+    col = col + lava_params.coast.rgb * coast_factor;
 
     // Sun specular: reflect sun about the sampled normal, take
-    // `pow(max(R.V, 0), exp)` and gate by SPECULAR_STRENGTH.
+    // `pow(max(R.V, 0), exp)` and gate by per-map specular strength.
     let refl = reflect(-sun_dir, n);
     let spec = clamp(
-        pow(max(dot(normalize(eye_dir), refl), 0.0), LAVA_SPECULAR_EXP),
+        pow(max(dot(normalize(eye_dir), refl), 0.0), lava_params.swirl_specular.z),
         0.0,
-        LAVA_SPECULAR_STRENGTH,
+        lava_params.swirl_specular.w,
     );
     col = col + col * spec;
 
@@ -150,9 +156,11 @@ fn shade_map_lava(world_pos: vec3<f32>, eye_dir: vec3<f32>) -> vec4<f32> {
     // distortion sample so it shimmers with the heat haze.
     col = col + col * (de.a * distortion.y * 700.0);
 
-    // Final colour correction (engine's `SWIZZLECOLORS` macro,
-    // typically a per-map vec3 multiplier).
-    col = col * LAVA_COLOR_CORRECTION;
+    // Final colour correction (engine's `SWIZZLECOLORS` macro --
+    // the dominant per-map visual lever; LavaMaps configs vary it
+    // from vec3(0.26, 1.0, 0.03) for acid green to
+    // vec3(0.3, 0.1, 1.5) for purple).
+    col = col * lava_params.color_correction_uv.rgb;
 
     // Distance fog -- same gate `shade_water` uses, so lava under
     // a foggy atmosphere fades to the atmospheric fog colour.
