@@ -386,18 +386,25 @@ fn execute_single_bundler(
 
     // Spring archive ID is `display_name .. " " .. version` from
     // mapinfo.lua. Some authored maps put the version inside the
-    // `name` field too ("Onyx Cauldron 2.2.3"); naive concatenation
-    // produces a doubled "Onyx Cauldron 2.2.3 2.2.3" the engine
-    // can't resolve, so strip a matching trailing version (with
-    // either space or underscore separator) before joining.
+    // `name` field too -- naive concatenation then produces a doubled
+    // identity the engine can't resolve. The patterns we strip:
+    //   "Onyx Cauldron 2.2.3"  -> base "Onyx Cauldron", version "2.2.3"
+    //   "Forge v2.3"           -> base "Forge",         version "2.3"
+    //   "Map_v1.0"             -> base "Map",           version "1.0"
+    // Try each variant with each separator; first match wins.
     let map_internal_name = match plan.version.as_deref().filter(|v| !v.is_empty()) {
         Some(v) => {
             let mut base = plan.display_name.as_str();
-            for sep in [' ', '_'] {
-                if let Some(trimmed) = base.strip_suffix(v) {
-                    if let Some(stripped) = trimmed.strip_suffix(sep) {
-                        base = stripped;
-                        break;
+            let v_lower = format!("v{v}");
+            let v_upper = format!("V{v}");
+            let suffix_candidates = [v.to_string(), v_lower, v_upper];
+            'outer: for sfx in &suffix_candidates {
+                if let Some(trimmed) = base.strip_suffix(sfx.as_str()) {
+                    for sep in [' ', '_'] {
+                        if let Some(stripped) = trimmed.strip_suffix(sep) {
+                            base = stripped;
+                            break 'outer;
+                        }
                     }
                 }
             }
