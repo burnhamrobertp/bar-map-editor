@@ -71,7 +71,8 @@ jobs:
             libxkbcommon-dev \
             libwayland-dev \
             libxcb-shape0-dev \
-            libxcb-xfixes0-dev
+            libxcb-xfixes0-dev \
+            libfuse2
 
       - name: Build release binaries
         run: cargo build --release --target ${{ matrix.target }}
