@@ -98,6 +98,47 @@ pub(crate) fn draw_settings(app: &mut BarEditorApp, ctx: &egui::Context) {
             ui.heading(t!("editor.prefs.game.heading"));
             ui.weak(t!("editor.prefs.game.hint"));
             ui.add_space(4.0);
+            ui.label(t!("editor.prefs.game.install_label"));
+            ui.horizontal(|ui| {
+                let mut path_str = app
+                    .settings()
+                    .bar_install_path
+                    .as_deref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                let response = ui.add(
+                    egui::TextEdit::singleline(&mut path_str)
+                        .hint_text(t!("editor.prefs.game.install_none"))
+                        .desired_width(320.0),
+                );
+                if response.lost_focus() {
+                    let trimmed = path_str.trim();
+                    let new_value = if trimmed.is_empty() {
+                        None
+                    } else {
+                        Some(std::path::PathBuf::from(trimmed))
+                    };
+                    if new_value != app.settings().bar_install_path {
+                        app.settings.bar_install_path = new_value;
+                        changed = true;
+                    }
+                }
+                if ui.button(t!("editor.prefs.game.browse")).clicked() {
+                    let picked = rfd::FileDialog::new().pick_folder();
+                    if let Some(path) = picked {
+                        app.settings.bar_install_path = Some(path);
+                        changed = true;
+                    }
+                }
+                if app.settings().bar_install_path.is_some()
+                    && ui.button(t!("editor.prefs.game.clear")).clicked()
+                {
+                    app.settings.bar_install_path = None;
+                    changed = true;
+                }
+            });
+
+            ui.add_space(4.0);
             ui.label(t!("editor.prefs.game.archive_label"));
             ui.horizontal(|ui| {
                 let mut path_str = app

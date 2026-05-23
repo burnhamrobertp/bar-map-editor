@@ -525,19 +525,17 @@ return mapinfo
         spc_g = lit.ground_specular[1],
         spc_b = lit.ground_specular[2],
         spec_exp = lit.spec_exponent,
-        // Water mode forces damage to zero -- the BAR engine reads
-        // any positive `mapinfo.water.damage` as lava, so storing
-        // a stale lava value while the user is in water mode would
-        // turn the exported map into lava on Test-in-BAR. Lava mode
-        // emits the stored value as-is.
-        water_damage = if wat.is_lava { wat.damage } else { 0.0 },
-        // (`wat.is_lava` is a bool here, sourced from
-        // ResolvedWater, which defaults to false when the recipe
-        // hasn't expressed a preference. The
-        // forced-zero-in-water-mode rule still applies because
-        // this template emits `damage` unconditionally; the
-        // structured emitter in `targets/spring_smf.rs` is the
-        // path where unset damage stays unset.)
+        // Water-mode export forces water.damage to zero so a stale
+        // pre-lava value doesn't accidentally trip the engine's
+        // water-damage fallback path in `bar-game/modules/lava.lua`
+        // (which uses `Game.waterDamage > 0` as one of its lava
+        // triggers when no other config matched). Lava mode emits
+        // the lava-side damage so the engine charges the right
+        // amount even if the lava gadget fails to load.
+        water_damage = match rs.fluid_mode {
+            bar_project::recipe::FluidMode::Lava => rs.lava.damage,
+            bar_project::recipe::FluidMode::Water => 0.0,
+        },
         abs_r = wat.absorb[0],
         abs_g = wat.absorb[1],
         abs_b = wat.absorb[2],

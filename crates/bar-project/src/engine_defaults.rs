@@ -73,6 +73,39 @@ pub const WATER_WAVE_LENGTH: f32 = 1.0;
 pub const WATER_WAVE_FOAM_DISTORTION: f32 = 1.0;
 pub const WATER_WAVE_FOAM_INTENSITY: f32 = 1.0;
 
+// ── Lava widget (bar-game `luarules/gadgets/map_lava.lua` +
+//    `modules/lava.lua`) ────────────────────────────────────────────
+// Game-side defaults baked into the lava gadget. Maps override these
+// via `mapconfig/lava.lua` inside the archive, or via game-side
+// `common/configs/LavaMaps/<MapName>.lua` matched on map name. BME's
+// `LavaSettings::resolved` falls through to these whenever a field
+// is unset on the recipe.
+pub const LAVA_DIFFUSE_EMIT_TEX: &str = "lava2_diffuseemit.dds";
+pub const LAVA_NORMAL_HEIGHT_TEX: &str = "lava2_normalheight.dds";
+pub const LAVA_LEVEL: f32 = 1.0;
+pub const LAVA_DAMAGE: f32 = 100.0;
+pub const LAVA_UV_SCALE: f32 = 2.0;
+pub const LAVA_COLOR_CORRECTION: [f32; 3] = [1.0, 1.0, 1.0];
+pub const LAVA_COAST_COLOR: [f32; 3] = [2.0, 0.5, 0.0];
+pub const LAVA_COAST_WIDTH: f32 = 25.0;
+pub const LAVA_COAST_LIGHT_BOOST: f32 = 0.6;
+pub const LAVA_SWIRL_FREQ: f32 = 0.025;
+pub const LAVA_SWIRL_AMP: f32 = 0.003;
+pub const LAVA_SPECULAR_EXP: f32 = 64.0;
+pub const LAVA_SPECULAR_STRENGTH: f32 = 1.0;
+pub const LAVA_LOS_DARKNESS: f32 = 0.5;
+pub const LAVA_SHADOW_STRENGTH: f32 = 0.4;
+pub const LAVA_PARALLAX_DEPTH: f32 = 16.0;
+pub const LAVA_PARALLAX_OFFSET: f32 = 0.5;
+pub const LAVA_FOG_ENABLED: bool = true;
+pub const LAVA_FOG_COLOR: [f32; 3] = [2.0, 0.5, 0.0];
+pub const LAVA_FOG_FACTOR: f32 = 0.06;
+pub const LAVA_FOG_HEIGHT: f32 = 20.0;
+pub const LAVA_FOG_ABOVE: f32 = 1.0;
+pub const LAVA_FOG_DISTORTION: f32 = 4.0;
+pub const LAVA_TIDE_AMPLITUDE: f32 = 2.0;
+pub const LAVA_TIDE_PERIOD: f32 = 200.0;
+
 // ── Grass widget (mapinfo `custom.grassConfig`) ───────────────────
 // Citations: `bar-game/luaui/Widgets/map_grass_gl4.lua` lines 87-110
 // (grassConfig defaults) and 93-110 (grassShaderParams defaults).

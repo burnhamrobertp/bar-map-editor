@@ -207,9 +207,19 @@ pub struct MapSettings {
     /// Lighting settings.
     #[serde(default)]
     pub lighting: LightingSettings,
-    /// Water settings.
+    /// Water settings -- always present; only consumed by the
+    /// renderer when [`MapSettings::fluid_mode`] resolves to
+    /// [`FluidMode::Water`].
     #[serde(default)]
     pub water: WaterSettings,
+    /// Lava widget settings -- consumed when `fluid_mode == Lava`.
+    #[serde(default)]
+    pub lava: LavaSettings,
+    /// Which fluid covers the map's water plane. `None` defers to
+    /// the [`FluidMode`] default (Water). Mutually exclusive at the
+    /// engine level -- see the type docs.
+    #[serde(default)]
+    pub fluid_mode: Option<FluidMode>,
 
     /// Height-based custom fog (mapinfo `custom.fog`).
     #[serde(default)]
@@ -333,6 +343,8 @@ pub struct ResolvedMapSettings {
     pub atmosphere: ResolvedAtmosphere,
     pub lighting: ResolvedLighting,
     pub water: ResolvedWater,
+    pub lava: ResolvedLava,
+    pub fluid_mode: FluidMode,
     pub custom_grass: ResolvedGrassSettings,
 }
 
@@ -353,6 +365,8 @@ impl MapSettings {
             atmosphere: self.atmosphere.resolved(),
             lighting: self.lighting.resolved(),
             water: self.water.resolved(),
+            lava: self.lava.resolved(),
+            fluid_mode: self.fluid_mode.unwrap_or_default(),
             custom_grass: self.custom_grass.resolved(),
         }
     }
@@ -718,13 +732,6 @@ impl CustomGrassSettings {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct WaterSettings {
-    /// Water vs lava toggle. In BAR, `mapinfo.water.damage > 0` is what
-    /// flips the engine's "water" volume into lava behaviour at
-    /// runtime -- there's no separate `lava = true` flag. BME models
-    /// the choice explicitly here so the editor UI can present
-    /// distinct forms for the two modes and so the exporter can force
-    /// `damage = 0` in water mode regardless of what's stored.
-    pub is_lava: Option<bool>,
     pub damage: Option<f32>,
     pub absorb: Option<[f32; 3]>,
     pub base_color: Option<[f32; 3]>,
@@ -776,8 +783,6 @@ pub struct WaterSettings {
 
 #[derive(Debug, Clone)]
 pub struct ResolvedWater {
-    /// Water vs lava mode. See [`WaterSettings::is_lava`].
-    pub is_lava: bool,
     pub damage: f32,
     pub absorb: [f32; 3],
     pub base_color: [f32; 3],
@@ -819,10 +824,6 @@ impl WaterSettings {
     pub fn resolved(&self) -> ResolvedWater {
         use crate::engine_defaults as ed;
         ResolvedWater {
-            // Default to water (false) when unset. Importer overrides
-            // this from `damage > 0` so existing lava maps land in
-            // lava mode at SD7-import time.
-            is_lava: self.is_lava.unwrap_or(false),
             damage: self.damage.unwrap_or(ed::WATER_DAMAGE),
             absorb: self.absorb.unwrap_or(ed::WATER_ABSORB),
             base_color: self.base_color.unwrap_or(ed::WATER_BASE_COLOR),
@@ -867,6 +868,168 @@ impl WaterSettings {
             repeat_y: self.repeat_y.unwrap_or(0.0),
             shore_waves: self.shore_waves.unwrap_or(true),
             normal_texture: self.normal_texture.clone().unwrap_or_default(),
+        }
+    }
+}
+
+/// Which fluid (if any) covers the map's water plane. Mutually
+/// exclusive at the engine level: bar-game's `map_lava` gadget calls
+/// `Spring.SetDrawWater(false)` when lava is active, so only one
+/// rendering pass ever draws. BME models the choice explicitly here
+/// because the gadget's trigger is a chain of inputs (map archive
+/// `mapconfig/lava.lua`, game-side `LavaMaps/<MapName>.lua` catalog
+/// match, `mapinfo.water.damage > 0` fallback, mod option) -- the
+/// underlying mapinfo damage field is NOT a reliable indicator on
+/// its own.
+#[derive(Default, Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FluidMode {
+    /// Engine `BumpWater` pipeline -- the only mode that uses the
+    /// `water = { ... }` table from mapinfo for rendering.
+    #[default]
+    Water,
+    /// bar-game `map_lava` gadget overlay -- uses the `lava = { ... }`
+    /// block on `MapSettings` for textured-emissive rendering. The
+    /// engine water draw is disabled while lava is active.
+    Lava,
+}
+
+/// Lava widget configuration -- mirrors the keys read by
+/// bar-game's `modules/lava.lua` (with per-map overrides authored in
+/// `mapconfig/lava.lua` inside the map archive, or in game-side
+/// `common/configs/LavaMaps/<MapName>.lua`). Visual fields drive the
+/// renderer's `LavaParamsUniform`; gameplay fields (damage, tide)
+/// are persisted for export but unused by the editor preview.
+///
+/// Every field is `Option<T>` so an unset key on import stays unset
+/// on export (round-trip parity), and the renderer falls through to
+/// the engine defaults in `engine_defaults.rs::LAVA_*` whenever a
+/// recipe leaves a field empty.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct LavaSettings {
+    /// `lava.diffuseEmitTex` -- RGB = base colour, A = emission /
+    /// heat mask. Defaults to `lava2_diffuseemit.dds` (CC0, bundled).
+    pub diffuse_emit_tex: Option<String>,
+    /// `lava.normalHeightTex` -- RGB = tangent normal, A = parallax
+    /// height. Defaults to `lava2_normalheight.dds`.
+    pub normal_height_tex: Option<String>,
+    /// Lava plane Y in elmos. Independent of `water.level`.
+    pub level: Option<f32>,
+    /// `lava.damage` -- per-second damage applied to units in lava.
+    /// Distinct from `water.damage` (which the engine reads for the
+    /// water-damage fallback trigger path).
+    pub damage: Option<f32>,
+    /// Tile count across the map's longer axis.
+    pub uv_scale: Option<f32>,
+    /// Final RGB multiplier on the lava colour (engine's
+    /// `SWIZZLECOLORS`). The dominant per-map visual lever -- this
+    /// is what makes some lava maps acid-green, others purple, etc.
+    pub color_correction: Option<[f32; 3]>,
+    /// RGB colour added at the coastline ramp (engine `COASTCOLOR`).
+    pub coast_color: Option<[f32; 3]>,
+    /// Coast ramp width in elmos.
+    pub coast_width: Option<f32>,
+    /// Extra brightness added at the coast (engine's
+    /// `coastLightBoost`; consumed by the fog-light pass when wired).
+    pub coast_light_boost: Option<f32>,
+    /// Texture swirl animation frequency.
+    pub swirl_freq: Option<f32>,
+    /// Texture swirl animation amplitude.
+    pub swirl_amp: Option<f32>,
+    /// Sun specular exponent for the lava surface.
+    pub specular_exp: Option<f32>,
+    /// Peak brightness of specular highlights.
+    pub specular_strength: Option<f32>,
+    /// Out-of-LOS darkening (gameplay -- unused by BME preview).
+    pub los_darkness: Option<f32>,
+    /// Shadowed-fragment brightness floor.
+    pub shadow_strength: Option<f32>,
+    /// Parallax-mapping depth in shader units (>0 enables the
+    /// pre-displaced sample path; BME's Core port skips it).
+    pub parallax_depth: Option<f32>,
+    /// Parallax centre, 0..1.
+    pub parallax_offset: Option<f32>,
+    /// Whether the additive height-fog pass renders above the lava.
+    pub fog_enabled: Option<bool>,
+    pub fog_color: Option<[f32; 3]>,
+    pub fog_factor: Option<f32>,
+    pub fog_height: Option<f32>,
+    pub fog_above: Option<f32>,
+    pub fog_distortion: Option<f32>,
+    /// Tide animation amplitude (elmos).
+    pub tide_amplitude: Option<f32>,
+    /// Tide animation period (seconds).
+    pub tide_period: Option<f32>,
+}
+
+/// Resolved counterpart of [`LavaSettings`] -- every field replaced
+/// with its effective value (recipe value -> engine default in
+/// `engine_defaults::LAVA_*`).
+#[derive(Debug, Clone)]
+pub struct ResolvedLava {
+    pub diffuse_emit_tex: String,
+    pub normal_height_tex: String,
+    pub level: f32,
+    pub damage: f32,
+    pub uv_scale: f32,
+    pub color_correction: [f32; 3],
+    pub coast_color: [f32; 3],
+    pub coast_width: f32,
+    pub coast_light_boost: f32,
+    pub swirl_freq: f32,
+    pub swirl_amp: f32,
+    pub specular_exp: f32,
+    pub specular_strength: f32,
+    pub los_darkness: f32,
+    pub shadow_strength: f32,
+    pub parallax_depth: f32,
+    pub parallax_offset: f32,
+    pub fog_enabled: bool,
+    pub fog_color: [f32; 3],
+    pub fog_factor: f32,
+    pub fog_height: f32,
+    pub fog_above: f32,
+    pub fog_distortion: f32,
+    pub tide_amplitude: f32,
+    pub tide_period: f32,
+}
+
+impl LavaSettings {
+    pub fn resolved(&self) -> ResolvedLava {
+        use crate::engine_defaults as ed;
+        ResolvedLava {
+            diffuse_emit_tex: self
+                .diffuse_emit_tex
+                .clone()
+                .unwrap_or_else(|| ed::LAVA_DIFFUSE_EMIT_TEX.to_string()),
+            normal_height_tex: self
+                .normal_height_tex
+                .clone()
+                .unwrap_or_else(|| ed::LAVA_NORMAL_HEIGHT_TEX.to_string()),
+            level: self.level.unwrap_or(ed::LAVA_LEVEL),
+            damage: self.damage.unwrap_or(ed::LAVA_DAMAGE),
+            uv_scale: self.uv_scale.unwrap_or(ed::LAVA_UV_SCALE),
+            color_correction: self.color_correction.unwrap_or(ed::LAVA_COLOR_CORRECTION),
+            coast_color: self.coast_color.unwrap_or(ed::LAVA_COAST_COLOR),
+            coast_width: self.coast_width.unwrap_or(ed::LAVA_COAST_WIDTH),
+            coast_light_boost: self.coast_light_boost.unwrap_or(ed::LAVA_COAST_LIGHT_BOOST),
+            swirl_freq: self.swirl_freq.unwrap_or(ed::LAVA_SWIRL_FREQ),
+            swirl_amp: self.swirl_amp.unwrap_or(ed::LAVA_SWIRL_AMP),
+            specular_exp: self.specular_exp.unwrap_or(ed::LAVA_SPECULAR_EXP),
+            specular_strength: self.specular_strength.unwrap_or(ed::LAVA_SPECULAR_STRENGTH),
+            los_darkness: self.los_darkness.unwrap_or(ed::LAVA_LOS_DARKNESS),
+            shadow_strength: self.shadow_strength.unwrap_or(ed::LAVA_SHADOW_STRENGTH),
+            parallax_depth: self.parallax_depth.unwrap_or(ed::LAVA_PARALLAX_DEPTH),
+            parallax_offset: self.parallax_offset.unwrap_or(ed::LAVA_PARALLAX_OFFSET),
+            fog_enabled: self.fog_enabled.unwrap_or(ed::LAVA_FOG_ENABLED),
+            fog_color: self.fog_color.unwrap_or(ed::LAVA_FOG_COLOR),
+            fog_factor: self.fog_factor.unwrap_or(ed::LAVA_FOG_FACTOR),
+            fog_height: self.fog_height.unwrap_or(ed::LAVA_FOG_HEIGHT),
+            fog_above: self.fog_above.unwrap_or(ed::LAVA_FOG_ABOVE),
+            fog_distortion: self.fog_distortion.unwrap_or(ed::LAVA_FOG_DISTORTION),
+            tide_amplitude: self.tide_amplitude.unwrap_or(ed::LAVA_TIDE_AMPLITUDE),
+            tide_period: self.tide_period.unwrap_or(ed::LAVA_TIDE_PERIOD),
         }
     }
 }

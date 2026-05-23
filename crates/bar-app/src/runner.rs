@@ -14,6 +14,43 @@ use eframe::egui;
 use crate::bar_install;
 use crate::layout_manager::LayoutManager;
 
+/// Fixed output basename for the Test-in-BAR bundle, dropped into
+/// `<bar-install>/data/maps/`. Using one BME-owned filename for
+/// every Test-in-BAR run (instead of one per recipe name) avoids:
+///   (a) clobbering the user's source archive when their .sd7
+///       happens to share a stem with the recipe -- this is what
+///       deleted `forge.sd7` in earlier sessions, and
+///   (b) accumulating leftover .sdd directories in the install's
+///       maps/ folder across many test runs.
+///
+/// The underscore prefix sorts it ahead of authored maps in
+/// alphabetised lobby lists and makes the "this is a BME artifact"
+/// intent obvious from the filename. The mapinfo identity inside
+/// the archive still comes from the recipe (Spring resolves
+/// archives by mapinfo `name + " " + version`, not by filename), so
+/// `MapName=` in the launch script lines up regardless.
+const TEST_IN_BAR_BUNDLE_NAME: &str = "_bme_test_in_bar.sdd";
+
+/// Replacement version string applied to the Test-in-BAR bundle's
+/// `mapinfo.version`. Combined with stripping the embedded version
+/// from `mapinfo.name`, this produces an archive identity of the
+/// form `"<base-name> 99.99.99"` (e.g. `"Forge 99.99.99"`). Three
+/// things this buys:
+///   1. bar-game's `map_lava` gadget can single-trim ` 99.99.99` to
+///      reach `<base-name>` and match its LavaMaps catalog entry
+///      (e.g. `Forge.lua`). Source recipes whose `name` field
+///      embeds the version -- common in BAR-shipped maps -- can't
+///      be matched after a single trim if both tokens are present.
+///   2. The fake version is unmistakeable in BAR's lobby; it reads
+///      "Forge 99.99.99" so the user can see at a glance they're
+///      testing the BME build, not their installed source archive.
+///   3. Identity is distinct from any plausible user-installed
+///      source, so the engine never has to pick between two
+///      archives claiming the same identity.
+///
+/// Runtime-only; never persisted into the recipe.
+const TEST_IN_BAR_VERSION: &str = "99.99.99";
+
 pub struct PendingExportDir {
     pub rx: mpsc::Receiver<Option<std::path::PathBuf>>,
     pub run_filter_label: Option<String>,
@@ -77,6 +114,12 @@ pub struct AppRunner {
     pub pending_test_in_bar_after_compile: bool,
     pub pending_export_dir: Option<PendingExportDir>,
     pub bar_install: Option<bar_install::BarVersions>,
+    /// Mirror of `settings.bar_install_path` so the per-frame update
+    /// loop can detect Preferences edits and refresh `bar_install`
+    /// against the new path. `None` here means we believe the user
+    /// has no install configured; reconciling this against the
+    /// current setting drives the rebuild.
+    pub bar_install_path_seen: Option<std::path::PathBuf>,
     pub layout_manager: LayoutManager,
     pub pending_maximize: bool,
     pub has_shown_window: bool,
@@ -531,6 +574,48 @@ impl eframe::App for AppRunner {
         // Run the bar-gui frame (menus, palette, properties, modals, layout panels).
         self.app.update(ctx, frame);
 
+        // Reconcile `bar_install` against the configured path. When
+        // the user edits Preferences -> Game Data -> BAR install
+        // path, this picks up the change on the next frame and
+        // rebuilds the version list (or clears it when the path is
+        // emptied). No magical fallthrough -- if the configured
+        // path doesn't validate, Test-in-BAR is gated off the same
+        // way it is when nothing was detected on first launch.
+        let desired_install = self.app.settings().bar_install_path.clone();
+        if desired_install != self.bar_install_path_seen {
+            self.bar_install_path_seen = desired_install.clone();
+            self.bar_install = desired_install
+                .as_deref()
+                .and_then(bar_install::BarVersions::from_install_root);
+            if let Some(ref versions) = self.bar_install {
+                self.app.bar_versions.game_labels =
+                    versions.games.iter().map(|g| g.label.clone()).collect();
+                self.app.bar_versions.engine_labels =
+                    versions.engines.iter().map(|e| e.label.clone()).collect();
+            } else {
+                self.app.bar_versions.game_labels.clear();
+                self.app.bar_versions.engine_labels.clear();
+            }
+        }
+
+        // Consume `graph_reset` here, BEFORE the features_changed
+        // handler below spawns the model loader. `apply_project` (in
+        // bar-gui) sets both flags on a project switch; if the layout
+        // manager's `reset()` ran after `spawn_model_loader`, the
+        // loader would query the prior project's renderer for which
+        // models are already loaded, filter those names out of the
+        // queue, and then the renderer would be wiped on the
+        // layout_manager.update call later in this frame -- leaving
+        // those shared types unloaded on the fresh renderer and
+        // rendering them as green placeholder cubes. (See
+        // viewport.rs::build_feature_instances for the green-cube
+        // branch.) `layout_manager.update` still calls
+        // `take_graph_reset()` defensively; once the signal has been
+        // consumed here it's a no-op.
+        if self.app.project.take_graph_reset() {
+            self.layout_manager.reset(&self.gpu_context);
+        }
+
         // Feature catalog: detect archive change, poll background load.
         let desired_archive = self.app.settings().selected_game_archive.clone();
         if desired_archive != self.catalog_archive_path {
@@ -577,26 +662,31 @@ impl eframe::App for AppRunner {
         if self.app.project.features_changed {
             self.app.project.features_changed = false;
             self.model_rx = None; // cancel prior loader for a different map
-                                  // On barproj reload no SD7 extraction runs, so map_work_dir may be
-                                  // None. Check whether the project dir has objects3d/ copied in
-                                  // (happens on first save after import); if so, use it as the map
-                                  // data root so S3O models and feature defs are found without any
-                                  // reference to the original archive.
-            if self.map_work_dir.is_none() {
-                if let Some(ref project_dir) = self.app.project.path.clone() {
-                    if project_dir.join("objects3d").is_dir() {
-                        let map_catalog = FeatureCatalog::from_dir(project_dir);
-                        if !map_catalog.is_empty() {
-                            if let Some(ref mut catalog) = self.feature_catalog {
-                                catalog.merge(map_catalog);
-                                let mut names: Vec<String> =
-                                    catalog.features.keys().cloned().collect();
-                                names.sort();
-                                self.app.feature_palette_names = names;
-                            }
+                                  // Reset the map-data root unconditionally. A prior SD7
+                                  // import or .barproj open may have set it; if we don't
+                                  // clear here, switching from project A to project B keeps
+                                  // the worker pointed at A's objects3d/, so B's map-
+                                  // bundled features fail to locate their S3O and render
+                                  // as catalog-known-but-no-mesh placeholders (green).
+            self.map_work_dir = None;
+            if let Some(ref project_dir) = self.app.project.path.clone() {
+                if project_dir.join("objects3d").is_dir() {
+                    // FeatureCatalog::merge is first-write-wins, so map-
+                    // specific defs from a prior project that share a
+                    // name with B's persist. Rare for game-archive
+                    // features (same def across maps); for distinct
+                    // map-bundled features with name collisions this is
+                    // a known follow-up.
+                    let map_catalog = FeatureCatalog::from_dir(project_dir);
+                    if !map_catalog.is_empty() {
+                        if let Some(ref mut catalog) = self.feature_catalog {
+                            catalog.merge(map_catalog);
+                            let mut names: Vec<String> = catalog.features.keys().cloned().collect();
+                            names.sort();
+                            self.app.feature_palette_names = names;
                         }
-                        self.map_work_dir = Some(project_dir.clone());
                     }
+                    self.map_work_dir = Some(project_dir.clone());
                 }
             }
             self.spawn_model_loader(ctx);
@@ -1064,6 +1154,7 @@ impl AppRunner {
                     &recipe,
                     &prev_sdd,
                     self.app.project.path.as_deref(),
+                    Some(TEST_IN_BAR_VERSION),
                 ) {
                     Ok(()) => {
                         self.test_in_bar_cache =
@@ -1113,12 +1204,56 @@ impl AppRunner {
                     None,
                     test_project_dir.as_deref(),
                     Some(bar_engine::ArchiveFormat::Directory),
+                    Some(TEST_IN_BAR_VERSION),
                 ) {
-                    Ok(results) => results
+                    Ok(results) => match results
                         .into_iter()
                         .find(|r| r.output_path.extension().and_then(|s| s.to_str()) == Some("sdd"))
-                        .map(|r| Ok((r.output_path, r.map_internal_name)))
-                        .unwrap_or_else(|| Err("Bundler produced no SDD".to_string())),
+                    {
+                        Some(r) => {
+                            // Rename the bundler's per-recipe output to the
+                            // fixed BME slot so we never leave behind a
+                            // `<recipe-name>.sdd` next to the user's
+                            // installed maps. See `TEST_IN_BAR_BUNDLE_NAME`
+                            // for why this is a single fixed path.
+                            let fixed_path = bundler_output_dir.join(TEST_IN_BAR_BUNDLE_NAME);
+                            if fixed_path.exists() {
+                                if let Err(e) = std::fs::remove_dir_all(&fixed_path) {
+                                    let _ = std::fs::remove_dir_all(&r.output_path);
+                                    Err(format!(
+                                        "Cannot clear previous Test-in-BAR slot \
+                                         {}: {e}",
+                                        fixed_path.display()
+                                    ))
+                                } else {
+                                    match std::fs::rename(&r.output_path, &fixed_path) {
+                                        Ok(()) => Ok((fixed_path, r.map_internal_name)),
+                                        Err(e) => {
+                                            let _ = std::fs::remove_dir_all(&r.output_path);
+                                            Err(format!(
+                                                "Cannot move bundle to Test-in-BAR \
+                                                 slot {}: {e}",
+                                                fixed_path.display()
+                                            ))
+                                        }
+                                    }
+                                }
+                            } else {
+                                match std::fs::rename(&r.output_path, &fixed_path) {
+                                    Ok(()) => Ok((fixed_path, r.map_internal_name)),
+                                    Err(e) => {
+                                        let _ = std::fs::remove_dir_all(&r.output_path);
+                                        Err(format!(
+                                            "Cannot move bundle to Test-in-BAR \
+                                             slot {}: {e}",
+                                            fixed_path.display()
+                                        ))
+                                    }
+                                }
+                            }
+                        }
+                        None => Err("Bundler produced no SDD".to_string()),
+                    },
                     Err(e) => Err(format!("Bundler error: {e}")),
                 },
                 Err(e) => Err(format!("Graph evaluation failed: {e:?}")),
@@ -1284,6 +1419,16 @@ fn compute_test_in_bar_keys(
     // Recipe parts that the bundler bakes into the binary artifacts
     // or the file-copy set. Anything not listed here is a mapinfo-
     // only field and lives in the full key further down.
+    //
+    // `name` and `version` are heavy inputs because they drive the
+    // archive identity (`name + " " + version`) AND the .sdd
+    // directory name. A rename has to invalidate the prior bundle so
+    // the launcher doesn't ask the engine for the old identity
+    // against a freshly-regenerated mapinfo (the symptom: "Dependent
+    // archive X not found" even though the .sdd is right there).
+    "ID".hash(&mut heavy);
+    recipe.name.hash(&mut heavy);
+    recipe.version.hash(&mut heavy);
     let s = &recipe.output.map_settings;
     "DIM".hash(&mut heavy);
     recipe.output.width.hash(&mut heavy);

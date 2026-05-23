@@ -60,17 +60,15 @@ pub struct BarVersions {
 }
 
 impl BarVersions {
-    /// Detect a BAR install. Returns `None` when no usable install is found.
-    pub fn detect() -> Option<Self> {
-        for root in candidate_install_roots() {
-            if let Some(v) = Self::from_root(&root) {
-                return Some(v);
-            }
-        }
-        None
-    }
-
-    fn from_root(root: &Path) -> Option<Self> {
+    /// Load engine + game + maps state from an explicit BAR install
+    /// root. Returns `None` when the path doesn't look like a BAR
+    /// install (missing `Beyond-All-Reason.exe`, missing `data/maps`,
+    /// or no engine binaries found). The editor never falls back to
+    /// guessing the install location -- the only input is the
+    /// `bar_install_path` setting, populated by
+    /// `auto_detect_install_root` on first launch and overridable
+    /// from Preferences.
+    pub fn from_install_root(root: &Path) -> Option<Self> {
         let lobby_exe = root.join("Beyond-All-Reason.exe");
         if !lobby_exe.exists() {
             return None;
@@ -280,6 +278,25 @@ fn copy_dir_recursive(src: &Path, dst: &Path) -> std::io::Result<()> {
 // Detection helpers
 // ---------------------------------------------------------------------------
 
+/// One-shot auto-detection of a BAR install. Used ONLY to seed the
+/// `bar_install_path` setting on first launch -- once the setting
+/// is populated (or the user clears it deliberately), this is never
+/// consulted again. No env-var fallthrough at the
+/// `BarVersions::from_install_root` callsite: that consumes the
+/// configured path verbatim.
+///
+/// Probes (Windows): `%LOCALAPPDATA%\Programs\Beyond-All-Reason`,
+/// `%PROGRAMFILES%\Beyond-All-Reason`, `%PROGRAMFILES(X86)%\
+/// Beyond-All-Reason`. First candidate that contains
+/// `Beyond-All-Reason.exe` wins; the actual install validity check
+/// (engine binaries present, etc.) happens later in
+/// `from_install_root`.
+pub fn auto_detect_install_root() -> Option<PathBuf> {
+    candidate_install_roots()
+        .into_iter()
+        .find(|root| root.join("Beyond-All-Reason.exe").exists())
+}
+
 fn candidate_install_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -392,7 +409,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn detect_does_not_panic() {
-        let _ = BarVersions::detect();
+    fn auto_detect_does_not_panic() {
+        let _ = auto_detect_install_root();
+    }
+
+    #[test]
+    fn from_install_root_rejects_unrelated_path() {
+        let tmp = std::env::temp_dir();
+        // A temp dir is never a BAR install; we just want to confirm
+        // the validator returns None cleanly rather than panicking.
+        assert!(BarVersions::from_install_root(&tmp).is_none());
     }
 }

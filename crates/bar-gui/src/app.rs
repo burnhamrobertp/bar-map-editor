@@ -476,6 +476,14 @@ impl BarEditorApp {
         self.settings.save();
     }
 
+    /// Persist `bar_install_path` and save. Called from bar-app once
+    /// on first launch when auto-detection finds an install the
+    /// user hasn't configured yet.
+    pub fn set_bar_install_path(&mut self, path: Option<std::path::PathBuf>) {
+        self.settings.bar_install_path = path;
+        self.settings.save();
+    }
+
     /// True when the user is currently looking at a subgraph tab —
     /// the palette uses this to gate the "SubGraph IO" group so
     /// `SubgraphInput`/`SubgraphOutput` can't be dropped at the

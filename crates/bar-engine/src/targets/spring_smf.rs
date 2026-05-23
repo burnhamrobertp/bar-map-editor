@@ -801,19 +801,20 @@ impl SpringSmfCodec {
         }
 
         let wat = &settings.water;
-        // Water mode forces damage to zero on export. BAR's engine
-        // treats any positive `mapinfo.water.damage` as lava, so a
-        // stale lava value left in the recipe while the user is in
-        // water mode would silently flip the exported map back to
-        // lava. Lava mode emits the stored value as-is.
-        //
-        // `is_lava == None` means "user has expressed no preference"
-        // (fresh default MapSettings) -- leave the stored damage
-        // alone so an empty recipe doesn't drag a `water = { damage
-        // = 0 }` block into mapinfo.
-        let exported_water_damage = match wat.is_lava {
-            Some(false) => Some(0.0),
-            Some(true) | None => wat.damage,
+        let lav = &settings.lava;
+        // Water mode forces damage to zero so a stale value doesn't
+        // accidentally trip the engine's water-damage fallback in
+        // `bar-game/modules/lava.lua` (one of its lava triggers).
+        // Lava mode exports the lava-side damage value so the engine
+        // charges the right amount even if the lava gadget fails to
+        // load. `fluid_mode == None` means "user expressed no
+        // preference" -- leave the stored water damage alone so an
+        // empty recipe doesn't drag `water = { damage = 0 }` into
+        // mapinfo.
+        let exported_water_damage = match settings.fluid_mode {
+            Some(bar_project::recipe::FluidMode::Water) => Some(0.0),
+            Some(bar_project::recipe::FluidMode::Lava) => lav.damage.or(wat.damage),
+            None => wat.damage,
         };
         let wat_block = {
             let mut t = LuaTable::new(8);
@@ -1642,7 +1643,6 @@ mod tests {
                 unit_specular: Some([0.8, 0.6, 0.6]),
             },
             water: WaterSettings {
-                is_lava: Some(true),
                 damage: Some(0.5),
                 absorb: Some([0.011, 0.011, 0.015]),
                 base_color: Some([0.5, 0.68, 0.68]),
@@ -1679,6 +1679,8 @@ mod tests {
                 shore_waves: Some(true),
                 normal_texture: Some("maps/waterbump.dds".to_string()),
             },
+            lava: Default::default(),
+            fluid_mode: Some(bar_project::recipe::FluidMode::Lava),
             custom_fog: Default::default(),
             custom_grass: CustomGrassSettings {
                 dist_tga: Some("maps/grass.tga".to_string()),
