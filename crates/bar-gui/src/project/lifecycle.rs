@@ -619,6 +619,13 @@ impl BarEditorApp {
     }
 
     pub(crate) fn dispatch_open(&mut self, path: std::path::PathBuf) {
+        // The OS folder picker can't filter directories by extension,
+        // so the Open Project dialog returns whatever the user
+        // selected. Validate here: SD7 archives go through the
+        // importer, `.barproj` directories load as projects, anything
+        // else is a user mistake we surface cleanly rather than
+        // letting `Project::load` produce a "recipe.json not found"
+        // error from deep inside the loader.
         match path
             .extension()
             .and_then(|e| e.to_str())
@@ -626,7 +633,13 @@ impl BarEditorApp {
             .as_deref()
         {
             Some("sd7") => self.open_map_as_project(path),
-            _ => self.load_project(path),
+            Some("barproj") => self.load_project(path),
+            _ => {
+                self.log_error(t!(
+                    "editor.project.not_barproj",
+                    path = path.display().to_string()
+                ));
+            }
         }
     }
 

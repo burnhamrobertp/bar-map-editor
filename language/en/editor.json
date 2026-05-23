@@ -26,7 +26,8 @@
       "save_failed": "Save failed: %{error}",
       "extracting": "Extracting %{name}…",
       "opened": "Opened: %{name}",
-      "autosaved": "Autosaved"
+      "autosaved": "Autosaved",
+      "not_barproj": "Not a .barproj project directory: %{path}"
     },
     "prefs": {
       "title": "Preferences",
