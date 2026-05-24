@@ -22,11 +22,14 @@ use std::path::{Path, PathBuf};
 /// One available game version shown in the version picker.
 #[derive(Debug, Clone)]
 pub struct BarGameVersion {
-    /// Label shown in the UI (e.g. "byar:stable (rapid)" or "byar_1234.sdz").
+    /// Label shown in the UI -- archive filename, with `" (latest)"`
+    /// suffixed on the newest-mtime entry.
     pub label: String,
-    /// Value written to `GameType=` in the startscript.
+    /// Value written to `GameType=` in the startscript. Sourced from the
+    /// archive's `modinfo.lua` (`name + " " + version`) -- the filename
+    /// alone won't satisfy Recoil's archive lookup.
     pub archive_name: String,
-    /// Full path to the archive on disk. `None` for rapid/synthetic entries.
+    /// Full path to the archive on disk.
     pub path: Option<std::path::PathBuf>,
 }
 
@@ -46,9 +49,11 @@ pub struct BarEngineVersion {
 /// All detected game and engine versions for a BAR install.
 #[derive(Debug, Clone)]
 pub struct BarVersions {
-    /// Available game archives. `games[0]` is always `byar:stable` (rapid
-    /// tag fallback); subsequent entries are locally installed archives,
-    /// newest first.
+    /// Locally installed game archives, newest-mtime first. The newest
+    /// entry's label is suffixed with `" (latest)"` so the dropdown's
+    /// default selection makes the "use the freshest install" intent
+    /// obvious. Empty when no usable archive lives under
+    /// `<install>/data/games/`.
     pub games: Vec<BarGameVersion>,
     /// Available engine binaries, newest-mtime first.
     pub engines: Vec<BarEngineVersion>,
@@ -68,7 +73,14 @@ impl BarVersions {
     /// `bar_install_path` setting, populated by
     /// `auto_detect_install_root` on first launch and overridable
     /// from Preferences.
+    ///
+    /// The configured path is normalised first: if the user pasted in
+    /// `<root>/data` or `<root>/data/games` directly (a common slip
+    /// when picking the folder from a file dialog), we walk back up to
+    /// the actual install root so the rest of the resolution doesn't
+    /// double-stack `data/data/...`.
     pub fn from_install_root(root: &Path) -> Option<Self> {
+        let root = normalize_install_root(root);
         let lobby_exe = root.join("Beyond-All-Reason.exe");
         if !lobby_exe.exists() {
             return None;
@@ -85,15 +97,7 @@ impl BarVersions {
             return None;
         }
 
-        // "Beyond All Reason $VERSION" is the token the BAR lobby itself
-        // writes into its startscripts. Recoil resolves $VERSION locally
-        // from the installed game archive -- no CDN or rapid tag needed.
-        let mut games = vec![BarGameVersion {
-            label: "Beyond All Reason (latest)".to_string(),
-            archive_name: "Beyond All Reason $VERSION".to_string(),
-            path: None,
-        }];
-        games.extend(collect_games(&data_dir.join("games")));
+        let games = collect_games(&data_dir.join("games"));
 
         Some(Self {
             games,
@@ -340,6 +344,15 @@ fn collect_engines(engine_root: &Path) -> Vec<BarEngineVersion> {
 
 /// Game archives under `<games_root>/`, newest mtime first.
 /// Matches both the legacy `byar_*.sdz` format and the current `BAR*.sdd` format.
+///
+/// `archive_name` is populated from each archive's `modinfo.lua` identity
+/// (`name + " " + version`) -- that's what Recoil matches `GameType=` against.
+/// Archives without a readable modinfo are skipped because they can't be
+/// reliably launched; presenting them in the dropdown would be the same
+/// trap the synthetic `$VERSION` entry used to be.
+///
+/// The newest-mtime entry's label gets a `" (latest)"` suffix so the
+/// default selection signals which archive will be used.
 fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
     let Ok(entries) = std::fs::read_dir(games_root) else {
         return Vec::new();
@@ -348,8 +361,8 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
         .flatten()
         .filter_map(|entry| {
             let name = entry.file_name().to_string_lossy().into_owned();
-            let ext = entry
-                .path()
+            let full_path = entry.path();
+            let ext = full_path
                 .extension()
                 .map(|e| e.to_string_lossy().into_owned())
                 .unwrap_or_default();
@@ -361,19 +374,67 @@ fn collect_games(games_root: &Path) -> Vec<BarGameVersion> {
                 return None;
             }
             let mtime = entry.metadata().ok()?.modified().ok()?;
-            let full_path = entry.path();
+            let identity = read_archive_identity(&full_path)?;
             Some((
                 mtime,
                 BarGameVersion {
-                    label: name.clone(),
-                    archive_name: name,
+                    label: name,
+                    archive_name: identity,
                     path: Some(full_path),
                 },
             ))
         })
         .collect();
     found.sort_by_key(|v| std::cmp::Reverse(v.0));
-    found.into_iter().map(|(_, v)| v).collect()
+    let mut games: Vec<BarGameVersion> = found.into_iter().map(|(_, v)| v).collect();
+    if let Some(newest) = games.first_mut() {
+        newest.label = format!("{} (latest)", newest.label);
+    }
+    games
+}
+
+/// Extract `"{name} {version}"` from an archive's `modinfo.lua`. This is
+/// the archive identity Recoil uses when matching `GameType=` and
+/// `depend = { ... }` entries -- the filename is irrelevant to lookup.
+/// Returns `None` if `modinfo.lua` is absent or doesn't declare both
+/// fields.
+fn read_archive_identity(archive: &Path) -> Option<String> {
+    let bytes = bar_engine::read_file_from_archive(archive, "modinfo.lua")?;
+    let lua = String::from_utf8_lossy(&bytes);
+    let name = bar_project::parse_mapinfo_string(&lua, "name")?;
+    let version = bar_project::parse_mapinfo_string(&lua, "version")?;
+    Some(format!("{name} {version}"))
+}
+
+/// Strip a trailing `data` or `data/games` from the configured install
+/// path so the rest of the resolution can rely on `root.join("data")`
+/// without doubling up. Triggers when the user pastes (or picks via
+/// folder dialog) a path one or two levels deeper than the install
+/// root, which is easy to do because `data/games/` is what's most
+/// visible when browsing the install.
+fn normalize_install_root(p: &Path) -> PathBuf {
+    let leaf = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_ascii_lowercase());
+    match leaf.as_deref() {
+        Some("games") => {
+            let parent = p.parent();
+            let grandparent = parent.and_then(|d| d.parent());
+            if parent.map(|d| d.file_name().and_then(|n| n.to_str())) == Some(Some("data")) {
+                if let Some(gp) = grandparent {
+                    return gp.to_path_buf();
+                }
+            }
+        }
+        Some("data") => {
+            if let Some(parent) = p.parent() {
+                return parent.to_path_buf();
+            }
+        }
+        _ => {}
+    }
+    p.to_path_buf()
 }
 
 // ---------------------------------------------------------------------------
@@ -419,5 +480,34 @@ mod tests {
         // A temp dir is never a BAR install; we just want to confirm
         // the validator returns None cleanly rather than panicking.
         assert!(BarVersions::from_install_root(&tmp).is_none());
+    }
+
+    #[test]
+    fn normalize_leaves_install_root_alone() {
+        let p = PathBuf::from("C:/Beyond-All-Reason");
+        assert_eq!(normalize_install_root(&p), p);
+    }
+
+    #[test]
+    fn normalize_strips_trailing_data() {
+        let root = PathBuf::from("C:/Beyond-All-Reason");
+        let with_data = root.join("data");
+        assert_eq!(normalize_install_root(&with_data), root);
+    }
+
+    #[test]
+    fn normalize_strips_trailing_data_games() {
+        let root = PathBuf::from("C:/Beyond-All-Reason");
+        let with_data_games = root.join("data").join("games");
+        assert_eq!(normalize_install_root(&with_data_games), root);
+    }
+
+    #[test]
+    fn normalize_does_not_strip_unrelated_games_dir() {
+        // Path ending in `games` but not under a `data` parent shouldn't
+        // be touched -- it's not the BAR layout, walking up would point
+        // at the wrong place.
+        let weird = PathBuf::from("C:/Some/Other/games");
+        assert_eq!(normalize_install_root(&weird), weird);
     }
 }

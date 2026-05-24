@@ -13,8 +13,10 @@ use bar_graph::NodeId;
 /// Indices are safe to use as-is: `launch_skirmish` bounds-checks them.
 #[derive(Debug, Clone, Default)]
 pub struct BarVersionState {
-    /// Display labels for available game archives. `game_labels[0]` is
-    /// always "byar:stable (rapid)"; subsequent entries are local archives.
+    /// Display labels for available game archives, newest-mtime first.
+    /// Empty when no usable archive is installed under
+    /// `<bar-install>/data/games/`; the newest entry is suffixed
+    /// `" (latest)"` so default selection reads correctly.
     pub game_labels: Vec<String>,
     /// Display labels for available engine versions, newest first.
     pub engine_labels: Vec<String>,
