@@ -70,15 +70,23 @@ impl GpuContext {
             wgpu::Features::empty()
         };
 
+        // Cap the requested limits at what the adapter actually provides --
+        // software Vulkan / GLES on some hosts only exposes 128 MB storage
+        // buffers, which would crash request_device if we insisted on 512.
+        let storage_cap = adapter
+            .limits()
+            .max_storage_buffer_binding_size
+            .min(512 * 1024 * 1024);
+        let buffer_cap = adapter.limits().max_buffer_size.min(512 * 1024 * 1024);
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("bar-compute"),
                     required_features: bc_feature,
                     required_limits: wgpu::Limits {
-                        // Allow larger storage buffers for high-res heightmaps (8K = 256MB)
-                        max_storage_buffer_binding_size: 512 * 1024 * 1024,
-                        max_buffer_size: 512 * 1024 * 1024,
+                        max_storage_buffer_binding_size: storage_cap,
+                        max_buffer_size: buffer_cap,
                         // Terrain pipeline binds 5 groups (camera, textures,
                         // water_planes, heightmap, shadow). Default cap is 4
                         // which rejects the shadow group when running CLI /
@@ -132,14 +140,20 @@ impl ComputeDevice {
             adapter_info.name, adapter_info.backend
         );
 
+        let storage_cap = adapter
+            .limits()
+            .max_storage_buffer_binding_size
+            .min(512 * 1024 * 1024);
+        let buffer_cap = adapter.limits().max_buffer_size.min(512 * 1024 * 1024);
+
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("bar-compute"),
                     required_features: wgpu::Features::empty(),
                     required_limits: wgpu::Limits {
-                        max_storage_buffer_binding_size: 512 * 1024 * 1024,
-                        max_buffer_size: 512 * 1024 * 1024,
+                        max_storage_buffer_binding_size: storage_cap,
+                        max_buffer_size: buffer_cap,
                         ..wgpu::Limits::default()
                     },
                     ..Default::default()

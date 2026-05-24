@@ -79,13 +79,25 @@ fn main() -> Result<()> {
                 } else {
                     wgpu::Limits::default()
                 };
+                // Software Vulkan (llvmpipe / lavapipe -- WSLg without GPU
+                // passthrough, Mesa fallbacks, some VMs) caps storage buffer
+                // and buffer sizes at 128 MB. Asking for 512 MB unconditionally
+                // crashes startup there. Clamp to the adapter's actual ceiling
+                // so the editor launches; runtime GPU paths that need more
+                // headroom degrade via `check_buffer_size` rather than a hard
+                // wgpu error at adapter creation.
+                let storage_cap = adapter
+                    .limits()
+                    .max_storage_buffer_binding_size
+                    .min(512 * 1024 * 1024);
+                let buffer_cap = adapter.limits().max_buffer_size.min(512 * 1024 * 1024);
                 wgpu::DeviceDescriptor {
                     label: Some("bar-editor"),
                     required_features: bc,
                     required_limits: wgpu::Limits {
                         max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
-                        max_storage_buffer_binding_size: 512 * 1024 * 1024,
-                        max_buffer_size: 512 * 1024 * 1024,
+                        max_storage_buffer_binding_size: storage_cap,
+                        max_buffer_size: buffer_cap,
                         // Terrain pipeline now uses 5 bind groups (camera +
                         // textures + water_planes + heightmap + shadow). Bump
                         // the limit accordingly; both desktop GL and modern
