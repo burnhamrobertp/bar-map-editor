@@ -74,37 +74,30 @@ fn main() -> Result<()> {
                 } else {
                     wgpu::Features::empty()
                 };
-                let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
-                    wgpu::Limits::downlevel_webgl2_defaults()
-                } else {
-                    wgpu::Limits::default()
-                };
-                // Software Vulkan (llvmpipe / lavapipe -- WSLg without GPU
-                // passthrough, Mesa fallbacks, some VMs) caps storage buffer
-                // and buffer sizes at 128 MB. Asking for 512 MB unconditionally
-                // crashes startup there. Clamp to the adapter's actual ceiling
-                // so the editor launches; runtime GPU paths that need more
-                // headroom degrade via `check_buffer_size` rather than a hard
-                // wgpu error at adapter creation.
-                let storage_cap = adapter
-                    .limits()
+                // Start from the adapter's actual limits and only cap a
+                // few fields downward for our own memory budget. Doing it
+                // this way means request_device never fails because the
+                // adapter offered less than wgpu's defaults -- which is
+                // common on software Vulkan stacks (llvmpipe / lavapipe
+                // under WSLg without GPU passthrough, Mesa fallbacks, some
+                // VMs). When a runtime path then exceeds an adapter limit
+                // (e.g. erosion's storage buffer), it surfaces a clean
+                // error via `check_buffer_size` instead of a panic.
+                let adapter_limits = adapter.limits();
+                let mut required_limits = adapter_limits.clone();
+                required_limits.max_storage_buffer_binding_size = adapter_limits
                     .max_storage_buffer_binding_size
                     .min(512 * 1024 * 1024);
-                let buffer_cap = adapter.limits().max_buffer_size.min(512 * 1024 * 1024);
+                required_limits.max_buffer_size =
+                    adapter_limits.max_buffer_size.min(512 * 1024 * 1024);
+                // Terrain pipeline binds 5 groups (camera, textures,
+                // water_planes, heightmap, shadow). Default cap is 4 on
+                // some downlevel stacks; bump where the adapter allows.
+                required_limits.max_bind_groups = 8.min(adapter_limits.max_bind_groups);
                 wgpu::DeviceDescriptor {
                     label: Some("bar-editor"),
                     required_features: bc,
-                    required_limits: wgpu::Limits {
-                        max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
-                        max_storage_buffer_binding_size: storage_cap,
-                        max_buffer_size: buffer_cap,
-                        // Terrain pipeline now uses 5 bind groups (camera +
-                        // textures + water_planes + heightmap + shadow). Bump
-                        // the limit accordingly; both desktop GL and modern
-                        // backends support 8 groups, so 5 is well within range.
-                        max_bind_groups: 8.min(adapter.limits().max_bind_groups),
-                        ..base_limits
-                    },
+                    required_limits,
                     ..Default::default()
                 }
             }),

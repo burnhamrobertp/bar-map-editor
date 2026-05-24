@@ -70,30 +70,27 @@ impl GpuContext {
             wgpu::Features::empty()
         };
 
-        // Cap the requested limits at what the adapter actually provides --
-        // software Vulkan / GLES on some hosts only exposes 128 MB storage
-        // buffers, which would crash request_device if we insisted on 512.
-        let storage_cap = adapter
-            .limits()
+        // Start from the adapter's actual limits and only cap memory-bound
+        // fields downward. Software Vulkan stacks (llvmpipe / lavapipe on
+        // WSLg without GPU passthrough, Mesa fallbacks, some VMs) expose
+        // lower limits than wgpu's defaults; using the adapter's set
+        // verbatim means request_device never fails because we asked for
+        // more than the driver can give, and downstream pipelines hit
+        // clean per-call errors instead of a startup panic.
+        let adapter_limits = adapter.limits();
+        let mut required_limits = adapter_limits.clone();
+        required_limits.max_storage_buffer_binding_size = adapter_limits
             .max_storage_buffer_binding_size
             .min(512 * 1024 * 1024);
-        let buffer_cap = adapter.limits().max_buffer_size.min(512 * 1024 * 1024);
+        required_limits.max_buffer_size = adapter_limits.max_buffer_size.min(512 * 1024 * 1024);
+        required_limits.max_bind_groups = 8.min(adapter_limits.max_bind_groups);
 
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("bar-compute"),
                     required_features: bc_feature,
-                    required_limits: wgpu::Limits {
-                        max_storage_buffer_binding_size: storage_cap,
-                        max_buffer_size: buffer_cap,
-                        // Terrain pipeline binds 5 groups (camera, textures,
-                        // water_planes, heightmap, shadow). Default cap is 4
-                        // which rejects the shadow group when running CLI /
-                        // headless previews.
-                        max_bind_groups: 8.min(adapter.limits().max_bind_groups),
-                        ..wgpu::Limits::default()
-                    },
+                    required_limits,
                     ..Default::default()
                 },
                 None,
@@ -140,22 +137,19 @@ impl ComputeDevice {
             adapter_info.name, adapter_info.backend
         );
 
-        let storage_cap = adapter
-            .limits()
+        let adapter_limits = adapter.limits();
+        let mut required_limits = adapter_limits.clone();
+        required_limits.max_storage_buffer_binding_size = adapter_limits
             .max_storage_buffer_binding_size
             .min(512 * 1024 * 1024);
-        let buffer_cap = adapter.limits().max_buffer_size.min(512 * 1024 * 1024);
+        required_limits.max_buffer_size = adapter_limits.max_buffer_size.min(512 * 1024 * 1024);
 
         let (device, queue) = adapter
             .request_device(
                 &wgpu::DeviceDescriptor {
                     label: Some("bar-compute"),
                     required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits {
-                        max_storage_buffer_binding_size: storage_cap,
-                        max_buffer_size: buffer_cap,
-                        ..wgpu::Limits::default()
-                    },
+                    required_limits,
                     ..Default::default()
                 },
                 None,
