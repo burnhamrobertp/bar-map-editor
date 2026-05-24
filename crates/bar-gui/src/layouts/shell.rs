@@ -1058,6 +1058,14 @@ impl BarEditorApp {
                     let hover = hover_with_summary(&base_hover, &compile_summary, &blocking_msg);
                     let compile_clicked = compile_resp.clicked();
                     compile_resp.on_hover_text(hover);
+                    if compile_clicked {
+                        tracing::info!(
+                            compile_running,
+                            compile_blocked,
+                            any_running,
+                            "Compile button clicked"
+                        );
+                    }
                     if compile_running && compile_clicked {
                         self.preview.cancel_compile_requested = true;
                     } else if !compile_running && !compile_blocked && compile_clicked {

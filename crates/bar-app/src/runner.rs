@@ -294,9 +294,17 @@ impl eframe::App for AppRunner {
                 }
                 Err(mpsc::TryRecvError::Empty) => {}
                 Err(mpsc::TryRecvError::Disconnected) => {
+                    // Channel dropped without a send means the worker
+                    // thread exited without producing a result -- usually a
+                    // panic that bypassed our catch_unwind, or the thread
+                    // being killed externally. Surface it instead of
+                    // silently clearing state.
+                    tracing::error!("Compile: worker channel disconnected without a result");
                     self.app.preview.compile_running = false;
                     self.compile_result_rx = None;
                     self.pending_test_in_bar_after_compile = false;
+                    self.app
+                        .set_status(bar_gui::i18n::t("editor.status.compile.worker_lost"));
                 }
             }
         }
@@ -309,19 +317,45 @@ impl eframe::App for AppRunner {
                 self.compile_result_rx = Some(rx);
                 self.app.preview.compile_running = true;
                 let ctx_clone = ctx.clone();
+                tracing::info!(
+                    project = %project_dir.display(),
+                    "Compile: spawning worker thread"
+                );
                 std::thread::spawn(move || {
-                    let result = bar_engine::compile_project(
-                        &project_dir,
-                        &graph,
-                        executor.as_ref(),
-                        &recipe,
-                        &|_| {},
-                    )
-                    .map_err(|e| e.to_string());
+                    // Catch panics so a worker-thread crash surfaces as a
+                    // logged error rather than a silent channel disconnect
+                    // (which the runner would otherwise see as "compile
+                    // just stopped" with no log entry).
+                    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        bar_engine::compile_project(
+                            &project_dir,
+                            &graph,
+                            executor.as_ref(),
+                            &recipe,
+                            &|_| {},
+                        )
+                    }));
+                    let result = match outcome {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(e)) => {
+                            tracing::error!(error = %e, "Compile: returned error");
+                            Err(e.to_string())
+                        }
+                        Err(panic) => {
+                            let msg = panic
+                                .downcast_ref::<&str>()
+                                .map(|s| (*s).to_string())
+                                .or_else(|| panic.downcast_ref::<String>().cloned())
+                                .unwrap_or_else(|| "unknown panic".to_string());
+                            tracing::error!(panic = %msg, "Compile: worker thread panicked");
+                            Err(format!("compile panicked: {msg}"))
+                        }
+                    };
                     let _ = tx.send(result);
                     ctx_clone.request_repaint();
                 });
             } else {
+                tracing::warn!("Compile clicked but project has no on-disk path -- prompting save");
                 self.app
                     .set_status(bar_gui::i18n::t("editor.status.compile.save_first"));
             }
