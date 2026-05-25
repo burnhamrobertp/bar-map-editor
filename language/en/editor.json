@@ -89,6 +89,7 @@
       "node_graph": "Node Graph",
       "sculpt_3d": "3D Sculpt",
       "preview": "Preview",
+      "layout_no_gpu": "This layout requires a GPU. No hardware-accelerated wgpu adapter was detected at startup; software Vulkan (lavapipe / WSLg without GPU passthrough) can't drive the 3D viewport at usable framerates. The editor is locked to Node Graph.",
       "log": "Log"
     },
     "log": {

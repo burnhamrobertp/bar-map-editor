@@ -265,6 +265,15 @@ pub struct BarEditorApp {
     /// Set by `bar-app` from `GpuContext::supports_bc` on startup. Tells
     /// the Preview layout whether BC1 texture upload is available.
     pub supports_bc: bool,
+    /// True when the wgpu adapter is software-only (`device_type ==
+    /// DeviceType::Cpu`, e.g. lavapipe under WSLg without GPU
+    /// passthrough). Set by `bar-app` at startup from
+    /// `RenderState::adapter`. Layouts and rendering paths branch on
+    /// this to disable expensive paths -- Preview is locked out, grass
+    /// / advanced shading / shadows / features are short-circuited in
+    /// Sculpt -- since a CPU-only Vulkan target makes those paths run
+    /// at unusable framerates.
+    pub software_renderer: bool,
     /// Sorted list of feature type names from the loaded catalog.
     /// Populated by `bar-app` when the feature catalog is loaded.
     pub feature_palette_names: Vec<String>,
@@ -392,6 +401,7 @@ impl Default for BarEditorApp {
             settings: Settings::default(),
             active_layout: Layout::default(),
             supports_bc: false,
+            software_renderer: false,
             feature_palette_names: Vec::new(),
             feature_filter: String::new(),
             selected_feature_type: None,
@@ -999,11 +1009,29 @@ impl BarEditorApp {
         self.active_layout
     }
 
+    /// True when the given layout is a 3D one (Sculpt3D / Preview) and
+    /// the wgpu adapter is software-only -- those layouts are gated
+    /// off entirely on lavapipe because the terrain shader alone
+    /// pegs CPU cores. NodeGraph is always permitted.
+    pub fn layout_blocked_by_software(&self, layout: Layout) -> bool {
+        self.software_renderer && matches!(layout, Layout::Sculpt3D | Layout::Preview)
+    }
+
     /// Switch to a different layout. Layouts are pure UI/UX, so the
     /// switch is instant and never migrates project state. Persists
     /// the choice via `Settings` so the user picks up where they
     /// left off after a restart.
+    ///
+    /// Software-only adapters (`software_renderer == true`) are locked
+    /// to NodeGraph: the 3D layouts (Sculpt3D, Preview) run their
+    /// terrain shader on the CPU under lavapipe and are unusable.
+    /// Calls to switch into a blocked layout are silently ignored;
+    /// the UI also disables those menu entries so this path is only
+    /// hit via stale keyboard shortcuts or persisted settings.
     pub fn set_active_layout(&mut self, layout: Layout) {
+        if self.layout_blocked_by_software(layout) {
+            return;
+        }
         if self.active_layout == layout {
             return;
         }

@@ -125,6 +125,32 @@ fn main() -> Result<()> {
                 .map(|rs| GpuContext::from_existing(rs.device.clone(), rs.queue.clone()));
 
             app.supports_bc = gpu_context.as_ref().map(|c| c.supports_bc).unwrap_or(false);
+            // Detect CPU-only Vulkan targets (lavapipe under WSLg
+            // without GPU passthrough, host-fallback Mesa stacks).
+            // The 3D layouts (Sculpt3D, Preview) are locked out
+            // entirely on these adapters because the terrain shader
+            // running on a CPU rasteriser is unusable -- see
+            // BarEditorApp::software_renderer.
+            app.software_renderer = render_state
+                .as_ref()
+                .map(|rs| rs.adapter.get_info().device_type == wgpu::DeviceType::Cpu)
+                .unwrap_or(false);
+            if app.software_renderer {
+                let name = render_state
+                    .as_ref()
+                    .map(|rs| rs.adapter.get_info().name)
+                    .unwrap_or_default();
+                tracing::warn!(
+                    adapter = %name,
+                    "Software-only Vulkan adapter detected; editor locked to Node Graph layout"
+                );
+                // If the user's saved layout from a previous (hardware)
+                // session was a 3D one, snap them back to NodeGraph so
+                // they don't land on a layout they can't use.
+                if app.layout_blocked_by_software(app.active_layout()) {
+                    app.set_active_layout(bar_gui::Layout::NodeGraph);
+                }
+            }
 
             let executor = make_executor(&gpu_context);
 

@@ -673,7 +673,19 @@ impl BarEditorApp {
                             if let Some(s) = shortcut {
                                 btn = btn.shortcut_text(egui::RichText::new(s).color(sc));
                             }
-                            if ui.add_enabled(has_proj, btn).clicked() {
+                            // 3D layouts require a GPU; lock them out
+                            // on software adapters (no hardware Vulkan
+                            // discoverable -- lavapipe under WSLg or
+                            // similar) and surface the reason on hover.
+                            let blocked = self.layout_blocked_by_software(layout);
+                            let enabled = has_proj && !blocked;
+                            let resp = ui.add_enabled(enabled, btn);
+                            let resp = if blocked {
+                                resp.on_disabled_hover_text(t!("editor.menu.layout_no_gpu"))
+                            } else {
+                                resp
+                            };
+                            if resp.clicked() {
                                 self.set_active_layout(layout);
                                 ui.close_menu();
                             }
