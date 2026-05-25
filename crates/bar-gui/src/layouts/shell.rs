@@ -37,12 +37,13 @@ fn paint_validation_badge(ui: &egui::Ui, btn_rect: egui::Rect, summary: &Validat
         (egui::Color32::from_rgb(230, 180, 60), summary.warnings)
     };
     let radius = 7.0;
-    // Anchor outside the button's top-right corner so the badge
-    // doesn't clip the icon underneath. ~60% of the badge sits past
-    // the rect edges; the painter's clip is expanded twice the
-    // radius to leave room for the overflow.
-    let offset = radius * 0.6;
-    let center = egui::pos2(btn_rect.max.x + offset, btn_rect.min.y - offset);
+    // Anchor on the button's top-right corner: the badge straddles
+    // the edge so half sits inside the icon area and half overflows.
+    // The earlier `+ offset` / `- offset` push lifted the badge too
+    // far up and right; on dense action bars it read as floating
+    // detached from any button. Sitting on the corner keeps the
+    // association obvious without occluding the icon centre.
+    let center = egui::pos2(btn_rect.max.x, btn_rect.min.y);
     let painter = ui.painter_at(btn_rect.expand(radius * 2.0));
     painter.circle_filled(center, radius, color);
     painter.circle_stroke(
@@ -673,7 +674,19 @@ impl BarEditorApp {
                             if let Some(s) = shortcut {
                                 btn = btn.shortcut_text(egui::RichText::new(s).color(sc));
                             }
-                            if ui.add_enabled(has_proj, btn).clicked() {
+                            // 3D layouts require a GPU; lock them out
+                            // on software adapters (no hardware Vulkan
+                            // discoverable -- lavapipe under WSLg or
+                            // similar) and surface the reason on hover.
+                            let blocked = self.layout_blocked_by_software(layout);
+                            let enabled = has_proj && !blocked;
+                            let resp = ui.add_enabled(enabled, btn);
+                            let resp = if blocked {
+                                resp.on_disabled_hover_text(t!("editor.menu.layout_no_gpu"))
+                            } else {
+                                resp
+                            };
+                            if resp.clicked() {
                                 self.set_active_layout(layout);
                                 ui.close_menu();
                             }
@@ -1058,6 +1071,14 @@ impl BarEditorApp {
                     let hover = hover_with_summary(&base_hover, &compile_summary, &blocking_msg);
                     let compile_clicked = compile_resp.clicked();
                     compile_resp.on_hover_text(hover);
+                    if compile_clicked {
+                        tracing::info!(
+                            compile_running,
+                            compile_blocked,
+                            any_running,
+                            "Compile button clicked"
+                        );
+                    }
                     if compile_running && compile_clicked {
                         self.preview.cancel_compile_requested = true;
                     } else if !compile_running && !compile_blocked && compile_clicked {

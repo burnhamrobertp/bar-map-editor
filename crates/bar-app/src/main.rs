@@ -1,3 +1,14 @@
+// Release builds on Windows use the GUI subsystem so launching the
+// installed binary doesn't pop a cmd.exe console window first. Debug
+// builds keep the console subsystem so cargo-run output (stdout /
+// eprintln from rapid iteration) stays visible. Logs are routed
+// through the in-app log panel via `app_log_layer` regardless, so
+// dropping stderr on Windows release isn't a functional loss.
+#![cfg_attr(
+    all(not(debug_assertions), target_os = "windows"),
+    windows_subsystem = "windows"
+)]
+
 mod app_log_layer;
 mod bar_install;
 mod feature_thumb_cache;
@@ -5,7 +16,7 @@ mod layout_manager;
 mod runner;
 mod viewport;
 
-use std::sync::mpsc;
+use std::sync::{mpsc, Arc, Mutex};
 
 use anyhow::Result;
 use bar_compute::GpuContext;
@@ -15,22 +26,103 @@ use tracing_subscriber::EnvFilter;
 
 use runner::{make_executor, AppRunner};
 
+/// Open `bme.log` next to the running binary, truncating any previous
+/// contents. Returns `None` if the executable path can't be determined
+/// or the file can't be created -- the editor falls back to stdout +
+/// the in-app log panel in that case.
+fn open_log_file() -> Option<Arc<Mutex<std::fs::File>>> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let path = dir.join("bme.log");
+    match std::fs::File::create(&path) {
+        Ok(f) => Some(Arc::new(Mutex::new(f))),
+        Err(e) => {
+            eprintln!("Could not create {}: {e}", path.display());
+            None
+        }
+    }
+}
+
+/// Adapter that satisfies tracing_subscriber's `MakeWriter` for a
+/// shared file handle. The intermediate `LockedFileWriter` locks the
+/// mutex per write call so concurrent log events from background
+/// threads don't interleave mid-line.
+#[derive(Clone)]
+struct SharedFileWriter(Arc<Mutex<std::fs::File>>);
+
+struct LockedFileWriter(Arc<Mutex<std::fs::File>>);
+
+impl std::io::Write for LockedFileWriter {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).flush()
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::writer::MakeWriter<'a> for SharedFileWriter {
+    type Writer = LockedFileWriter;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        LockedFileWriter(self.0.clone())
+    }
+}
+
 fn main() -> Result<()> {
     let (log_tx, log_rx) = mpsc::channel::<(Level, String)>();
-    // BME log panel filter: DEBUG so the panel's "DBG" visibility toggle
-    // has something to surface. The panel hides DEBUG events by default;
-    // the user enables them with the per-level button. Stdout filter
-    // stays at INFO (or RUST_LOG override) to avoid debug-spam in the
-    // terminal.
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        ))
+    let log_file = open_log_file();
+    // Three sinks layered over the same tracing registry:
+    //   1. stdout (visible in debug builds; suppressed on Windows
+    //      release because of `windows_subsystem = "windows"`).
+    //   2. bme.log next to the binary -- the durable record callers
+    //      can attach to bug reports. Truncated each launch so the
+    //      file size stays bounded.
+    //   3. AppLogLayer feeding the in-app log panel via mpsc.
+    //
+    // The stdout layer keeps the EnvFilter (RUST_LOG override) so
+    // developers can tighten or widen verbosity from the shell. The
+    // file layer captures DEBUG and above unconditionally so post-hoc
+    // diagnostics aren't gated on whoever ran the binary having set
+    // RUST_LOG correctly.
+    // Default filter that mutes the known-spammy crates (wgpu's
+    // Vulkan loader chatter, winit window-system probes, calloop
+    // event-source bookkeeping) while keeping our own code verbose.
+    // Without this, file logging accumulates ~MB per second on a
+    // typical session. RUST_LOG overrides this verbatim when set, so
+    // a maintainer who wants everything can opt back in.
+    let stdout_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "info,wgpu_hal=warn,wgpu_core=warn,naga=warn,winit=warn,\
+             wayland_client=warn,calloop=warn,sctk=warn,egui_winit=warn,\
+             egui_wgpu=info",
+        )
+    });
+    let file_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::new(
+            "debug,wgpu_hal=warn,wgpu_core=warn,naga=warn,winit=warn,\
+             wayland_client=warn,calloop=warn,sctk=warn,egui_winit=warn,\
+             egui_wgpu=info",
+        )
+    });
+    let registry = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(stdout_filter))
         .with(
             app_log_layer::AppLogLayer::new(log_tx)
                 .with_filter(tracing_subscriber::filter::LevelFilter::DEBUG),
-        )
-        .init();
+        );
+    if let Some(file) = log_file {
+        registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .with_ansi(false)
+                    .with_writer(SharedFileWriter(file))
+                    .with_filter(file_filter),
+            )
+            .init();
+    } else {
+        registry.init();
+    }
 
     tracing::info!("Starting BAR - Map Editor");
 
@@ -74,25 +166,30 @@ fn main() -> Result<()> {
                 } else {
                     wgpu::Features::empty()
                 };
-                let base_limits = if adapter.get_info().backend == wgpu::Backend::Gl {
-                    wgpu::Limits::downlevel_webgl2_defaults()
-                } else {
-                    wgpu::Limits::default()
-                };
+                // Start from the adapter's actual limits and only cap a
+                // few fields downward for our own memory budget. Doing it
+                // this way means request_device never fails because the
+                // adapter offered less than wgpu's defaults -- which is
+                // common on software Vulkan stacks (llvmpipe / lavapipe
+                // under WSLg without GPU passthrough, Mesa fallbacks, some
+                // VMs). When a runtime path then exceeds an adapter limit
+                // (e.g. erosion's storage buffer), it surfaces a clean
+                // error via `check_buffer_size` instead of a panic.
+                let adapter_limits = adapter.limits();
+                let mut required_limits = adapter_limits.clone();
+                required_limits.max_storage_buffer_binding_size = adapter_limits
+                    .max_storage_buffer_binding_size
+                    .min(512 * 1024 * 1024);
+                required_limits.max_buffer_size =
+                    adapter_limits.max_buffer_size.min(512 * 1024 * 1024);
+                // Terrain pipeline binds 5 groups (camera, textures,
+                // water_planes, heightmap, shadow). Default cap is 4 on
+                // some downlevel stacks; bump where the adapter allows.
+                required_limits.max_bind_groups = 8.min(adapter_limits.max_bind_groups);
                 wgpu::DeviceDescriptor {
                     label: Some("bar-editor"),
                     required_features: bc,
-                    required_limits: wgpu::Limits {
-                        max_texture_dimension_2d: adapter.limits().max_texture_dimension_2d,
-                        max_storage_buffer_binding_size: 512 * 1024 * 1024,
-                        max_buffer_size: 512 * 1024 * 1024,
-                        // Terrain pipeline now uses 5 bind groups (camera +
-                        // textures + water_planes + heightmap + shadow). Bump
-                        // the limit accordingly; both desktop GL and modern
-                        // backends support 8 groups, so 5 is well within range.
-                        max_bind_groups: 8.min(adapter.limits().max_bind_groups),
-                        ..base_limits
-                    },
+                    required_limits,
                     ..Default::default()
                 }
             }),
@@ -120,6 +217,32 @@ fn main() -> Result<()> {
                 .map(|rs| GpuContext::from_existing(rs.device.clone(), rs.queue.clone()));
 
             app.supports_bc = gpu_context.as_ref().map(|c| c.supports_bc).unwrap_or(false);
+            // Detect CPU-only Vulkan targets (lavapipe under WSLg
+            // without GPU passthrough, host-fallback Mesa stacks).
+            // The 3D layouts (Sculpt3D, Preview) are locked out
+            // entirely on these adapters because the terrain shader
+            // running on a CPU rasteriser is unusable -- see
+            // BarEditorApp::software_renderer.
+            app.software_renderer = render_state
+                .as_ref()
+                .map(|rs| rs.adapter.get_info().device_type == wgpu::DeviceType::Cpu)
+                .unwrap_or(false);
+            if app.software_renderer {
+                let name = render_state
+                    .as_ref()
+                    .map(|rs| rs.adapter.get_info().name)
+                    .unwrap_or_default();
+                tracing::warn!(
+                    adapter = %name,
+                    "Software-only Vulkan adapter detected; editor locked to Node Graph layout"
+                );
+                // If the user's saved layout from a previous (hardware)
+                // session was a 3D one, snap them back to NodeGraph so
+                // they don't land on a layout they can't use.
+                if app.layout_blocked_by_software(app.active_layout()) {
+                    app.set_active_layout(bar_gui::Layout::NodeGraph);
+                }
+            }
 
             let executor = make_executor(&gpu_context);
 

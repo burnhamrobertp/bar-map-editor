@@ -1586,9 +1586,16 @@ fn draw_viewport_body(
             // real features.
             let in_preview = app.active_layout() == bar_gui::Layout::Preview;
             let display = app.settings().display;
-            renderer.set_grass_visible(in_preview && display.grass);
-            renderer.set_advanced_map_shading(display.advanced_map_shading);
-            renderer.set_advanced_model_shading(display.advanced_model_shading);
+            let software = app.software_renderer;
+            renderer.set_low_quality(software);
+            // Software adapters: force every optional fidelity path off
+            // regardless of the user's display prefs. The renderer's
+            // own low_quality gate already skips shadows / reflections /
+            // features; clearing these flags zeros their per-pixel cost
+            // on the paths that aren't gated at the encoder level.
+            renderer.set_grass_visible(!software && in_preview && display.grass);
+            renderer.set_advanced_map_shading(!software && display.advanced_map_shading);
+            renderer.set_advanced_model_shading(!software && display.advanced_model_shading);
             // Render every frame the viewport body runs. egui's own
             // `request_repaint` in `update_viewport_texture` keeps
             // the frame loop ticking; rendering unconditionally here
