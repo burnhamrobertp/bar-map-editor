@@ -89,6 +89,7 @@
       "node_graph": "Node Graph",
       "sculpt_3d": "3D Sculpt",
       "preview": "Preview",
+      "layout_no_gpu": "This layout requires a GPU. No hardware-accelerated wgpu adapter was detected at startup; software Vulkan (lavapipe / WSLg without GPU passthrough) can't drive the 3D viewport at usable framerates. The editor is locked to Node Graph.",
       "log": "Log"
     },
     "log": {
@@ -432,7 +433,8 @@
         "cancelled": "Compile cancelled",
         "complete": "Compile complete",
         "failed": "Compile failed: %{error}",
-        "save_first": "Project must be saved before compiling"
+        "save_first": "Project must be saved before compiling",
+        "worker_lost": "Compile worker exited without a result (see log for details)"
       },
       "bundle": {
         "cancelled": "Bundle cancelled"

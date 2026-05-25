@@ -1255,6 +1255,14 @@ pub struct TerrainRenderer {
     /// can read it without a uniform-buffer change. See
     /// `docs/recoil-shader-ports.md` for the cus_gl4 gap.
     advanced_model_shading: bool,
+    /// Reduced-quality mode for software-only wgpu adapters
+    /// (lavapipe / WSLg without GPU passthrough). When true, the
+    /// shadow pass, the planar reflection pass, and the feature
+    /// instancing draws are short-circuited. The renderer still
+    /// produces a usable image (terrain + water + sky) but skips the
+    /// heavy optional passes that drive a CPU rasteriser into the
+    /// ground. Set from `bar-app` via [`Self::set_low_quality`].
+    low_quality: bool,
 }
 
 /// Generate a tileable noise-based water normal map.
@@ -3383,6 +3391,7 @@ impl TerrainRenderer {
             grass_visible: true,
             advanced_map_shading: true,
             advanced_model_shading: true,
+            low_quality: false,
         }
     }
 
@@ -3404,6 +3413,13 @@ impl TerrainRenderer {
     /// Toggle the advanced S3O model path. See [`Self::advanced_model_shading`].
     pub fn set_advanced_model_shading(&mut self, enabled: bool) {
         self.advanced_model_shading = enabled;
+    }
+
+    /// Toggle reduced-quality mode for software wgpu adapters. See
+    /// [`Self::low_quality`] for the field-level description of which
+    /// passes get skipped.
+    pub fn set_low_quality(&mut self, on: bool) {
+        self.low_quality = on;
     }
 
     // ── Public update methods ───────────────────────────────────────────────
@@ -5692,7 +5708,7 @@ impl TerrainRenderer {
         // shadow_terrain shader only reads x_extent / z_extent / height_scale
         // and the buffer contents are stable across this whole encoder.
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&base_uniform));
-        {
+        if !self.low_quality {
             let mut enc = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("shadow_pass_encoder"),
             });
@@ -5734,7 +5750,9 @@ impl TerrainRenderer {
         // Above-water cameras get a mirror image of above-water geometry
         // (standard planar reflection); below-water cameras get a mirror
         // image of the underwater scene (total internal reflection content).
-        if self.water_y >= 0.0 {
+        // Skipped under low_quality: the reflection pass is a full
+        // second world render and crushes software wgpu adapters.
+        if !self.low_quality && self.water_y >= 0.0 {
             if let (Some(ref reflection_view), Some(ref reflection_depth_view)) =
                 (&self.reflection_view, &self.reflection_depth_view)
             {
@@ -6019,15 +6037,21 @@ impl TerrainRenderer {
         // Feature pass: writes color + depth for features, including any below
         // the water plane. Runs BEFORE the water draw so the water's alpha
         // blend layers cleanly over underwater features.
-        if let (Some(ref fr), Some(ref depth_view)) = (&self.feature_renderer, &self.depth_texture)
-        {
-            fr.draw(
-                &mut encoder,
-                output_view,
-                depth_view,
-                &self.camera_bind_group,
-                self.shadow.receiver_bind_group(),
-            );
+        // Skipped under low_quality: feature instancing on a software
+        // adapter is the worst per-frame cost on most maps (hundreds
+        // of S3O instances with full vertex shading).
+        if !self.low_quality {
+            if let (Some(ref fr), Some(ref depth_view)) =
+                (&self.feature_renderer, &self.depth_texture)
+            {
+                fr.draw(
+                    &mut encoder,
+                    output_view,
+                    depth_view,
+                    &self.camera_bind_group,
+                    self.shadow.receiver_bind_group(),
+                );
+            }
         }
 
         // Water pass: draws only the water-plane sub-range of the terrain
