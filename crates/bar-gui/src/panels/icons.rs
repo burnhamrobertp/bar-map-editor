@@ -365,6 +365,7 @@ pub(crate) fn paint_cancel_x(
 }
 
 /// Filled triangle for collapsible section headers. Points down when open, right when closed.
+#[allow(dead_code)]
 pub(crate) fn paint_triangle_arrow(
     painter: &egui::Painter,
     rect: egui::Rect,

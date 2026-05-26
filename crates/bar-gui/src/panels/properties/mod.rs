@@ -24,6 +24,7 @@ pub(crate) mod layout_generator;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
+pub(crate) mod properties_canvas;
 pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
