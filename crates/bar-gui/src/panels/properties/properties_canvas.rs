@@ -241,20 +241,21 @@ where
         })
     };
 
-    // Press-based drag tracking. Using `is_pointer_button_down_on()` +
-    // a manual state machine instead of egui's `drag_started_by` /
-    // `dragged_by`: those only flip on after the cursor has moved
-    // enough pixels to count as a drag, but by then the cursor has
-    // drifted off the small handle and the hit-test misses entirely.
-    // Press-detection at the first frame of "button down on this
-    // response" catches every press exactly where it happened.
-    //
-    // The same machine also serves "click to select" -- a press
-    // immediately followed by release (no movement) still fires
-    // HandlePressed at the press, then HandleReleased on release.
-    // The panel maps HandlePressed to state.selected.
-    let down_on_canvas = response.is_pointer_button_down_on();
-    if down_on_canvas && state.drag.is_none() {
+    // Right-click delete (one-shot, requires a handle hit).
+    if response.secondary_clicked() {
+        if let Some(p) = response.interact_pointer_pos() {
+            if let Some(h) = hit_test(p) {
+                gestures.push(CanvasGesture::HandleDeleted { item: h.item });
+            }
+        }
+    }
+
+    // Drag start: a drag that begins on a handle starts manipulation.
+    // egui only flips `drag_started` on once the cursor crosses its
+    // drag threshold; the generous handle radii (see the panels' handle
+    // specs) keep the cursor within the hit zone at that point, so the
+    // hit-test still lands on the intended handle.
+    if response.drag_started_by(egui::PointerButton::Primary) {
         if let Some(p) = response.interact_pointer_pos() {
             if let Some(h) = hit_test(p) {
                 let pos = xform.to_norm(p);
@@ -273,12 +274,9 @@ where
         }
     }
 
+    // Continued drag emits a HandleDragged per frame; release commits.
     if let Some(drag) = state.drag.clone() {
-        if down_on_canvas {
-            // Pointer still pressed -- emit a HandleDragged per frame.
-            // The panel idempotently re-writes the handle's data, so
-            // emitting on stationary frames is harmless and saves
-            // tracking a "did the cursor move" predicate.
+        if response.dragged_by(egui::PointerButton::Primary) {
             if let Some(p) = response.interact_pointer_pos() {
                 let pos = xform.to_norm(p);
                 gestures.push(CanvasGesture::HandleDragged {
@@ -287,9 +285,8 @@ where
                     pos,
                 });
             }
-        } else {
-            // Pointer released. The release commits the panel's
-            // pre-press undo snapshot and clears canvas drag state.
+        }
+        if response.drag_stopped_by(egui::PointerButton::Primary) {
             gestures.push(CanvasGesture::HandleReleased {
                 item: drag.item,
                 handle: drag.handle,
@@ -298,23 +295,15 @@ where
         }
     }
 
-    // Right-click delete (one-shot, requires a handle hit).
-    if response.secondary_clicked() {
-        if let Some(p) = response.interact_pointer_pos() {
-            if let Some(h) = hit_test(p) {
-                gestures.push(CanvasGesture::HandleDeleted { item: h.item });
-            }
-        }
-    }
-
-    // Left-click on empty canvas -> AddAt. Hits on handles are
-    // already handled by the press-tracking machine above, which
-    // sets state.selected via HandlePressed; we explicitly check
-    // hit_test().is_none() here to keep AddAt strictly for empty
-    // space.
+    // Click without drag. A handle hit selects that item (canvas-only
+    // state, no undo entry). Empty space inside the [0..1] frame adds
+    // a new item; outside the frame is ignored so the panel doesn't
+    // accumulate off-canvas items.
     if response.clicked_by(egui::PointerButton::Primary) {
         if let Some(p) = response.interact_pointer_pos() {
-            if hit_test(p).is_none() {
+            if let Some(h) = hit_test(p) {
+                state.selected = Some(h.item);
+            } else {
                 let pos = xform.to_norm(p);
                 if (0.0..=1.0).contains(&pos[0]) && (0.0..=1.0).contains(&pos[1]) {
                     gestures.push(CanvasGesture::AddAt { pos });
