@@ -116,14 +116,12 @@ impl BarEditorApp {
             ui.label(format!("{shape_count} / {MAX_SHAPES} shapes"));
         });
 
-        // Allocate a square canvas. Floor it at 360px so the canvas
-        // stays usable when the properties panel is narrow; egui
-        // surfaces a horizontal scrollbar in that case rather than
-        // shrinking the canvas to uselessness. Cap at 500px so it
-        // doesn't dominate ultra-wide layouts.
-        let canvas_size = ui.available_width().clamp(360.0, 500.0);
-        let (canvas_rect, _) =
-            ui.allocate_exact_size(egui::vec2(canvas_size, canvas_size), egui::Sense::hover());
+        // Square canvas size. Lower floor (280px) keeps the panel
+        // usable in narrow side-panel docks; the previous 360 floor
+        // pushed the sidebar below the visible viewport on standard
+        // panel widths and forced a vertical scrollbar even at
+        // baseline.
+        let canvas_size = ui.available_width().clamp(280.0, 500.0);
 
         let state_id = egui::Id::new(("lg_canvas_state", node_id.0));
         let mut state: CanvasState = ui
@@ -196,7 +194,7 @@ impl BarEditorApp {
 
         let gestures = properties_canvas::draw(
             ui,
-            canvas_rect,
+            egui::vec2(canvas_size, canvas_size),
             &mut state,
             &handles,
             move |painter, xform| {

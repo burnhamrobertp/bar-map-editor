@@ -119,18 +119,16 @@ impl CanvasTransform {
     }
 }
 
-/// Paint the canvas + handles, process input, return any gestures the
-/// caller should apply this frame.
-///
-/// `rect` is the screen-pixel rectangle the canvas should fill (the
-/// caller is responsible for `allocate_exact_size`). `state` is the
-/// persistent canvas state (the caller stores this somewhere
-/// frame-to-frame). `handles` lists every interactive point in the
-/// caller's data. `draw_items` paints the items themselves using the
-/// returned transform.
+/// Paint the canvas and handles, process input, return any gestures
+/// the caller should apply this frame. The widget allocates its own
+/// rect and interaction Response (with `Sense::click_and_drag`) so
+/// pointer events for the canvas live on a single Response. An earlier
+/// version of this API had the caller allocate first and the widget
+/// allocate again; egui routed drag events inconsistently across the
+/// two Responses, which broke drag detection on every handle.
 pub fn draw<F>(
     ui: &mut egui::Ui,
-    rect: egui::Rect,
+    size: egui::Vec2,
     state: &mut CanvasState,
     handles: &[HandleSpec],
     draw_items: F,
@@ -139,7 +137,8 @@ where
     F: FnOnce(&egui::Painter, &CanvasTransform),
 {
     let mut gestures = Vec::new();
-    let painter = ui.painter_at(rect);
+    let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
+    let rect = response.rect;
 
     // Auto-fit zoom on first frame.
     if state.zoom <= 0.0 {
@@ -234,10 +233,8 @@ where
         );
     }
 
-    // Input. Allocate the rect with sense::click_and_drag so we own
-    // pointer events inside the canvas. Re-allocation each frame is
-    // fine; egui keeps the response stable as long as the rect is.
-    let response = ui.allocate_rect(rect, egui::Sense::click_and_drag());
+    // Input uses the response from the allocate_painter call above --
+    // single allocation, click+drag sense.
 
     // Helper: find the topmost handle whose hit-circle contains `p`.
     let hit_test = |p: egui::Pos2| -> Option<&HandleSpec> {

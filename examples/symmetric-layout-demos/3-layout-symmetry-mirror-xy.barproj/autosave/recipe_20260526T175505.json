@@ -1,0 +1,434 @@
+{
+  "name": "Layout: symmetry=mirror_xy",
+  "shortname": null,
+  "description": "Same shapes with 4-quadrant symmetry. Each shape produces 4 copies (original + 3 reflections). Good for 2v2 corner-symmetric maps.",
+  "author": "bar-editor symmetric-layout demo",
+  "version": "0.1",
+  "tip": null,
+  "depend": [
+    "Map Helper v1"
+  ],
+  "nodes": [
+    {
+      "key": "node_2",
+      "type": "FinalComposition",
+      "label": "Export",
+      "params": {
+        "metalmap_layer_asset_path": {
+          "String": ""
+        },
+        "color_layer_asset_path": {
+          "String": ""
+        },
+        "heightmap_layer_asset_id": {
+          "String": "7e44f858-70ed-4487-868b-ba4bee71eebf"
+        },
+        "color_layer_asset_id": {
+          "String": "812ddc14-2bdd-44c1-b407-7d06e31d806a"
+        },
+        "typemap_layer_asset_id": {
+          "String": "242500b8-911d-473f-8e96-2ce81a3699b7"
+        },
+        "metalmap_layer_asset_id": {
+          "String": "49d35d5a-9873-494b-a90a-092518fc67f3"
+        },
+        "heightmap_layer_asset_path": {
+          "String": ""
+        },
+        "typemap_layer_asset_path": {
+          "String": ""
+        }
+      }
+    },
+    {
+      "key": "node_1",
+      "type": "LayoutGenerator",
+      "label": "LayoutGenerator (symmetry=mirror_xy)",
+      "params": {
+        "rx_1": {
+          "Float": 0.08
+        },
+        "symmetry": {
+          "String": "mirror_xy"
+        },
+        "height_4": {
+          "Float": 0.5
+        },
+        "x_6": {
+          "Float": 0.5
+        },
+        "height_1": {
+          "Float": 0.55
+        },
+        "rx_2": {
+          "Float": 0.1
+        },
+        "falloff_2": {
+          "Float": 0.5
+        },
+        "rx_0": {
+          "Float": 0.12
+        },
+        "height_0": {
+          "Float": 0.8
+        },
+        "x_2": {
+          "Float": 0.4
+        },
+        "falloff_5": {
+          "Float": 0.5
+        },
+        "angle_1": {
+          "Float": 0.0
+        },
+        "x_5": {
+          "Float": 0.5
+        },
+        "x_7": {
+          "Float": 0.5
+        },
+        "y_5": {
+          "Float": 0.5
+        },
+        "y_7": {
+          "Float": 0.5
+        },
+        "type_0": {
+          "String": "ellipse"
+        },
+        "height_2": {
+          "Float": 0.65
+        },
+        "x_4": {
+          "Float": 0.68166673
+        },
+        "falloff_7": {
+          "Float": 0.5
+        },
+        "angle_7": {
+          "Float": 0.0
+        },
+        "y_0": {
+          "Float": 0.5
+        },
+        "rx_3": {
+          "Float": 0.1
+        },
+        "falloff_0": {
+          "Float": 0.5
+        },
+        "y_4": {
+          "Float": 0.4305208
+        },
+        "ry_0": {
+          "Float": 0.12
+        },
+        "ry_2": {
+          "Float": 0.06
+        },
+        "height_5": {
+          "Float": 0.0
+        },
+        "height_3": {
+          "Float": 0.5
+        },
+        "type_5": {
+          "String": "ellipse"
+        },
+        "type_3": {
+          "String": "ellipse"
+        },
+        "angle_2": {
+          "Float": 0.0
+        },
+        "rx_7": {
+          "Float": 0.2
+        },
+        "height_6": {
+          "Float": 0.0
+        },
+        "shape_count": {
+          "UInt": 5
+        },
+        "y_3": {
+          "Float": 0.5060764
+        },
+        "x_0": {
+          "Float": 0.25
+        },
+        "x_3": {
+          "Float": 0.27055553
+        },
+        "rx_4": {
+          "Float": 0.1
+        },
+        "type_4": {
+          "String": "ellipse"
+        },
+        "ry_1": {
+          "Float": 0.08
+        },
+        "angle_4": {
+          "Float": 0.0
+        },
+        "ry_7": {
+          "Float": 0.2
+        },
+        "falloff_6": {
+          "Float": 0.5
+        },
+        "ry_6": {
+          "Float": 0.2
+        },
+        "falloff_4": {
+          "Float": 0.5
+        },
+        "ry_5": {
+          "Float": 0.2
+        },
+        "rx_6": {
+          "Float": 0.2
+        },
+        "angle_0": {
+          "Float": 0.0
+        },
+        "y_6": {
+          "Float": 0.5
+        },
+        "ry_4": {
+          "Float": 0.1
+        },
+        "y_2": {
+          "Float": 0.65
+        },
+        "type_7": {
+          "String": "ellipse"
+        },
+        "rx_5": {
+          "Float": 0.2
+        },
+        "height_7": {
+          "Float": 0.0
+        },
+        "type_6": {
+          "String": "ellipse"
+        },
+        "falloff_3": {
+          "Float": 0.5
+        },
+        "falloff_1": {
+          "Float": 0.5
+        },
+        "ry_3": {
+          "Float": 0.1
+        },
+        "type_2": {
+          "String": "ellipse"
+        },
+        "angle_3": {
+          "Float": 0.0
+        },
+        "angle_5": {
+          "Float": 0.0
+        },
+        "x_1": {
+          "Float": 0.3
+        },
+        "y_1": {
+          "Float": 0.3
+        },
+        "type_1": {
+          "String": "ellipse"
+        },
+        "angle_6": {
+          "Float": 0.0
+        }
+      }
+    }
+  ],
+  "connections": [
+    {
+      "from": "node_1.output",
+      "to": "node_2.heightmap"
+    }
+  ],
+  "output": {
+    "width": 257,
+    "height": 257,
+    "map_settings": {
+      "min_height": 0.0,
+      "max_height": 800.0,
+      "map_hardness": null,
+      "gravity": null,
+      "detail_textures": [],
+      "deformable": null,
+      "void_water": null,
+      "void_ground": null,
+      "tidal_strength": null,
+      "max_metal": null,
+      "extractor_radius": null,
+      "auto_show_metal": null,
+      "replace": {
+        "declared": false,
+        "entries": []
+      },
+      "terrain_types": [],
+      "atmosphere": {
+        "min_wind": null,
+        "max_wind": null,
+        "fog_start": null,
+        "fog_end": null,
+        "fog_color": null,
+        "sun_color": null,
+        "sky_color": null,
+        "sky_dir": null,
+        "cloud_density": null,
+        "cloud_color": null,
+        "skybox": null
+      },
+      "lighting": {
+        "sun_dir": null,
+        "sun_intensity": null,
+        "ground_ambient": null,
+        "ground_diffuse": null,
+        "ground_specular": null,
+        "spec_exponent": null,
+        "ground_shadow_density": null,
+        "unit_shadow_density": null,
+        "unit_ambient": null,
+        "unit_diffuse": null,
+        "unit_specular": null
+      },
+      "water": {
+        "damage": null,
+        "absorb": null,
+        "base_color": null,
+        "min_color": null,
+        "surface_color": null,
+        "surface_alpha": null,
+        "diffuse_color": null,
+        "specular_color": null,
+        "ambient_factor": null,
+        "diffuse_factor": null,
+        "specular_factor": null,
+        "specular_power": null,
+        "fresnel_min": null,
+        "fresnel_max": null,
+        "fresnel_power": null,
+        "reflection_distortion": null,
+        "perlin_amplitude": null,
+        "blur_base": null,
+        "blur_exponent": null,
+        "caustics_resolution": null,
+        "caustics_strength": null,
+        "wave_offset_factor": null,
+        "wave_foam_distortion": null,
+        "wave_foam_intensity": null,
+        "wave_length": null,
+        "force_rendering": null,
+        "has_water_plane": null,
+        "num_tiles": null,
+        "perlin_start_freq": null,
+        "perlin_lacunarity": null,
+        "plane_color": null,
+        "repeat_x": null,
+        "repeat_y": null,
+        "shore_waves": null,
+        "normal_texture": null
+      },
+      "lava": {
+        "diffuse_emit_tex": null,
+        "normal_height_tex": null,
+        "level": null,
+        "damage": null,
+        "uv_scale": null,
+        "color_correction": null,
+        "coast_color": null,
+        "coast_width": null,
+        "coast_light_boost": null,
+        "swirl_freq": null,
+        "swirl_amp": null,
+        "specular_exp": null,
+        "specular_strength": null,
+        "los_darkness": null,
+        "shadow_strength": null,
+        "parallax_depth": null,
+        "parallax_offset": null,
+        "fog_enabled": null,
+        "fog_color": null,
+        "fog_factor": null,
+        "fog_height": null,
+        "fog_above": null,
+        "fog_distortion": null,
+        "tide_amplitude": null,
+        "tide_period": null
+      },
+      "fluid_mode": null,
+      "custom_fog": {
+        "enabled": false,
+        "color": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "height_elmos": 0.0,
+        "atten": 0.0
+      },
+      "custom_grass": {
+        "dist_tga": null,
+        "blade_color_tex": null,
+        "max_size": null,
+        "min_size": null,
+        "patch_resolution": null,
+        "patch_placement_jitter": null,
+        "map_color_factor": null,
+        "map_color_base": null,
+        "alpha_threshold": null,
+        "shadow_factor": null,
+        "grass_brightness": null,
+        "fade_start": null,
+        "fade_end": null,
+        "wind_strength": null,
+        "wind_scale": null,
+        "wind_sample_scale": null,
+        "grass_wind_mult": null
+      },
+      "custom_clouds": {
+        "speed": null,
+        "color": null,
+        "height": null,
+        "bottom": null,
+        "fade_alt": null,
+        "scale": null,
+        "opacity": null,
+        "clamp_to_map": null,
+        "sun_penetration": null
+      },
+      "sound": {
+        "preset": null,
+        "passfilter_gainlf": null,
+        "passfilter_gainhf": null
+      },
+      "resources": {
+        "detail_tex": "",
+        "splat_distr_tex": "",
+        "splat_detail_normal_tex_1": "",
+        "splat_detail_normal_tex_2": "",
+        "splat_detail_normal_tex_3": "",
+        "splat_detail_normal_tex_4": "",
+        "splat_detail_normal_diffuse_alpha": false,
+        "splat_tex_scales": null,
+        "splat_tex_mults": null,
+        "sky_reflect_mod_tex": "",
+        "specular_tex": "",
+        "grass_shading_tex": "",
+        "light_emission_tex": "",
+        "detail_normal_tex": "",
+        "splat_detail_tex": ""
+      },
+      "minimap": null,
+      "start_positions": []
+    }
+  },
+  "features": []
+}

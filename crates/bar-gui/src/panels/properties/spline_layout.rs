@@ -82,12 +82,9 @@ impl BarEditorApp {
                 });
         });
 
-        // Square canvas. Floor at 360px (see LayoutGenerator panel for
-        // the same rationale -- narrow side panels otherwise produce
-        // an unusably small canvas).
-        let canvas_size = ui.available_width().clamp(360.0, 500.0);
-        let (canvas_rect, _) =
-            ui.allocate_exact_size(egui::vec2(canvas_size, canvas_size), egui::Sense::hover());
+        // Square canvas. Lower floor (280) keeps the panel useful in
+        // narrow side-panel docks without forcing a baseline scroll.
+        let canvas_size = ui.available_width().clamp(280.0, 500.0);
 
         let state_id = egui::Id::new(("sl_canvas_state", node_id.0));
         let mut state: CanvasState = ui
@@ -112,7 +109,7 @@ impl BarEditorApp {
 
         let gestures = properties_canvas::draw(
             ui,
-            canvas_rect,
+            egui::vec2(canvas_size, canvas_size),
             &mut state,
             &handles,
             move |painter, xform| {
