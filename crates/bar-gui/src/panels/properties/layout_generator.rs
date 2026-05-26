@@ -150,31 +150,31 @@ impl BarEditorApp {
                 item: i,
                 id: HANDLE_CENTRE,
                 pos: [s.x, s.y],
-                px_radius: 7.0,
+                px_radius: 10.0,
             });
             handles.push(HandleSpec {
                 item: i,
                 id: HANDLE_TL,
                 pos: corner(-s.rx, -s.ry),
-                px_radius: 5.0,
+                px_radius: 8.0,
             });
             handles.push(HandleSpec {
                 item: i,
                 id: HANDLE_TR,
                 pos: corner(s.rx, -s.ry),
-                px_radius: 5.0,
+                px_radius: 8.0,
             });
             handles.push(HandleSpec {
                 item: i,
                 id: HANDLE_BL,
                 pos: corner(-s.rx, s.ry),
-                px_radius: 5.0,
+                px_radius: 8.0,
             });
             handles.push(HandleSpec {
                 item: i,
                 id: HANDLE_BR,
                 pos: corner(s.rx, s.ry),
-                px_radius: 5.0,
+                px_radius: 8.0,
             });
             // Rotation arm sits offset along local +x axis at
             // 1.3 * rx so it's outside the silhouette.
@@ -182,7 +182,7 @@ impl BarEditorApp {
                 item: i,
                 id: HANDLE_ROT,
                 pos: corner(s.rx * 1.3 + 0.02, 0.0),
-                px_radius: 5.0,
+                px_radius: 8.0,
             });
         }
 

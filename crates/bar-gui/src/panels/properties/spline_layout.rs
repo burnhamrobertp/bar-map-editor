@@ -91,7 +91,8 @@ impl BarEditorApp {
             .data(|d| d.get_temp::<CanvasState>(state_id))
             .unwrap_or_default();
 
-        // One handle per control point.
+        // One handle per control point. Generous radius so the point
+        // is easy to grab even on smaller canvas sizes.
         let handles: Vec<HandleSpec> = points
             .iter()
             .enumerate()
@@ -99,7 +100,7 @@ impl BarEditorApp {
                 item: i,
                 id: HANDLE_POINT,
                 pos: *p,
-                px_radius: 6.0,
+                px_radius: 9.0,
             })
             .collect();
 
