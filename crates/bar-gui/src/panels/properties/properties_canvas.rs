@@ -298,16 +298,19 @@ where
         }
     }
 
-    // Click on empty canvas adds a point. Use clicked_by(Primary)
-    // instead of drag_started to distinguish from drag-start; egui
-    // fires clicked when the pointer didn't move during press+release.
+    // Click without drag. Three outcomes:
+    //   1. Hit on a handle -> select that handle's item. Selection
+    //      is canvas-internal so we don't emit a gesture; the panel
+    //      reads `state.selected` for its sidebar.
+    //   2. Empty space inside the [0..1] frame -> AddAt.
+    //   3. Empty space outside the frame -> silently ignored so the
+    //      panel doesn't accumulate off-canvas items.
     if response.clicked_by(egui::PointerButton::Primary) {
         if let Some(p) = response.interact_pointer_pos() {
-            if hit_test(p).is_none() {
+            if let Some(h) = hit_test(p) {
+                state.selected = Some(h.item);
+            } else {
                 let pos = xform.to_norm(p);
-                // Only treat in-frame clicks as adds; clicking outside
-                // the [0..1] frame is silently ignored so the panel
-                // doesn't accumulate off-canvas items.
                 if (0.0..=1.0).contains(&pos[0]) && (0.0..=1.0).contains(&pos[1]) {
                     gestures.push(CanvasGesture::AddAt { pos });
                 }

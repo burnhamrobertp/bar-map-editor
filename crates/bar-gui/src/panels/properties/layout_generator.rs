@@ -116,8 +116,12 @@ impl BarEditorApp {
             ui.label(format!("{shape_count} / {MAX_SHAPES} shapes"));
         });
 
-        // Allocate a square canvas inside the available width.
-        let canvas_size = ui.available_width().min(400.0);
+        // Allocate a square canvas. Floor it at 360px so the canvas
+        // stays usable when the properties panel is narrow; egui
+        // surfaces a horizontal scrollbar in that case rather than
+        // shrinking the canvas to uselessness. Cap at 500px so it
+        // doesn't dominate ultra-wide layouts.
+        let canvas_size = ui.available_width().clamp(360.0, 500.0);
         let (canvas_rect, _) =
             ui.allocate_exact_size(egui::vec2(canvas_size, canvas_size), egui::Sense::hover());
 
@@ -327,17 +331,28 @@ impl BarEditorApp {
         // Persist canvas state.
         ui.data_mut(|d| d.insert_temp::<CanvasState>(state_id, state));
 
-        // Commit mutations + undo.
+        // Non-canvas changes (the symmetry dropdown above the canvas)
+        // don't emit gestures, so diff against the original params and
+        // promote any change to `mutated` + `commit_undo_now`.
+        let original_symmetry = match params.get("symmetry") {
+            Some(ParamValue::String(s)) => s.clone(),
+            _ => "none".to_string(),
+        };
+        if symmetry != original_symmetry {
+            mutated = true;
+            commit_undo_now = true;
+        }
+
+        // Undo for atomic ops (add / delete / symmetry change) must
+        // capture the PRE-mutation graph state. Take the snapshot
+        // BEFORE writing new params; drag ends use the snapshot
+        // stashed at HandlePressed instead.
+        let want_atomic_undo = commit_undo_now && self.dialog.field_edit_in_progress.is_none();
+        if want_atomic_undo {
+            self.push_undo("Layout edit");
+        }
+
         if mutated {
-            let original_symmetry = match params.get("symmetry") {
-                Some(ParamValue::String(s)) => s.clone(),
-                _ => "none".to_string(),
-            };
-            let symmetry_changed = symmetry != original_symmetry;
-            if symmetry_changed && !commit_undo_now && self.dialog.field_edit_in_progress.is_none()
-            {
-                self.push_undo("Layout edit");
-            }
             if let Some(node) = self.graph.get_node_mut(node_id) {
                 node.params.insert(
                     "shape_count".to_string(),
@@ -373,14 +388,12 @@ impl BarEditorApp {
             }
         }
 
-        if commit_undo_now {
+        // Drag-end: push the snapshot captured at drag-start. Skipped
+        // when atomic-undo already pushed an entry above.
+        if commit_undo_now && !want_atomic_undo {
             if let Some(snap) = self.dialog.field_edit_in_progress.take() {
                 self.history.push(snap);
                 self.project.is_dirty = true;
-            } else {
-                // Atomic mutations (add / delete) don't go through the
-                // snapshot stash -- push a fresh undo entry directly.
-                self.push_undo("Layout edit");
             }
         }
     }
