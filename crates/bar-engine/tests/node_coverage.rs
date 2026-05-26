@@ -1648,6 +1648,28 @@ fn voronoi_seed_determinism() {
 }
 
 #[test]
+fn param_value_spline_round_trips_via_serde() {
+    // Constructing the variant directly + serialise + deserialise back.
+    // Verifies the JSON shape carries the variant tag and the point
+    // coords intact, including the empty-list edge case.
+    let pts = vec![[0.1_f32, 0.2], [0.5, 0.7], [0.9, 0.4]];
+    let v = ParamValue::Spline(pts.clone());
+    let s = serde_json::to_string(&v).expect("serialise");
+    let back: ParamValue = serde_json::from_str(&s).expect("deserialise");
+    match back {
+        ParamValue::Spline(got) => assert_eq!(got, pts),
+        other => panic!("expected ParamValue::Spline, got {other:?}"),
+    }
+
+    let empty: ParamValue =
+        serde_json::from_str(&serde_json::to_string(&ParamValue::Spline(vec![])).unwrap()).unwrap();
+    match empty {
+        ParamValue::Spline(got) => assert!(got.is_empty()),
+        other => panic!("empty Spline round-trip lost the variant: {other:?}"),
+    }
+}
+
+#[test]
 fn hydraulic_erosion_seed_determinism() {
     // Erosion is stochastic via droplet starting positions; the same
     // seed must give the same erosion pattern for saved-recipe replays.

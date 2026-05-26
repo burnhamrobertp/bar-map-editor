@@ -222,6 +222,13 @@ pub enum ParamValue {
     Bool(bool),
     String(String),
     Vec2([f32; 2]),
+    /// Ordered list of 2D control points in normalised [0..1, 0..1].
+    /// Used by canvas-edited nodes (currently `SplineLayout`) to carry
+    /// arbitrarily-long point sequences without resorting to indexed
+    /// per-point params. Authors mutate this through the panel's 2D
+    /// canvas; the executor reads it as a polyline / Catmull-Rom
+    /// source.
+    Spline(Vec<[f32; 2]>),
 }
 
 impl Node {

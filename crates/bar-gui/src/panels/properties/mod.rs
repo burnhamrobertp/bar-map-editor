@@ -572,6 +572,11 @@ impl BarEditorApp {
                                             ui.end_row();
                                         }
                                         ParamValue::Vec2(_) => {}
+                                        // Splines are only meaningful in a 2D canvas
+                                        // editor (SplineLayout has its own panel);
+                                        // the generic property grid skips them rather
+                                        // than try to surface raw point arrays.
+                                        ParamValue::Spline(_) => {}
                                     }
                                 }
                             });

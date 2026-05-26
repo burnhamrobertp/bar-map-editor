@@ -40,6 +40,7 @@ pub enum ParamKind {
     Bool,
     String,
     Vec2,
+    Spline,
 }
 
 impl ParamKind {
@@ -52,6 +53,7 @@ impl ParamKind {
             ParamValue::Bool(_) => ParamKind::Bool,
             ParamValue::String(_) => ParamKind::String,
             ParamValue::Vec2(_) => ParamKind::Vec2,
+            ParamValue::Spline(_) => ParamKind::Spline,
         }
     }
 }
