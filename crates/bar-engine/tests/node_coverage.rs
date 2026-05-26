@@ -411,6 +411,153 @@ fn mirror_y_makes_top_bottom_symmetric() {
 }
 
 #[test]
+fn mirror_average_x_preserves_information_from_both_halves() {
+    // A 0->1 left-to-right ramp has equal information on both halves.
+    // The replace `mirror_x` mode throws the right half away (output
+    // would average to ~0.25). The `average_x` mode means(left, right)
+    // at every column -- input(u) + input(1-u) averages to ~0.5
+    // everywhere, so the output mean equals the input mean.
+    let input = gen(|u, _| u);
+    let inputs = input_hm("input", input.clone());
+    let p = &[("mode", ParamValue::String("average_x".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    assert_hm_dims(&h);
+    // Output must be symmetric about the centre column.
+    let left = h.get(2, H / 2).unwrap();
+    let right = h.get(W - 1 - 2, H / 2).unwrap();
+    assert!(
+        (left - right).abs() < 1e-4,
+        "average_x output must be symmetric: {left} vs {right}"
+    );
+    // Mean is preserved: the ramp's mean is 0.5, so the averaged output
+    // sits at ~0.5 across the whole image.
+    let m = mean(&h);
+    assert!(
+        (m - 0.5).abs() < 0.05,
+        "average_x mean should match input mean: got {m}"
+    );
+}
+
+#[test]
+fn mirror_average_xy_collapses_to_mean_of_four() {
+    // Build an input with a known asymmetric pattern so each of the
+    // four symmetric partners carries a distinct value. The output at
+    // every position should equal the mean of those four values.
+    let input = gen(|u, v| u + 2.0 * v); // top-left low, bottom-right high
+    let inputs = input_hm("input", input.clone());
+    let p = &[("mode", ParamValue::String("average_xy".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    let cx = 3;
+    let cy = 4;
+    let expected = (input.get(cx, cy).unwrap()
+        + input.get(W - 1 - cx, cy).unwrap()
+        + input.get(cx, H - 1 - cy).unwrap()
+        + input.get(W - 1 - cx, H - 1 - cy).unwrap())
+        / 4.0;
+    let got = h.get(cx, cy).unwrap();
+    assert!(
+        (got - expected).abs() < 1e-4,
+        "average_xy at ({cx},{cy}): expected {expected}, got {got}"
+    );
+}
+
+#[test]
+fn layout_generator_mirror_x_symmetry_duplicates_shape() {
+    // One off-centre shape with `symmetry=mirror_x` should produce a
+    // pair: the original on the left and its reflection on the right.
+    let p = &[
+        ("shape_count", ParamValue::UInt(1)),
+        ("symmetry", ParamValue::String("mirror_x".to_string())),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.25)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.15)),
+        ("ry_0", ParamValue::Float(0.15)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
+        "output",
+    );
+    // The off-centre shape sits near x=0.25; its mirror sits near
+    // x=0.75. Both columns at y=0.5 should read bright.
+    let left = h.get((0.25 * (W - 1) as f32) as u32, H / 2).unwrap();
+    let right = h.get((0.75 * (W - 1) as f32) as u32, H / 2).unwrap();
+    assert!(left > 0.5, "left shape: {left}");
+    assert!(right > 0.5, "right shape: {right}");
+    // Output must be symmetric about x=0.5.
+    let l = h.get(2, H / 2).unwrap();
+    let r = h.get(W - 1 - 2, H / 2).unwrap();
+    assert!(
+        (l - r).abs() < 1e-3,
+        "symmetry should be exact under mirror_x: {l} vs {r}"
+    );
+}
+
+#[test]
+fn layout_generator_rotate_90_produces_four_peaks() {
+    // One off-centre shape with `symmetry=rotate_90` produces four
+    // peaks rotated 90 / 180 / 270 degrees about the centre.
+    let p = &[
+        ("shape_count", ParamValue::UInt(1)),
+        ("symmetry", ParamValue::String("rotate_90".to_string())),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.7)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.1)),
+        ("ry_0", ParamValue::Float(0.1)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
+        "output",
+    );
+    // Original at (0.7, 0.5). Three rotations: (0.5, 0.7), (0.3, 0.5),
+    // (0.5, 0.3). All four positions should be lit.
+    let lookup = |nx: f32, ny: f32| {
+        let px = (nx * (W - 1) as f32) as u32;
+        let py = (ny * (H - 1) as f32) as u32;
+        h.get(px, py).unwrap()
+    };
+    assert!(lookup(0.7, 0.5) > 0.5, "original");
+    assert!(lookup(0.5, 0.7) > 0.5, "rot 90");
+    assert!(lookup(0.3, 0.5) > 0.5, "rot 180");
+    assert!(lookup(0.5, 0.3) > 0.5, "rot 270");
+}
+
+#[test]
+fn layout_generator_none_symmetry_is_unchanged() {
+    // Sanity check: the default `symmetry=none` produces the same
+    // single-shape output the node has always produced. Guards against
+    // regressions where the symmetry expansion accidentally adds a
+    // copy even for the default mode.
+    let p = &[
+        ("shape_count", ParamValue::UInt(1)),
+        ("symmetry", ParamValue::String("none".to_string())),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.25)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.15)),
+        ("ry_0", ParamValue::Float(0.15)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(
+        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
+        "output",
+    );
+    let left = h.get((0.25 * (W - 1) as f32) as u32, H / 2).unwrap();
+    let right = h.get((0.75 * (W - 1) as f32) as u32, H / 2).unwrap();
+    assert!(left > 0.5, "shape at 0.25 should be lit: {left}");
+    assert!(right < 0.1, "no shape at 0.75 under symmetry=none: {right}");
+}
+
+#[test]
 fn curve_runs_and_preserves_dimensions() {
     let hm = gen(|u, _| u);
     let inputs = input_hm("input", hm);

@@ -1310,6 +1310,17 @@ fn apply_invert(input: &Heightmap) -> Heightmap {
     Heightmap::frbar_data(w, h, data).unwrap()
 }
 
+/// Average of the values at the listed `(x, y)` source positions. Used
+/// by the `average_*` modes to fold all symmetric partners into a
+/// single output that preserves information from every quadrant.
+fn mean_at_positions(src: &[f32], w: usize, positions: &[(usize, usize)]) -> f32 {
+    let mut sum = 0.0;
+    for &(x, y) in positions {
+        sum += src[y * w + x];
+    }
+    sum / positions.len() as f32
+}
+
 fn apply_mirror(input: &Heightmap, mode: &str) -> Heightmap {
     let w = input.width() as usize;
     let h = input.height() as usize;
@@ -1317,32 +1328,35 @@ fn apply_mirror(input: &Heightmap, mode: &str) -> Heightmap {
     let mut data = vec![0.0f32; w * h];
     for py in 0..h {
         for px in 0..w {
-            let (sx, sy) = match mode {
+            // Replace modes (`mirror_*` / `rotate_*`) pick a single
+            // source pixel; averaging modes (`average_*`) take the mean
+            // of every pixel in the symmetric orbit so both halves
+            // contribute to the output.
+            data[py * w + px] = match mode {
                 "mirror_x" => {
                     let sx = if px < w / 2 { px } else { w - 1 - px };
-                    (sx, py)
+                    src[py * w + sx]
                 }
                 "mirror_y" => {
                     let sy = if py < h / 2 { py } else { h - 1 - py };
-                    (px, sy)
+                    src[sy * w + px]
                 }
                 "mirror_xy" => {
                     let sx = if px < w / 2 { px } else { w - 1 - px };
                     let sy = if py < h / 2 { py } else { h - 1 - py };
-                    (sx, sy)
+                    src[sy * w + sx]
                 }
                 "rotate_180" => {
-                    // Left half is canonical; right half gets value rotated 180.
                     if px < w / 2 {
-                        (px, py)
+                        src[py * w + px]
                     } else {
-                        (w - 1 - px, h - 1 - py)
+                        src[(h - 1 - py) * w + (w - 1 - px)]
                     }
                 }
                 "rotate_90_4way" => {
                     // Top-left quadrant is canonical. Other quadrants are mapped
                     // back by 90-degree rotations (assumes a square map).
-                    if px < w / 2 && py < h / 2 {
+                    let (sx, sy) = if px < w / 2 && py < h / 2 {
                         (px, py)
                     } else if px >= w / 2 && py < h / 2 {
                         (py, w - 1 - px)
@@ -1350,11 +1364,39 @@ fn apply_mirror(input: &Heightmap, mode: &str) -> Heightmap {
                         (h - 1 - py, px)
                     } else {
                         (w - 1 - px, h - 1 - py)
-                    }
+                    };
+                    src[sy * w + sx]
                 }
-                _ => (px, py),
+                "average_x" => mean_at_positions(src, w, &[(px, py), (w - 1 - px, py)]),
+                "average_y" => mean_at_positions(src, w, &[(px, py), (px, h - 1 - py)]),
+                "average_xy" => mean_at_positions(
+                    src,
+                    w,
+                    &[
+                        (px, py),
+                        (w - 1 - px, py),
+                        (px, h - 1 - py),
+                        (w - 1 - px, h - 1 - py),
+                    ],
+                ),
+                "average_180" => mean_at_positions(src, w, &[(px, py), (w - 1 - px, h - 1 - py)]),
+                "average_90_4way" => {
+                    // Each output pixel is the mean of its four
+                    // 90-degree-rotated partners. Assumes a square map
+                    // -- the same caveat as `rotate_90_4way`.
+                    mean_at_positions(
+                        src,
+                        w,
+                        &[
+                            (px, py),
+                            (w - 1 - py, px),
+                            (w - 1 - px, h - 1 - py),
+                            (py, w - 1 - px),
+                        ],
+                    )
+                }
+                _ => src[py * w + px],
             };
-            data[py * w + px] = src[sy * w + sx];
         }
     }
     Heightmap::frbar_data(w as u32, h as u32, data).unwrap()
@@ -3019,8 +3061,54 @@ fn apply_select_convexity(input: &Heightmap, mode: &str, strength: f32) -> Heigh
     Heightmap::frbar_data(w as u32, h as u32, out).unwrap()
 }
 
+/// Expand a single shape placement `(cx, cy, angle_deg)` into all the
+/// instances implied by the LayoutGenerator's `symmetry` mode. Coords
+/// are in normalised [0..1, 0..1] space; the reflection axes pass
+/// through (0.5, 0.5) and rotations pivot about the same centre.
+///
+/// Angle handling: a mirror flips the apparent rotation direction, so
+/// the mirrored copy's angle is negated. Rotations add the rotation
+/// step to the angle so the shape's silhouette rotates with its
+/// position.
+fn expand_symmetric_placements(
+    cx: f32,
+    cy: f32,
+    angle_deg: f32,
+    mode: &str,
+) -> Vec<(f32, f32, f32)> {
+    match mode {
+        "mirror_x" => vec![(cx, cy, angle_deg), (1.0 - cx, cy, -angle_deg)],
+        "mirror_y" => vec![(cx, cy, angle_deg), (cx, 1.0 - cy, -angle_deg)],
+        "mirror_xy" => vec![
+            (cx, cy, angle_deg),
+            (1.0 - cx, cy, -angle_deg),
+            (cx, 1.0 - cy, -angle_deg),
+            (1.0 - cx, 1.0 - cy, angle_deg),
+        ],
+        "rotate_180" => vec![(cx, cy, angle_deg), (1.0 - cx, 1.0 - cy, angle_deg + 180.0)],
+        "rotate_90" => {
+            // Rotate (cx, cy) about (0.5, 0.5) by 0 / 90 / 180 / 270.
+            // (px, py) = (0.5 + (cx - 0.5) * cos - (cy - 0.5) * sin,
+            //            0.5 + (cx - 0.5) * sin + (cy - 0.5) * cos)
+            let dx = cx - 0.5;
+            let dy = cy - 0.5;
+            vec![
+                (cx, cy, angle_deg),
+                (0.5 - dy, 0.5 + dx, angle_deg + 90.0),
+                (1.0 - cx, 1.0 - cy, angle_deg + 180.0),
+                (0.5 + dy, 0.5 - dx, angle_deg + 270.0),
+            ]
+        }
+        _ => vec![(cx, cy, angle_deg)],
+    }
+}
+
 /// Composites up to 8 primitive shapes into a heightmap.
 /// Each shape contributes via a smooth radial falloff; shapes are max-blended.
+///
+/// When `symmetry` is non-default, each shape entry is expanded into
+/// multiple symmetric placements before compositing -- see
+/// `expand_symmetric_placements`.
 fn apply_layout_generator(
     params: &HashMap<String, ParamValue>,
     shape_count: usize,
@@ -3030,50 +3118,60 @@ fn apply_layout_generator(
 ) -> Heightmap {
     let mut data = vec![0.0f32; (width * height) as usize];
 
+    let symmetry = match params.get("symmetry") {
+        Some(ParamValue::String(s)) => s.as_str(),
+        _ => "none",
+    };
+
     for i in 0..shape_count {
         let shape_type = match params.get(&format!("type_{i}")) {
             Some(ParamValue::String(s)) => s.as_str(),
             _ => "ellipse",
         };
-        let cx = get_float(params, &format!("x_{i}"), 0.5);
-        let cy = get_float(params, &format!("y_{i}"), 0.5);
+        let base_cx = get_float(params, &format!("x_{i}"), 0.5);
+        let base_cy = get_float(params, &format!("y_{i}"), 0.5);
         let rx = get_float(params, &format!("rx_{i}"), 0.2).max(1e-4);
         let ry = get_float(params, &format!("ry_{i}"), 0.2).max(1e-4);
-        let angle_deg = get_float(params, &format!("angle_{i}"), 0.0);
+        let base_angle = get_float(params, &format!("angle_{i}"), 0.0);
         let peak = get_float(params, &format!("height_{i}"), 0.5);
         let falloff = get_float(params, &format!("falloff_{i}"), 0.5).clamp(0.001, 1.0);
-        let angle_rad = angle_deg * PI / 180.0;
-        let cos_a = angle_rad.cos();
-        let sin_a = angle_rad.sin();
 
-        for py in 0..height {
-            for px in 0..width {
-                let ux = px as f32 / (width - 1).max(1) as f32 - cx;
-                let uy = py as f32 / (height - 1).max(1) as f32 - cy;
-                // Rotate into shape-local space.
-                let lx = (ux * cos_a + uy * sin_a) / rx;
-                let ly = (-ux * sin_a + uy * cos_a) / ry;
-                // Normalized distance from centre.
-                let d = match shape_type {
-                    "rectangle" => lx.abs().max(ly.abs()),
-                    "ridge" => ly.abs(), // infinite ridge along the rotated X axis
-                    _ => (lx * lx + ly * ly).sqrt(), // ellipse
-                };
-                if d >= 1.0 {
-                    continue;
-                }
-                // Smooth falloff: cos curve from d=1-falloff (peak) to d=1 (zero).
-                let t = 1.0 - d; // 1 at centre, 0 at edge
-                let smoothed = if t >= falloff {
-                    1.0
-                } else {
-                    let s = t / falloff;
-                    s * s * (3.0 - 2.0 * s) // smoothstep
-                };
-                let v = smoothed * peak;
-                let idx = py as usize * width as usize + px as usize;
-                if v > data[idx] {
-                    data[idx] = v;
+        for (cx, cy, angle_deg) in
+            expand_symmetric_placements(base_cx, base_cy, base_angle, symmetry)
+        {
+            let angle_rad = angle_deg * PI / 180.0;
+            let cos_a = angle_rad.cos();
+            let sin_a = angle_rad.sin();
+
+            for py in 0..height {
+                for px in 0..width {
+                    let ux = px as f32 / (width - 1).max(1) as f32 - cx;
+                    let uy = py as f32 / (height - 1).max(1) as f32 - cy;
+                    // Rotate into shape-local space.
+                    let lx = (ux * cos_a + uy * sin_a) / rx;
+                    let ly = (-ux * sin_a + uy * cos_a) / ry;
+                    // Normalized distance from centre.
+                    let d = match shape_type {
+                        "rectangle" => lx.abs().max(ly.abs()),
+                        "ridge" => ly.abs(), // infinite ridge along the rotated X axis
+                        _ => (lx * lx + ly * ly).sqrt(), // ellipse
+                    };
+                    if d >= 1.0 {
+                        continue;
+                    }
+                    // Smooth falloff: cos curve from d=1-falloff (peak) to d=1 (zero).
+                    let t = 1.0 - d; // 1 at centre, 0 at edge
+                    let smoothed = if t >= falloff {
+                        1.0
+                    } else {
+                        let s = t / falloff;
+                        s * s * (3.0 - 2.0 * s) // smoothstep
+                    };
+                    let v = smoothed * peak;
+                    let idx = py as usize * width as usize + px as usize;
+                    if v > data[idx] {
+                        data[idx] = v;
+                    }
                 }
             }
         }

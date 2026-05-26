@@ -26,6 +26,15 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
     if node_type == &NodeType::LayoutGenerator {
         let mut m = HashMap::new();
         m.insert("shape_count".to_string(), ParamValue::UInt(1));
+        // Per-shape symmetry multiplier. Default "none" preserves the
+        // original behaviour where each shape entry maps to exactly one
+        // composited instance. Non-default modes duplicate each shape
+        // across reflection / rotation axes so BAR-style symmetric maps
+        // can be authored without manually entering N copies.
+        m.insert(
+            "symmetry".to_string(),
+            ParamValue::String("none".to_string()),
+        );
         for i in 0..8usize {
             let h = if i == 0 { 0.5 } else { 0.0 };
             m.insert(
@@ -348,11 +357,22 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
 pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'static str]> {
     match (node_type, key) {
         (NodeType::Mirror, "mode") => Some(&[
+            // `mirror_*` and `rotate_*` modes replace the non-canonical
+            // half with a copy of the canonical one (information from
+            // the discarded half is lost).
             "mirror_x",
             "mirror_y",
             "mirror_xy",
             "rotate_180",
             "rotate_90_4way",
+            // `average_*` modes preserve information from both halves
+            // by emitting the mean at each symmetric pixel pair. Use
+            // these when both halves carry detail that should survive.
+            "average_x",
+            "average_y",
+            "average_xy",
+            "average_180",
+            "average_90_4way",
         ]),
         (NodeType::Voronoi, "mode") => Some(&["f1", "f2", "f2_f1", "cell"]),
         (NodeType::Gradient, "direction") => Some(&["linear_x", "linear_y", "radial", "angular"]),
@@ -390,6 +410,14 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
         (NodeType::LayoutGenerator, k) if k.starts_with("type_") => {
             Some(&["ellipse", "rectangle", "ridge"])
         }
+        (NodeType::LayoutGenerator, "symmetry") => Some(&[
+            "none",
+            "mirror_x",
+            "mirror_y",
+            "mirror_xy",
+            "rotate_180",
+            "rotate_90",
+        ]),
         _ => None,
     }
 }
