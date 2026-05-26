@@ -74,8 +74,6 @@ pub enum NodeType {
     /// recorded brush dabs (stored as JSON in `params["dabs"]`), and
     // Mask Operations
     MaskThreshold,
-    MaskInvert,
-    MaskBlur,
     MaskApply,
 
     // Utility
@@ -535,17 +533,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
                 Port::new("control", "Control", PortKind::Control),
             ],
             vec![Port::new("output", "Mask", PortKind::Heightmap)],
-        ),
-        NodeType::MaskInvert => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
-        NodeType::MaskBlur => (
-            vec![
-                Port::new("input", "Input", PortKind::Heightmap),
-                Port::new("control", "Control", PortKind::Control),
-            ],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
         ),
         NodeType::MaskApply => (
             vec![

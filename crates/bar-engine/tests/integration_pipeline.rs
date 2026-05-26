@@ -351,7 +351,7 @@ fn test_mask_operations_pipeline() {
             },
             RecipeNode {
                 key: "blur".to_string(),
-                node_type: NodeType::MaskBlur,
+                node_type: NodeType::Blur,
                 label: "Blur Mask".to_string(),
                 params: HashMap::from([("radius".to_string(), ParamValue::Float(3.0))]),
             },

@@ -736,26 +736,15 @@ fn mask_threshold_yields_binary_band() {
 }
 
 #[test]
-fn mask_invert_flips_a_binary_mask() {
+fn invert_flips_a_constant() {
+    // Constant-input cousin to `invert_reflects_values_around_half`:
+    // verifies the 1-x relationship rather than the spatial direction
+    // of the flip. Previously MaskInvert had its own variant for the
+    // mask-port case; consolidated to use Invert directly.
     let inputs = input_hm("input", flat(0.7));
-    let h = out_hm(&run(NodeType::MaskInvert, &[], &inputs), "output");
+    let h = out_hm(&run(NodeType::Invert, &[], &inputs), "output");
     let m = mean(&h);
     assert!((m - 0.3).abs() < 1e-3, "1 - 0.7 = 0.3, got {m}");
-}
-
-#[test]
-fn mask_blur_smooths_a_delta() {
-    let mut data = vec![0.0_f32; (W * H) as usize];
-    data[(H / 2) as usize * W as usize + (W / 2) as usize] = 1.0;
-    let hm = Heightmap::frbar_data(W, H, data).unwrap();
-    let inputs = input_hm("input", hm);
-    let p = &[("radius", ParamValue::Float(2.0))];
-    let h = out_hm(&run(NodeType::MaskBlur, p, &inputs), "output");
-    assert_hm_dims(&h);
-    let centre = h.get(W / 2, H / 2).unwrap();
-    let neighbour = h.get(W / 2 + 1, H / 2).unwrap();
-    assert!(centre < 1.0);
-    assert!(neighbour > 0.0);
 }
 
 #[test]

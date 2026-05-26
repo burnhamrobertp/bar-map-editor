@@ -90,7 +90,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("threshold", ParamValue::Float(0.5)),
             ("smoothness", ParamValue::Float(0.0)),
         ],
-        NodeType::MaskBlur => vec![("radius", ParamValue::Float(2.0))],
         NodeType::BiasGain => vec![
             ("bias", ParamValue::Float(0.5)),
             ("gain", ParamValue::Float(0.5)),
@@ -652,7 +651,7 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         // Utility
         (Constant, "value") => (0.0, 1.0),
         // Filters
-        (Blur | MaskBlur, "radius") => (0.1, 20.0),
+        (Blur, "radius") => (0.1, 20.0),
         (Sharpen, "radius") => (0.1, 10.0),
         (Sharpen, "strength") => (0.0, 4.0),
         (Clamp, "min") | (Clamp, "max") => (0.0, 1.0),

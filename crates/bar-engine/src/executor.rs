@@ -597,19 +597,6 @@ impl NodeExecutor for CpuExecutor {
                 };
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
-            NodeType::MaskInvert => {
-                let input = get_input_heightmap(inputs, "input")?;
-                let hm = apply_invert(&input);
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
-            }
-            NodeType::MaskBlur => {
-                let input = get_input_heightmap(inputs, "input")?;
-                let ctrl = get_optional_heightmap(inputs, "control");
-                let radius = get_float(params, "radius", 2.0);
-                let hm = apply_blur(&input, radius);
-                let hm = scale_by_field(hm, ctrl.as_ref());
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
-            }
             NodeType::MaskApply => {
                 let input = get_input_heightmap(inputs, "input")?;
                 let mask = get_input_heightmap(inputs, "mask")?;

@@ -251,8 +251,6 @@ mod tests {
         NodeType::SpecularMap,
         // Mask operations
         NodeType::MaskThreshold,
-        NodeType::MaskInvert,
-        NodeType::MaskBlur,
         NodeType::MaskApply,
         // Utility
         NodeType::Mask,
