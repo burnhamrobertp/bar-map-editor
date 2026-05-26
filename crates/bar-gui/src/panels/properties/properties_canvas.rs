@@ -37,9 +37,14 @@ pub struct CanvasState {
 pub struct DragInProgress {
     pub item: usize,
     pub handle: HandleId,
-    /// Where the drag started, in normalised coords. Useful for panels
-    /// that compute deltas (e.g. resizing relative to the press point).
+    /// Where the drag started, in normalised coords. Used to measure
+    /// movement so a press-without-drag (a plain click-to-select)
+    /// doesn't get treated as an edit.
     pub press_pos: [f32; 2],
+    /// Set once the cursor moves past a small threshold from
+    /// `press_pos`. Distinguishes a real drag (commit an undo entry)
+    /// from a click that merely selected the handle (no undo entry).
+    pub moved: bool,
 }
 
 /// Generic handle identifier. Panels invent their own semantic kinds
@@ -88,8 +93,15 @@ pub enum CanvasGesture {
         handle: HandleId,
         pos: [f32; 2],
     },
-    /// Drag released -- panel pushes its held undo snapshot.
-    HandleReleased { item: usize, handle: HandleId },
+    /// Drag released. `moved` is true if the cursor actually dragged
+    /// the handle (commit the held undo snapshot) and false if it was
+    /// a click that only selected the handle (discard the snapshot --
+    /// no edit happened).
+    HandleReleased {
+        item: usize,
+        handle: HandleId,
+        moved: bool,
+    },
     /// Right-click on a handle. Panel removes the item.
     HandleDeleted { item: usize },
 }
@@ -250,12 +262,15 @@ where
         }
     }
 
-    // Drag start: a drag that begins on a handle starts manipulation.
-    // egui only flips `drag_started` on once the cursor crosses its
-    // drag threshold; the generous handle radii (see the panels' handle
-    // specs) keep the cursor within the hit zone at that point, so the
-    // hit-test still lands on the intended handle.
-    if response.drag_started_by(egui::PointerButton::Primary) {
+    // Press-based interaction. The press itself selects the handle and
+    // arms a potential drag -- exactly the "press grabs the shape"
+    // behaviour an author expects, rather than waiting for mouseup to
+    // select. egui's `drag_started` fires only after the cursor
+    // crosses a movement threshold, by which point it has drifted off
+    // the handle and the hit-test misses; detecting the press at the
+    // first "button down on this response" frame catches it precisely.
+    let down_on_canvas = response.is_pointer_button_down_on();
+    if down_on_canvas && state.drag.is_none() {
         if let Some(p) = response.interact_pointer_pos() {
             if let Some(h) = hit_test(p) {
                 let pos = xform.to_norm(p);
@@ -263,6 +278,7 @@ where
                     item: h.item,
                     handle: h.id,
                     press_pos: pos,
+                    moved: false,
                 });
                 state.selected = Some(h.item);
                 gestures.push(CanvasGesture::HandlePressed {
@@ -274,36 +290,47 @@ where
         }
     }
 
-    // Continued drag emits a HandleDragged per frame; release commits.
-    if let Some(drag) = state.drag.clone() {
-        if response.dragged_by(egui::PointerButton::Primary) {
+    if let Some(mut drag) = state.drag.clone() {
+        if down_on_canvas {
             if let Some(p) = response.interact_pointer_pos() {
                 let pos = xform.to_norm(p);
-                gestures.push(CanvasGesture::HandleDragged {
-                    item: drag.item,
-                    handle: drag.handle,
-                    pos,
-                });
+                // Only treat it as a drag once the cursor leaves a
+                // small dead-zone around the press point -- otherwise
+                // a slightly-jittery click would register as an edit.
+                let dx = pos[0] - drag.press_pos[0];
+                let dy = pos[1] - drag.press_pos[1];
+                if !drag.moved && (dx * dx + dy * dy) > 0.002 * 0.002 {
+                    drag.moved = true;
+                    state.drag = Some(drag.clone());
+                }
+                if drag.moved {
+                    gestures.push(CanvasGesture::HandleDragged {
+                        item: drag.item,
+                        handle: drag.handle,
+                        pos,
+                    });
+                }
             }
-        }
-        if response.drag_stopped_by(egui::PointerButton::Primary) {
+        } else {
+            // Released. `moved` tells the panel whether to keep the
+            // edit (commit undo) or treat it as a select-only click
+            // (discard the stashed snapshot).
             gestures.push(CanvasGesture::HandleReleased {
                 item: drag.item,
                 handle: drag.handle,
+                moved: drag.moved,
             });
             state.drag = None;
         }
     }
 
-    // Click without drag. A handle hit selects that item (canvas-only
-    // state, no undo entry). Empty space inside the [0..1] frame adds
-    // a new item; outside the frame is ignored so the panel doesn't
-    // accumulate off-canvas items.
+    // Left-click on empty canvas adds an item. Handle hits are
+    // consumed by the press path above (which sets state.selected),
+    // so AddAt only fires for clicks that miss every handle and land
+    // inside the [0..1] frame.
     if response.clicked_by(egui::PointerButton::Primary) {
         if let Some(p) = response.interact_pointer_pos() {
-            if let Some(h) = hit_test(p) {
-                state.selected = Some(h.item);
-            } else {
+            if hit_test(p).is_none() {
                 let pos = xform.to_norm(p);
                 if (0.0..=1.0).contains(&pos[0]) && (0.0..=1.0).contains(&pos[1]) {
                     gestures.push(CanvasGesture::AddAt { pos });

@@ -146,9 +146,13 @@ impl BarEditorApp {
                         mutated = true;
                     }
                 }
-                CanvasGesture::HandleReleased { .. } => {
-                    if self.dialog.field_edit_in_progress.is_some() {
-                        commit_undo_now = true;
+                CanvasGesture::HandleReleased { moved, .. } => {
+                    if moved {
+                        if self.dialog.field_edit_in_progress.is_some() {
+                            commit_undo_now = true;
+                        }
+                    } else {
+                        self.dialog.field_edit_in_progress = None;
                     }
                 }
                 CanvasGesture::HandleDeleted { item } => {

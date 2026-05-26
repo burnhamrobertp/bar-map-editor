@@ -236,9 +236,16 @@ impl BarEditorApp {
                         mutated = true;
                     }
                 }
-                CanvasGesture::HandleReleased { .. } => {
-                    if self.dialog.field_edit_in_progress.is_some() {
-                        commit_undo_now = true;
+                CanvasGesture::HandleReleased { moved, .. } => {
+                    if moved {
+                        // Real drag -- commit the snapshot stashed at press.
+                        if self.dialog.field_edit_in_progress.is_some() {
+                            commit_undo_now = true;
+                        }
+                    } else {
+                        // Click that only selected the handle -- drop the
+                        // stashed snapshot so we don't log a no-op undo.
+                        self.dialog.field_edit_in_progress = None;
                     }
                 }
                 CanvasGesture::HandleDeleted { item } => {
