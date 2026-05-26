@@ -78,11 +78,30 @@ Cons:
 - The "mixed primitives + freehand in one place" authoring story
   needs both nodes wired together with a combiner.
 
-**Recommendation: Option A (merge).** The UX coherence and the
-single-editor maintenance win outweigh the one-time data-model +
-demo-rewrite cost, and pre-release is exactly when to absorb that. The
-rest of this plan assumes a merged `Layout` node; where a step is
-merge-specific it's called out.
+**Recommendation: Option A (merge). DECIDED -- proceeding with the
+merge.**
+
+### Chosen data model: indexed per-item params (no new ParamValue variant)
+
+Rather than a typed `ParamValue::Layout(Vec<LayoutItem>)` (which would
+ripple through every exhaustive `ParamValue` match + the serde format),
+the merged node reuses the indexed-param pattern `LayoutGenerator`
+already uses, extended to cover spline items via the existing
+`ParamValue::Spline` variant. Per item `i`:
+
+- `type_i`: String -- `ellipse` / `rectangle` / `ridge` / `spline`.
+- Primitives use `x_i`, `y_i`, `rx_i`, `ry_i`, `angle_i`.
+- Spline items use `points_i: Spline`, `closed_i: Bool`, `fill_i: Bool`.
+- All items share `height_i` (amplitude) and `falloff_i`.
+
+Node-level: `item_count: UInt` (cap reuses the existing 8), `symmetry:
+String`, `mode: String` (ridge / valley / mask applied to the
+composited output).
+
+This sidesteps the typed-vs-JSON question, adds zero new `ParamValue`
+match arms, and lets the existing `LayoutGenerator` panel + executor
+be extended rather than rewritten. The cap can rise later; it's a node
+constraint, not a model limit.
 
 ## The node-edit view
 
@@ -158,16 +177,27 @@ The renderer already has the switches:
 - Feed a flat / neutral albedo so the preview is untextured -- just
   lit geometry showing the heightmap's shape.
 
+### What to evaluate -- THIS NODE ONLY, in isolation
+
+The preview must render **only the edited node's own output**, not its
+upstream subtree and not the downstream pipeline. Evaluate the Layout
+node by itself -- its items composited into a heightmap, with no mask
+input applied (or a neutral one) -- and render that. The author is
+looking at what *this node contributes*, independent of everything
+else in the graph. Do not run the full graph for the preview.
+
+Concretely: build a one-node eval (the merged node's params ->
+`apply_layout`) at preview resolution; never call the whole-graph
+evaluator for the preview.
+
 ### When to re-render
 
-Re-evaluate only the edited node's subtree at preview resolution and
-re-render when:
+Re-render when:
 - A gesture mutates the node (handle drag, add, delete), or
 - A sidebar param changes (mode, amplitude, width, symmetry, etc.).
 
-Evaluating one Layout node at 128²-256² is cheap (the headless CLI
-preview proves the path). Debounce to once per frame; don't re-render
-on stationary frames.
+Evaluating one Layout node at 128²-256² is cheap. Debounce to once
+per frame; don't re-render on stationary frames.
 
 ### Where it lives
 
