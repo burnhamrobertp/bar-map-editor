@@ -25,6 +25,7 @@ pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
 pub(crate) mod properties_canvas;
+pub(crate) mod spline_layout;
 pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
@@ -338,6 +339,9 @@ impl BarEditorApp {
                 } else if node_type == NodeType::LayoutGenerator {
                     ui.separator();
                     self.draw_layout_generator_properties(ui, node_id, &node_params);
+                } else if node_type == NodeType::SplineLayout {
+                    ui.separator();
+                    self.draw_spline_layout_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.
