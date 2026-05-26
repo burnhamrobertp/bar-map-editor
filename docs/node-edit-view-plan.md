@@ -290,6 +290,12 @@ The whole thing is large; ship in reviewable slices:
 1. **Merge the nodes** (data model + executor + tests + demo
    rewrites). No UX change yet -- the existing in-panel canvas drives
    the merged node. Validates the data model before building UX on it.
+   **DONE.** `NodeType::Layout` holds an indexed item list; the GUI
+   panel lives in `crates/bar-gui/src/panels/properties/layout/`
+   (`mod.rs` coordinator + independent `primitive.rs` / `spline.rs`
+   kind modules). Executor composites items via per-pixel max with
+   ridge / valley / mask + symmetry. `LayoutGenerator` / `SplineLayout`
+   are gone.
 2. **Fill mode** for closed splines/freehand. Small, lands on the
    merged executor.
 3. **Live preview renderer** (`layout_preview.rs`) + show it in the

@@ -1,7 +1,7 @@
 # Symmetric layout demos
 
 Six minimal `.barproj` projects showing the two new symmetric-layout
-features in action: the `symmetry` param on `LayoutGenerator` and the
+features in action: the `symmetry` param on the `Layout` node and the
 `average_*` modes on `Mirror`.
 
 ## How to use them
@@ -20,7 +20,7 @@ features in action: the `symmetry` param on `LayoutGenerator` and the
 
 ## The demos
 
-All `LayoutGenerator` demos share the same three off-centre ellipse
+All `Layout` demos share the same three off-centre ellipse
 placements -- the only difference between them is the `symmetry` param.
 Comparing the four layout demos side-by-side makes the multiplier
 behaviour of each mode obvious.

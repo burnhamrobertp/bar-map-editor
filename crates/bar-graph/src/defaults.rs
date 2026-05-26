@@ -21,35 +21,22 @@ use crate::node::{NodeType, ParamValue};
 
 /// Return the full set of default parameter values for a node type.
 pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
-    // LayoutGenerator has dynamically-named per-shape params; handle it before
-    // the static-key match below.
-    // SplineLayout carries its variable-length control points as a
-    // single ParamValue::Spline rather than indexed per-point params
-    // (LayoutGenerator's pattern would force a fixed cap on point count
-    // and surface as many sliders).
-    if node_type == &NodeType::SplineLayout {
+    // Layout has dynamically-named per-item params; handle it before
+    // the static-key match below. Each of the 8 item slots carries the
+    // primitive fields (type / x / y / rx / ry / angle) plus the spline
+    // fields (points / closed / fill / width) so a slot can switch
+    // kinds without losing data; only the fields its `type_i` selects
+    // are read by the executor.
+    if node_type == &NodeType::Layout {
         let mut m = HashMap::new();
-        m.insert("points".to_string(), ParamValue::Spline(Vec::new()));
+        m.insert("item_count".to_string(), ParamValue::UInt(1));
+        // Output interpretation of the composited coverage field:
+        // ridge (raise), valley (invert -> carve via downstream
+        // Multiply), mask (0..1 selector). Surfaced as a dropdown.
         m.insert("mode".to_string(), ParamValue::String("ridge".to_string()));
-        m.insert("amplitude".to_string(), ParamValue::Float(0.5));
-        m.insert("width".to_string(), ParamValue::Float(0.05));
-        m.insert("falloff".to_string(), ParamValue::Float(0.5));
-        m.insert("closed".to_string(), ParamValue::Bool(false));
-        m.insert(
-            "symmetry".to_string(),
-            ParamValue::String("none".to_string()),
-        );
-        return m;
-    }
-
-    if node_type == &NodeType::LayoutGenerator {
-        let mut m = HashMap::new();
-        m.insert("shape_count".to_string(), ParamValue::UInt(1));
-        // Per-shape symmetry multiplier. Default "none" preserves the
-        // original behaviour where each shape entry maps to exactly one
-        // composited instance. Non-default modes duplicate each shape
-        // across reflection / rotation axes so BAR-style symmetric maps
-        // can be authored without manually entering N copies.
+        // Symmetry multiplier: duplicates every item across reflection
+        // / rotation axes so BAR-style symmetric maps need only one
+        // authored copy.
         m.insert(
             "symmetry".to_string(),
             ParamValue::String("none".to_string()),
@@ -60,13 +47,20 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
                 format!("type_{i}"),
                 ParamValue::String("ellipse".to_string()),
             );
+            // Primitive fields.
             m.insert(format!("x_{i}"), ParamValue::Float(0.5));
             m.insert(format!("y_{i}"), ParamValue::Float(0.5));
             m.insert(format!("rx_{i}"), ParamValue::Float(0.2));
             m.insert(format!("ry_{i}"), ParamValue::Float(0.2));
             m.insert(format!("angle_{i}"), ParamValue::Float(0.0));
+            // Shared fields.
             m.insert(format!("height_{i}"), ParamValue::Float(h));
             m.insert(format!("falloff_{i}"), ParamValue::Float(0.5));
+            // Spline fields (used when type_i == "spline").
+            m.insert(format!("points_{i}"), ParamValue::Spline(Vec::new()));
+            m.insert(format!("closed_{i}"), ParamValue::Bool(false));
+            m.insert(format!("fill_{i}"), ParamValue::Bool(false));
+            m.insert(format!("width_{i}"), ParamValue::Float(0.05));
         }
         return m;
     }
@@ -426,19 +420,11 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             Some(&["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"])
         }
         (NodeType::SelectConvexity, "mode") => Some(&["ridges", "valleys", "full"]),
-        (NodeType::LayoutGenerator, k) if k.starts_with("type_") => {
-            Some(&["ellipse", "rectangle", "ridge"])
+        (NodeType::Layout, k) if k.starts_with("type_") => {
+            Some(&["ellipse", "rectangle", "ridge", "spline"])
         }
-        (NodeType::LayoutGenerator, "symmetry") => Some(&[
-            "none",
-            "mirror_x",
-            "mirror_y",
-            "mirror_xy",
-            "rotate_180",
-            "rotate_90",
-        ]),
-        (NodeType::SplineLayout, "mode") => Some(&["ridge", "valley", "mask"]),
-        (NodeType::SplineLayout, "symmetry") => Some(&[
+        (NodeType::Layout, "mode") => Some(&["ridge", "valley", "mask"]),
+        (NodeType::Layout, "symmetry") => Some(&[
             "none",
             "mirror_x",
             "mirror_y",
@@ -775,8 +761,8 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (SelectAspect, "direction") => (0.0, 360.0),
         (SelectAspect, "width") => (0.0, 180.0),
         (SelectAspect, "falloff") => (0.0, 90.0),
-        // LayoutGenerator per-shape numeric params
-        (LayoutGenerator, k)
+        // Layout per-item numeric params.
+        (Layout, k)
             if matches!(
                 k.trim_end_matches(|c: char| c.is_ascii_digit()),
                 "x_" | "y_" | "rx_" | "ry_" | "height_" | "falloff_"
@@ -784,11 +770,8 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         {
             (0.0, 1.0)
         }
-        (LayoutGenerator, k) if k.starts_with("angle_") => (0.0, 360.0),
-        // SplineLayout floats
-        (SplineLayout, "amplitude") => (0.0, 1.0),
-        (SplineLayout, "width") => (0.001, 0.5),
-        (SplineLayout, "falloff") => (0.0, 1.0),
+        (Layout, k) if k.starts_with("angle_") => (0.0, 360.0),
+        (Layout, k) if k.starts_with("width_") => (0.001, 0.5),
         _ => return None,
     })
 }
@@ -803,7 +786,7 @@ pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
         (ThermalErosion, "iterations") => (10, 1_000),
         (TextureWeightmap, "layer_count") => (2, 8),
         (ColorRamp, "stop_count") => (2, 8),
-        (LayoutGenerator, "shape_count") => (1, 8),
+        (Layout, "item_count") => (1, 8),
         (Stratify, "layer_count") => (2, 32),
         _ => return None,
     })

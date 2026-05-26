@@ -462,11 +462,11 @@ fn mirror_average_xy_collapses_to_mean_of_four() {
 }
 
 #[test]
-fn layout_generator_mirror_x_symmetry_duplicates_shape() {
+fn layout_mirror_x_symmetry_duplicates_shape() {
     // One off-centre shape with `symmetry=mirror_x` should produce a
     // pair: the original on the left and its reflection on the right.
     let p = &[
-        ("shape_count", ParamValue::UInt(1)),
+        ("item_count", ParamValue::UInt(1)),
         ("symmetry", ParamValue::String("mirror_x".to_string())),
         ("type_0", ParamValue::String("ellipse".to_string())),
         ("x_0", ParamValue::Float(0.25)),
@@ -477,10 +477,7 @@ fn layout_generator_mirror_x_symmetry_duplicates_shape() {
         ("height_0", ParamValue::Float(1.0)),
         ("falloff_0", ParamValue::Float(0.5)),
     ];
-    let h = out_hm(
-        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
-        "output",
-    );
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
     // The off-centre shape sits near x=0.25; its mirror sits near
     // x=0.75. Both columns at y=0.5 should read bright.
     let left = h.get((0.25 * (W - 1) as f32) as u32, H / 2).unwrap();
@@ -497,11 +494,11 @@ fn layout_generator_mirror_x_symmetry_duplicates_shape() {
 }
 
 #[test]
-fn layout_generator_rotate_90_produces_four_peaks() {
+fn layout_rotate_90_produces_four_peaks() {
     // One off-centre shape with `symmetry=rotate_90` produces four
     // peaks rotated 90 / 180 / 270 degrees about the centre.
     let p = &[
-        ("shape_count", ParamValue::UInt(1)),
+        ("item_count", ParamValue::UInt(1)),
         ("symmetry", ParamValue::String("rotate_90".to_string())),
         ("type_0", ParamValue::String("ellipse".to_string())),
         ("x_0", ParamValue::Float(0.7)),
@@ -512,10 +509,7 @@ fn layout_generator_rotate_90_produces_four_peaks() {
         ("height_0", ParamValue::Float(1.0)),
         ("falloff_0", ParamValue::Float(0.5)),
     ];
-    let h = out_hm(
-        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
-        "output",
-    );
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
     // Original at (0.7, 0.5). Three rotations: (0.5, 0.7), (0.3, 0.5),
     // (0.5, 0.3). All four positions should be lit.
     let lookup = |nx: f32, ny: f32| {
@@ -530,13 +524,13 @@ fn layout_generator_rotate_90_produces_four_peaks() {
 }
 
 #[test]
-fn layout_generator_none_symmetry_is_unchanged() {
+fn layout_none_symmetry_is_unchanged() {
     // Sanity check: the default `symmetry=none` produces the same
     // single-shape output the node has always produced. Guards against
     // regressions where the symmetry expansion accidentally adds a
     // copy even for the default mode.
     let p = &[
-        ("shape_count", ParamValue::UInt(1)),
+        ("item_count", ParamValue::UInt(1)),
         ("symmetry", ParamValue::String("none".to_string())),
         ("type_0", ParamValue::String("ellipse".to_string())),
         ("x_0", ParamValue::Float(0.25)),
@@ -547,10 +541,7 @@ fn layout_generator_none_symmetry_is_unchanged() {
         ("height_0", ParamValue::Float(1.0)),
         ("falloff_0", ParamValue::Float(0.5)),
     ];
-    let h = out_hm(
-        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
-        "output",
-    );
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
     let left = h.get((0.25 * (W - 1) as f32) as u32, H / 2).unwrap();
     let right = h.get((0.75 * (W - 1) as f32) as u32, H / 2).unwrap();
     assert!(left > 0.5, "shape at 0.25 should be lit: {left}");
@@ -1241,12 +1232,9 @@ fn flow_select_threshold_above_high_is_one() {
 }
 
 #[test]
-fn layout_generator_zero_shape_count_is_empty() {
-    let p = &[("shape_count", ParamValue::UInt(0))];
-    let h = out_hm(
-        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
-        "output",
-    );
+fn layout_zero_item_count_is_empty() {
+    let p = &[("item_count", ParamValue::UInt(0))];
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
     assert_hm_dims(&h);
     let (_, mx) = min_max(&h);
     assert!(
@@ -1256,9 +1244,9 @@ fn layout_generator_zero_shape_count_is_empty() {
 }
 
 #[test]
-fn layout_generator_centred_ellipse_brightens_centre() {
+fn layout_centred_ellipse_brightens_centre() {
     let p = &[
-        ("shape_count", ParamValue::UInt(1)),
+        ("item_count", ParamValue::UInt(1)),
         ("type_0", ParamValue::String("ellipse".to_string())),
         ("x_0", ParamValue::Float(0.5)),
         ("y_0", ParamValue::Float(0.5)),
@@ -1268,10 +1256,7 @@ fn layout_generator_centred_ellipse_brightens_centre() {
         ("height_0", ParamValue::Float(1.0)),
         ("falloff_0", ParamValue::Float(0.5)),
     ];
-    let h = out_hm(
-        &run(NodeType::LayoutGenerator, p, &empty_inputs()),
-        "output",
-    );
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
     let centre = h.get(W / 2, H / 2).unwrap();
     let corner = h.get(0, 0).unwrap();
     assert!(centre > 0.5, "ellipse centre should be bright: {centre}");
@@ -1647,25 +1632,38 @@ fn voronoi_seed_determinism() {
     );
 }
 
-// ── SplineLayout ─────────────────────────────────────────────────────
+// ── Layout: spline items ─────────────────────────────────────────────
 
 fn spline_param(points: Vec<[f32; 2]>) -> ParamValue {
     ParamValue::Spline(points)
 }
 
+/// One spline item in slot 0, with node-level `mode` / `symmetry`.
+fn spline_item(
+    points: Vec<[f32; 2]>,
+    mode: &str,
+    width: f32,
+    symmetry: &str,
+) -> Vec<(&'static str, ParamValue)> {
+    vec![
+        ("item_count", ParamValue::UInt(1)),
+        ("mode", ParamValue::String(mode.to_string())),
+        ("symmetry", ParamValue::String(symmetry.to_string())),
+        ("type_0", ParamValue::String("spline".to_string())),
+        ("points_0", spline_param(points)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("width_0", ParamValue::Float(width)),
+        ("falloff_0", ParamValue::Float(0.5)),
+        ("closed_0", ParamValue::Bool(false)),
+        ("fill_0", ParamValue::Bool(false)),
+    ]
+}
+
 #[test]
-fn spline_layout_empty_points_emits_zero() {
+fn layout_spline_empty_points_emits_zero() {
     // Fewer than 2 points -> nothing to interpolate -> all-zero output.
-    let p = &[
-        ("points", spline_param(vec![])),
-        ("mode", ParamValue::String("ridge".to_string())),
-        ("amplitude", ParamValue::Float(1.0)),
-        ("width", ParamValue::Float(0.1)),
-        ("falloff", ParamValue::Float(0.5)),
-        ("closed", ParamValue::Bool(false)),
-        ("symmetry", ParamValue::String("none".to_string())),
-    ];
-    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    let p = spline_item(vec![], "ridge", 0.1, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
     assert_hm_dims(&h);
     let (_, mx) = min_max(&h);
     assert!(
@@ -1675,20 +1673,12 @@ fn spline_layout_empty_points_emits_zero() {
 }
 
 #[test]
-fn spline_layout_two_points_ridge_raises_along_line() {
+fn layout_spline_two_points_ridge_raises_along_line() {
     // Two horizontal points at y=0.5 -- the curve degenerates to a
     // straight line. The midpoint pixel must be lit; the corners far
     // from the line must be dark.
-    let p = &[
-        ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
-        ("mode", ParamValue::String("ridge".to_string())),
-        ("amplitude", ParamValue::Float(1.0)),
-        ("width", ParamValue::Float(0.2)),
-        ("falloff", ParamValue::Float(0.5)),
-        ("closed", ParamValue::Bool(false)),
-        ("symmetry", ParamValue::String("none".to_string())),
-    ];
-    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    let p = spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "ridge", 0.2, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
     let mid = h.get(W / 2, H / 2).unwrap();
     let corner = h.get(0, 0).unwrap();
     assert!(mid > 0.5, "midpoint of ridge should be bright: {mid}");
@@ -1696,43 +1686,25 @@ fn spline_layout_two_points_ridge_raises_along_line() {
 }
 
 #[test]
-fn spline_layout_valley_mode_carves_below_amplitude() {
-    // Valley mode emits `amplitude + signed_weight` clamped to [0, 1].
-    // With amplitude=0.5, a pixel on the curve has weight=1 and
-    // signed_weight=-0.5, so the output sits at 0.0 (carved). Off-axis
-    // pixels have weight=0 and signed_weight=0, so they sit at 0.5
-    // (the baseline).
-    let p = &[
-        ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
-        ("mode", ParamValue::String("valley".to_string())),
-        ("amplitude", ParamValue::Float(0.5)),
-        ("width", ParamValue::Float(0.1)),
-        ("falloff", ParamValue::Float(0.5)),
-        ("closed", ParamValue::Bool(false)),
-        ("symmetry", ParamValue::String("none".to_string())),
-    ];
-    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+fn layout_spline_valley_mode_inverts_field() {
+    // Valley mode emits `1 - field`. With height=1, a pixel on the
+    // curve has field=1, so it carves to 0; off-axis pixels have
+    // field=0, so they rise to the 1.0 baseline.
+    let p = spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "valley", 0.1, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
     let mid = h.get(W / 2, H / 2).unwrap();
     let corner = h.get(0, 0).unwrap();
     assert!(mid < 0.1, "valley centre should be carved (~0): {mid}");
     assert!(
-        (corner - 0.5).abs() < 0.05,
-        "valley baseline should be amplitude (0.5): {corner}"
+        corner > 0.95,
+        "valley off-axis should rise to the 1.0 baseline: {corner}"
     );
 }
 
 #[test]
-fn spline_layout_mask_mode_in_unit_range() {
-    let p = &[
-        ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
-        ("mode", ParamValue::String("mask".to_string())),
-        ("amplitude", ParamValue::Float(0.5)),
-        ("width", ParamValue::Float(0.1)),
-        ("falloff", ParamValue::Float(0.5)),
-        ("closed", ParamValue::Bool(false)),
-        ("symmetry", ParamValue::String("none".to_string())),
-    ];
-    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+fn layout_spline_mask_mode_in_unit_range() {
+    let p = spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "mask", 0.1, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
     let (mn, mx) = min_max(&h);
     assert!(
         mn >= 0.0 && mx <= 1.0,
@@ -1743,26 +1715,23 @@ fn spline_layout_mask_mode_in_unit_range() {
 }
 
 #[test]
-fn spline_layout_width_controls_perpendicular_falloff() {
+fn layout_spline_width_controls_perpendicular_falloff() {
     // A wider `width` lights up pixels that fall outside the narrow
     // version's falloff radius.
-    let common = |width: f32| {
-        vec![
-            ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
-            ("mode", ParamValue::String("ridge".to_string())),
-            ("amplitude", ParamValue::Float(1.0)),
-            ("width", ParamValue::Float(width)),
-            ("falloff", ParamValue::Float(0.5)),
-            ("closed", ParamValue::Bool(false)),
-            ("symmetry", ParamValue::String("none".to_string())),
-        ]
-    };
     let narrow = out_hm(
-        &run(NodeType::SplineLayout, &common(0.05), &empty_inputs()),
+        &run(
+            NodeType::Layout,
+            &spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "ridge", 0.05, "none"),
+            &empty_inputs(),
+        ),
         "output",
     );
     let wide = out_hm(
-        &run(NodeType::SplineLayout, &common(0.3), &empty_inputs()),
+        &run(
+            NodeType::Layout,
+            &spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "ridge", 0.3, "none"),
+            &empty_inputs(),
+        ),
         "output",
     );
     let y_off = H / 2 + 4;
@@ -1775,17 +1744,9 @@ fn spline_layout_width_controls_perpendicular_falloff() {
 }
 
 #[test]
-fn spline_layout_symmetry_mirror_x_doubles_curve() {
-    let p = &[
-        ("points", spline_param(vec![[0.2, 0.3], [0.4, 0.3]])),
-        ("mode", ParamValue::String("ridge".to_string())),
-        ("amplitude", ParamValue::Float(1.0)),
-        ("width", ParamValue::Float(0.1)),
-        ("falloff", ParamValue::Float(0.5)),
-        ("closed", ParamValue::Bool(false)),
-        ("symmetry", ParamValue::String("mirror_x".to_string())),
-    ];
-    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+fn layout_spline_symmetry_mirror_x_doubles_curve() {
+    let p = spline_item(vec![[0.2, 0.3], [0.4, 0.3]], "ridge", 0.1, "mirror_x");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
     let left = h
         .get((0.2 * (W - 1) as f32) as u32, (0.3 * (H - 1) as f32) as u32)
         .unwrap();

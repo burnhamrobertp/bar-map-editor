@@ -672,16 +672,10 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
-            NodeType::LayoutGenerator => {
+            NodeType::Layout => {
                 let mask = get_optional_heightmap(inputs, "mask");
-                let shape_count = get_uint(params, "shape_count", 1).min(8) as usize;
-                let hm = apply_layout_generator(params, shape_count, width, height, mask.as_ref());
-                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
-            }
-
-            NodeType::SplineLayout => {
-                let mask = get_optional_heightmap(inputs, "mask");
-                let hm = apply_spline_layout(params, width, height, mask.as_ref());
+                let item_count = get_uint(params, "item_count", 1).min(8) as usize;
+                let hm = apply_layout(params, item_count, width, height, mask.as_ref());
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
@@ -3068,7 +3062,7 @@ fn apply_select_convexity(input: &Heightmap, mode: &str, strength: f32) -> Heigh
 }
 
 /// Expand a single shape placement `(cx, cy, angle_deg)` into all the
-/// instances implied by the LayoutGenerator's `symmetry` mode. Coords
+/// instances implied by the Layout node's `symmetry` mode. Coords
 /// are in normalised [0..1, 0..1] space; the reflection axes pass
 /// through (0.5, 0.5) and rotations pivot about the same centre.
 ///
@@ -3115,79 +3109,65 @@ fn expand_symmetric_placements(
 /// When `symmetry` is non-default, each shape entry is expanded into
 /// multiple symmetric placements before compositing -- see
 /// `expand_symmetric_placements`.
-fn apply_layout_generator(
+/// Composite every layout item (primitive shapes + Catmull-Rom
+/// splines) into a single [0, 1] coverage field, then map it to the
+/// node's output mode and apply the optional mask input.
+///
+/// Items are read from indexed params (`type_i`, `x_i`, ..., or
+/// `points_i` for spline items). Each item contributes its
+/// falloff-weighted coverage scaled by `height_i`; items composite by
+/// per-pixel max. The node-level `mode` then interprets the field:
+/// `ridge`/`mask` pass it through, `valley` inverts it (background 1,
+/// shapes 0) so a downstream Multiply carves the terrain.
+fn apply_layout(
     params: &HashMap<String, ParamValue>,
-    shape_count: usize,
+    item_count: usize,
     width: u32,
     height: u32,
     mask: Option<&Heightmap>,
 ) -> Heightmap {
-    let mut data = vec![0.0f32; (width * height) as usize];
+    let mut field = vec![0.0f32; (width * height) as usize];
 
     let symmetry = match params.get("symmetry") {
         Some(ParamValue::String(s)) => s.as_str(),
         _ => "none",
     };
+    let mode = match params.get("mode") {
+        Some(ParamValue::String(s)) => s.as_str(),
+        _ => "ridge",
+    };
 
-    for i in 0..shape_count {
-        let shape_type = match params.get(&format!("type_{i}")) {
+    for i in 0..item_count {
+        let item_type = match params.get(&format!("type_{i}")) {
             Some(ParamValue::String(s)) => s.as_str(),
             _ => "ellipse",
         };
-        let base_cx = get_float(params, &format!("x_{i}"), 0.5);
-        let base_cy = get_float(params, &format!("y_{i}"), 0.5);
-        let rx = get_float(params, &format!("rx_{i}"), 0.2).max(1e-4);
-        let ry = get_float(params, &format!("ry_{i}"), 0.2).max(1e-4);
-        let base_angle = get_float(params, &format!("angle_{i}"), 0.0);
-        let peak = get_float(params, &format!("height_{i}"), 0.5);
-        let falloff = get_float(params, &format!("falloff_{i}"), 0.5).clamp(0.001, 1.0);
-
-        for (cx, cy, angle_deg) in
-            expand_symmetric_placements(base_cx, base_cy, base_angle, symmetry)
-        {
-            let angle_rad = angle_deg * PI / 180.0;
-            let cos_a = angle_rad.cos();
-            let sin_a = angle_rad.sin();
-
-            for py in 0..height {
-                for px in 0..width {
-                    let ux = px as f32 / (width - 1).max(1) as f32 - cx;
-                    let uy = py as f32 / (height - 1).max(1) as f32 - cy;
-                    // Rotate into shape-local space.
-                    let lx = (ux * cos_a + uy * sin_a) / rx;
-                    let ly = (-ux * sin_a + uy * cos_a) / ry;
-                    // Normalized distance from centre.
-                    let d = match shape_type {
-                        "rectangle" => lx.abs().max(ly.abs()),
-                        "ridge" => ly.abs(), // infinite ridge along the rotated X axis
-                        _ => (lx * lx + ly * ly).sqrt(), // ellipse
-                    };
-                    if d >= 1.0 {
-                        continue;
-                    }
-                    // Smooth falloff: cos curve from d=1-falloff (peak) to d=1 (zero).
-                    let t = 1.0 - d; // 1 at centre, 0 at edge
-                    let smoothed = if t >= falloff {
-                        1.0
-                    } else {
-                        let s = t / falloff;
-                        s * s * (3.0 - 2.0 * s) // smoothstep
-                    };
-                    let v = smoothed * peak;
-                    let idx = py as usize * width as usize + px as usize;
-                    if v > data[idx] {
-                        data[idx] = v;
-                    }
-                }
-            }
+        let height_i = get_float(params, &format!("height_{i}"), 0.5).clamp(0.0, 1.0);
+        let falloff_i = get_float(params, &format!("falloff_{i}"), 0.5).clamp(0.0, 1.0);
+        if item_type == "spline" {
+            rasterize_spline_item(
+                &mut field, params, i, height_i, falloff_i, symmetry, width, height,
+            );
+        } else {
+            rasterize_primitive_item(
+                &mut field, item_type, params, i, height_i, falloff_i, symmetry, width, height,
+            );
         }
     }
 
-    // Apply optional mask: mask=0 → output=0.
+    for v in field.iter_mut() {
+        *v = match mode {
+            // Background high, shapes low -- multiply downstream to carve.
+            "valley" => (1.0 - *v).clamp(0.0, 1.0),
+            // ridge / mask: coverage passes straight through.
+            _ => v.clamp(0.0, 1.0),
+        };
+    }
+
     if let Some(m) = mask {
-        for (i, v) in data.iter_mut().enumerate() {
-            let mx = (i % width as usize) as u32;
-            let my = (i / width as usize) as u32;
+        for (idx, v) in field.iter_mut().enumerate() {
+            let mx = (idx % width as usize) as u32;
+            let my = (idx / width as usize) as u32;
             let mw = m.width();
             let mh = m.height();
             let smx = (mx as f32 * mw as f32 / width as f32) as u32;
@@ -3197,11 +3177,189 @@ fn apply_layout_generator(
         }
     }
 
-    Heightmap::frbar_data(width, height, data).unwrap()
+    Heightmap::frbar_data(width, height, field).unwrap()
+}
+
+/// Composite one primitive item (ellipse / rectangle / ridge) into the
+/// coverage `field` by per-pixel max, expanding it across the
+/// `symmetry` orbit first.
+#[allow(clippy::too_many_arguments)]
+fn rasterize_primitive_item(
+    field: &mut [f32],
+    shape_type: &str,
+    params: &HashMap<String, ParamValue>,
+    i: usize,
+    height_i: f32,
+    falloff: f32,
+    symmetry: &str,
+    width: u32,
+    height: u32,
+) {
+    let base_cx = get_float(params, &format!("x_{i}"), 0.5);
+    let base_cy = get_float(params, &format!("y_{i}"), 0.5);
+    let rx = get_float(params, &format!("rx_{i}"), 0.2).max(1e-4);
+    let ry = get_float(params, &format!("ry_{i}"), 0.2).max(1e-4);
+    let base_angle = get_float(params, &format!("angle_{i}"), 0.0);
+    let falloff = falloff.clamp(0.001, 1.0);
+
+    for (cx, cy, angle_deg) in expand_symmetric_placements(base_cx, base_cy, base_angle, symmetry) {
+        let angle_rad = angle_deg * PI / 180.0;
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+        for py in 0..height {
+            for px in 0..width {
+                let ux = px as f32 / (width - 1).max(1) as f32 - cx;
+                let uy = py as f32 / (height - 1).max(1) as f32 - cy;
+                let lx = (ux * cos_a + uy * sin_a) / rx;
+                let ly = (-ux * sin_a + uy * cos_a) / ry;
+                let d = match shape_type {
+                    "rectangle" => lx.abs().max(ly.abs()),
+                    "ridge" => ly.abs(),
+                    _ => (lx * lx + ly * ly).sqrt(),
+                };
+                if d >= 1.0 {
+                    continue;
+                }
+                let t = 1.0 - d;
+                let smoothed = if t >= falloff {
+                    1.0
+                } else {
+                    let s = t / falloff;
+                    s * s * (3.0 - 2.0 * s)
+                };
+                let v = smoothed * height_i;
+                let idx = py as usize * width as usize + px as usize;
+                if v > field[idx] {
+                    field[idx] = v;
+                }
+            }
+        }
+    }
+}
+
+/// Even-odd point-in-polygon test against a sampled (closed) curve.
+/// `samples` and the query are both in normalised [0, 1] space.
+fn point_in_polygon(samples: &[[f32; 2]], px: u32, py: u32, width: u32, height: u32) -> bool {
+    let x = px as f32 / (width - 1).max(1) as f32;
+    let y = py as f32 / (height - 1).max(1) as f32;
+    let n = samples.len();
+    if n < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = n - 1;
+    for k in 0..n {
+        let (xi, yi) = (samples[k][0], samples[k][1]);
+        let (xj, yj) = (samples[j][0], samples[j][1]);
+        if ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi) + xi) {
+            inside = !inside;
+        }
+        j = k;
+    }
+    inside
+}
+
+/// Composite one spline item into the coverage `field`. Open splines
+/// raise a band along the curve; closed splines with `fill` set raise
+/// their whole interior. Symmetry duplicates the control points across
+/// the orbit, rasterising one virtual spline per orbit position.
+#[allow(clippy::too_many_arguments)]
+fn rasterize_spline_item(
+    field: &mut [f32],
+    params: &HashMap<String, ParamValue>,
+    i: usize,
+    height_i: f32,
+    falloff: f32,
+    symmetry: &str,
+    width: u32,
+    height: u32,
+) {
+    let points = get_spline(params, &format!("points_{i}"));
+    if points.len() < 2 {
+        return;
+    }
+    let width_norm = get_float(params, &format!("width_{i}"), 0.05).clamp(0.001, 0.5);
+    let closed = matches!(
+        params.get(&format!("closed_{i}")),
+        Some(ParamValue::Bool(true))
+    );
+    let fill = matches!(
+        params.get(&format!("fill_{i}")),
+        Some(ParamValue::Bool(true))
+    );
+
+    let orbits: Vec<Vec<[f32; 2]>> = if symmetry == "none" {
+        vec![points.to_vec()]
+    } else {
+        let expansions: Vec<Vec<(f32, f32, f32)>> = points
+            .iter()
+            .map(|p| expand_symmetric_placements(p[0], p[1], 0.0, symmetry))
+            .collect();
+        let orbit_size = expansions.first().map(|e| e.len()).unwrap_or(1);
+        (0..orbit_size)
+            .map(|orbit_idx| {
+                expansions
+                    .iter()
+                    .map(|exp| {
+                        let (x, y, _) = exp[orbit_idx];
+                        [x, y]
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
+    let aspect_ref = width.min(height) as f32;
+    let width_px = width_norm * aspect_ref;
+    let inner_px = width_px * (1.0 - falloff.clamp(0.0, 1.0));
+
+    for orbit in &orbits {
+        // Fill needs a closed polygon to test interior membership.
+        let samples = sample_catmull_rom(orbit, 32, closed || fill);
+        if samples.is_empty() {
+            continue;
+        }
+        for py in 0..height {
+            for px in 0..width {
+                let pix_x = px as f32;
+                let pix_y = py as f32;
+                let mut min_d2 = f32::INFINITY;
+                for s in &samples {
+                    let sx = s[0] * (width - 1).max(1) as f32;
+                    let sy = s[1] * (height - 1).max(1) as f32;
+                    let dx = pix_x - sx;
+                    let dy = pix_y - sy;
+                    let d2 = dx * dx + dy * dy;
+                    if d2 < min_d2 {
+                        min_d2 = d2;
+                    }
+                }
+                let d = min_d2.sqrt();
+                let mut weight = if d <= inner_px {
+                    1.0
+                } else if d >= width_px {
+                    0.0
+                } else {
+                    let t = (width_px - d) / (width_px - inner_px).max(1e-6);
+                    t * t * (3.0 - 2.0 * t)
+                };
+                // Fill: the closed interior is fully covered; the outer
+                // edge still feathers via the distance band above.
+                if fill && point_in_polygon(&samples, px, py, width, height) {
+                    weight = 1.0;
+                }
+                let v = weight * height_i;
+                let idx = py as usize * width as usize + px as usize;
+                if v > field[idx] {
+                    field[idx] = v;
+                }
+            }
+        }
+    }
 }
 
 /// Read the `ParamValue::Spline` at `key`, returning an empty slice
-/// when the param is missing or has the wrong variant. SplineLayout's
+/// when the param is missing or has the wrong variant. The spline
 /// rasteriser uses this so it can short-circuit empty splines cleanly.
 fn get_spline<'a>(params: &'a HashMap<String, ParamValue>, key: &str) -> &'a [[f32; 2]] {
     match params.get(key) {
@@ -3288,154 +3446,6 @@ fn sample_catmull_rom(
         samples.push(points[n - 1]);
     }
     samples
-}
-
-/// Rasterise a Catmull-Rom spline into a heightmap by computing each
-/// pixel's perpendicular distance to the nearest sample point and
-/// applying a smoothstep falloff. `mode` selects the output mapping
-/// ("ridge" raises, "valley" carves, "mask" emits 0..1).
-fn apply_spline_layout(
-    params: &HashMap<String, ParamValue>,
-    width: u32,
-    height: u32,
-    mask: Option<&Heightmap>,
-) -> Heightmap {
-    let mut data = vec![0.0f32; (width * height) as usize];
-    let points = get_spline(params, "points");
-    if points.len() < 2 {
-        return Heightmap::frbar_data(width, height, data).unwrap();
-    }
-
-    let mode = match params.get("mode") {
-        Some(ParamValue::String(s)) => s.as_str(),
-        _ => "ridge",
-    };
-    let amplitude = get_float(params, "amplitude", 0.5).clamp(0.0, 1.0);
-    let width_norm = get_float(params, "width", 0.05).clamp(0.001, 0.5);
-    let falloff = get_float(params, "falloff", 0.5).clamp(0.0, 1.0);
-    let closed = matches!(params.get("closed"), Some(ParamValue::Bool(true)));
-    let symmetry = match params.get("symmetry") {
-        Some(ParamValue::String(s)) => s.as_str(),
-        _ => "none",
-    };
-
-    // Expand the control points into the symmetric orbit, producing
-    // one virtual spline per orbit position. Each spline is rasterised
-    // independently and composited via max (ridge / mask) or min
-    // (valley) into `data`.
-    let orbits: Vec<Vec<[f32; 2]>> = if symmetry == "none" {
-        vec![points.to_vec()]
-    } else {
-        // Per-point expansion. The Nth orbit copy of the spline uses
-        // the Nth element of each point's symmetric expansion.
-        let expansions: Vec<Vec<(f32, f32, f32)>> = points
-            .iter()
-            .map(|p| expand_symmetric_placements(p[0], p[1], 0.0, symmetry))
-            .collect();
-        let orbit_size = expansions.first().map(|e| e.len()).unwrap_or(1);
-        (0..orbit_size)
-            .map(|orbit_idx| {
-                expansions
-                    .iter()
-                    .map(|exp| {
-                        let (x, y, _) = exp[orbit_idx];
-                        [x, y]
-                    })
-                    .collect()
-            })
-            .collect()
-    };
-
-    // Aspect-aware width: a circular falloff stays circular regardless
-    // of map aspect by referring to the smaller dimension.
-    let aspect_ref = width.min(height) as f32;
-    let width_px = width_norm * aspect_ref;
-    let inner_px = width_px * (1.0 - falloff);
-
-    for orbit in &orbits {
-        let samples = sample_catmull_rom(orbit, 32, closed);
-        if samples.is_empty() {
-            continue;
-        }
-        for py in 0..height {
-            for px in 0..width {
-                let pix_x = px as f32;
-                let pix_y = py as f32;
-                let mut min_d2 = f32::INFINITY;
-                for s in &samples {
-                    // Sample is in normalised coords; multiply to map
-                    // back to pixel space for distance comparison.
-                    let sx = s[0] * (width - 1).max(1) as f32;
-                    let sy = s[1] * (height - 1).max(1) as f32;
-                    let dx = pix_x - sx;
-                    let dy = pix_y - sy;
-                    let d2 = dx * dx + dy * dy;
-                    if d2 < min_d2 {
-                        min_d2 = d2;
-                    }
-                }
-                let d = min_d2.sqrt();
-                let weight = if d <= inner_px {
-                    1.0
-                } else if d >= width_px {
-                    0.0
-                } else {
-                    // smoothstep from outer (d=width_px) to inner
-                    // (d=inner_px), inverted so 1.0 sits at the curve.
-                    let t = (width_px - d) / (width_px - inner_px).max(1e-6);
-                    t * t * (3.0 - 2.0 * t)
-                };
-
-                let idx = py as usize * width as usize + px as usize;
-                let v = match mode {
-                    "valley" => -(weight * amplitude),
-                    "mask" => weight,
-                    _ => weight * amplitude, // ridge
-                };
-                if mode == "valley" {
-                    // Valley composites by min so multiple valleys cut
-                    // additively rather than overwriting.
-                    if v < data[idx] {
-                        data[idx] = v;
-                    }
-                } else if v > data[idx] {
-                    data[idx] = v;
-                }
-            }
-        }
-    }
-
-    // Valley mode emits negative weights; clamp to [0, 1] for the
-    // final heightmap so the engine's conventional non-negative range
-    // is preserved. Authors compose valleys with a higher-value base
-    // (e.g. a noise layer) and use the SubtractIfPositive pattern via
-    // Subtract for actual carving.
-    for v in data.iter_mut() {
-        if mode == "valley" {
-            // Re-bias: valleys carry max negative as `amplitude`;
-            // shift up so the cleanest place is 0 and unaffected
-            // areas remain at the base value. v <= 0 here; emit
-            // `amplitude + v` clamped.
-            *v = (amplitude + *v).clamp(0.0, 1.0);
-        } else {
-            *v = v.clamp(0.0, 1.0);
-        }
-    }
-
-    if let Some(m) = mask {
-        for (i, v) in data.iter_mut().enumerate() {
-            let mx = (i % width as usize) as u32;
-            let my = (i / width as usize) as u32;
-            let mw = m.width();
-            let mh = m.height();
-            let smx = (mx as f32 * mw as f32 / width as f32) as u32;
-            let smy = (my as f32 * mh as f32 / height as f32) as u32;
-            let mv = m.get(smx.min(mw - 1), smy.min(mh - 1)).unwrap_or(1.0);
-            *v *= mv;
-        }
-    }
-
-    Heightmap::frbar_data(width, height, data).unwrap()
 }
 
 /// Bilinear sample with clamp-to-edge.
@@ -4165,7 +4175,7 @@ mod tests {
     fn layout_generator_ellipse_peak_at_centre() {
         let executor = CpuExecutor;
         let mut params = HashMap::new();
-        params.insert("shape_count".to_string(), ParamValue::UInt(1));
+        params.insert("item_count".to_string(), ParamValue::UInt(1));
         params.insert(
             "type_0".to_string(),
             ParamValue::String("ellipse".to_string()),
@@ -4178,15 +4188,7 @@ mod tests {
         params.insert("height_0".to_string(), ParamValue::Float(0.8));
         params.insert("falloff_0".to_string(), ParamValue::Float(0.5));
         let result = executor
-            .execute(
-                &NodeType::LayoutGenerator,
-                &params,
-                &HashMap::new(),
-                32,
-                32,
-                32,
-                32,
-            )
+            .execute(&NodeType::Layout, &params, &HashMap::new(), 32, 32, 32, 32)
             .unwrap();
         let PortValue::Heightmap(out) = result.get("output").unwrap() else {
             panic!("expected heightmap");

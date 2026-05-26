@@ -1,10 +1,10 @@
 //! Build a set of demonstration `.barproj` directories showcasing the
 //! symmetric-layout features:
 //!
-//!   1. LayoutGenerator with `symmetry = none`         (baseline)
-//!   2. LayoutGenerator with `symmetry = mirror_x`     (1v1 mirror)
-//!   3. LayoutGenerator with `symmetry = mirror_xy`    (4-quadrant)
-//!   4. LayoutGenerator with `symmetry = rotate_90`    (4-corner radial)
+//!   1. Layout with `symmetry = none`         (baseline)
+//!   2. Layout with `symmetry = mirror_x`     (1v1 mirror)
+//!   3. Layout with `symmetry = mirror_xy`    (4-quadrant)
+//!   4. Layout with `symmetry = rotate_90`    (4-corner radial)
 //!   5. Mirror with `mode = mirror_x`                  (canonical half wins)
 //!   6. Mirror with `mode = average_x`                 (both halves blended)
 //!
@@ -37,12 +37,12 @@ fn string(s: &str) -> ParamValue {
     ParamValue::String(s.to_string())
 }
 
-/// Three off-centre ellipse placements shared across the LayoutGenerator
+/// Three off-centre ellipse placements shared across the Layout
 /// demos. Off-centre on purpose so the symmetry transforms have visible
 /// effects -- a centre-of-canvas shape is its own mirror.
 fn layout_shapes_params(symmetry: &str) -> HashMap<String, ParamValue> {
     let mut m = HashMap::new();
-    m.insert("shape_count".to_string(), uint(3));
+    m.insert("item_count".to_string(), uint(3));
     m.insert("symmetry".to_string(), string(symmetry));
 
     let shapes: &[(f32, f32, f32, f32, f32, &str)] = &[
@@ -86,7 +86,7 @@ fn output_config() -> OutputConfig {
     }
 }
 
-/// LayoutGenerator -> FinalComposition with a given symmetry mode.
+/// Layout -> FinalComposition with a given symmetry mode.
 fn layout_demo(name: &str, description: &str, symmetry: &str) -> Recipe {
     Recipe {
         name: name.to_string(),
@@ -99,8 +99,8 @@ fn layout_demo(name: &str, description: &str, symmetry: &str) -> Recipe {
         nodes: vec![
             RecipeNode {
                 key: "layout".to_string(),
-                node_type: NodeType::LayoutGenerator,
-                label: format!("LayoutGenerator (symmetry={symmetry})"),
+                node_type: NodeType::Layout,
+                label: format!("Layout (symmetry={symmetry})"),
                 params: layout_shapes_params(symmetry),
             },
             RecipeNode {

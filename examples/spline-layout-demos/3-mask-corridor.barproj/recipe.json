@@ -11,16 +11,37 @@
   "nodes": [
     {
       "key": "spline",
-      "type": "SplineLayout",
-      "label": "SplineLayout (mask, symmetry=none)",
+      "type": "Layout",
+      "label": "Layout (spline, mask, symmetry=none)",
       "params": {
-        "falloff": {
-          "Float": 0.5
+        "item_count": {
+          "UInt": 1
         },
-        "width": {
+        "width_0": {
           "Float": 0.08
         },
-        "points": {
+        "type_0": {
+          "String": "spline"
+        },
+        "mode": {
+          "String": "mask"
+        },
+        "symmetry": {
+          "String": "none"
+        },
+        "falloff_0": {
+          "Float": 0.5
+        },
+        "closed_0": {
+          "Bool": false
+        },
+        "fill_0": {
+          "Bool": false
+        },
+        "height_0": {
+          "Float": 1.0
+        },
+        "points_0": {
           "Spline": [
             [
               0.1,
@@ -35,18 +56,6 @@
               0.5
             ]
           ]
-        },
-        "mode": {
-          "String": "mask"
-        },
-        "amplitude": {
-          "Float": 1.0
-        },
-        "closed": {
-          "Bool": false
-        },
-        "symmetry": {
-          "String": "none"
         }
       }
     },

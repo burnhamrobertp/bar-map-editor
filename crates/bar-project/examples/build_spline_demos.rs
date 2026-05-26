@@ -1,5 +1,5 @@
-//! Build demonstration `.barproj` directories for the SplineLayout
-//! node and the shared canvas editor.
+//! Build demonstration `.barproj` directories for the Layout node's
+//! spline items and the shared canvas editor.
 //!
 //! Each demo carries a hand-picked control-point sequence so the
 //! visual output is meaningful out-of-the-box; once opened in BME the
@@ -40,25 +40,30 @@ fn output_config() -> OutputConfig {
     }
 }
 
-/// SplineLayout -> FinalComposition. Standalone demo with no noise mix.
+/// A single spline item in slot 0 of a Layout node, with node-level
+/// `mode` / `symmetry`.
+#[allow(clippy::too_many_arguments)]
 fn spline_demo(
     name: &str,
     description: &str,
     points: Vec<[f32; 2]>,
     mode: &str,
-    amplitude: f32,
+    height: f32,
     width: f32,
     closed: bool,
     symmetry: &str,
 ) -> Recipe {
     let mut params = HashMap::new();
-    params.insert("points".to_string(), spline(points));
+    params.insert("item_count".to_string(), ParamValue::UInt(1));
     params.insert("mode".to_string(), string(mode));
-    params.insert("amplitude".to_string(), float(amplitude));
-    params.insert("width".to_string(), float(width));
-    params.insert("falloff".to_string(), float(0.5));
-    params.insert("closed".to_string(), boolean(closed));
     params.insert("symmetry".to_string(), string(symmetry));
+    params.insert("type_0".to_string(), string("spline"));
+    params.insert("points_0".to_string(), spline(points));
+    params.insert("height_0".to_string(), float(height));
+    params.insert("width_0".to_string(), float(width));
+    params.insert("falloff_0".to_string(), float(0.5));
+    params.insert("closed_0".to_string(), boolean(closed));
+    params.insert("fill_0".to_string(), boolean(false));
 
     Recipe {
         name: name.to_string(),
@@ -71,8 +76,8 @@ fn spline_demo(
         nodes: vec![
             RecipeNode {
                 key: "spline".to_string(),
-                node_type: NodeType::SplineLayout,
-                label: format!("SplineLayout ({mode}, symmetry={symmetry})"),
+                node_type: NodeType::Layout,
+                label: format!("Layout (spline, {mode}, symmetry={symmetry})"),
                 params,
             },
             RecipeNode {
@@ -91,12 +96,16 @@ fn spline_demo(
     }
 }
 
-/// RidgedNoise + SplineLayout (valley) added together via `Add` to
-/// show how a carved river fits into noise terrain.
+/// RidgedNoise + a Layout valley spline multiplied together to show
+/// how a carved river fits into noise terrain.
 fn river_in_noise_demo() -> Recipe {
     let mut spline_params = HashMap::new();
+    spline_params.insert("item_count".to_string(), ParamValue::UInt(1));
+    spline_params.insert("mode".to_string(), string("valley"));
+    spline_params.insert("symmetry".to_string(), string("none"));
+    spline_params.insert("type_0".to_string(), string("spline"));
     spline_params.insert(
-        "points".to_string(),
+        "points_0".to_string(),
         spline(vec![
             [0.05, 0.35],
             [0.30, 0.55],
@@ -105,18 +114,17 @@ fn river_in_noise_demo() -> Recipe {
             [0.95, 0.45],
         ]),
     );
-    spline_params.insert("mode".to_string(), string("valley"));
-    spline_params.insert("amplitude".to_string(), float(0.4));
-    spline_params.insert("width".to_string(), float(0.04));
-    spline_params.insert("falloff".to_string(), float(0.5));
-    spline_params.insert("closed".to_string(), boolean(false));
-    spline_params.insert("symmetry".to_string(), string("none"));
+    spline_params.insert("height_0".to_string(), float(0.6));
+    spline_params.insert("width_0".to_string(), float(0.04));
+    spline_params.insert("falloff_0".to_string(), float(0.5));
+    spline_params.insert("closed_0".to_string(), boolean(false));
+    spline_params.insert("fill_0".to_string(), boolean(false));
 
     Recipe {
         name: "Spline valley cut into noise".to_string(),
         shortname: None,
         description:
-            "Ridged noise base with a SplineLayout valley running across it. Demonstrates how the valley mode composites with a base heightmap via Multiply, carving a river-like channel through the underlying terrain."
+            "Ridged noise base with a Layout valley spline running across it. Demonstrates how the valley mode composites with a base heightmap via Multiply, carving a river-like channel through the underlying terrain."
                 .to_string(),
         author: Some("bar-editor spline-layout demo".to_string()),
         version: Some("0.1".to_string()),
@@ -137,7 +145,7 @@ fn river_in_noise_demo() -> Recipe {
             },
             RecipeNode {
                 key: "spline".to_string(),
-                node_type: NodeType::SplineLayout,
+                node_type: NodeType::Layout,
                 label: "River valley".to_string(),
                 params: spline_params,
             },
@@ -207,10 +215,10 @@ fn main() -> anyhow::Result<()> {
             "2-valley-river.barproj",
             spline_demo(
                 "Valley: river cut",
-                "Same S-curve but in valley mode. Output reads as a carved trough rather than a raised ridge. Baseline elevation is amplitude (0.4); the channel pixels sit at zero.",
+                "Same S-curve but in valley mode. Valley inverts the field, so the off-channel terrain rises to the 1.0 baseline while the channel pixels (height 0.6) carve down to ~0.4.",
                 vec![[0.10, 0.30], [0.35, 0.55], [0.65, 0.40], [0.90, 0.65]],
                 "valley",
-                0.4,
+                0.6,
                 0.04,
                 false,
                 "none",

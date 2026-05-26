@@ -20,12 +20,11 @@
 
 pub(crate) mod color_ramp;
 pub(crate) mod group;
-pub(crate) mod layout_generator;
+pub(crate) mod layout;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
 pub(crate) mod properties_canvas;
-pub(crate) mod spline_layout;
 pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
@@ -336,12 +335,9 @@ impl BarEditorApp {
                 } else if node_type == NodeType::ColorRamp {
                     ui.separator();
                     self.draw_color_ramp_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::LayoutGenerator {
+                } else if node_type == NodeType::Layout {
                     ui.separator();
-                    self.draw_layout_generator_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::SplineLayout {
-                    ui.separator();
-                    self.draw_spline_layout_properties(ui, node_id, &node_params);
+                    self.draw_layout_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.
@@ -578,7 +574,7 @@ impl BarEditorApp {
                                         }
                                         ParamValue::Vec2(_) => {}
                                         // Splines are only meaningful in a 2D canvas
-                                        // editor (SplineLayout has its own panel);
+                                        // editor (the Layout node has its own panel);
                                         // the generic property grid skips them rather
                                         // than try to surface raw point arrays.
                                         ParamValue::Spline(_) => {}

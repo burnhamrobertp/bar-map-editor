@@ -11,28 +11,10 @@
   "nodes": [
     {
       "key": "spline",
-      "type": "SplineLayout",
-      "label": "SplineLayout (valley, symmetry=mirror_x)",
+      "type": "Layout",
+      "label": "Layout (spline, valley, symmetry=mirror_x)",
       "params": {
-        "width": {
-          "Float": 0.05
-        },
-        "falloff": {
-          "Float": 0.5
-        },
-        "closed": {
-          "Bool": false
-        },
-        "symmetry": {
-          "String": "mirror_x"
-        },
-        "mode": {
-          "String": "valley"
-        },
-        "amplitude": {
-          "Float": 0.5
-        },
-        "points": {
+        "points_0": {
           "Spline": [
             [
               0.1,
@@ -51,6 +33,33 @@
               0.9
             ]
           ]
+        },
+        "falloff_0": {
+          "Float": 0.5
+        },
+        "symmetry": {
+          "String": "mirror_x"
+        },
+        "closed_0": {
+          "Bool": false
+        },
+        "type_0": {
+          "String": "spline"
+        },
+        "fill_0": {
+          "Bool": false
+        },
+        "item_count": {
+          "UInt": 1
+        },
+        "width_0": {
+          "Float": 0.05
+        },
+        "mode": {
+          "String": "valley"
+        },
+        "height_0": {
+          "Float": 0.5
         }
       }
     },

@@ -1,7 +1,7 @@
 {
   "name": "Valley: river cut",
   "shortname": null,
-  "description": "Same S-curve but in valley mode. Output reads as a carved trough rather than a raised ridge. Baseline elevation is amplitude (0.4); the channel pixels sit at zero.",
+  "description": "Same S-curve but in valley mode. Valley inverts the field, so the off-channel terrain rises to the 1.0 baseline while the channel pixels (height 0.6) carve down to ~0.4.",
   "author": "bar-editor spline-layout demo",
   "version": "0.1",
   "tip": null,
@@ -11,10 +11,25 @@
   "nodes": [
     {
       "key": "spline",
-      "type": "SplineLayout",
-      "label": "SplineLayout (valley, symmetry=none)",
+      "type": "Layout",
+      "label": "Layout (spline, valley, symmetry=none)",
       "params": {
-        "points": {
+        "height_0": {
+          "Float": 0.6
+        },
+        "type_0": {
+          "String": "spline"
+        },
+        "fill_0": {
+          "Bool": false
+        },
+        "closed_0": {
+          "Bool": false
+        },
+        "mode": {
+          "String": "valley"
+        },
+        "points_0": {
           "Spline": [
             [
               0.1,
@@ -34,20 +49,14 @@
             ]
           ]
         },
-        "mode": {
-          "String": "valley"
-        },
-        "amplitude": {
-          "Float": 0.4
-        },
-        "falloff": {
-          "Float": 0.5
-        },
-        "width": {
+        "width_0": {
           "Float": 0.04
         },
-        "closed": {
-          "Bool": false
+        "item_count": {
+          "UInt": 1
+        },
+        "falloff_0": {
+          "Float": 0.5
         },
         "symmetry": {
           "String": "none"

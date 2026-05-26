@@ -11,28 +11,13 @@
   "nodes": [
     {
       "key": "spline",
-      "type": "SplineLayout",
-      "label": "SplineLayout (ridge, symmetry=none)",
+      "type": "Layout",
+      "label": "Layout (spline, ridge, symmetry=none)",
       "params": {
-        "amplitude": {
-          "Float": 0.7
+        "item_count": {
+          "UInt": 1
         },
-        "mode": {
-          "String": "ridge"
-        },
-        "width": {
-          "Float": 0.05
-        },
-        "falloff": {
-          "Float": 0.5
-        },
-        "closed": {
-          "Bool": false
-        },
-        "symmetry": {
-          "String": "none"
-        },
-        "points": {
+        "points_0": {
           "Spline": [
             [
               0.15,
@@ -51,6 +36,30 @@
               0.3
             ]
           ]
+        },
+        "mode": {
+          "String": "ridge"
+        },
+        "width_0": {
+          "Float": 0.05
+        },
+        "type_0": {
+          "String": "spline"
+        },
+        "fill_0": {
+          "Bool": false
+        },
+        "symmetry": {
+          "String": "none"
+        },
+        "falloff_0": {
+          "Float": 0.5
+        },
+        "height_0": {
+          "Float": 0.7
+        },
+        "closed_0": {
+          "Bool": false
         }
       }
     },

@@ -1,7 +1,8 @@
 //! Shared 2D canvas widget for properties-panel item editing.
 //!
-//! Used by node types that author 2D data (`LayoutGenerator` shapes,
-//! `SplineLayout` control points). The widget owns the canvas chrome
+//! Used by node types that author 2D data (the `Layout` node's
+//! primitive shapes and spline control points). The widget owns the
+//! canvas chrome
 //! -- background grid, pan/zoom, hit-testing, drag state -- and emits
 //! typed gestures the calling panel translates into param mutations.
 //!
@@ -69,10 +70,10 @@ pub struct HandleSpec {
 }
 
 /// Gestures emitted by the widget. The panel matches on these and
-/// mutates its own data accordingly. Several variants carry fields
-/// the LayoutGenerator panel doesn't read but the SplineLayout
-/// panel does (or will); the `dead_code` allow lets the public API
-/// stay uniform without per-consumer noise.
+/// mutates its own data accordingly. Some variants carry fields only
+/// one item kind reads (a spline reads `handle` on delete; a primitive
+/// ignores it); the `dead_code` allow lets the public API stay uniform
+/// without per-consumer noise.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
 pub enum CanvasGesture {
@@ -102,8 +103,10 @@ pub enum CanvasGesture {
         handle: HandleId,
         moved: bool,
     },
-    /// Right-click on a handle. Panel removes the item.
-    HandleDeleted { item: usize },
+    /// Right-click on a handle. The panel decides what to remove --
+    /// for a primitive item it's the whole item; for a spline item
+    /// the `handle` identifies which control point to drop.
+    HandleDeleted { item: usize, handle: HandleId },
 }
 
 /// Coord transform between normalised [0..1] and canvas-pixel space.
@@ -257,7 +260,10 @@ where
     if response.secondary_clicked() {
         if let Some(p) = response.interact_pointer_pos() {
             if let Some(h) = hit_test(p) {
-                gestures.push(CanvasGesture::HandleDeleted { item: h.item });
+                gestures.push(CanvasGesture::HandleDeleted {
+                    item: h.item,
+                    handle: h.id,
+                });
             }
         }
     }

@@ -11,38 +11,113 @@
   "nodes": [
     {
       "key": "layout",
-      "type": "LayoutGenerator",
-      "label": "LayoutGenerator (symmetry=rotate_90)",
+      "type": "Layout",
+      "label": "Layout (symmetry=rotate_90)",
       "params": {
-        "x_6": {
-          "Float": 0.5
-        },
         "angle_4": {
           "Float": 0.0
         },
-        "y_1": {
-          "Float": 0.3
-        },
-        "ry_0": {
-          "Float": 0.12
-        },
-        "ry_3": {
-          "Float": 0.2
-        },
-        "ry_5": {
-          "Float": 0.2
-        },
-        "angle_1": {
-          "Float": 0.0
-        },
-        "x_1": {
-          "Float": 0.3
+        "falloff_7": {
+          "Float": 0.5
         },
         "type_2": {
           "String": "ellipse"
         },
-        "ry_6": {
+        "height_7": {
+          "Float": 0.0
+        },
+        "angle_6": {
+          "Float": 0.0
+        },
+        "type_4": {
+          "String": "ellipse"
+        },
+        "height_6": {
+          "Float": 0.0
+        },
+        "rx_5": {
           "Float": 0.2
+        },
+        "item_count": {
+          "UInt": 3
+        },
+        "angle_7": {
+          "Float": 0.0
+        },
+        "y_0": {
+          "Float": 0.5
+        },
+        "height_5": {
+          "Float": 0.0
+        },
+        "x_2": {
+          "Float": 0.4
+        },
+        "ry_1": {
+          "Float": 0.08
+        },
+        "x_3": {
+          "Float": 0.5
+        },
+        "falloff_4": {
+          "Float": 0.5
+        },
+        "angle_5": {
+          "Float": 0.0
+        },
+        "y_7": {
+          "Float": 0.5
+        },
+        "height_2": {
+          "Float": 0.65
+        },
+        "y_4": {
+          "Float": 0.5
+        },
+        "y_5": {
+          "Float": 0.5
+        },
+        "symmetry": {
+          "String": "rotate_90"
+        },
+        "y_1": {
+          "Float": 0.3
+        },
+        "rx_1": {
+          "Float": 0.08
+        },
+        "type_0": {
+          "String": "ellipse"
+        },
+        "y_3": {
+          "Float": 0.5
+        },
+        "height_1": {
+          "Float": 0.55
+        },
+        "type_3": {
+          "String": "ellipse"
+        },
+        "height_0": {
+          "Float": 0.8
+        },
+        "falloff_3": {
+          "Float": 0.5
+        },
+        "x_7": {
+          "Float": 0.5
+        },
+        "ry_2": {
+          "Float": 0.06
+        },
+        "ry_3": {
+          "Float": 0.2
+        },
+        "rx_3": {
+          "Float": 0.2
+        },
+        "ry_0": {
+          "Float": 0.12
         },
         "height_3": {
           "Float": 0.0
@@ -50,167 +125,92 @@
         "height_4": {
           "Float": 0.0
         },
-        "height_5": {
-          "Float": 0.0
-        },
-        "angle_0": {
-          "Float": 0.0
-        },
-        "x_7": {
-          "Float": 0.5
-        },
-        "falloff_1": {
-          "Float": 0.5
-        },
-        "rx_2": {
-          "Float": 0.1
-        },
-        "y_7": {
-          "Float": 0.5
-        },
-        "ry_1": {
-          "Float": 0.08
+        "type_7": {
+          "String": "ellipse"
         },
         "ry_4": {
           "Float": 0.2
         },
-        "type_7": {
-          "String": "ellipse"
-        },
-        "y_4": {
-          "Float": 0.5
-        },
-        "rx_6": {
-          "Float": 0.2
-        },
-        "type_5": {
-          "String": "ellipse"
-        },
-        "y_6": {
-          "Float": 0.5
-        },
-        "falloff_2": {
-          "Float": 0.5
-        },
-        "angle_3": {
-          "Float": 0.0
-        },
-        "ry_7": {
-          "Float": 0.2
-        },
-        "type_6": {
-          "String": "ellipse"
-        },
-        "x_4": {
-          "Float": 0.5
-        },
         "y_2": {
           "Float": 0.65
-        },
-        "rx_1": {
-          "Float": 0.08
-        },
-        "type_3": {
-          "String": "ellipse"
-        },
-        "falloff_5": {
-          "Float": 0.5
         },
         "type_1": {
           "String": "ellipse"
         },
-        "angle_2": {
-          "Float": 0.0
-        },
-        "y_0": {
-          "Float": 0.5
-        },
-        "y_3": {
-          "Float": 0.5
-        },
-        "rx_4": {
+        "ry_5": {
           "Float": 0.2
         },
-        "falloff_6": {
+        "falloff_5": {
           "Float": 0.5
         },
-        "falloff_7": {
-          "Float": 0.5
-        },
-        "symmetry": {
-          "String": "rotate_90"
-        },
-        "y_5": {
-          "Float": 0.5
-        },
-        "x_2": {
-          "Float": 0.4
-        },
-        "angle_7": {
+        "angle_1": {
           "Float": 0.0
         },
-        "rx_3": {
-          "Float": 0.2
-        },
-        "angle_6": {
+        "angle_3": {
           "Float": 0.0
+        },
+        "x_4": {
+          "Float": 0.5
         },
         "falloff_0": {
           "Float": 0.5
         },
-        "rx_5": {
-          "Float": 0.2
-        },
-        "ry_2": {
-          "Float": 0.06
-        },
-        "rx_0": {
-          "Float": 0.12
-        },
-        "height_1": {
-          "Float": 0.55
-        },
-        "falloff_4": {
-          "Float": 0.5
-        },
-        "type_0": {
-          "String": "ellipse"
-        },
-        "height_0": {
-          "Float": 0.8
-        },
-        "shape_count": {
-          "UInt": 3
-        },
-        "x_0": {
-          "Float": 0.25
-        },
-        "height_2": {
-          "Float": 0.65
-        },
-        "x_5": {
-          "Float": 0.5
-        },
-        "falloff_3": {
-          "Float": 0.5
-        },
-        "angle_5": {
+        "angle_2": {
           "Float": 0.0
         },
         "rx_7": {
           "Float": 0.2
         },
-        "height_6": {
-          "Float": 0.0
-        },
-        "x_3": {
+        "y_6": {
           "Float": 0.5
         },
-        "height_7": {
+        "x_6": {
+          "Float": 0.5
+        },
+        "angle_0": {
           "Float": 0.0
         },
-        "type_4": {
+        "x_5": {
+          "Float": 0.5
+        },
+        "type_5": {
           "String": "ellipse"
+        },
+        "x_0": {
+          "Float": 0.25
+        },
+        "falloff_2": {
+          "Float": 0.5
+        },
+        "x_1": {
+          "Float": 0.3
+        },
+        "type_6": {
+          "String": "ellipse"
+        },
+        "ry_6": {
+          "Float": 0.2
+        },
+        "falloff_6": {
+          "Float": 0.5
+        },
+        "ry_7": {
+          "Float": 0.2
+        },
+        "rx_6": {
+          "Float": 0.2
+        },
+        "rx_0": {
+          "Float": 0.12
+        },
+        "falloff_1": {
+          "Float": 0.5
+        },
+        "rx_4": {
+          "Float": 0.2
+        },
+        "rx_2": {
+          "Float": 0.1
         }
       }
     },

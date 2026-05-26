@@ -1,7 +1,7 @@
 {
   "name": "Spline valley cut into noise",
   "shortname": null,
-  "description": "Ridged noise base with a SplineLayout valley running across it. Demonstrates how the valley mode composites with a base heightmap via Multiply, carving a river-like channel through the underlying terrain.",
+  "description": "Ridged noise base with a Layout valley spline running across it. Demonstrates how the valley mode composites with a base heightmap via Multiply, carving a river-like channel through the underlying terrain.",
   "author": "bar-editor spline-layout demo",
   "version": "0.1",
   "tip": null,
@@ -14,41 +14,56 @@
       "type": "RidgedNoise",
       "label": "Ridged terrain",
       "params": {
-        "frequency": {
-          "Float": 3.0
+        "persistence": {
+          "Float": 0.5
         },
         "seed": {
           "UInt": 7
         },
-        "persistence": {
-          "Float": 0.5
+        "lacunarity": {
+          "Float": 2.0
+        },
+        "frequency": {
+          "Float": 3.0
         },
         "octaves": {
           "UInt": 5
-        },
-        "lacunarity": {
-          "Float": 2.0
         }
       }
     },
     {
       "key": "spline",
-      "type": "SplineLayout",
+      "type": "Layout",
       "label": "River valley",
       "params": {
-        "width": {
+        "item_count": {
+          "UInt": 1
+        },
+        "fill_0": {
+          "Bool": false
+        },
+        "closed_0": {
+          "Bool": false
+        },
+        "width_0": {
           "Float": 0.04
         },
-        "falloff": {
-          "Float": 0.5
-        },
-        "closed": {
-          "Bool": false
+        "mode": {
+          "String": "valley"
         },
         "symmetry": {
           "String": "none"
         },
-        "points": {
+        "height_0": {
+          "Float": 0.6
+        },
+        "falloff_0": {
+          "Float": 0.5
+        },
+        "type_0": {
+          "String": "spline"
+        },
+        "points_0": {
           "Spline": [
             [
               0.05,
@@ -71,12 +86,6 @@
               0.45
             ]
           ]
-        },
-        "mode": {
-          "String": "valley"
-        },
-        "amplitude": {
-          "Float": 0.4
         }
       }
     },
