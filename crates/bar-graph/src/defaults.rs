@@ -23,6 +23,25 @@ use crate::node::{NodeType, ParamValue};
 pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
     // LayoutGenerator has dynamically-named per-shape params; handle it before
     // the static-key match below.
+    // SplineLayout carries its variable-length control points as a
+    // single ParamValue::Spline rather than indexed per-point params
+    // (LayoutGenerator's pattern would force a fixed cap on point count
+    // and surface as many sliders).
+    if node_type == &NodeType::SplineLayout {
+        let mut m = HashMap::new();
+        m.insert("points".to_string(), ParamValue::Spline(Vec::new()));
+        m.insert("mode".to_string(), ParamValue::String("ridge".to_string()));
+        m.insert("amplitude".to_string(), ParamValue::Float(0.5));
+        m.insert("width".to_string(), ParamValue::Float(0.05));
+        m.insert("falloff".to_string(), ParamValue::Float(0.5));
+        m.insert("closed".to_string(), ParamValue::Bool(false));
+        m.insert(
+            "symmetry".to_string(),
+            ParamValue::String("none".to_string()),
+        );
+        return m;
+    }
+
     if node_type == &NodeType::LayoutGenerator {
         let mut m = HashMap::new();
         m.insert("shape_count".to_string(), ParamValue::UInt(1));
@@ -418,6 +437,15 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             "rotate_180",
             "rotate_90",
         ]),
+        (NodeType::SplineLayout, "mode") => Some(&["ridge", "valley", "mask"]),
+        (NodeType::SplineLayout, "symmetry") => Some(&[
+            "none",
+            "mirror_x",
+            "mirror_y",
+            "mirror_xy",
+            "rotate_180",
+            "rotate_90",
+        ]),
         _ => None,
     }
 }
@@ -757,6 +785,10 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
             (0.0, 1.0)
         }
         (LayoutGenerator, k) if k.starts_with("angle_") => (0.0, 360.0),
+        // SplineLayout floats
+        (SplineLayout, "amplitude") => (0.0, 1.0),
+        (SplineLayout, "width") => (0.001, 0.5),
+        (SplineLayout, "falloff") => (0.0, 1.0),
         _ => return None,
     })
 }

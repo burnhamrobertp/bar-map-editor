@@ -125,6 +125,14 @@ pub enum NodeType {
     /// into a heightmap. Each shape has position, size, rotation, peak height,
     /// and falloff. Shapes are composited by taking the per-pixel maximum.
     LayoutGenerator,
+    /// Curved linear feature generator. Takes an ordered set of 2D control
+    /// points (stored as `ParamValue::Spline`), fits a Catmull-Rom curve
+    /// through them, and emits a heightmap whose value at each pixel is
+    /// the falloff-weighted perpendicular distance to the curve. Supports
+    /// ridge (raise), valley (carve), and mask (0..1) output modes, plus
+    /// the same symmetry enum as LayoutGenerator. Used for rivers, road
+    /// corridors, ridge lines, plateau edges.
+    SplineLayout,
 
     // Filters (transform / warp / strata)
     /// Translate, scale, and rotate a heightmap. Inverse-mapped bilinear
@@ -610,6 +618,10 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
         ),
 
         NodeType::LayoutGenerator => (
+            vec![Port::new("mask", "Mask", PortKind::Mask)],
+            vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
+        ),
+        NodeType::SplineLayout => (
             vec![Port::new("mask", "Mask", PortKind::Mask)],
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),

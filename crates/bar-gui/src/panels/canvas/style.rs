@@ -62,7 +62,8 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Gradient
         | NodeType::FileInput
         | NodeType::Constant
-        | NodeType::LayoutGenerator => tokens::NODE_CAT_GENERATOR,
+        | NodeType::LayoutGenerator
+        | NodeType::SplineLayout => tokens::NODE_CAT_GENERATOR,
 
         NodeType::HydraulicErosion
         | NodeType::ThermalErosion

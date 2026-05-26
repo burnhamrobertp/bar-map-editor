@@ -1647,6 +1647,155 @@ fn voronoi_seed_determinism() {
     );
 }
 
+// ── SplineLayout ─────────────────────────────────────────────────────
+
+fn spline_param(points: Vec<[f32; 2]>) -> ParamValue {
+    ParamValue::Spline(points)
+}
+
+#[test]
+fn spline_layout_empty_points_emits_zero() {
+    // Fewer than 2 points -> nothing to interpolate -> all-zero output.
+    let p = &[
+        ("points", spline_param(vec![])),
+        ("mode", ParamValue::String("ridge".to_string())),
+        ("amplitude", ParamValue::Float(1.0)),
+        ("width", ParamValue::Float(0.1)),
+        ("falloff", ParamValue::Float(0.5)),
+        ("closed", ParamValue::Bool(false)),
+        ("symmetry", ParamValue::String("none".to_string())),
+    ];
+    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    assert_hm_dims(&h);
+    let (_, mx) = min_max(&h);
+    assert!(
+        mx < 1e-4,
+        "empty spline should produce zero output, got max {mx}"
+    );
+}
+
+#[test]
+fn spline_layout_two_points_ridge_raises_along_line() {
+    // Two horizontal points at y=0.5 -- the curve degenerates to a
+    // straight line. The midpoint pixel must be lit; the corners far
+    // from the line must be dark.
+    let p = &[
+        ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
+        ("mode", ParamValue::String("ridge".to_string())),
+        ("amplitude", ParamValue::Float(1.0)),
+        ("width", ParamValue::Float(0.2)),
+        ("falloff", ParamValue::Float(0.5)),
+        ("closed", ParamValue::Bool(false)),
+        ("symmetry", ParamValue::String("none".to_string())),
+    ];
+    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    let mid = h.get(W / 2, H / 2).unwrap();
+    let corner = h.get(0, 0).unwrap();
+    assert!(mid > 0.5, "midpoint of ridge should be bright: {mid}");
+    assert!(corner < 0.1, "far corner should be dark: {corner}");
+}
+
+#[test]
+fn spline_layout_valley_mode_carves_below_amplitude() {
+    // Valley mode emits `amplitude + signed_weight` clamped to [0, 1].
+    // With amplitude=0.5, a pixel on the curve has weight=1 and
+    // signed_weight=-0.5, so the output sits at 0.0 (carved). Off-axis
+    // pixels have weight=0 and signed_weight=0, so they sit at 0.5
+    // (the baseline).
+    let p = &[
+        ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
+        ("mode", ParamValue::String("valley".to_string())),
+        ("amplitude", ParamValue::Float(0.5)),
+        ("width", ParamValue::Float(0.1)),
+        ("falloff", ParamValue::Float(0.5)),
+        ("closed", ParamValue::Bool(false)),
+        ("symmetry", ParamValue::String("none".to_string())),
+    ];
+    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    let mid = h.get(W / 2, H / 2).unwrap();
+    let corner = h.get(0, 0).unwrap();
+    assert!(mid < 0.1, "valley centre should be carved (~0): {mid}");
+    assert!(
+        (corner - 0.5).abs() < 0.05,
+        "valley baseline should be amplitude (0.5): {corner}"
+    );
+}
+
+#[test]
+fn spline_layout_mask_mode_in_unit_range() {
+    let p = &[
+        ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
+        ("mode", ParamValue::String("mask".to_string())),
+        ("amplitude", ParamValue::Float(0.5)),
+        ("width", ParamValue::Float(0.1)),
+        ("falloff", ParamValue::Float(0.5)),
+        ("closed", ParamValue::Bool(false)),
+        ("symmetry", ParamValue::String("none".to_string())),
+    ];
+    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    let (mn, mx) = min_max(&h);
+    assert!(
+        mn >= 0.0 && mx <= 1.0,
+        "mask output escapes [0,1]: ({mn}, {mx})"
+    );
+    let mid = h.get(W / 2, H / 2).unwrap();
+    assert!(mid > 0.5, "mask centre should be near 1.0: {mid}");
+}
+
+#[test]
+fn spline_layout_width_controls_perpendicular_falloff() {
+    // A wider `width` lights up pixels that fall outside the narrow
+    // version's falloff radius.
+    let common = |width: f32| {
+        vec![
+            ("points", spline_param(vec![[0.2, 0.5], [0.8, 0.5]])),
+            ("mode", ParamValue::String("ridge".to_string())),
+            ("amplitude", ParamValue::Float(1.0)),
+            ("width", ParamValue::Float(width)),
+            ("falloff", ParamValue::Float(0.5)),
+            ("closed", ParamValue::Bool(false)),
+            ("symmetry", ParamValue::String("none".to_string())),
+        ]
+    };
+    let narrow = out_hm(
+        &run(NodeType::SplineLayout, &common(0.05), &empty_inputs()),
+        "output",
+    );
+    let wide = out_hm(
+        &run(NodeType::SplineLayout, &common(0.3), &empty_inputs()),
+        "output",
+    );
+    let y_off = H / 2 + 4;
+    let n = narrow.get(W / 2, y_off).unwrap();
+    let w_val = wide.get(W / 2, y_off).unwrap();
+    assert!(
+        w_val > n,
+        "wider width should reach the off-axis pixel: narrow={n}, wide={w_val}"
+    );
+}
+
+#[test]
+fn spline_layout_symmetry_mirror_x_doubles_curve() {
+    let p = &[
+        ("points", spline_param(vec![[0.2, 0.3], [0.4, 0.3]])),
+        ("mode", ParamValue::String("ridge".to_string())),
+        ("amplitude", ParamValue::Float(1.0)),
+        ("width", ParamValue::Float(0.1)),
+        ("falloff", ParamValue::Float(0.5)),
+        ("closed", ParamValue::Bool(false)),
+        ("symmetry", ParamValue::String("mirror_x".to_string())),
+    ];
+    let h = out_hm(&run(NodeType::SplineLayout, p, &empty_inputs()), "output");
+    let left = h
+        .get((0.2 * (W - 1) as f32) as u32, (0.3 * (H - 1) as f32) as u32)
+        .unwrap();
+    let right = h
+        .get((0.8 * (W - 1) as f32) as u32, (0.3 * (H - 1) as f32) as u32)
+        .unwrap();
+    assert!(left > 0.3, "left curve should be lit: {left}");
+    assert!(right > 0.3, "mirrored right curve should be lit: {right}");
+}
+
 #[test]
 fn param_value_spline_round_trips_via_serde() {
     // Constructing the variant directly + serialise + deserialise back.

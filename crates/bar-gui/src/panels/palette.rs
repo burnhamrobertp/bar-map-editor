@@ -34,6 +34,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
         ("Layout Generator", NodeType::LayoutGenerator),
+        ("Spline Layout", NodeType::SplineLayout),
     ];
 
     let filters = [
@@ -112,6 +113,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
         ("Layout Generator", NodeType::LayoutGenerator),
+        ("Spline Layout", NodeType::SplineLayout),
         ("Hydraulic Erosion", NodeType::HydraulicErosion),
         ("Thermal Erosion", NodeType::ThermalErosion),
         ("Blur", NodeType::Blur),

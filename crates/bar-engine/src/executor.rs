@@ -679,6 +679,12 @@ impl NodeExecutor for CpuExecutor {
                 outputs.insert("output".to_string(), PortValue::Heightmap(hm));
             }
 
+            NodeType::SplineLayout => {
+                let mask = get_optional_heightmap(inputs, "mask");
+                let hm = apply_spline_layout(params, width, height, mask.as_ref());
+                outputs.insert("output".to_string(), PortValue::Heightmap(hm));
+            }
+
             NodeType::Transform => {
                 let input = get_input_heightmap(inputs, "input")?;
                 let mask = get_optional_heightmap(inputs, "mask");
@@ -3178,6 +3184,244 @@ fn apply_layout_generator(
     }
 
     // Apply optional mask: mask=0 → output=0.
+    if let Some(m) = mask {
+        for (i, v) in data.iter_mut().enumerate() {
+            let mx = (i % width as usize) as u32;
+            let my = (i / width as usize) as u32;
+            let mw = m.width();
+            let mh = m.height();
+            let smx = (mx as f32 * mw as f32 / width as f32) as u32;
+            let smy = (my as f32 * mh as f32 / height as f32) as u32;
+            let mv = m.get(smx.min(mw - 1), smy.min(mh - 1)).unwrap_or(1.0);
+            *v *= mv;
+        }
+    }
+
+    Heightmap::frbar_data(width, height, data).unwrap()
+}
+
+/// Read the `ParamValue::Spline` at `key`, returning an empty slice
+/// when the param is missing or has the wrong variant. SplineLayout's
+/// rasteriser uses this so it can short-circuit empty splines cleanly.
+fn get_spline<'a>(params: &'a HashMap<String, ParamValue>, key: &str) -> &'a [[f32; 2]] {
+    match params.get(key) {
+        Some(ParamValue::Spline(pts)) => pts,
+        _ => &[],
+    }
+}
+
+/// One segment of a centripetal Catmull-Rom curve. Given the four
+/// surrounding control points and `t` in `[0, 1]`, returns the curve
+/// position. P1 and P2 are the segment's endpoints; P0 and P3 are
+/// the neighbours that bias the tangents.
+fn catmull_rom_segment(p0: [f32; 2], p1: [f32; 2], p2: [f32; 2], p3: [f32; 2], t: f32) -> [f32; 2] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let cx = 0.5
+        * ((2.0 * p1[0])
+            + (-p0[0] + p2[0]) * t
+            + (2.0 * p0[0] - 5.0 * p1[0] + 4.0 * p2[0] - p3[0]) * t2
+            + (-p0[0] + 3.0 * p1[0] - 3.0 * p2[0] + p3[0]) * t3);
+    let cy = 0.5
+        * ((2.0 * p1[1])
+            + (-p0[1] + p2[1]) * t
+            + (2.0 * p0[1] - 5.0 * p1[1] + 4.0 * p2[1] - p3[1]) * t2
+            + (-p0[1] + 3.0 * p1[1] - 3.0 * p2[1] + p3[1]) * t3);
+    [cx, cy]
+}
+
+/// Sample a Catmull-Rom curve through `points` at `samples_per_segment`
+/// evenly-spaced `t` values per segment. Endpoint tangents are
+/// reflected (open spline) or wrap around (closed spline). Output is
+/// in the same normalised coord space as `points`.
+fn sample_catmull_rom(
+    points: &[[f32; 2]],
+    samples_per_segment: usize,
+    closed: bool,
+) -> Vec<[f32; 2]> {
+    let n = points.len();
+    if n < 2 {
+        return points.to_vec();
+    }
+    let mut samples = Vec::with_capacity(n * samples_per_segment);
+    let seg_count = if closed { n } else { n - 1 };
+    for i in 0..seg_count {
+        let i_prev = if closed {
+            (i + n - 1) % n
+        } else if i == 0 {
+            // Open spline: reflect P1 through P0 to get a virtual P-1.
+            // Encoded by passing a synthesised point computed below.
+            usize::MAX
+        } else {
+            i - 1
+        };
+        let i_next = if closed {
+            (i + 2) % n
+        } else {
+            (i + 2).min(n - 1)
+        };
+        let p0 = if i_prev == usize::MAX {
+            // 2*P0 - P1 -- reflection through the endpoint
+            [
+                2.0 * points[i][0] - points[i + 1][0],
+                2.0 * points[i][1] - points[i + 1][1],
+            ]
+        } else {
+            points[i_prev]
+        };
+        let p1 = points[i];
+        let p2 = points[if closed { (i + 1) % n } else { i + 1 }];
+        // Open spline last segment: reflect through P_(n-1) to get P_n.
+        let p3 = if !closed && i + 2 >= n {
+            [2.0 * p2[0] - p1[0], 2.0 * p2[1] - p1[1]]
+        } else {
+            points[i_next]
+        };
+        for s in 0..samples_per_segment {
+            let t = s as f32 / samples_per_segment as f32;
+            samples.push(catmull_rom_segment(p0, p1, p2, p3, t));
+        }
+    }
+    // Include the final endpoint so distance queries near the tip don't
+    // miss a sample.
+    if !closed {
+        samples.push(points[n - 1]);
+    }
+    samples
+}
+
+/// Rasterise a Catmull-Rom spline into a heightmap by computing each
+/// pixel's perpendicular distance to the nearest sample point and
+/// applying a smoothstep falloff. `mode` selects the output mapping
+/// ("ridge" raises, "valley" carves, "mask" emits 0..1).
+fn apply_spline_layout(
+    params: &HashMap<String, ParamValue>,
+    width: u32,
+    height: u32,
+    mask: Option<&Heightmap>,
+) -> Heightmap {
+    let mut data = vec![0.0f32; (width * height) as usize];
+    let points = get_spline(params, "points");
+    if points.len() < 2 {
+        return Heightmap::frbar_data(width, height, data).unwrap();
+    }
+
+    let mode = match params.get("mode") {
+        Some(ParamValue::String(s)) => s.as_str(),
+        _ => "ridge",
+    };
+    let amplitude = get_float(params, "amplitude", 0.5).clamp(0.0, 1.0);
+    let width_norm = get_float(params, "width", 0.05).clamp(0.001, 0.5);
+    let falloff = get_float(params, "falloff", 0.5).clamp(0.0, 1.0);
+    let closed = matches!(params.get("closed"), Some(ParamValue::Bool(true)));
+    let symmetry = match params.get("symmetry") {
+        Some(ParamValue::String(s)) => s.as_str(),
+        _ => "none",
+    };
+
+    // Expand the control points into the symmetric orbit, producing
+    // one virtual spline per orbit position. Each spline is rasterised
+    // independently and composited via max (ridge / mask) or min
+    // (valley) into `data`.
+    let orbits: Vec<Vec<[f32; 2]>> = if symmetry == "none" {
+        vec![points.to_vec()]
+    } else {
+        // Per-point expansion. The Nth orbit copy of the spline uses
+        // the Nth element of each point's symmetric expansion.
+        let expansions: Vec<Vec<(f32, f32, f32)>> = points
+            .iter()
+            .map(|p| expand_symmetric_placements(p[0], p[1], 0.0, symmetry))
+            .collect();
+        let orbit_size = expansions.first().map(|e| e.len()).unwrap_or(1);
+        (0..orbit_size)
+            .map(|orbit_idx| {
+                expansions
+                    .iter()
+                    .map(|exp| {
+                        let (x, y, _) = exp[orbit_idx];
+                        [x, y]
+                    })
+                    .collect()
+            })
+            .collect()
+    };
+
+    // Aspect-aware width: a circular falloff stays circular regardless
+    // of map aspect by referring to the smaller dimension.
+    let aspect_ref = width.min(height) as f32;
+    let width_px = width_norm * aspect_ref;
+    let inner_px = width_px * (1.0 - falloff);
+
+    for orbit in &orbits {
+        let samples = sample_catmull_rom(orbit, 32, closed);
+        if samples.is_empty() {
+            continue;
+        }
+        for py in 0..height {
+            for px in 0..width {
+                let pix_x = px as f32;
+                let pix_y = py as f32;
+                let mut min_d2 = f32::INFINITY;
+                for s in &samples {
+                    // Sample is in normalised coords; multiply to map
+                    // back to pixel space for distance comparison.
+                    let sx = s[0] * (width - 1).max(1) as f32;
+                    let sy = s[1] * (height - 1).max(1) as f32;
+                    let dx = pix_x - sx;
+                    let dy = pix_y - sy;
+                    let d2 = dx * dx + dy * dy;
+                    if d2 < min_d2 {
+                        min_d2 = d2;
+                    }
+                }
+                let d = min_d2.sqrt();
+                let weight = if d <= inner_px {
+                    1.0
+                } else if d >= width_px {
+                    0.0
+                } else {
+                    // smoothstep from outer (d=width_px) to inner
+                    // (d=inner_px), inverted so 1.0 sits at the curve.
+                    let t = (width_px - d) / (width_px - inner_px).max(1e-6);
+                    t * t * (3.0 - 2.0 * t)
+                };
+
+                let idx = py as usize * width as usize + px as usize;
+                let v = match mode {
+                    "valley" => -(weight * amplitude),
+                    "mask" => weight,
+                    _ => weight * amplitude, // ridge
+                };
+                if mode == "valley" {
+                    // Valley composites by min so multiple valleys cut
+                    // additively rather than overwriting.
+                    if v < data[idx] {
+                        data[idx] = v;
+                    }
+                } else if v > data[idx] {
+                    data[idx] = v;
+                }
+            }
+        }
+    }
+
+    // Valley mode emits negative weights; clamp to [0, 1] for the
+    // final heightmap so the engine's conventional non-negative range
+    // is preserved. Authors compose valleys with a higher-value base
+    // (e.g. a noise layer) and use the SubtractIfPositive pattern via
+    // Subtract for actual carving.
+    for v in data.iter_mut() {
+        if mode == "valley" {
+            // Re-bias: valleys carry max negative as `amplitude`;
+            // shift up so the cleanest place is 0 and unaffected
+            // areas remain at the base value. v <= 0 here; emit
+            // `amplitude + v` clamped.
+            *v = (amplitude + *v).clamp(0.0, 1.0);
+        } else {
+            *v = v.clamp(0.0, 1.0);
+        }
+    }
+
     if let Some(m) = mask {
         for (i, v) in data.iter_mut().enumerate() {
             let mx = (i % width as usize) as u32;
