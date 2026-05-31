@@ -20,6 +20,11 @@ pub enum CanvasView {
     /// previous "confined edit mode" lifted into a tab so the user
     /// can keep the Main tab open alongside.
     SubGraph(u64),
+    /// Bespoke full-area editor for a single node (currently the
+    /// `Layout` node): a large 2D authoring canvas plus a live
+    /// preview of that one node's output. Entered by double-clicking
+    /// the node; backed out via the tab close button.
+    NodeEdit(NodeId),
 }
 
 /// In-progress port drag for wire creation. Output ports always emit

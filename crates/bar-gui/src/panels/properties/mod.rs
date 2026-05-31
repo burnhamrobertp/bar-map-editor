@@ -34,6 +34,37 @@ use eframe::egui;
 
 use crate::app::*;
 
+/// A compact top-right close affordance for the contextual properties
+/// popup. Draws an X from line segments (matching the canvas tab close
+/// buttons) rather than a glyph, so it stays font-independent. Returns
+/// true when clicked.
+pub(crate) fn close_icon_button(ui: &mut egui::Ui) -> bool {
+    let size = egui::vec2(18.0, 18.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let color = if resp.hovered() {
+        crate::panels::tokens::SEVERITY_ERROR
+    } else {
+        ui.visuals().weak_text_color()
+    };
+    let m = 5.0;
+    let painter = ui.painter();
+    painter.line_segment(
+        [
+            rect.left_top() + egui::vec2(m, m),
+            rect.right_bottom() - egui::vec2(m, m),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+    painter.line_segment(
+        [
+            rect.right_top() + egui::vec2(-m, m),
+            rect.left_bottom() + egui::vec2(m, -m),
+        ],
+        egui::Stroke::new(1.5, color),
+    );
+    resp.on_hover_text("Close").clicked()
+}
+
 impl BarEditorApp {
     pub(crate) fn tick_props_panel(&mut self, ctx: &egui::Context) {
         // ── Pending → active promotion ────────────────────────────────
@@ -105,16 +136,17 @@ impl BarEditorApp {
                             .auto_shrink([false, true])
                             .show(ui, |ui| {
                                 self.draw_properties_for(ui, &target);
-                                ui.add_space(6.0);
-                                ui.separator();
-                                if ui.button("Close").clicked() {
-                                    close_panel = true;
-                                }
                             });
                     });
             });
         let panel_rect = resp.response.rect;
         self.props.active_rect = Some(panel_rect);
+
+        // The popup's own ✕ (or an action that supersedes the popup,
+        // like entering a node's edit view) requests closure here.
+        if std::mem::take(&mut self.props.close_requested) {
+            close_panel = true;
+        }
 
         // Click-outside-to-close. Only triggers on the press, not on
         // hold/drag, so dragging from inside the panel doesn't close
@@ -300,14 +332,26 @@ impl BarEditorApp {
                 // below via the generic param editor.)
                 let mut label_buf = node_label.clone();
                 let mut label_changed = false;
+                // Header row: name field fills the width, close ✕ sits
+                // in the top-right corner. IO nodes skip the name field
+                // (their visual already names them) but keep the ✕.
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if close_icon_button(ui) {
+                            self.props.close_requested = true;
+                        }
+                        if !is_io {
+                            let edit_resp = ui.add(
+                                egui::TextEdit::singleline(&mut label_buf)
+                                    .desired_width(f32::INFINITY)
+                                    .font(egui::TextStyle::Heading),
+                            );
+                            crate::panels::widgets::select_all_on_focus(ui, &edit_resp, &label_buf);
+                            label_changed = edit_resp.changed();
+                        }
+                    });
+                });
                 if !is_io {
-                    let edit_resp = ui.add(
-                        egui::TextEdit::singleline(&mut label_buf)
-                            .desired_width(f32::INFINITY)
-                            .font(egui::TextStyle::Heading),
-                    );
-                    crate::panels::widgets::select_all_on_focus(ui, &edit_resp, &label_buf);
-                    label_changed = edit_resp.changed();
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new("Type:").weak());
                         ui.label(format!("{:?}", node_type));

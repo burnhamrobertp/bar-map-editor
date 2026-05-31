@@ -31,18 +31,26 @@ impl BarEditorApp {
         let inputs = &snapshot.subgraph_inputs;
         let outputs = &snapshot.subgraph_outputs;
 
-        // Editable label — same affordance node titles use.
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut label_buf)
-                .hint_text("Group label")
-                .desired_width(f32::INFINITY)
-                .font(egui::TextStyle::Heading),
-        );
-        crate::panels::widgets::select_all_on_focus(ui, &resp, &label_buf);
+        // Header row: editable label fills the width, close ✕ in the
+        // top-right corner.
         let mut dirty = false;
-        if resp.changed() {
-            dirty = true;
-        }
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if crate::panels::properties::close_icon_button(ui) {
+                    self.props.close_requested = true;
+                }
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut label_buf)
+                        .hint_text("Group label")
+                        .desired_width(f32::INFINITY)
+                        .font(egui::TextStyle::Heading),
+                );
+                crate::panels::widgets::select_all_on_focus(ui, &resp, &label_buf);
+                if resp.changed() {
+                    dirty = true;
+                }
+            });
+        });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Type:").weak());
             ui.label(if is_subgraph {

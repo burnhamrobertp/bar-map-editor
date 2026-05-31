@@ -11,7 +11,9 @@ use std::f32::consts::PI;
 use bar_graph::ParamValue;
 use eframe::egui;
 
-use crate::panels::properties::properties_canvas::{CanvasTransform, HandleId, HandleSpec};
+use crate::panels::properties::properties_canvas::{
+    CanvasTransform, HandleId, HandleKind, HandleSpec,
+};
 
 pub(super) const H_CENTRE: HandleId = HandleId(0);
 pub(super) const H_TL: HandleId = HandleId(1);
@@ -79,7 +81,7 @@ impl Primitive {
     }
 
     pub(super) fn handles(&self, item: usize) -> Vec<HandleSpec> {
-        let (cosa, sina) = (self.angle * PI / 180.0).sin_cos();
+        let (sina, cosa) = (self.angle * PI / 180.0).sin_cos();
         let corner = |lx: f32, ly: f32| -> [f32; 2] {
             [
                 (self.x + lx * cosa - ly * sina).clamp(-0.5, 1.5),
@@ -90,40 +92,70 @@ impl Primitive {
             HandleSpec {
                 item,
                 id: H_CENTRE,
+                kind: HandleKind::Centre,
                 pos: [self.x, self.y],
-                px_radius: 10.0,
+                px_radius: 8.0,
             },
             HandleSpec {
                 item,
                 id: H_TL,
+                kind: HandleKind::Corner,
                 pos: corner(-self.rx, -self.ry),
-                px_radius: 8.0,
+                px_radius: 6.0,
             },
             HandleSpec {
                 item,
                 id: H_TR,
+                kind: HandleKind::Corner,
                 pos: corner(self.rx, -self.ry),
-                px_radius: 8.0,
+                px_radius: 6.0,
             },
             HandleSpec {
                 item,
                 id: H_BL,
+                kind: HandleKind::Corner,
                 pos: corner(-self.rx, self.ry),
-                px_radius: 8.0,
+                px_radius: 6.0,
             },
             HandleSpec {
                 item,
                 id: H_BR,
+                kind: HandleKind::Corner,
                 pos: corner(self.rx, self.ry),
-                px_radius: 8.0,
+                px_radius: 6.0,
             },
             HandleSpec {
                 item,
                 id: H_ROT,
+                kind: HandleKind::Rotation,
                 pos: corner(self.rx * 1.3 + 0.02, 0.0),
-                px_radius: 8.0,
+                px_radius: 7.0,
             },
         ]
+    }
+
+    /// True if `pos` (normalised) is inside the primitive's silhouette.
+    /// Used by the canvas widget to let an author click an unselected
+    /// shape's body to select it.
+    pub(super) fn contains(&self, pos: [f32; 2]) -> bool {
+        let (sina, cosa) = (self.angle * PI / 180.0).sin_cos();
+        let dx = pos[0] - self.x;
+        let dy = pos[1] - self.y;
+        let lx = dx * cosa + dy * sina;
+        let ly = -dx * sina + dy * cosa;
+        let rx = self.rx.max(1e-4);
+        let ry = self.ry.max(1e-4);
+        match self.shape_type.as_str() {
+            "rectangle" => lx.abs() <= rx && ly.abs() <= ry,
+            // Ridge has no closed silhouette; treat a narrow band along
+            // the local X axis as the clickable area.
+            "ridge" => ly.abs() <= ry.max(0.015),
+            _ => {
+                let nx = lx / rx;
+                let ny = ly / ry;
+                nx * nx + ny * ny <= 1.0
+            }
+        }
     }
 
     pub(super) fn apply_drag(&mut self, handle: HandleId, pos: [f32; 2]) {
@@ -133,7 +165,7 @@ impl Primitive {
                 self.y = pos[1].clamp(0.0, 1.0);
             }
             H_TL | H_TR | H_BL | H_BR => {
-                let (cosa, sina) = (self.angle * PI / 180.0).sin_cos();
+                let (sina, cosa) = (self.angle * PI / 180.0).sin_cos();
                 let dx = pos[0] - self.x;
                 let dy = pos[1] - self.y;
                 let local_x = dx * cosa + dy * sina;
@@ -157,7 +189,7 @@ impl Primitive {
             egui::Color32::from_rgb(180, 180, 200)
         };
         let stroke = egui::Stroke::new(if selected { 2.0 } else { 1.0 }, col);
-        let (cosa, sina) = (self.angle * PI / 180.0).sin_cos();
+        let (sina, cosa) = (self.angle * PI / 180.0).sin_cos();
         let to_world = |lx: f32, ly: f32| -> egui::Pos2 {
             xform.to_pixel([
                 self.x + lx * cosa - ly * sina,
@@ -187,6 +219,50 @@ impl Primitive {
                     painter.line_segment([prev, next], stroke);
                     prev = next;
                 }
+            }
+        }
+    }
+
+    /// Draw the shape's silhouette as a drag-to-create preview: a
+    /// translucent yellow fill plus a yellow outline, in the shape
+    /// kind the user will get on release. Identical geometry to
+    /// `draw`, but distinct styling so the preview reads as
+    /// "about-to-create" rather than "selected existing shape".
+    pub(super) fn draw_preview(&self, painter: &egui::Painter, xform: &CanvasTransform) {
+        let stroke_col = egui::Color32::from_rgb(255, 200, 60);
+        let fill_col = egui::Color32::from_rgba_unmultiplied(255, 200, 60, 50);
+        let stroke = egui::Stroke::new(1.5, stroke_col);
+        let (sina, cosa) = (self.angle * PI / 180.0).sin_cos();
+        let to_world = |lx: f32, ly: f32| -> egui::Pos2 {
+            xform.to_pixel([
+                self.x + lx * cosa - ly * sina,
+                self.y + lx * sina + ly * cosa,
+            ])
+        };
+        match self.shape_type.as_str() {
+            "rectangle" => {
+                let pts = vec![
+                    to_world(-self.rx, -self.ry),
+                    to_world(self.rx, -self.ry),
+                    to_world(self.rx, self.ry),
+                    to_world(-self.rx, self.ry),
+                ];
+                painter.add(egui::Shape::convex_polygon(pts, fill_col, stroke));
+            }
+            "ridge" => {
+                // No closed silhouette; a horizontal line across the
+                // local X axis suffices.
+                painter.line_segment([to_world(-2.0, 0.0), to_world(2.0, 0.0)], stroke);
+            }
+            _ => {
+                let n = 32;
+                let pts: Vec<egui::Pos2> = (0..n)
+                    .map(|k| {
+                        let t = k as f32 / n as f32 * std::f32::consts::TAU;
+                        to_world(self.rx * t.cos(), self.ry * t.sin())
+                    })
+                    .collect();
+                painter.add(egui::Shape::convex_polygon(pts, fill_col, stroke));
             }
         }
     }

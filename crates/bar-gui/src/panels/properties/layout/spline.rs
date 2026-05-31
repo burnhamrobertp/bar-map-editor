@@ -10,7 +10,9 @@ use std::collections::HashMap;
 use bar_graph::ParamValue;
 use eframe::egui;
 
-use crate::panels::properties::properties_canvas::{CanvasTransform, HandleId, HandleSpec};
+use crate::panels::properties::properties_canvas::{
+    CanvasTransform, HandleId, HandleKind, HandleSpec,
+};
 
 #[derive(Clone)]
 pub(super) struct Spline {
@@ -80,10 +82,41 @@ impl Spline {
             .map(|(j, p)| HandleSpec {
                 item,
                 id: HandleId(j as u8),
+                kind: HandleKind::SplinePoint,
                 pos: *p,
-                px_radius: 9.0,
+                px_radius: 7.0,
             })
             .collect()
+    }
+
+    /// True if `pos` (normalised) is close enough to the spline's
+    /// curve to count as a body hit. Used by the canvas widget to let
+    /// an author click a spline's curve to select it. The threshold
+    /// scales with the spline's authored `width` so wide rivers select
+    /// off-axis just like they rasterise.
+    pub(super) fn contains(&self, pos: [f32; 2]) -> bool {
+        if self.points.len() < 2 {
+            // A bare 1-point spline has no curve to hit; let the point
+            // handle itself catch the click.
+            return false;
+        }
+        let band = self.width.max(0.012);
+        let samples = sample_catmull_rom(&self.points, 18, self.closed);
+        if self.closed && self.fill && samples.len() >= 3 {
+            // Inside the closed polygon counts as a hit, plus the
+            // band-around-the-edge that open splines use.
+            if point_in_polygon(&samples, pos) {
+                return true;
+            }
+        }
+        let mut prev = samples[0];
+        for s in samples.iter().skip(1) {
+            if dist_point_to_segment(pos, prev, *s) <= band {
+                return true;
+            }
+            prev = *s;
+        }
+        false
     }
 
     pub(super) fn add_point(&mut self, pos: [f32; 2]) {
@@ -123,9 +156,13 @@ impl Spline {
                 prev = p;
             }
         }
-        // Draw control points so even a 1-point spline is visible.
-        for p in &self.points {
-            painter.circle_stroke(xform.to_pixel(*p), 3.0, stroke);
+        // Control-point dots are transformer affordances -- only show
+        // them when the spline is selected. A bare 1-point spline gets
+        // a dot regardless so it isn't invisible.
+        if selected || self.points.len() < 2 {
+            for p in &self.points {
+                painter.circle_stroke(xform.to_pixel(*p), 3.0, stroke);
+            }
         }
     }
 }
@@ -187,4 +224,37 @@ fn get_f(params: &HashMap<String, ParamValue>, key: &str, default: f32) -> f32 {
         Some(ParamValue::Float(v)) => *v,
         _ => default,
     }
+}
+
+fn dist_point_to_segment(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
+    let abx = b[0] - a[0];
+    let aby = b[1] - a[1];
+    let len2 = abx * abx + aby * aby;
+    if len2 < 1e-10 {
+        let dx = p[0] - a[0];
+        let dy = p[1] - a[1];
+        return (dx * dx + dy * dy).sqrt();
+    }
+    let t = (((p[0] - a[0]) * abx + (p[1] - a[1]) * aby) / len2).clamp(0.0, 1.0);
+    let qx = a[0] + t * abx;
+    let qy = a[1] + t * aby;
+    let dx = p[0] - qx;
+    let dy = p[1] - qy;
+    (dx * dx + dy * dy).sqrt()
+}
+
+fn point_in_polygon(samples: &[[f32; 2]], p: [f32; 2]) -> bool {
+    let mut inside = false;
+    let n = samples.len();
+    let (px, py) = (p[0], p[1]);
+    let mut j = n - 1;
+    for i in 0..n {
+        let (xi, yi) = (samples[i][0], samples[i][1]);
+        let (xj, yj) = (samples[j][0], samples[j][1]);
+        if (yi > py) != (yj > py) && px < (xj - xi) * (py - yi) / (yj - yi).max(1e-10) + xi {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }

@@ -128,6 +128,17 @@ pub struct DialogState {
     /// `field_edit_in_progress` -- one drag = one undo entry,
     /// captured at drag-start and pushed at drag-stop.
     pub(crate) spawn_drag_in_progress: Option<crate::undo::Snapshot>,
+    /// Live mirror of the Layout edit view's currently-selected item,
+    /// keyed by node id. Captured into the undo snapshot so undo / redo
+    /// can re-select the affected shape on restore. Updated every frame
+    /// the layout editor runs; consumed (and cleared) when applied to
+    /// the editor's canvas state on the frame after a restore.
+    pub(crate) layout_selection_hint: Option<(bar_graph::NodeId, Option<usize>)>,
+    /// Active creation tool for the Layout edit view's canvas: which
+    /// kind of shape a drag-to-create gesture produces. One of
+    /// `ellipse` / `rectangle` / `ridge` / `spline`. Defaults to
+    /// `ellipse`. Session-scoped; not persisted across project loads.
+    pub(crate) layout_creation_tool: Option<String>,
     /// Whether the Assemble Map wizard is currently open. The wizard's
     /// per-page state (current page, accumulated picks) lives on
     /// [`crate::panels::assemble_map::AssembleMapState`].

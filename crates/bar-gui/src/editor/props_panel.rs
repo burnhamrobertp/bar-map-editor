@@ -52,11 +52,17 @@ pub struct PropsPanelState {
     /// On-screen rect of the popup as drawn last frame. Used by the
     /// click-outside dismissal logic.
     pub active_rect: Option<eframe::egui::Rect>,
+    /// Set by the popup's own close affordance (the top-right ✕ next to
+    /// the name field) or by actions that supersede the popup, e.g.
+    /// descending into a node's edit view. Consumed in
+    /// `tick_props_panel` after the panel is drawn.
+    pub close_requested: bool,
 }
 
 impl PropsPanelState {
     pub fn close(&mut self) {
         self.active = None;
         self.active_rect = None;
+        self.close_requested = false;
     }
 }

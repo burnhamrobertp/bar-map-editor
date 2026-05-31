@@ -66,6 +66,14 @@ impl BarEditorApp {
             }
         }
 
+        // Node-edit view replaces the graph body with a bespoke
+        // full-area editor for one node. The tab strip above stays so
+        // the user can switch / close back to the graph.
+        if let CanvasView::NodeEdit(id) = self.current_view() {
+            self.draw_layout_editor(ui, id);
+            return;
+        }
+
         let available = ui.available_size();
         let (canvas_rect, response) =
             ui.allocate_exact_size(available, egui::Sense::click_and_drag());
@@ -194,6 +202,9 @@ impl BarEditorApp {
                             .groups
                             .get(&gid)
                             .is_some_and(|g| g.member_ids.contains(id)),
+                        // The node-edit view replaces the graph body
+                        // entirely; no graph nodes are in scope.
+                        CanvasView::NodeEdit(_) => false,
                     };
                     if !in_scope {
                         continue;
@@ -1122,6 +1133,19 @@ impl BarEditorApp {
                         });
                     }
                 }
+            }
+            // Double-click a Layout node to descend into its bespoke
+            // edit view (mirrors double-click-to-enter for subgraphs).
+            if node_response.double_clicked()
+                && self
+                    .graph
+                    .get_node(*node_id)
+                    .is_some_and(|n| n.node_type == NodeType::Layout)
+            {
+                self.open_or_activate_tab(CanvasView::NodeEdit(*node_id));
+                self.clear_selection();
+                self.props.close();
+                pending_props_clear = true;
             }
             // Drag-start on a node cancels any pending props popup —
             // the user wanted to drag, not inspect.

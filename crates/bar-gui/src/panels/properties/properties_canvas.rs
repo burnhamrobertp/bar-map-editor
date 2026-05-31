@@ -29,6 +29,26 @@ pub struct CanvasState {
     pub selected: Option<usize>,
     /// Drag state, set on a press and cleared on a release.
     pub drag: Option<DragInProgress>,
+    /// Active "drag in empty space to create a new shape" gesture. Set
+    /// when the user presses in an empty area (no handle, no item
+    /// body), cleared on release. While set, the widget renders a
+    /// preview rectangle from `press_pos` to `current_pos`.
+    pub creation: Option<CreationDrag>,
+}
+
+/// Drag-rect / freehand-path state for creating a new shape. The
+/// shape isn't created until release, and only if the cursor moved
+/// past a small threshold from the press point -- a click without
+/// drag does NOT create. `path` accumulates samples along the drag
+/// (subsampled to one point every ~0.005 normalised units) so a
+/// spline-tool freehand draw can reconstruct what the user traced;
+/// primitive tools simply use `press_pos` + `current_pos`.
+#[derive(Clone, Debug, Default)]
+pub struct CreationDrag {
+    pub press_pos: [f32; 2],
+    pub current_pos: [f32; 2],
+    pub path: Vec<[f32; 2]>,
+    pub moved: bool,
 }
 
 /// Drag-state details. The panel inspects this to know which item /
@@ -54,6 +74,24 @@ pub struct DragInProgress {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HandleId(pub u8);
 
+/// Visual category for a handle. Drives the widget's per-handle
+/// rendering -- each kind gets a distinct silhouette + colour so the
+/// transformer reads as a set of differentiated controls rather than
+/// a bag of identical dots, and so a handle never looks the same as
+/// the shape outline it sits on top of.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HandleKind {
+    /// Centre / move handle. Drawn as a filled disc in cool blue.
+    Centre,
+    /// Scale handle at a corner. Drawn as a filled square in green.
+    Corner,
+    /// Rotation handle. Drawn as a ring with an inner dot, in pink.
+    Rotation,
+    /// One control point of a spline. Drawn as a filled diamond in
+    /// cyan -- visually unlike any primitive transformer handle.
+    SplinePoint,
+}
+
 /// One draggable handle the calling panel wants the widget to know
 /// about. Handles are listed every frame -- the panel computes their
 /// positions from its own data, then hands the list over.
@@ -61,6 +99,7 @@ pub struct HandleId(pub u8);
 pub struct HandleSpec {
     pub item: usize,
     pub id: HandleId,
+    pub kind: HandleKind,
     /// Normalised position. The widget hit-tests this in pixel space
     /// against the cursor with the configured radius.
     pub pos: [f32; 2],
@@ -107,6 +146,21 @@ pub enum CanvasGesture {
     /// for a primitive item it's the whole item; for a spline item
     /// the `handle` identifies which control point to drop.
     HandleDeleted { item: usize, handle: HandleId },
+    /// Left-click on an unselected shape's body (transformer handles
+    /// for that shape weren't visible, so the body acts as the
+    /// selector). Panel sets `state.selected = Some(item)` and does
+    /// not start a drag.
+    ItemSelected { item: usize },
+    /// Drag-create: the user pressed in empty canvas, dragged past the
+    /// click threshold, and released. The panel creates a new shape
+    /// from these inputs. Primitive tools use `from` + `to` as the
+    /// rectangle's two corners; the spline tool uses the full `path`
+    /// (subsampled along the drag) as control points.
+    CreateAt {
+        from: [f32; 2],
+        to: [f32; 2],
+        path: Vec<[f32; 2]>,
+    },
 }
 
 /// Coord transform between normalised [0..1] and canvas-pixel space.
@@ -141,15 +195,17 @@ impl CanvasTransform {
 /// version of this API had the caller allocate first and the widget
 /// allocate again; egui routed drag events inconsistently across the
 /// two Responses, which broke drag detection on every handle.
-pub fn draw<F>(
+pub fn draw<F, H>(
     ui: &mut egui::Ui,
     size: egui::Vec2,
     state: &mut CanvasState,
     handles: &[HandleSpec],
     draw_items: F,
+    item_hit_test: H,
 ) -> Vec<CanvasGesture>
 where
     F: FnOnce(&egui::Painter, &CanvasTransform),
+    H: Fn([f32; 2]) -> Option<usize>,
 {
     let mut gestures = Vec::new();
     let (response, painter) = ui.allocate_painter(size, egui::Sense::click_and_drag());
@@ -162,6 +218,34 @@ where
             (rect.width() - state.zoom) * 0.5,
             (rect.height() - state.zoom) * 0.5,
         );
+    }
+
+    // ── Pan + zoom navigation ──────────────────────────────────────
+    // Middle-mouse drag pans the canvas. Scroll wheel zooms with the
+    // cursor as the anchor so authoring fine detail on large maps
+    // doesn't fling the area you're looking at off-screen. Performed
+    // before xform is captured so the rest of the frame sees the
+    // updated pan / zoom immediately.
+    if response.dragged_by(egui::PointerButton::Middle) {
+        state.pan += response.drag_delta();
+    }
+    if let Some(cursor) = response.hover_pos() {
+        let scroll = ui.ctx().input(|i| i.smooth_scroll_delta.y);
+        if scroll.abs() > 0.0 {
+            // Cursor position in normalised canvas coords before zoom.
+            let dx = cursor.x - rect.min.x - state.pan.x;
+            let dy = cursor.y - rect.min.y - state.pan.y;
+            let cursor_norm = [dx / state.zoom.max(1e-6), dy / state.zoom.max(1e-6)];
+            let factor = (1.0 + scroll * 0.0015).clamp(0.7, 1.4);
+            // Bounds: don't zoom out below the auto-fit size, don't
+            // zoom in beyond ~50x.
+            let min_zoom = (rect.width().min(rect.height())) * 0.4;
+            let max_zoom = (rect.width().min(rect.height())) * 50.0;
+            let new_zoom = (state.zoom * factor).clamp(min_zoom, max_zoom);
+            // Adjust pan so cursor_norm stays under the cursor pixel.
+            state.pan += egui::vec2(cursor_norm[0], cursor_norm[1]) * (state.zoom - new_zoom);
+            state.zoom = new_zoom;
+        }
     }
 
     let xform = CanvasTransform {
@@ -224,42 +308,61 @@ where
     // top regardless of caller paint order.
     draw_items(&painter, &xform);
 
-    // Handles: paint each as a small disc with selection highlight.
-    let selected_color = egui::Color32::from_rgb(255, 200, 60);
-    let normal_color = ui.visuals().widgets.inactive.fg_stroke.color;
-    for h in handles {
-        let p = xform.to_pixel(h.pos);
-        let selected_item = state.selected == Some(h.item);
-        let drag_active = state
-            .drag
-            .as_ref()
-            .map(|d| d.item == h.item && d.handle == h.id)
-            .unwrap_or(false);
-        let colour = if selected_item || drag_active {
-            selected_color
-        } else {
-            normal_color
-        };
-        painter.circle_filled(p, h.px_radius, colour);
-        painter.circle_stroke(
-            p,
-            h.px_radius,
-            egui::Stroke::new(1.0, egui::Color32::from_black_alpha(180)),
-        );
-    }
-
-    // Helper: find the topmost handle whose hit-circle contains `p`.
-    let hit_test = |p: egui::Pos2| -> Option<&HandleSpec> {
+    // Handle hit-test helper (used by both rendering for hover state
+    // and the interaction logic below).
+    let handle_hit_test = |p: egui::Pos2| -> Option<&HandleSpec> {
         handles.iter().rev().find(|h| {
             let hp = xform.to_pixel(h.pos);
             (hp - p).length() <= h.px_radius
         })
     };
 
+    // Pointer position over the canvas this frame (None if outside).
+    let pointer_inside = response.hover_pos();
+    let hovered_handle = pointer_inside.and_then(handle_hit_test);
+    let hovered_item_from_body: Option<usize> = match (pointer_inside, hovered_handle) {
+        (Some(p), None) => item_hit_test(xform.to_norm(p)),
+        _ => None,
+    };
+
+    // Render handles. Each `HandleKind` has its own silhouette + base
+    // colour. A drag-in-progress or hover overlays an outer ring so the
+    // active / about-to-act handle reads at a glance.
+    for h in handles {
+        let p = xform.to_pixel(h.pos);
+        let drag_active = state
+            .drag
+            .as_ref()
+            .map(|d| d.item == h.item && d.handle == h.id)
+            .unwrap_or(false);
+        let is_hovered = hovered_handle
+            .map(|hh| hh.item == h.item && hh.id == h.id)
+            .unwrap_or(false);
+        draw_handle(&painter, p, h.kind, h.px_radius, drag_active, is_hovered);
+    }
+
+    // Cursor feedback: Grabbing while dragging, Grab when hovering a
+    // handle, PointingHand when hovering an unselected shape's body
+    // (clicking it will select), Default otherwise.
+    if pointer_inside.is_some() {
+        let cursor = if state.drag.is_some() {
+            egui::CursorIcon::Grabbing
+        } else if hovered_handle.is_some() {
+            egui::CursorIcon::Grab
+        } else if hovered_item_from_body.is_some() {
+            egui::CursorIcon::PointingHand
+        } else {
+            egui::CursorIcon::Default
+        };
+        if cursor != egui::CursorIcon::Default {
+            ui.ctx().set_cursor_icon(cursor);
+        }
+    }
+
     // Right-click delete (one-shot, requires a handle hit).
     if response.secondary_clicked() {
         if let Some(p) = response.interact_pointer_pos() {
-            if let Some(h) = hit_test(p) {
+            if let Some(h) = handle_hit_test(p) {
                 gestures.push(CanvasGesture::HandleDeleted {
                     item: h.item,
                     handle: h.id,
@@ -276,9 +379,9 @@ where
     // the handle and the hit-test misses; detecting the press at the
     // first "button down on this response" frame catches it precisely.
     let down_on_canvas = response.is_pointer_button_down_on();
-    if down_on_canvas && state.drag.is_none() {
+    if down_on_canvas && state.drag.is_none() && state.creation.is_none() {
         if let Some(p) = response.interact_pointer_pos() {
-            if let Some(h) = hit_test(p) {
+            if let Some(h) = handle_hit_test(p) {
                 let pos = xform.to_norm(p);
                 state.drag = Some(DragInProgress {
                     item: h.item,
@@ -292,6 +395,22 @@ where
                     handle: h.id,
                     pos,
                 });
+            } else {
+                // No handle and no item body under the press; this is a
+                // potential drag-to-create gesture. Item-body presses
+                // are left to `clicked_by` below, which fires only on a
+                // press+release without significant drag (i.e. a real
+                // click that should select).
+                let pos = xform.to_norm(p);
+                let inside_frame = (0.0..=1.0).contains(&pos[0]) && (0.0..=1.0).contains(&pos[1]);
+                if inside_frame && item_hit_test(pos).is_none() {
+                    state.creation = Some(CreationDrag {
+                        press_pos: pos,
+                        current_pos: pos,
+                        path: vec![pos],
+                        moved: false,
+                    });
+                }
             }
         }
     }
@@ -330,20 +449,128 @@ where
         }
     }
 
-    // Left-click on empty canvas adds an item. Handle hits are
-    // consumed by the press path above (which sets state.selected),
-    // so AddAt only fires for clicks that miss every handle and land
-    // inside the [0..1] frame.
+    // Drag-to-create lifecycle. Started in the empty-area branch of
+    // the press logic above. Tracks the cursor while held and renders
+    // a translucent preview rect once the press has moved past a
+    // small dead-zone. On release, emits CreateAt (with rect) if the
+    // gesture was a real drag, or AddAt (no rect) if it was a click
+    // without movement -- the panel uses AddAt for spline-point
+    // addition and ignores it otherwise.
+    if let Some(mut creation) = state.creation.clone() {
+        if down_on_canvas {
+            if let Some(p) = response.interact_pointer_pos() {
+                let pos = xform.to_norm(p);
+                creation.current_pos = pos;
+                let dx = pos[0] - creation.press_pos[0];
+                let dy = pos[1] - creation.press_pos[1];
+                if !creation.moved && (dx * dx + dy * dy) > 0.01 * 0.01 {
+                    creation.moved = true;
+                }
+                // Subsample the cursor path so freehand spline draws
+                // get a usable polyline without ballooning to one
+                // point per frame. ~0.005 normalised units between
+                // samples reads as smooth at typical canvas sizes.
+                let last = creation.path.last().copied().unwrap_or(creation.press_pos);
+                let dx2 = pos[0] - last[0];
+                let dy2 = pos[1] - last[1];
+                if (dx2 * dx2 + dy2 * dy2) > 0.005 * 0.005 {
+                    creation.path.push(pos);
+                }
+                state.creation = Some(creation.clone());
+            }
+            // The shape-specific preview silhouette is painted by the
+            // caller's draw_items closure, which knows what kind it
+            // will create. The widget itself is shape-agnostic.
+        } else {
+            // Released. A real drag emits CreateAt with the rect + the
+            // full path; a press-without-drag emits AddAt at the press
+            // point (the panel only acts on AddAt for spline-point
+            // addition).
+            if creation.moved {
+                // Ensure the path ends at the release position.
+                let last = creation.path.last().copied().unwrap_or(creation.press_pos);
+                if last != creation.current_pos {
+                    creation.path.push(creation.current_pos);
+                }
+                gestures.push(CanvasGesture::CreateAt {
+                    from: creation.press_pos,
+                    to: creation.current_pos,
+                    path: creation.path,
+                });
+            } else {
+                gestures.push(CanvasGesture::AddAt {
+                    pos: creation.press_pos,
+                });
+            }
+            state.creation = None;
+        }
+    }
+
+    // Left-click resolution: handle hits are consumed by the press
+    // path above; drag-to-create / spline-point clicks are consumed by
+    // the creation lifecycle just above. The only thing left for
+    // `clicked_by` is selecting an unselected shape by clicking its
+    // body.
     if response.clicked_by(egui::PointerButton::Primary) {
         if let Some(p) = response.interact_pointer_pos() {
-            if hit_test(p).is_none() {
+            if handle_hit_test(p).is_none() {
                 let pos = xform.to_norm(p);
-                if (0.0..=1.0).contains(&pos[0]) && (0.0..=1.0).contains(&pos[1]) {
-                    gestures.push(CanvasGesture::AddAt { pos });
+                if let Some(item) = item_hit_test(pos) {
+                    if state.selected != Some(item) {
+                        gestures.push(CanvasGesture::ItemSelected { item });
+                    }
                 }
             }
         }
     }
 
     gestures
+}
+
+/// Draw one handle in its kind's signature silhouette. The drag /
+/// hover overlay is a yellow outer ring -- the same affordance every
+/// kind uses so authors learn one "this is the active one" cue.
+fn draw_handle(
+    painter: &egui::Painter,
+    p: egui::Pos2,
+    kind: HandleKind,
+    radius: f32,
+    drag_active: bool,
+    hovered: bool,
+) {
+    let outline = egui::Stroke::new(1.0, egui::Color32::from_black_alpha(200));
+    match kind {
+        HandleKind::Centre => {
+            let fill = egui::Color32::from_rgb(90, 170, 255);
+            painter.circle_filled(p, radius, fill);
+            painter.circle_stroke(p, radius, outline);
+        }
+        HandleKind::Corner => {
+            let fill = egui::Color32::from_rgb(140, 220, 140);
+            let side = radius * 1.7;
+            let rect = egui::Rect::from_center_size(p, egui::vec2(side, side));
+            painter.rect_filled(rect, 1.0, fill);
+            painter.rect_stroke(rect, 1.0, outline, egui::epaint::StrokeKind::Inside);
+        }
+        HandleKind::Rotation => {
+            let ring = egui::Color32::from_rgb(255, 130, 200);
+            painter.circle_stroke(p, radius, egui::Stroke::new(2.0, ring));
+            painter.circle_filled(p, radius * 0.35, ring);
+        }
+        HandleKind::SplinePoint => {
+            let fill = egui::Color32::from_rgb(160, 225, 225);
+            let d = radius;
+            let pts = vec![
+                egui::pos2(p.x, p.y - d),
+                egui::pos2(p.x + d, p.y),
+                egui::pos2(p.x, p.y + d),
+                egui::pos2(p.x - d, p.y),
+            ];
+            painter.add(egui::Shape::convex_polygon(pts, fill, outline));
+        }
+    }
+    if drag_active || hovered {
+        let ring = egui::Color32::from_rgb(255, 200, 60);
+        painter.circle_stroke(p, radius + 3.0, egui::Stroke::new(1.5, ring));
+    }
 }

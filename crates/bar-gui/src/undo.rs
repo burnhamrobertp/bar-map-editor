@@ -171,6 +171,7 @@ impl BarEditorApp {
                     recipe_meta: self.map.recipe_meta.clone(),
                     features: self.map.features.clone(),
                 },
+                layout_selection: self.dialog.layout_selection_hint,
             },
             description: description.to_string(),
             painted_assets,
@@ -257,6 +258,14 @@ impl BarEditorApp {
         self.map.settings = snap.state.map.settings;
         self.map.recipe_meta = snap.state.map.recipe_meta;
         self.map.features = snap.state.map.features;
+        // Re-arm the layout-editor selection so the affected shape is
+        // re-selected on the frame the edit view next runs. The editor
+        // consumes (and clears) this when it next draws for that node.
+        self.dialog.layout_selection_hint = snap.state.layout_selection;
+        // The Layout edit view's live preview reflects evaluated params;
+        // since restore_snapshot just changed those, the preview is now
+        // stale and must re-render against the restored graph.
+        self.layout_preview.dirty = true;
         // Force a GPU instance rebuild on the next layout-manager
         // tick in case features changed (cheap when they didn't).
         self.map.features_placement_dirty = true;

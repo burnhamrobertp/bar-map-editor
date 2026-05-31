@@ -14,7 +14,8 @@ use bar_graph::NodeType;
 use eframe::egui;
 
 use crate::app::{
-    build_io_outline, node_type_color, BarEditorApp, PaletteKind, IO_NODE_SIZE, IO_REF_H,
+    build_io_outline, node_type_color, BarEditorApp, CanvasView, PaletteKind, IO_NODE_SIZE,
+    IO_REF_H,
 };
 use crate::panels::icons::draw_io_icon;
 
@@ -50,7 +51,17 @@ impl BarEditorApp {
                         .show_inside(ui, |ui| {
                             self.draw_validation_summary(ui);
                         });
-                    self.draw_node_palette(ui);
+                    // The node palette is irrelevant inside a Layout
+                    // edit view; swap it out for the editor's chrome
+                    // (mode/symmetry/items/sidebar). The SidePanel
+                    // container itself stays put, so its width and the
+                    // palette's transient state (filter, scroll) are
+                    // preserved across the swap.
+                    if let CanvasView::NodeEdit(id) = self.current_view() {
+                        self.draw_layout_editor_chrome(ui, id);
+                    } else {
+                        self.draw_node_palette(ui);
+                    }
                 });
         }
     }

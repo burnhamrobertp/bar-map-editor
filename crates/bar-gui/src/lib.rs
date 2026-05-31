@@ -18,6 +18,7 @@ pub mod panels;
 pub mod project;
 pub mod settings;
 pub mod state;
+pub mod terrain_pane;
 pub mod undo;
 
 pub use app::{BarEditorApp, BrushTool, ExportStatus, Layout, SmfLightingSnapshot};
@@ -25,4 +26,5 @@ pub use io::ParentWindow;
 pub use log::LogLevel;
 pub use paint::FCLayerKind;
 pub use settings::{Settings, WindowState};
+pub use terrain_pane::{PaneQuality, TerrainPane, ToolFlow};
 pub use undo::{Snapshot, UndoHistory};
