@@ -34,6 +34,20 @@ pub struct CanvasState {
     /// body), cleared on release. While set, the widget renders a
     /// preview rectangle from `press_pos` to `current_pos`.
     pub creation: Option<CreationDrag>,
+    /// World-space position of the OPPOSITE corner when the user is
+    /// dragging a corner-resize handle. Captured by the panel on
+    /// HandlePressed, consumed each HandleDragged frame so the
+    /// opposite corner stays anchored (the dragged corner moves to
+    /// the cursor; the shape's centre moves with the cursor as a
+    /// consequence). Cleared on release. `None` for non-corner drags.
+    pub corner_anchor: Option<[f32; 2]>,
+    /// World-space centre of the primitive at press time when the
+    /// user pressed on its BODY (as opposed to grabbing the centre
+    /// handle directly). Used so the move drag translates the
+    /// primitive by the cursor delta -- the click point stays under
+    /// the cursor -- instead of snapping the centre to the click
+    /// point. `None` for handle-direct drags. Cleared on release.
+    pub body_drag_origin: Option<[f32; 2]>,
 }
 
 /// Drag-rect / freehand-path state for creating a new shape. The
@@ -106,6 +120,11 @@ pub struct HandleSpec {
     /// Pixel hit-test radius. Lets small handles (rotation arms) be
     /// distinguished from big handles (shape centres).
     pub px_radius: f32,
+    /// Cursor the widget shows when this specific handle is hovered.
+    /// Panels pick per-handle (e.g. NwseResize vs NeswResize for
+    /// opposite corner pairs, Move for the centre, Crosshair for the
+    /// rotation arm).
+    pub cursor: egui::CursorIcon,
 }
 
 /// Gestures emitted by the widget. The panel matches on these and
@@ -146,11 +165,13 @@ pub enum CanvasGesture {
     /// for a primitive item it's the whole item; for a spline item
     /// the `handle` identifies which control point to drop.
     HandleDeleted { item: usize, handle: HandleId },
-    /// Left-click on an unselected shape's body (transformer handles
-    /// for that shape weren't visible, so the body acts as the
-    /// selector). Panel sets `state.selected = Some(item)` and does
-    /// not start a drag.
-    ItemSelected { item: usize },
+    /// Left-press on a shape's body (no handle hit). Fired on press
+    /// (not click), so the panel can immediately both select the
+    /// shape and start a "move the whole shape" drag without the
+    /// user having to click once to select and again to drag.
+    /// `pos` is the press position in normalised coords; the panel
+    /// uses it to compute the drag's delta-from-press origin.
+    ItemPressed { item: usize, pos: [f32; 2] },
     /// Drag-create: the user pressed in empty canvas, dragged past the
     /// click threshold, and released. The panel creates a new shape
     /// from these inputs. Primitive tools use `from` + `to` as the
@@ -341,14 +362,16 @@ where
         draw_handle(&painter, p, h.kind, h.px_radius, drag_active, is_hovered);
     }
 
-    // Cursor feedback: Grabbing while dragging, Grab when hovering a
-    // handle, PointingHand when hovering an unselected shape's body
-    // (clicking it will select), Default otherwise.
+    // Cursor feedback. While dragging: Grabbing. Hovering a specific
+    // handle: that handle's declared cursor (so resize corners show
+    // resize cursors, rotation shows a crosshair, etc.). Hovering an
+    // unselected shape's body: PointingHand to advertise the click
+    // selects. Otherwise: default.
     if pointer_inside.is_some() {
         let cursor = if state.drag.is_some() {
             egui::CursorIcon::Grabbing
-        } else if hovered_handle.is_some() {
-            egui::CursorIcon::Grab
+        } else if let Some(h) = hovered_handle {
+            h.cursor
         } else if hovered_item_from_body.is_some() {
             egui::CursorIcon::PointingHand
         } else {
@@ -396,14 +419,16 @@ where
                     pos,
                 });
             } else {
-                // No handle and no item body under the press; this is a
-                // potential drag-to-create gesture. Item-body presses
-                // are left to `clicked_by` below, which fires only on a
-                // press+release without significant drag (i.e. a real
-                // click that should select).
                 let pos = xform.to_norm(p);
                 let inside_frame = (0.0..=1.0).contains(&pos[0]) && (0.0..=1.0).contains(&pos[1]);
-                if inside_frame && item_hit_test(pos).is_none() {
+                if let Some(item) = item_hit_test(pos) {
+                    // Press on an item body. Emit `ItemPressed` -- the
+                    // panel selects + (for primitives) sets up a
+                    // body-press centre drag so the user can press +
+                    // immediately drag without a separate select click.
+                    gestures.push(CanvasGesture::ItemPressed { item, pos });
+                } else if inside_frame {
+                    // Empty inside the frame: drag-to-create.
                     state.creation = Some(CreationDrag {
                         press_pos: pos,
                         current_pos: pos,
@@ -506,23 +531,12 @@ where
         }
     }
 
-    // Left-click resolution: handle hits are consumed by the press
-    // path above; drag-to-create / spline-point clicks are consumed by
-    // the creation lifecycle just above. The only thing left for
-    // `clicked_by` is selecting an unselected shape by clicking its
-    // body.
-    if response.clicked_by(egui::PointerButton::Primary) {
-        if let Some(p) = response.interact_pointer_pos() {
-            if handle_hit_test(p).is_none() {
-                let pos = xform.to_norm(p);
-                if let Some(item) = item_hit_test(pos) {
-                    if state.selected != Some(item) {
-                        gestures.push(CanvasGesture::ItemSelected { item });
-                    }
-                }
-            }
-        }
-    }
+    // All left-click resolution is now handled by the press path:
+    // handle hits start handle drags, item-body presses emit
+    // `ItemPressed` (panel selects + sets up a body drag), empty
+    // presses start a creation drag. `clicked_by(Primary)` would
+    // double-fire after a press-without-drag, so it's deliberately
+    // not used here.
 
     gestures
 }

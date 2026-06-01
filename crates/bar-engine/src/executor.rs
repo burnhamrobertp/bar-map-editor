@@ -3214,7 +3214,21 @@ fn rasterize_primitive_item(
                 let ly = (-ux * sin_a + uy * cos_a) / ry;
                 let d = match shape_type {
                     "rectangle" => lx.abs().max(ly.abs()),
-                    "ridge" => ly.abs(),
+                    "line" => {
+                        // Distance from the pixel to the line SEGMENT
+                        // running between local (-1, 0) and (1, 0).
+                        // Inside the segment's projection: perpendicular
+                        // distance (the line's body). Outside it:
+                        // distance to the nearer endpoint, giving a
+                        // rounded cap of radius `ry` in world space.
+                        if (-1.0..=1.0).contains(&lx) {
+                            ly.abs()
+                        } else {
+                            let sign = if lx > 0.0 { 1.0 } else { -1.0 };
+                            let cap_x = (lx - sign) * rx / ry;
+                            (cap_x * cap_x + ly * ly).sqrt()
+                        }
+                    }
                     _ => (lx * lx + ly * ly).sqrt(),
                 };
                 if d >= 1.0 {

@@ -85,6 +85,7 @@ impl Spline {
                 kind: HandleKind::SplinePoint,
                 pos: *p,
                 px_radius: 7.0,
+                cursor: egui::CursorIcon::Grab,
             })
             .collect()
     }
@@ -117,10 +118,6 @@ impl Spline {
             prev = *s;
         }
         false
-    }
-
-    pub(super) fn add_point(&mut self, pos: [f32; 2]) {
-        self.points.push(pos);
     }
 
     pub(super) fn move_point(&mut self, idx: usize, pos: [f32; 2]) {

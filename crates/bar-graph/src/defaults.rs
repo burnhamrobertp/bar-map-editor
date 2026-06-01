@@ -421,7 +421,7 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
         }
         (NodeType::SelectConvexity, "mode") => Some(&["ridges", "valleys", "full"]),
         (NodeType::Layout, k) if k.starts_with("type_") => {
-            Some(&["ellipse", "rectangle", "ridge", "spline"])
+            Some(&["ellipse", "rectangle", "line", "spline"])
         }
         (NodeType::Layout, "mode") => Some(&["ridge", "valley", "mask"]),
         (NodeType::Layout, "symmetry") => Some(&[

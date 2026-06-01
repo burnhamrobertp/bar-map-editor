@@ -1,4 +1,4 @@
-//! Primitive layout item: ellipse / rectangle / ridge.
+//! Primitive layout item: ellipse / rectangle / line.
 //!
 //! Self-contained -- owns its param read/write, its canvas handles
 //! (centre + four corners + rotation), its drag response, and its
@@ -24,7 +24,7 @@ pub(super) const H_ROT: HandleId = HandleId(5);
 
 #[derive(Clone)]
 pub(super) struct Primitive {
-    /// `ellipse` / `rectangle` / `ridge`.
+    /// `ellipse` / `rectangle` / `line`.
     pub shape_type: String,
     pub x: f32,
     pub y: f32,
@@ -88,6 +88,11 @@ impl Primitive {
                 (self.y + lx * sina + ly * cosa).clamp(-0.5, 1.5),
             ]
         };
+        // Cursor per handle. Diagonal corners get their actual
+        // diagonal-resize cursor (matched against the unrotated frame
+        // -- when the shape is rotated, the cursor's diagonal no
+        // longer aligns visually, but the cost of a perfect rotated
+        // mapping isn't worth the complexity for now).
         vec![
             HandleSpec {
                 item,
@@ -95,6 +100,7 @@ impl Primitive {
                 kind: HandleKind::Centre,
                 pos: [self.x, self.y],
                 px_radius: 8.0,
+                cursor: egui::CursorIcon::Move,
             },
             HandleSpec {
                 item,
@@ -102,6 +108,7 @@ impl Primitive {
                 kind: HandleKind::Corner,
                 pos: corner(-self.rx, -self.ry),
                 px_radius: 6.0,
+                cursor: egui::CursorIcon::ResizeNwSe,
             },
             HandleSpec {
                 item,
@@ -109,6 +116,7 @@ impl Primitive {
                 kind: HandleKind::Corner,
                 pos: corner(self.rx, -self.ry),
                 px_radius: 6.0,
+                cursor: egui::CursorIcon::ResizeNeSw,
             },
             HandleSpec {
                 item,
@@ -116,6 +124,7 @@ impl Primitive {
                 kind: HandleKind::Corner,
                 pos: corner(-self.rx, self.ry),
                 px_radius: 6.0,
+                cursor: egui::CursorIcon::ResizeNeSw,
             },
             HandleSpec {
                 item,
@@ -123,6 +132,7 @@ impl Primitive {
                 kind: HandleKind::Corner,
                 pos: corner(self.rx, self.ry),
                 px_radius: 6.0,
+                cursor: egui::CursorIcon::ResizeNwSe,
             },
             HandleSpec {
                 item,
@@ -130,6 +140,7 @@ impl Primitive {
                 kind: HandleKind::Rotation,
                 pos: corner(self.rx * 1.3 + 0.02, 0.0),
                 px_radius: 7.0,
+                cursor: egui::CursorIcon::Crosshair,
             },
         ]
     }
@@ -147,9 +158,11 @@ impl Primitive {
         let ry = self.ry.max(1e-4);
         match self.shape_type.as_str() {
             "rectangle" => lx.abs() <= rx && ly.abs() <= ry,
-            // Ridge has no closed silhouette; treat a narrow band along
-            // the local X axis as the clickable area.
-            "ridge" => ly.abs() <= ry.max(0.015),
+            // A line item is a bounded segment along the local X
+            // axis. Hit area: inside the segment's projection, plus
+            // a minimum 0.015-normalised band perpendicular so thin
+            // lines are still clickable.
+            "line" => lx.abs() <= rx && ly.abs() <= ry.max(0.015),
             _ => {
                 let nx = lx / rx;
                 let ny = ly / ry;
@@ -158,13 +171,36 @@ impl Primitive {
         }
     }
 
-    pub(super) fn apply_drag(&mut self, handle: HandleId, pos: [f32; 2]) {
+    /// Apply a handle drag. `anchor` is the world position the opposite
+    /// corner was at when the user pressed (only present for corner
+    /// handles). `shift` is the live state of the Shift modifier --
+    /// when held, corner drags fall back to center-fixed scaling
+    /// regardless of the anchor; releasing Shift mid-drag returns to
+    /// anchor-based resize.
+    pub(super) fn apply_drag(
+        &mut self,
+        handle: HandleId,
+        pos: [f32; 2],
+        anchor: Option<[f32; 2]>,
+        shift: bool,
+    ) {
         match handle {
             H_CENTRE => {
                 self.x = pos[0].clamp(0.0, 1.0);
                 self.y = pos[1].clamp(0.0, 1.0);
             }
             H_TL | H_TR | H_BL | H_BR => {
+                // Default: anchor the opposite corner (set at press
+                // time). The centre moves to the midpoint of the
+                // cursor and the anchor. Shift held: keep the centre
+                // where it is and scale around it (the prior
+                // behavior).
+                if let (Some(a), false) = (anchor, shift) {
+                    let new_cx = ((pos[0] + a[0]) * 0.5).clamp(0.0, 1.0);
+                    let new_cy = ((pos[1] + a[1]) * 0.5).clamp(0.0, 1.0);
+                    self.x = new_cx;
+                    self.y = new_cy;
+                }
                 let (sina, cosa) = (self.angle * PI / 180.0).sin_cos();
                 let dx = pos[0] - self.x;
                 let dy = pos[1] - self.y;
@@ -208,8 +244,11 @@ impl Primitive {
                     painter.line_segment([p[k], p[(k + 1) % 4]], stroke);
                 }
             }
-            "ridge" => {
-                painter.line_segment([to_world(-2.0, 0.0), to_world(2.0, 0.0)], stroke);
+            "line" => {
+                // Bounded segment from one endpoint to the other along
+                // the local X axis. Width (ry) is implied; users see
+                // it via the corner handles when selected.
+                painter.line_segment([to_world(-self.rx, 0.0), to_world(self.rx, 0.0)], stroke);
             }
             _ => {
                 let mut prev = to_world(self.rx, 0.0);
@@ -249,10 +288,11 @@ impl Primitive {
                 ];
                 painter.add(egui::Shape::convex_polygon(pts, fill_col, stroke));
             }
-            "ridge" => {
-                // No closed silhouette; a horizontal line across the
-                // local X axis suffices.
-                painter.line_segment([to_world(-2.0, 0.0), to_world(2.0, 0.0)], stroke);
+            "line" => {
+                // Bounded segment from press-point to release-point
+                // (rx is half the drag length, so this draws from one
+                // drag endpoint to the other).
+                painter.line_segment([to_world(-self.rx, 0.0), to_world(self.rx, 0.0)], stroke);
             }
             _ => {
                 let n = 32;

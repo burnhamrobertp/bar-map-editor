@@ -2,7 +2,8 @@
 //!
 //! The `Layout` node is one node holding a list of items, each of an
 //! independent kind: a [`primitive::Primitive`] (ellipse / rectangle /
-//! ridge) or a [`spline::Spline`] (Catmull-Rom control points). Those
+//! line) or a [`spline::Spline`] (Catmull-Rom control points; the
+//! "draw" tool produces these). Those
 //! kind modules each own their data, handles, drag response, and
 //! drawing in full isolation -- they don't reference one another.
 //!
@@ -73,10 +74,14 @@ impl Item {
         }
     }
 
-    fn kind_label(&self) -> &'static str {
+    /// User-facing identifier of the specific kind: the primitive's
+    /// `shape_type` for primitives (ellipse / rectangle / line) and
+    /// `spline` for splines. Used in the sidebar title and the
+    /// read-only type row.
+    fn type_label(&self) -> String {
         match self {
-            Item::Primitive(_) => "shape",
-            Item::Spline(_) => "spline",
+            Item::Primitive(p) => p.shape_type.clone(),
+            Item::Spline(_) => "spline".to_string(),
         }
     }
 }
@@ -103,7 +108,8 @@ struct LayoutFrame {
 impl BarEditorApp {
     /// Active creation-tool kind from session state, defaulting to the
     /// ellipse primitive. Drives drag-to-create + the "+ Add at centre"
-    /// button. One of `ellipse` / `rectangle` / `ridge` / `spline`.
+    /// button. One of `ellipse` / `rectangle` / `line` / `draw` (the
+    /// last creates a Spline item from a freehand cursor path).
     fn layout_creation_tool(&self) -> String {
         self.dialog
             .layout_creation_tool
@@ -187,6 +193,13 @@ impl BarEditorApp {
                 }
                 node.mark_dirty();
             }
+        }
+        // Preview re-render is expensive (single-node eval + offscreen
+        // 3D render). Trigger it only on commit-points (drag stop, atomic
+        // op, button click) -- NOT on every-frame mutations during a
+        // drag, which would re-render dozens of times per second and
+        // make handle drags feel laggy.
+        if frame.commit_undo_now {
             self.layout_preview.dirty = true;
         }
         if frame.commit_undo_now && !want_atomic_undo {
@@ -218,7 +231,10 @@ impl BarEditorApp {
                 ui,
                 ("lay_tool", node_id.0),
                 &mut tool,
-                &["ellipse", "rectangle", "ridge", "spline"],
+                // "draw" is the user-facing label for the spline /
+                // freehand-curve tool. The underlying data type is
+                // still `Spline` (Catmull-Rom control points).
+                &["ellipse", "rectangle", "line", "draw"],
             );
         });
         self.dialog.layout_creation_tool = Some(tool.clone());
@@ -261,11 +277,17 @@ impl BarEditorApp {
                 .add_enabled(can_add, egui::Button::new("+ Add at centre"))
                 .clicked()
             {
-                if tool == "spline" {
+                if tool == "draw" {
                     frame.items.push(Item::Spline(Spline::new()));
                 } else {
                     let mut p = Primitive::new(0.5, 0.5);
                     p.shape_type = tool.clone();
+                    // Line default starts thin -- a thick default
+                    // wouldn't read as a line. Other primitives keep
+                    // their `Primitive::new` defaults.
+                    if tool == "line" {
+                        p.ry = 0.01;
+                    }
                     frame.items.push(Item::Primitive(p));
                 }
                 frame.item_count = frame.items.len();
@@ -280,21 +302,33 @@ impl BarEditorApp {
 
         if let Some(sel) = frame.state.selected {
             if sel < frame.items.len() {
-                ui.label(format!("Item {sel} ({})", frame.items[sel].kind_label()));
-                self.draw_item_sidebar(
-                    ui,
-                    node_id,
-                    sel,
-                    &mut frame.items,
-                    &mut frame.mutated,
-                    &mut frame.commit_undo_now,
-                );
-                ui.add_space(4.0);
-                if ui.button("Delete item").clicked() {
+                // Title row: "Shape N (type)" with a right-aligned
+                // red trash icon to delete this shape. 1-indexed so
+                // it reads naturally to users ("Shape 1" not "0").
+                let title = format!("Shape {} ({})", sel + 1, frame.items[sel].type_label());
+                let mut delete = false;
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(title).strong());
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if trash_icon_button(ui) {
+                            delete = true;
+                        }
+                    });
+                });
+                if delete {
                     remove_item(&mut frame.items, &mut frame.state, sel);
                     frame.item_count = frame.items.len();
                     frame.mutated = true;
                     frame.commit_undo_now = true;
+                } else {
+                    self.draw_item_sidebar(
+                        ui,
+                        node_id,
+                        sel,
+                        &mut frame.items,
+                        &mut frame.mutated,
+                        &mut frame.commit_undo_now,
+                    );
                 }
             }
         } else if frame.items.iter().any(|it| matches!(it, Item::Spline(_))) {
@@ -367,20 +401,14 @@ impl BarEditorApp {
         // silhouette is painted here in the caller's draw_items
         // closure.
         let tool = self.layout_creation_tool();
+        let shift_held = ui.ctx().input(|i| i.modifiers.shift);
         let (creation_preview, preview_polyline): (Option<Primitive>, Option<Vec<[f32; 2]>>) =
             match frame.state.creation.as_ref() {
                 Some(c) if c.moved => {
-                    if tool == "spline" {
+                    if tool == "draw" {
                         (None, Some(c.path.clone()))
                     } else {
-                        let cx = ((c.press_pos[0] + c.current_pos[0]) * 0.5).clamp(0.0, 1.0);
-                        let cy = ((c.press_pos[1] + c.current_pos[1]) * 0.5).clamp(0.0, 1.0);
-                        let rx = ((c.current_pos[0] - c.press_pos[0]).abs() * 0.5).max(0.005);
-                        let ry = ((c.current_pos[1] - c.press_pos[1]).abs() * 0.5).max(0.005);
-                        let mut p = Primitive::new(cx, cy);
-                        p.shape_type = tool.clone();
-                        p.rx = rx;
-                        p.ry = ry;
+                        let p = primitive_from_drag(c.press_pos, c.current_pos, &tool, shift_held);
                         (Some(p), None)
                     }
                 }
@@ -419,23 +447,18 @@ impl BarEditorApp {
 
         for g in gestures {
             match g {
-                CanvasGesture::AddAt { pos } => {
-                    // A click in empty canvas only does something when
-                    // a spline is selected: append a control point.
-                    // Otherwise clicks no longer create shapes -- the
-                    // user creates by dragging a rectangle (see
-                    // CreateAt below).
-                    if let Some(Item::Spline(s)) =
-                        frame.state.selected.and_then(|s| frame.items.get_mut(s))
-                    {
-                        s.add_point(pos);
-                        frame.mutated = true;
-                        frame.commit_undo_now = true;
-                    }
+                CanvasGesture::AddAt { pos: _ } => {
+                    // A click in empty canvas (no drag, no item
+                    // body, no handle) deselects the current shape.
+                    // Standard editor UX: empty-space click clears
+                    // the selection. Splines are authored end-to-end
+                    // by the "draw" tool's drag flow, so the old
+                    // "click adds a control point" behavior is gone.
+                    frame.state.selected = None;
                 }
                 CanvasGesture::CreateAt { from, to, path } => {
                     if frame.items.len() < MAX_ITEMS {
-                        if tool == "spline" {
+                        if tool == "draw" {
                             // Freehand draw: subsample the captured
                             // cursor path to a manageable number of
                             // control points. The Catmull-Rom curve
@@ -452,16 +475,11 @@ impl BarEditorApp {
                                 frame.commit_undo_now = true;
                             }
                         } else {
-                            // Primitive of the chosen kind, bounded by
-                            // the drag rect.
-                            let cx = ((from[0] + to[0]) * 0.5).clamp(0.0, 1.0);
-                            let cy = ((from[1] + to[1]) * 0.5).clamp(0.0, 1.0);
-                            let rx = ((to[0] - from[0]).abs() * 0.5).max(0.01);
-                            let ry = ((to[1] - from[1]).abs() * 0.5).max(0.01);
-                            let mut p = Primitive::new(cx, cy);
-                            p.shape_type = tool.clone();
-                            p.rx = rx;
-                            p.ry = ry;
+                            // Use the same helper the preview drew so
+                            // the released shape matches the silhouette
+                            // exactly (drag direction -> line angle,
+                            // shift -> snapped angle / equal radii).
+                            let p = primitive_from_drag(from, to, &tool, shift_held);
                             frame.items.push(Item::Primitive(p));
                             frame.item_count = frame.items.len();
                             frame.state.selected = Some(frame.item_count - 1);
@@ -470,20 +488,55 @@ impl BarEditorApp {
                         }
                     }
                 }
-                CanvasGesture::HandlePressed { item, .. } => {
+                CanvasGesture::HandlePressed { item, handle, .. } => {
                     frame.state.selected = Some(item);
                     needs_undo_snapshot = true;
+                    // Capture the opposite-corner anchor for
+                    // corner-resize handles. The position is in world
+                    // (normalised [0,1]) space so it stays fixed as
+                    // the primitive's centre and rx/ry change during
+                    // the drag. Cleared on release.
+                    frame.state.corner_anchor = opposite_corner_anchor(&frame.items, item, handle);
                 }
                 CanvasGesture::HandleDragged { item, handle, pos } => {
                     if let Some(it) = frame.items.get_mut(item) {
                         match it {
-                            Item::Primitive(p) => p.apply_drag(handle, pos),
+                            Item::Primitive(p) => {
+                                // Body-press centre drags translate by
+                                // the cursor delta from the press
+                                // point so the click position stays
+                                // under the cursor; direct centre-
+                                // handle grabs fall through to the
+                                // existing cursor-snap behaviour.
+                                let effective_pos = if handle == primitive::H_CENTRE {
+                                    match (
+                                        frame.state.body_drag_origin,
+                                        frame.state.drag.as_ref().map(|d| d.press_pos),
+                                    ) {
+                                        (Some(origin), Some(press)) => [
+                                            origin[0] + (pos[0] - press[0]),
+                                            origin[1] + (pos[1] - press[1]),
+                                        ],
+                                        _ => pos,
+                                    }
+                                } else {
+                                    pos
+                                };
+                                p.apply_drag(
+                                    handle,
+                                    effective_pos,
+                                    frame.state.corner_anchor,
+                                    shift_held,
+                                );
+                            }
                             Item::Spline(s) => s.move_point(handle.0 as usize, pos),
                         }
                         frame.mutated = true;
                     }
                 }
                 CanvasGesture::HandleReleased { moved, .. } => {
+                    frame.state.corner_anchor = None;
+                    frame.state.body_drag_origin = None;
                     if moved {
                         if self.dialog.field_edit_in_progress.is_some() {
                             frame.commit_undo_now = true;
@@ -492,8 +545,29 @@ impl BarEditorApp {
                         self.dialog.field_edit_in_progress = None;
                     }
                 }
-                CanvasGesture::ItemSelected { item } => {
+                CanvasGesture::ItemPressed { item, pos } => {
+                    // Press on an item's body: select it, and for
+                    // primitives also set up a centre-handle drag
+                    // anchored to the primitive's centre at press
+                    // time. Subsequent HandleDragged frames translate
+                    // by the cursor's delta from `pos`, so the click
+                    // point stays under the cursor. Splines have no
+                    // whole-shape translate; for them this is a pure
+                    // select. The drag the widget actually tracks
+                    // starts firing HandleDragged on the next frame
+                    // because the widget already ran its drag block
+                    // before we mutated state.drag here.
                     frame.state.selected = Some(item);
+                    needs_undo_snapshot = true;
+                    if let Some(Item::Primitive(p)) = frame.items.get(item) {
+                        frame.state.body_drag_origin = Some([p.x, p.y]);
+                        frame.state.drag = Some(properties_canvas::DragInProgress {
+                            item,
+                            handle: primitive::H_CENTRE,
+                            press_pos: pos,
+                            moved: false,
+                        });
+                    }
                 }
                 CanvasGesture::HandleDeleted { item, handle } => {
                     let removed = match frame.items.get_mut(item) {
@@ -556,9 +630,13 @@ impl BarEditorApp {
             });
         });
 
-        if mutated {
-            self.layout_preview.dirty = true;
-        }
+        // Note: `mutated` returned by `layout_editor_canvas` fires on
+        // every drag frame (so the on-canvas silhouette tracks live);
+        // we deliberately do NOT mark the preview dirty here. The
+        // preview is marked dirty inside `commit_layout_frame` only on
+        // commit-points (drag stop, atomic op) so the heavy 3D
+        // re-render fires once per gesture, not per pixel.
+        let _ = mutated;
         if self.layout_preview.dirty {
             ui.ctx().request_repaint();
         }
@@ -673,30 +751,12 @@ impl BarEditorApp {
         mutated: &mut bool,
         commit_undo_now: &mut bool,
     ) {
-        // Type dropdown can convert the item between kinds.
-        let current_kind = match &items[sel] {
-            Item::Primitive(p) => p.shape_type.clone(),
-            Item::Spline(_) => "spline".to_string(),
-        };
-        let mut new_kind = current_kind.clone();
-        egui::Grid::new(("lay_side", node_id.0))
-            .num_columns(2)
-            .spacing([8.0, 3.0])
-            .show(ui, |ui| {
-                ui.label("type");
-                combo(
-                    ui,
-                    ("lay_type", node_id.0, sel as u64),
-                    &mut new_kind,
-                    &["ellipse", "rectangle", "ridge", "spline"],
-                );
-                ui.end_row();
-            });
-        if new_kind != current_kind {
-            convert_item(&mut items[sel], &new_kind);
-            *mutated = true;
-            *commit_undo_now = true;
-        }
+        // The type identifier is shown in the sidebar header ("Shape
+        // N (type)") right above this code, so no separate type row
+        // is needed here. The supported path to change a shape's
+        // type is "delete the shape, switch the tool, draw a new
+        // one" -- in-place conversion has too many edge cases around
+        // radii / control points.
 
         // Shared + kind-specific sliders / toggles.
         egui::Grid::new(("lay_side2", node_id.0))
@@ -785,42 +845,22 @@ impl BarEditorApp {
             let snap = self.snapshot("Layout edit");
             self.dialog.field_edit_in_progress = Some(snap);
         }
-        if resp.changed() {
+        // ParamSlider intentionally suppresses `changed()` during drag
+        // (so heavy callers don't fire per pixel) and only fires it on
+        // drag-stop. The layout editor reloads its items from graph
+        // params each frame, so a "mutated only on drag-stop" pattern
+        // would lose the value mid-drag -- the slider would visually
+        // snap back to the stored value next frame. Mark `mutated` on
+        // both `changed()` and `dragged()` so the value persists
+        // through the drag; `commit_undo_now` stays gated on drag-stop
+        // so the heavy preview re-render only fires once at the end.
+        if resp.changed() || resp.dragged() {
             *mutated = true;
         }
         if resp.drag_stopped() || resp.lost_focus() {
             *commit_undo_now = true;
         }
         ui.end_row();
-    }
-}
-
-/// Convert an item to a new kind, preserving the shared height/falloff.
-fn convert_item(item: &mut Item, new_kind: &str) {
-    let (height, falloff) = match item {
-        Item::Primitive(p) => (p.height, p.falloff),
-        Item::Spline(s) => (s.height, s.falloff),
-    };
-    if new_kind == "spline" {
-        if !matches!(item, Item::Spline(_)) {
-            let mut s = Spline::new();
-            s.height = height;
-            s.falloff = falloff;
-            *item = Item::Spline(s);
-        }
-    } else {
-        match item {
-            // Already a primitive: just change its shape sub-type.
-            Item::Primitive(p) => p.shape_type = new_kind.to_string(),
-            // Was a spline: become a primitive of the chosen shape.
-            Item::Spline(_) => {
-                let mut p = Primitive::new(0.5, 0.5);
-                p.shape_type = new_kind.to_string();
-                p.height = height;
-                p.falloff = falloff;
-                *item = Item::Primitive(p);
-            }
-        }
     }
 }
 
@@ -899,6 +939,143 @@ fn perpendicular_distance(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
     }
     let cross = abx * (p[1] - a[1]) - aby * (p[0] - a[0]);
     cross.abs() / len2.sqrt()
+}
+
+/// Build the primitive a drag-to-create gesture should produce. Used by
+/// both the live preview silhouette (so what the user sees is what
+/// they get on release) and the `CreateAt` handler that actually adds
+/// the item. Tool-specific:
+///
+/// * `line` -- drag direction sets the angle, drag midpoint the centre,
+///   drag length the `rx` (handle extent; the executor renders a
+///   line of map-wide visible length regardless). Shift snaps the
+///   angle to the nearest 45-degree increment.
+/// * `ellipse` / `rectangle` -- drag corners bound the shape. Shift
+///   constrains to equal radii (circle / square).
+///
+/// `spline` is handled separately in the caller because it uses the
+/// freehand path rather than just `from`/`to`.
+fn primitive_from_drag(from: [f32; 2], to: [f32; 2], tool: &str, shift: bool) -> Primitive {
+    let cx = ((from[0] + to[0]) * 0.5).clamp(0.0, 1.0);
+    let cy = ((from[1] + to[1]) * 0.5).clamp(0.0, 1.0);
+    let mut p = Primitive::new(cx, cy);
+    p.shape_type = tool.to_string();
+    if tool == "line" {
+        let dx = to[0] - from[0];
+        let dy = to[1] - from[1];
+        let mut angle = dy.atan2(dx);
+        if shift {
+            let step = std::f32::consts::FRAC_PI_4;
+            angle = (angle / step).round() * step;
+        }
+        p.angle = angle.to_degrees().rem_euclid(360.0);
+        p.rx = ((dx * dx + dy * dy).sqrt() * 0.5).max(0.01);
+        // Thin default width; users widen via the falloff slider or
+        // by dragging the corner handles after creation.
+        p.ry = 0.01;
+    } else {
+        let mut rx = ((to[0] - from[0]).abs() * 0.5).max(0.005);
+        let mut ry = ((to[1] - from[1]).abs() * 0.5).max(0.005);
+        if shift {
+            let r = rx.max(ry);
+            rx = r;
+            ry = r;
+        }
+        p.rx = rx;
+        p.ry = ry;
+    }
+    p
+}
+
+/// World-space position of the OPPOSITE corner of the given handle,
+/// captured at press time. The corner-resize math anchors the
+/// opposite corner here so the dragged corner can move to the cursor
+/// without the rest of the shape drifting. Returns `None` for any
+/// handle that isn't one of the four corner handles or any item that
+/// isn't a primitive (splines don't have a corner-anchor concept).
+fn opposite_corner_anchor(
+    items: &[Item],
+    item_idx: usize,
+    handle: properties_canvas::HandleId,
+) -> Option<[f32; 2]> {
+    use std::f32::consts::PI;
+    let Some(Item::Primitive(p)) = items.get(item_idx) else {
+        return None;
+    };
+    // Primitive corner handle ids: TL=1, TR=2, BL=3, BR=4. Opposite
+    // pairs are TL<->BR and TR<->BL.
+    let (opp_lx, opp_ly) = match handle.0 {
+        1 => (p.rx, p.ry),   // TL -> BR
+        2 => (-p.rx, p.ry),  // TR -> BL
+        3 => (p.rx, -p.ry),  // BL -> TR
+        4 => (-p.rx, -p.ry), // BR -> TL
+        _ => return None,
+    };
+    let (sina, cosa) = (p.angle * PI / 180.0).sin_cos();
+    Some([
+        p.x + opp_lx * cosa - opp_ly * sina,
+        p.y + opp_lx * sina + opp_ly * cosa,
+    ])
+}
+
+/// Compact red trash-can button used in the layout sidebar to delete
+/// the selected shape. Drawn from line segments so the source stays
+/// font-independent and ASCII-only.
+fn trash_icon_button(ui: &mut egui::Ui) -> bool {
+    let size = egui::vec2(20.0, 20.0);
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    let color = if resp.hovered() {
+        egui::Color32::from_rgb(255, 80, 80)
+    } else {
+        egui::Color32::from_rgb(210, 70, 70)
+    };
+    let stroke = egui::Stroke::new(1.4, color);
+    let painter = ui.painter();
+    let cx = rect.center().x;
+    let lid_y = rect.top() + 5.0;
+    let body_top = lid_y + 1.5;
+    let bot = rect.bottom() - 3.0;
+    let half_w = 5.0;
+    // Lid handle (small notch on top of the lid).
+    painter.line_segment(
+        [
+            egui::pos2(cx - 2.5, lid_y - 1.8),
+            egui::pos2(cx + 2.5, lid_y - 1.8),
+        ],
+        stroke,
+    );
+    // Lid (slightly wider than the body).
+    painter.line_segment(
+        [
+            egui::pos2(cx - half_w - 1.0, lid_y),
+            egui::pos2(cx + half_w + 1.0, lid_y),
+        ],
+        stroke,
+    );
+    // Body sides (taper inward slightly toward the base).
+    painter.line_segment(
+        [
+            egui::pos2(cx - half_w + 0.4, body_top),
+            egui::pos2(cx - half_w + 1.4, bot),
+        ],
+        stroke,
+    );
+    painter.line_segment(
+        [
+            egui::pos2(cx + half_w - 0.4, body_top),
+            egui::pos2(cx + half_w - 1.4, bot),
+        ],
+        stroke,
+    );
+    // Body bottom.
+    painter.line_segment(
+        [
+            egui::pos2(cx - half_w + 1.4, bot),
+            egui::pos2(cx + half_w - 1.4, bot),
+        ],
+        stroke,
+    );
+    resp.on_hover_text("Delete shape").clicked()
 }
 
 fn remove_item(items: &mut Vec<Item>, state: &mut CanvasState, idx: usize) {
