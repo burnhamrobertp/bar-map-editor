@@ -188,6 +188,10 @@ pub struct EditorState {
     pub node_to_group: HashMap<NodeId, u64>,
     pub next_group_id: u64,
     pub map: MapStateSnapshot,
+    /// Live mirror of the Layout edit view's selection (node id + item
+    /// index) captured at snapshot time. Restored on undo / redo so the
+    /// affected shape stays selected after stepping through history.
+    pub layout_selection: Option<(NodeId, Option<usize>)>,
 }
 
 impl EditorState {
@@ -201,6 +205,7 @@ impl EditorState {
             node_to_group: HashMap::new(),
             next_group_id: 1,
             map: MapStateSnapshot::default(),
+            layout_selection: None,
         }
     }
 }

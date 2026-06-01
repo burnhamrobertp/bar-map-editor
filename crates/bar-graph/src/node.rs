@@ -74,8 +74,6 @@ pub enum NodeType {
     /// recorded brush dabs (stored as JSON in `params["dabs"]`), and
     // Mask Operations
     MaskThreshold,
-    MaskInvert,
-    MaskBlur,
     MaskApply,
 
     // Utility
@@ -122,11 +120,17 @@ pub enum NodeType {
     /// (mode="valleys"), or a full curvature map (mode="full") where 0.5 = flat.
     SelectConvexity,
 
-    // Generator: primitive shape heightmap
-    /// Composites up to 8 primitive shapes (ellipse / rectangle / ridge-line)
-    /// into a heightmap. Each shape has position, size, rotation, peak height,
-    /// and falloff. Shapes are composited by taking the per-pixel maximum.
-    LayoutGenerator,
+    // Generator: 2D layout of primitive shapes + freehand splines.
+    /// Composites up to 8 layout items into a heightmap. Each item is
+    /// either a primitive (ellipse / rectangle / ridge with position,
+    /// size, rotation) or a Catmull-Rom spline (open path or
+    /// closed/filled region from a control-point sequence). Items carry
+    /// per-item height + falloff and composite by per-pixel maximum;
+    /// the node-level `mode` (ridge / valley / mask) then interprets
+    /// the field, and a `symmetry` enum mirrors / rotates every item.
+    /// Used for shaped landmasses, rivers, roads, ridge lines, plateau
+    /// edges, craters, atolls.
+    Layout,
 
     // Filters (transform / warp / strata)
     /// Translate, scale, and rotate a heightmap. Inverse-mapped bilinear
@@ -224,6 +228,13 @@ pub enum ParamValue {
     Bool(bool),
     String(String),
     Vec2([f32; 2]),
+    /// Ordered list of 2D control points in normalised [0..1, 0..1].
+    /// Used by canvas-edited nodes (`Layout` spline items) to carry
+    /// arbitrarily-long point sequences without resorting to indexed
+    /// per-point params. Authors mutate this through the panel's 2D
+    /// canvas; the executor reads it as a polyline / Catmull-Rom
+    /// source.
+    Spline(Vec<[f32; 2]>),
 }
 
 impl Node {
@@ -536,17 +547,6 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             ],
             vec![Port::new("output", "Mask", PortKind::Heightmap)],
         ),
-        NodeType::MaskInvert => (
-            vec![Port::new("input", "Input", PortKind::Heightmap)],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
-        NodeType::MaskBlur => (
-            vec![
-                Port::new("input", "Input", PortKind::Heightmap),
-                Port::new("control", "Control", PortKind::Control),
-            ],
-            vec![Port::new("output", "Output", PortKind::Heightmap)],
-        ),
         NodeType::MaskApply => (
             vec![
                 Port::new("input", "Input", PortKind::Heightmap),
@@ -615,7 +615,7 @@ fn default_ports(node_type: &NodeType) -> (Vec<Port>, Vec<Port>) {
             vec![Port::new("output", "Curvature", PortKind::Heightmap)],
         ),
 
-        NodeType::LayoutGenerator => (
+        NodeType::Layout => (
             vec![Port::new("mask", "Mask", PortKind::Mask)],
             vec![Port::new("output", "Heightmap", PortKind::Heightmap)],
         ),

@@ -431,11 +431,14 @@ impl BarEditorApp {
                     .canvas
                     .tabs
                     .iter()
-                    .map(|view| match view {
-                        CanvasView::Main => bar_project::PersistedCanvasView::Main,
+                    // NodeEdit tabs are ephemeral authoring state; they
+                    // don't survive save/load (filtered out here).
+                    .filter_map(|view| match view {
+                        CanvasView::Main => Some(bar_project::PersistedCanvasView::Main),
                         CanvasView::SubGraph(gid) => {
-                            bar_project::PersistedCanvasView::SubGraph { group_id: *gid }
+                            Some(bar_project::PersistedCanvasView::SubGraph { group_id: *gid })
                         }
+                        CanvasView::NodeEdit(_) => None,
                     })
                     .collect(),
                 active_tab: self.canvas.active_tab as u32,

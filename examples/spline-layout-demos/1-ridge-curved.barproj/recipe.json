@@ -1,0 +1,258 @@
+{
+  "name": "Ridge: curved line",
+  "shortname": null,
+  "description": "Four control points forming an S-curve. Ridge mode raises a thin elevation band along the Catmull-Rom curve through the points.",
+  "author": "bar-editor spline-layout demo",
+  "version": "0.1",
+  "tip": null,
+  "depend": [
+    "Map Helper v1"
+  ],
+  "nodes": [
+    {
+      "key": "spline",
+      "type": "Layout",
+      "label": "Layout (spline, ridge, symmetry=none)",
+      "params": {
+        "item_count": {
+          "UInt": 1
+        },
+        "points_0": {
+          "Spline": [
+            [
+              0.15,
+              0.7
+            ],
+            [
+              0.4,
+              0.4
+            ],
+            [
+              0.6,
+              0.65
+            ],
+            [
+              0.85,
+              0.3
+            ]
+          ]
+        },
+        "mode": {
+          "String": "ridge"
+        },
+        "width_0": {
+          "Float": 0.05
+        },
+        "type_0": {
+          "String": "spline"
+        },
+        "fill_0": {
+          "Bool": false
+        },
+        "symmetry": {
+          "String": "none"
+        },
+        "falloff_0": {
+          "Float": 0.5
+        },
+        "height_0": {
+          "Float": 0.7
+        },
+        "closed_0": {
+          "Bool": false
+        }
+      }
+    },
+    {
+      "key": "output",
+      "type": "FinalComposition",
+      "label": "Export",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "spline.output",
+      "to": "output.heightmap"
+    }
+  ],
+  "output": {
+    "width": 257,
+    "height": 257,
+    "map_settings": {
+      "min_height": null,
+      "max_height": null,
+      "map_hardness": null,
+      "gravity": null,
+      "detail_textures": [],
+      "deformable": null,
+      "void_water": null,
+      "void_ground": null,
+      "tidal_strength": null,
+      "max_metal": null,
+      "extractor_radius": null,
+      "auto_show_metal": null,
+      "replace": {
+        "declared": false,
+        "entries": []
+      },
+      "terrain_types": [],
+      "atmosphere": {
+        "min_wind": null,
+        "max_wind": null,
+        "fog_start": null,
+        "fog_end": null,
+        "fog_color": null,
+        "sun_color": null,
+        "sky_color": null,
+        "sky_dir": null,
+        "cloud_density": null,
+        "cloud_color": null,
+        "skybox": null
+      },
+      "lighting": {
+        "sun_dir": null,
+        "sun_intensity": null,
+        "ground_ambient": null,
+        "ground_diffuse": null,
+        "ground_specular": null,
+        "spec_exponent": null,
+        "ground_shadow_density": null,
+        "unit_shadow_density": null,
+        "unit_ambient": null,
+        "unit_diffuse": null,
+        "unit_specular": null
+      },
+      "water": {
+        "damage": null,
+        "absorb": null,
+        "base_color": null,
+        "min_color": null,
+        "surface_color": null,
+        "surface_alpha": null,
+        "diffuse_color": null,
+        "specular_color": null,
+        "ambient_factor": null,
+        "diffuse_factor": null,
+        "specular_factor": null,
+        "specular_power": null,
+        "fresnel_min": null,
+        "fresnel_max": null,
+        "fresnel_power": null,
+        "reflection_distortion": null,
+        "perlin_amplitude": null,
+        "blur_base": null,
+        "blur_exponent": null,
+        "caustics_resolution": null,
+        "caustics_strength": null,
+        "wave_offset_factor": null,
+        "wave_foam_distortion": null,
+        "wave_foam_intensity": null,
+        "wave_length": null,
+        "force_rendering": null,
+        "has_water_plane": null,
+        "num_tiles": null,
+        "perlin_start_freq": null,
+        "perlin_lacunarity": null,
+        "plane_color": null,
+        "repeat_x": null,
+        "repeat_y": null,
+        "shore_waves": null,
+        "normal_texture": null
+      },
+      "lava": {
+        "diffuse_emit_tex": null,
+        "normal_height_tex": null,
+        "level": null,
+        "damage": null,
+        "uv_scale": null,
+        "color_correction": null,
+        "coast_color": null,
+        "coast_width": null,
+        "coast_light_boost": null,
+        "swirl_freq": null,
+        "swirl_amp": null,
+        "specular_exp": null,
+        "specular_strength": null,
+        "los_darkness": null,
+        "shadow_strength": null,
+        "parallax_depth": null,
+        "parallax_offset": null,
+        "fog_enabled": null,
+        "fog_color": null,
+        "fog_factor": null,
+        "fog_height": null,
+        "fog_above": null,
+        "fog_distortion": null,
+        "tide_amplitude": null,
+        "tide_period": null
+      },
+      "fluid_mode": null,
+      "custom_fog": {
+        "enabled": false,
+        "color": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "height_elmos": 0.0,
+        "atten": 0.0
+      },
+      "custom_grass": {
+        "dist_tga": null,
+        "blade_color_tex": null,
+        "max_size": null,
+        "min_size": null,
+        "patch_resolution": null,
+        "patch_placement_jitter": null,
+        "map_color_factor": null,
+        "map_color_base": null,
+        "alpha_threshold": null,
+        "shadow_factor": null,
+        "grass_brightness": null,
+        "fade_start": null,
+        "fade_end": null,
+        "wind_strength": null,
+        "wind_scale": null,
+        "wind_sample_scale": null,
+        "grass_wind_mult": null
+      },
+      "custom_clouds": {
+        "speed": null,
+        "color": null,
+        "height": null,
+        "bottom": null,
+        "fade_alt": null,
+        "scale": null,
+        "opacity": null,
+        "clamp_to_map": null,
+        "sun_penetration": null
+      },
+      "sound": {
+        "preset": null,
+        "passfilter_gainlf": null,
+        "passfilter_gainhf": null
+      },
+      "resources": {
+        "detail_tex": "",
+        "splat_distr_tex": "",
+        "splat_detail_normal_tex_1": "",
+        "splat_detail_normal_tex_2": "",
+        "splat_detail_normal_tex_3": "",
+        "splat_detail_normal_tex_4": "",
+        "splat_detail_normal_diffuse_alpha": false,
+        "splat_tex_scales": null,
+        "splat_tex_mults": null,
+        "sky_reflect_mod_tex": "",
+        "specular_tex": "",
+        "grass_shading_tex": "",
+        "light_emission_tex": "",
+        "detail_normal_tex": "",
+        "splat_detail_tex": ""
+      },
+      "minimap": null,
+      "start_positions": []
+    }
+  },
+  "features": []
+}

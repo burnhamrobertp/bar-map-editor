@@ -66,6 +66,7 @@ impl BarEditorApp {
                 match view {
                     CanvasView::Main => None,
                     CanvasView::SubGraph(gid) => groups.get(gid).map(|g| group_color(g.color_idx)),
+                    CanvasView::NodeEdit(_) => None,
                 }
             };
 
@@ -95,6 +96,17 @@ impl BarEditorApp {
                         }
                     })
                     .unwrap_or_else(|| format!("SubGraph {gid}")),
+                CanvasView::NodeEdit(id) => self
+                    .graph
+                    .get_node(*id)
+                    .map(|n| {
+                        if n.label.is_empty() {
+                            format!("Layout {}", id.0)
+                        } else {
+                            n.label.clone()
+                        }
+                    })
+                    .unwrap_or_else(|| format!("Layout {}", id.0)),
             };
             let is_active = i == self.canvas.active_tab;
             let closable = i != 0;
@@ -359,6 +371,7 @@ impl BarEditorApp {
             let keep = match tab {
                 CanvasView::Main => true,
                 CanvasView::SubGraph(gid) => valid_groups.contains(gid),
+                CanvasView::NodeEdit(id) => self.graph.get_node(*id).is_some(),
             };
             if keep {
                 new_tabs.push(tab.clone());

@@ -40,6 +40,7 @@ pub enum ParamKind {
     Bool,
     String,
     Vec2,
+    Spline,
 }
 
 impl ParamKind {
@@ -52,6 +53,7 @@ impl ParamKind {
             ParamValue::Bool(_) => ParamKind::Bool,
             ParamValue::String(_) => ParamKind::String,
             ParamValue::Vec2(_) => ParamKind::Vec2,
+            ParamValue::Spline(_) => ParamKind::Spline,
         }
     }
 }
@@ -251,8 +253,6 @@ mod tests {
         NodeType::SpecularMap,
         // Mask operations
         NodeType::MaskThreshold,
-        NodeType::MaskInvert,
-        NodeType::MaskBlur,
         NodeType::MaskApply,
         // Utility
         NodeType::Mask,
@@ -273,8 +273,8 @@ mod tests {
         // Selectors
         NodeType::FlowSelect,
         NodeType::SelectConvexity,
-        // Shape generator
-        NodeType::LayoutGenerator,
+        // Layout generator (primitives + splines)
+        NodeType::Layout,
         // Transform / warp / strata filters
         NodeType::Transform,
         NodeType::Warp,
@@ -301,7 +301,7 @@ mod tests {
         // NODE_TYPES_FOR_TEST. Update this constant AND the array when you add a variant.
         // (A compile-time version of this check requires nightly variant_count; this
         // test is the stable equivalent.)
-        const EXPECTED_VARIANT_COUNT: usize = 61;
+        const EXPECTED_VARIANT_COUNT: usize = 59;
         assert_eq!(
             NODE_TYPES_FOR_TEST.len(),
             EXPECTED_VARIANT_COUNT,

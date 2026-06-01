@@ -10,6 +10,7 @@ use std::time::Instant;
 use bar_compute::GpuContext;
 use bar_engine::recipe::PlacedFeature;
 use bar_graph::NodeExecutor;
+use bar_gui::terrain_pane::{apply_orbit_primary, apply_pan_middle};
 use bar_project::find_file_in_dir;
 use bar_render::{pick_terrain, Camera, FeatureInstance, TerrainRenderer, TerrainUpdateParams};
 use eframe::egui;
@@ -115,7 +116,15 @@ pub struct FeatureDragState {
 
 pub struct ViewportCore {
     pub camera: Camera,
-    pub terrain_renderer: Option<TerrainRenderer>,
+    /// Shared 3D-rendering primitive. Owns the underlying
+    /// `TerrainRenderer` and the registered egui texture; the host
+    /// drives it via `pane.update_*` / `pane.render_with_camera` /
+    /// `pane.bind_egui_texture`. The `terrain_renderer()` /
+    /// `terrain_renderer_mut()` accessors return the underlying
+    /// renderer for upload paths not yet wrapped on the pane (so
+    /// existing call sites need a one-line rewrite rather than a
+    /// per-method passthrough). See `docs/terrain-pane-plan.md`.
+    pub terrain_pane: Option<bar_gui::TerrainPane>,
     pub viewport_texture_id: Option<egui::TextureId>,
     pub current_frame: Option<OwnedFrame>,
     pub last_water_y: f32,
@@ -292,20 +301,40 @@ pub struct MapGrassAssets {
 }
 
 impl ViewportCore {
+    /// Borrow the underlying `TerrainRenderer` for read-only access
+    /// (mesh extents, output view, etc.). Delegates through the pane.
+    /// Returns `None` if the pane hasn't been constructed yet (no GPU
+    /// context).
+    pub fn terrain_renderer(&self) -> Option<&TerrainRenderer> {
+        self.terrain_pane.as_ref().map(|p| p.renderer())
+    }
+
+    /// Mutably borrow the underlying `TerrainRenderer` for upload
+    /// paths that aren't yet wrapped on the pane. Existing call sites
+    /// that did `core.terrain_renderer_mut()` rewrite to
+    /// `core.terrain_renderer_mut()`; once a method is used widely
+    /// enough we'll promote it to a named pane method.
+    pub fn terrain_renderer_mut(&mut self) -> Option<&mut TerrainRenderer> {
+        self.terrain_pane.as_mut().map(|p| p.renderer_mut())
+    }
+
     pub fn new(gpu_context: &Option<GpuContext>, session_id: u64) -> Self {
-        let terrain_renderer = gpu_context.as_ref().map(|ctx| {
-            // BAR-faithful: non-sRGB render target so the GPU doesn't
-            // gamma-encode on write -- matches BAR's pipeline which
-            // uses unflagged Rgba8 framebuffers throughout.
-            let mut r =
-                TerrainRenderer::new(&ctx.device, &ctx.queue, wgpu::TextureFormat::Rgba8Unorm);
-            r.resize(&ctx.device, 512, 512);
-            r
+        // BAR-faithful: non-sRGB render target so the GPU doesn't
+        // gamma-encode on write -- matches BAR's pipeline which uses
+        // unflagged Rgba8 framebuffers throughout.
+        let terrain_pane = gpu_context.as_ref().map(|ctx| {
+            bar_gui::TerrainPane::new(
+                &ctx.device,
+                &ctx.queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                512,
+                bar_gui::PaneQuality::Full,
+            )
         });
         let (texture_load_tx, texture_load_rx) = mpsc::channel();
         Self {
             camera: Camera::default(),
-            terrain_renderer,
+            terrain_pane,
             viewport_texture_id: None,
             current_frame: None,
             last_water_y: -1.0,
@@ -393,7 +422,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::Skybox { key, data } => {
                 core.skybox_loading_for = None;
                 core.skybox_loaded_for = Some(key);
-                if let (Some(cm), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
+                if let (Some(cm), Some(renderer)) = (data, core.terrain_renderer_mut()) {
                     renderer.update_skybox(&gpu.device, &gpu.queue, &cm);
                     tracing::debug!(w = cm.width, h = cm.height, "Skybox cubemap loaded");
                 }
@@ -401,8 +430,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::Detail { key, data } => {
                 core.detail_loading_for = None;
                 core.detail_loaded_for = Some(key);
-                if let (Some((rgba, w, h)), Some(renderer)) = (data, core.terrain_renderer.as_mut())
-                {
+                if let (Some((rgba, w, h)), Some(renderer)) = (data, core.terrain_renderer_mut()) {
                     renderer.update_detail_texture(&gpu.device, &gpu.queue, &rgba, w, h);
                     tracing::debug!(w, h, "Detail texture loaded");
                 }
@@ -410,7 +438,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::Splat { key, data } => {
                 core.splat_loading_for = None;
                 core.splat_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some(arr), Some(renderer)) => {
                         renderer.update_splat_textures(&gpu.device, &gpu.queue, arr);
                         tracing::debug!("Splat detail textures loaded (with mip chains)");
@@ -424,7 +452,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::SkyReflectMod { key, data } => {
                 core.sky_reflect_mod_loading_for = None;
                 core.sky_reflect_mod_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_sky_reflect_mod(&gpu.device, &gpu.queue, &rgba, w, h);
                         tracing::debug!(w, h, "skyReflectModTex loaded");
@@ -438,7 +466,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::SpecularTex { key, data } => {
                 core.specular_tex_loading_for = None;
                 core.specular_tex_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_specular_tex(&gpu.device, &gpu.queue, &rgba, w, h);
                         tracing::debug!(w, h, "specularTex loaded");
@@ -452,7 +480,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::GrassShadingTex { key, data } => {
                 core.grass_shading_tex_loading_for = None;
                 core.grass_shading_tex_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_grass_shading_tex(&gpu.device, &gpu.queue, &rgba, w, h);
                         tracing::debug!(w, h, "grassShadingTex loaded");
@@ -466,7 +494,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::LightEmissionTex { key, data } => {
                 core.light_emission_tex_loading_for = None;
                 core.light_emission_tex_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_light_emission_tex(&gpu.device, &gpu.queue, &rgba, w, h);
                         tracing::debug!(w, h, "lightEmissionTex loaded");
@@ -480,7 +508,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::DetailNormalTex { key, data } => {
                 core.detail_normal_tex_loading_for = None;
                 core.detail_normal_tex_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_detail_normal_tex(&gpu.device, &gpu.queue, &rgba, w, h);
                         tracing::debug!(w, h, "detailNormalTex loaded");
@@ -494,7 +522,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::BasicSplatTex { key, data } => {
                 core.basic_splat_tex_loading_for = None;
                 core.basic_splat_tex_loaded_for = Some(key);
-                match (data, core.terrain_renderer.as_mut()) {
+                match (data, core.terrain_renderer_mut()) {
                     (Some((rgba, w, h)), Some(renderer)) => {
                         renderer.update_basic_splat_tex(&gpu.device, &gpu.queue, &rgba, w, h);
                         tracing::debug!(w, h, "splatDetailTex loaded");
@@ -508,7 +536,7 @@ pub fn poll_pending_texture_loads(core: &mut ViewportCore, gpu: &GpuContext) {
             TextureLoadResult::MapGrass { key, data } => {
                 core.map_grass_loading_for = None;
                 core.map_grass_loaded_for = Some(key);
-                if let (Some(bundle), Some(renderer)) = (data, core.terrain_renderer.as_mut()) {
+                if let (Some(bundle), Some(renderer)) = (data, core.terrain_renderer_mut()) {
                     let widget = renderer.map_grass.widget().clone();
                     let mip_count = bundle.blade_color_mips.len();
                     let (base_w, base_h) = bundle
@@ -555,7 +583,7 @@ pub fn sync_sky_reflect_mod(
         return;
     }
     if filename.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_sky_reflect_mod(&gpu.device, &gpu.queue);
         }
         core.sky_reflect_mod_loaded_for = key;
@@ -603,7 +631,7 @@ pub fn sync_specular_tex(
         return;
     }
     if filename.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_specular_tex(&gpu.device, &gpu.queue);
         }
         core.specular_tex_loaded_for = key;
@@ -663,7 +691,7 @@ pub fn sync_map_grass(
     // we only need to push the blend/fade constants for the
     // shader (elmo->render conversion happens in the shader against
     // the camera uniform, so this doesn't need any terrain state).
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
+    if let Some(renderer) = core.terrain_renderer_mut() {
         if !widget.enabled {
             renderer.clear_grass_assets(&gpu.device, &gpu.queue);
         } else {
@@ -844,7 +872,7 @@ pub fn sync_caustics(
     gpu: &GpuContext,
 ) {
     let Some(engine_dir) = engine_dir else {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_caustics(&gpu.device, &gpu.queue);
         }
         core.caustic_assets_loaded_from = None;
@@ -873,7 +901,7 @@ pub fn sync_caustics(
             return;
         }
     };
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
+    if let Some(renderer) = core.terrain_renderer_mut() {
         let frames: Vec<(Vec<u8>, u32, u32)> = bundle
             .caustics
             .into_iter()
@@ -917,7 +945,7 @@ pub fn sync_detail_normal_tex(
         return;
     }
     if filename.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_detail_normal_tex(&gpu.device, &gpu.queue);
         }
         core.detail_normal_tex_loaded_for = key;
@@ -964,7 +992,7 @@ pub fn sync_basic_splat_tex(
         return;
     }
     if filename.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_basic_splat_tex(&gpu.device, &gpu.queue);
         }
         core.basic_splat_tex_loaded_for = key;
@@ -1025,7 +1053,7 @@ pub fn sync_light_emission_tex(
         return;
     }
     if filename.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_light_emission_tex(&gpu.device, &gpu.queue);
         }
         core.light_emission_tex_loaded_for = key;
@@ -1158,7 +1186,7 @@ pub fn sync_splat_textures(
 
     let distr_name = &names[4];
     if distr_name.is_empty() {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_splat_textures(&gpu.device, &gpu.queue);
         }
         core.splat_loaded_for = key;
@@ -1273,7 +1301,7 @@ pub fn sync_detail_texture(
     }
     if detail_filename.is_empty() {
         // Reset to the 1x1 grey default so the contribution goes to zero.
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             let mid_grey = [128u8, 128, 128, 255];
             renderer.update_detail_texture(&gpu.device, &gpu.queue, &mid_grey, 1, 1);
         }
@@ -1325,7 +1353,7 @@ pub fn sync_skybox(
     if skybox_filename.is_empty() {
         // Map switched to one without a skybox -- clear the cubemap so
         // the procedural sky kicks back in.
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.clear_skybox(&gpu.device, &gpu.queue);
         }
         core.skybox_loaded_for = key;
@@ -1415,37 +1443,11 @@ pub struct ResolutionStatus {
 }
 
 // ── Helper: register / update the egui texture handle ────────────────────────
-
-pub fn update_viewport_texture(
-    viewport_texture_id: &mut Option<egui::TextureId>,
-    terrain_renderer: &Option<TerrainRenderer>,
-    render_state: &Option<eframe::egui_wgpu::RenderState>,
-    ctx: &egui::Context,
-) {
-    let Some(ref renderer) = terrain_renderer else {
-        return;
-    };
-    let Some(view) = renderer.output_view() else {
-        return;
-    };
-    let Some(ref rs) = render_state else {
-        return;
-    };
-
-    let mut egui_rend = rs.renderer.write();
-    if let Some(tex_id) = *viewport_texture_id {
-        egui_rend.update_egui_texture_from_wgpu_texture(
-            &rs.device,
-            view,
-            wgpu::FilterMode::Linear,
-            tex_id,
-        );
-    } else {
-        let tex_id = egui_rend.register_native_texture(&rs.device, view, wgpu::FilterMode::Linear);
-        *viewport_texture_id = Some(tex_id);
-    }
-    ctx.request_repaint();
-}
+//
+// Removed: replaced by `bar_gui::TerrainPane::bind_egui_texture`, which
+// owns the texture id internally. Hosts that previously held a separate
+// `viewport_texture_id` now mirror it from `pane.texture_id()` after each
+// `bind_egui_texture` call.
 
 // ── Sculpt3D viewport drawing ─────────────────────────────────────────────────
 
@@ -1547,75 +1549,62 @@ fn draw_viewport_body(
     let vp_h = (available.y as u32).max(1);
 
     if let Some(ref gpu) = gpu_context {
-        if let Some(ref mut renderer) = core.terrain_renderer {
-            // Push the gamma post-pass exponent from the viewport debug
-            // overlay. Just a 16-byte queue write; doing it every tick
-            // avoids having to bookkeep changed-since-last-frame across
-            // every renderer.render call site.
+        // Per-frame renderer setup: gamma post-pass exponent, grass
+        // debug knobs + wind tick, viewport size, and the Display
+        // preferences that gate fidelity passes. Runs through the
+        // underlying renderer (via the pane's escape hatch) so the
+        // existing settings-driven configuration carries over
+        // verbatim. Quality flags are set per-frame because the user
+        // can toggle them in the Display panel; the pane's
+        // construction-time `PaneQuality::Full` baseline is the
+        // ceiling, the per-frame setters refine it.
+        if let Some(renderer) = core.terrain_renderer_mut() {
             renderer.set_gamma_exponent(&gpu.queue, app.viewport_debug.gamma_exponent);
-            // Grass diagnostic output mode + alpha-test technique --
-            // both piped into the FS via the params uniform's `dbg`
-            // vec4 slot.
             renderer
                 .map_grass
                 .set_debug_output(&gpu.queue, app.viewport_debug.grass_debug_output);
             renderer
                 .map_grass
                 .set_alpha_test_mode(&gpu.queue, app.viewport_debug.grass_alpha_test_mode);
-            // Advance the grass wind-drift accumulator using
-            // `(min_wind + max_wind) / 2` as the static stand-in for
-            // `Spring.GetWind()` (which BME has no equivalent of).
-            // Falls through to engine defaults when the recipe
-            // doesn't override either field.
             let atmo = app.map.settings.atmosphere.resolved();
             let avg_wind = (atmo.min_wind + atmo.max_wind) * 0.5;
             renderer.map_grass.tick(&gpu.queue, avg_wind);
             if renderer.width != vp_w || renderer.height != vp_h {
                 renderer.resize(&gpu.device, vp_w, vp_h);
             }
-            // Apply the user's Display preferences. Grass is the
-            // one toggle that genuinely strips a path for
-            // performance (Sculpt = off always, Preview = follows
-            // the pref). The advanced-map and advanced-model
-            // toggles are forward-looking gates for future
-            // additional fidelity work -- they don't reduce the
-            // baseline, so we send their pref value through to the
-            // renderer regardless of layout. Today both are
-            // effectively no-ops on the rendering side; setting
-            // them keeps the plumbing alive for when they drive
-            // real features.
+        }
+        if let Some(pane) = core.terrain_pane.as_mut() {
             let in_preview = app.active_layout() == bar_gui::Layout::Preview;
             let display = app.settings().display;
             let software = app.software_renderer;
-            renderer.set_low_quality(software);
-            // Software adapters: force every optional fidelity path off
-            // regardless of the user's display prefs. The renderer's
-            // own low_quality gate already skips shadows / reflections /
-            // features; clearing these flags zeros their per-pixel cost
-            // on the paths that aren't gated at the encoder level.
-            renderer.set_grass_visible(!software && in_preview && display.grass);
-            renderer.set_advanced_map_shading(!software && display.advanced_map_shading);
-            renderer.set_advanced_model_shading(!software && display.advanced_model_shading);
-            // Render every frame the viewport body runs. egui's own
-            // `request_repaint` in `update_viewport_texture` keeps
-            // the frame loop ticking; rendering unconditionally here
-            // means any change that affects rendering -- camera,
-            // viewport size, mapinfo edits, debug toggles -- shows
-            // up the next frame for free, without per-diagnostic
-            // plumbing.
+            pane.set_low_quality(software);
+            // Software adapters: force every optional fidelity path
+            // off regardless of the user's display prefs.
+            pane.set_grass_visible(!software && in_preview && display.grass);
+            pane.set_advanced_map_shading(!software && display.advanced_map_shading);
+            pane.set_advanced_model_shading(!software && display.advanced_model_shading);
+            // Render every frame the viewport body runs. egui's
+            // `request_repaint` after binding the texture keeps the
+            // frame loop ticking; rendering unconditionally here means
+            // any change -- camera, viewport size, mapinfo edits,
+            // debug toggles -- shows up the next frame for free.
             let elapsed = core.started_at.elapsed().as_secs_f32();
             let smf = live_smf_lighting(app);
             let frame = core
                 .current_frame
                 .as_ref()
                 .map(|f| f.as_frame(elapsed, smf));
-            renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
-            update_viewport_texture(
-                &mut core.viewport_texture_id,
-                &core.terrain_renderer,
-                render_state,
-                ctx,
-            );
+            pane.render_with_camera(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+            if let Some(rs) = render_state {
+                pane.bind_egui_texture(rs);
+            }
+        }
+        // The pane owns the egui texture id internally; mirror it
+        // into core.viewport_texture_id so the paint code (and any
+        // off-thread caller relying on the field) keeps working.
+        if render_state.is_some() {
+            core.viewport_texture_id = core.terrain_pane.as_ref().and_then(|p| p.texture_id());
+            ctx.request_repaint();
         }
     }
 
@@ -1784,7 +1773,7 @@ fn compute_sun_gizmo_geometry(
     if app.active_layout() != bar_gui::Layout::Sculpt3D {
         return None;
     }
-    let renderer = core.terrain_renderer.as_ref()?;
+    let renderer = core.terrain_renderer()?;
     let aspect = response.rect.width().max(1.0) / response.rect.height().max(1.0);
     let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
     let dims = bar_gui::overlays::sun::SunGizmoDims {
@@ -2098,7 +2087,7 @@ fn handle_camera_input(
     let cursor_world = if sculpt_active {
         cursor_uv.and_then(|uv| {
             let hm = app.paint.heightmap.as_ref()?;
-            let renderer = core.terrain_renderer.as_ref()?;
+            let renderer = core.terrain_renderer()?;
             let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
             let pick = pick_terrain(
                 &core.camera,
@@ -2116,7 +2105,7 @@ fn handle_camera_input(
     } else {
         None
     };
-    if let Some(ref mut renderer) = core.terrain_renderer {
+    if let Some(renderer) = core.terrain_renderer_mut() {
         renderer.set_brush_cursor(cursor_world);
     }
 
@@ -2223,7 +2212,7 @@ fn handle_camera_input(
             && !sculpt_active
         {
             if let (Some(uv), Some(sel_idx)) = (cursor_uv, app.map.selected_feature_idx) {
-                if let Some(renderer) = core.terrain_renderer.as_ref() {
+                if let Some(renderer) = core.terrain_renderer() {
                     let pickable = build_pickable_features(
                         &app.map.features,
                         &FeatureMapDims {
@@ -2282,7 +2271,7 @@ fn handle_camera_input(
                 // Placement mode: place a new feature at the terrain pick position.
                 if let Some(uv) = cursor_uv {
                     if let Some(hm) = app.paint.heightmap.as_ref() {
-                        if let Some(renderer) = core.terrain_renderer.as_ref() {
+                        if let Some(renderer) = core.terrain_renderer() {
                             let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
                             if let Some(pick) = pick_terrain(
                                 &core.camera,
@@ -2324,7 +2313,7 @@ fn handle_camera_input(
                 // not the terrain under the cursor, so clicks on the visible
                 // body of a tall feature select reliably at any camera angle.
                 if let Some(uv) = cursor_uv {
-                    if let Some(renderer) = core.terrain_renderer.as_ref() {
+                    if let Some(renderer) = core.terrain_renderer() {
                         let pickable = build_pickable_features(
                             &app.map.features,
                             &FeatureMapDims {
@@ -2391,7 +2380,7 @@ fn handle_camera_input(
             if let (Some(uv), Some(hm), Some(renderer)) = (
                 cursor_uv,
                 app.paint.heightmap.as_ref(),
-                core.terrain_renderer.as_ref(),
+                core.terrain_renderer(),
             ) {
                 let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
                 if let Some(pick) = pick_terrain(
@@ -2421,9 +2410,7 @@ fn handle_camera_input(
                     }
                 }
             }
-        } else if feature_type.is_none() {
-            let delta = drag_delta_after_start(egui::PointerButton::Primary);
-            core.camera.orbit(delta.x * 0.01, delta.y * 0.01);
+        } else if feature_type.is_none() && apply_orbit_primary(&mut core.camera, response) {
             camera_changed = true;
         }
     }
@@ -2465,15 +2452,9 @@ fn handle_camera_input(
         camera_changed = true;
     }
 
-    if response.dragged_by(egui::PointerButton::Middle) {
-        let delta = drag_delta_after_start(egui::PointerButton::Middle);
-        let speed = core.camera.distance * 0.0015;
-        // Grab-and-drag-the-world: cursor stays anchored to a point
-        // on the terrain. Drag the cursor right and the world slides
-        // right with it, which means the camera target moves left
-        // (negative right). Same logic on Y: drag down and the world
-        // slides down, so the target moves forward into the scene.
-        core.camera.pan_xz(-delta.x * speed, delta.y * speed);
+    // Grab-and-drag-the-world MMB pan: same math the Layout preview
+    // uses, via the shared `apply_pan_middle` helper.
+    if apply_pan_middle(&mut core.camera, response) {
         camera_changed = true;
     }
 
@@ -2580,7 +2561,7 @@ fn handle_camera_input(
                 if let (Some(uv), Some(hm), Some(renderer)) = (
                     cursor_uv,
                     app.paint.heightmap.as_ref(),
-                    core.terrain_renderer.as_ref(),
+                    core.terrain_renderer(),
                 ) {
                     let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
                     // Walk the line from cursor toward screen centre and
@@ -2631,8 +2612,7 @@ fn handle_camera_input(
         // user's gesture does nothing instead of sliding the camera
         // along the terrain surface. Allow upward "escape" mutations
         // from a degenerate pre-below state so the user isn't stuck.
-        if let (Some(renderer), Some(hm)) =
-            (core.terrain_renderer.as_ref(), app.paint.heightmap.as_ref())
+        if let (Some(renderer), Some(hm)) = (core.terrain_renderer(), app.paint.heightmap.as_ref())
         {
             const TERRAIN_FLOOR_EPSILON: f32 = 0.005;
             let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
@@ -2668,7 +2648,7 @@ fn handle_camera_input(
         // grows the camera's distance from target, which moves
         // position XZ outward, but target itself stays inside the
         // map. Allow escape inward from a degenerate pre-oob state.
-        if let Some(renderer) = core.terrain_renderer.as_ref() {
+        if let Some(renderer) = core.terrain_renderer() {
             const TARGET_OOB_OVERSHOOT_FACTOR: f32 = 1.1;
             let (_, x_extent, z_extent) = renderer.mesh_extents();
             let bound_x = x_extent * TARGET_OOB_OVERSHOOT_FACTOR;
@@ -2690,20 +2670,21 @@ fn handle_camera_input(
     }
 
     if camera_changed {
-        if let (Some(ref mut renderer), Some(ref gpu)) = (&mut core.terrain_renderer, gpu_context) {
+        if let (Some(pane), Some(gpu)) = (core.terrain_pane.as_mut(), gpu_context.as_ref()) {
             let elapsed = core.started_at.elapsed().as_secs_f32();
             let smf = live_smf_lighting(app);
             let frame = core
                 .current_frame
                 .as_ref()
                 .map(|f| f.as_frame(elapsed, smf));
-            renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
-            update_viewport_texture(
-                &mut core.viewport_texture_id,
-                &core.terrain_renderer,
-                render_state,
-                ctx,
-            );
+            pane.render_with_camera(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+            if let Some(rs) = render_state {
+                pane.bind_egui_texture(rs);
+            }
+        }
+        if render_state.is_some() {
+            core.viewport_texture_id = core.terrain_pane.as_ref().and_then(|p| p.texture_id());
+            ctx.request_repaint();
         }
     }
 
@@ -2723,7 +2704,7 @@ fn handle_camera_input(
         let feature_type = app.selected_feature_type.as_ref()?;
         let uv = cursor_uv?;
         let hm = app.paint.heightmap.as_ref()?;
-        let renderer = core.terrain_renderer.as_ref()?;
+        let renderer = core.terrain_renderer()?;
         let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
         let pick = pick_terrain(
             &core.camera,
@@ -2771,7 +2752,7 @@ fn apply_sculpt_dab_at_cursor(
     let Some(hm) = app.paint.heightmap.as_ref() else {
         return;
     };
-    let Some(renderer) = core.terrain_renderer.as_ref() else {
+    let Some(renderer) = core.terrain_renderer() else {
         return;
     };
     let (height_scale, x_extent, z_extent) = renderer.mesh_extents();
@@ -2832,46 +2813,45 @@ fn apply_sculpt_dab_at_cursor(
         return;
     }
 
+    // Pre-compute frame inputs from `core` fields before borrowing
+    // the pane mutably, so the per-frame `core.started_at` /
+    // `core.current_frame` / `core.camera` reads don't conflict
+    // with `core.terrain_pane.as_mut()` afterwards.
+    let elapsed = core.started_at.elapsed().as_secs_f32();
+    let smf = live_smf_lighting(app);
+    let frame = core
+        .current_frame
+        .as_ref()
+        .map(|f| f.as_frame(elapsed, smf));
+    let camera = core.camera.clone();
     if is_color {
-        if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.color_buffer.clone()) {
-            if let Some(ref mut renderer) = core.terrain_renderer {
-                renderer.update_albedo(&gpu.device, &gpu.queue, &updated);
-                let elapsed = core.started_at.elapsed().as_secs_f32();
-                let smf = live_smf_lighting(app);
-                let frame = core
-                    .current_frame
-                    .as_ref()
-                    .map(|f| f.as_frame(elapsed, smf));
-                renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+        if let (Some(gpu), Some(updated)) = (gpu_context.as_ref(), app.paint.color_buffer.clone()) {
+            if let Some(pane) = core.terrain_pane.as_mut() {
+                pane.renderer_mut()
+                    .update_albedo(&gpu.device, &gpu.queue, &updated);
+                pane.render_with_camera(&gpu.device, &gpu.queue, &camera, frame.as_ref());
             }
         }
-    } else {
-        if let (Some(ref gpu), Some(updated)) = (gpu_context, app.paint.heightmap.clone()) {
-            if let Some(ref mut renderer) = core.terrain_renderer {
-                let br = app.paint.brush.radius_px.ceil() as i32 + 1;
-                let hm_w = updated.width() as i32;
-                let hm_h = updated.height() as i32;
-                let x0 = ((p.hm_x as i32) - br).max(0) as u32;
-                let y0 = ((p.hm_y as i32) - br).max(0) as u32;
-                let x1 = ((p.hm_x as i32) + br + 1).min(hm_w) as u32;
-                let y1 = ((p.hm_y as i32) + br + 1).min(hm_h) as u32;
-                let rw = x1 - x0;
-                let rh = y1 - y0;
-                if rw > 0 && rh > 0 {
-                    let hm_ref = &updated;
-                    let data: Vec<f32> = (y0..y1)
-                        .flat_map(|y| (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0)))
-                        .collect();
-                    renderer.update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
-                }
-                let elapsed = core.started_at.elapsed().as_secs_f32();
-                let smf = live_smf_lighting(app);
-                let frame = core
-                    .current_frame
-                    .as_ref()
-                    .map(|f| f.as_frame(elapsed, smf));
-                renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+    } else if let (Some(gpu), Some(updated)) = (gpu_context.as_ref(), app.paint.heightmap.clone()) {
+        if let Some(pane) = core.terrain_pane.as_mut() {
+            let br = app.paint.brush.radius_px.ceil() as i32 + 1;
+            let hm_w = updated.width() as i32;
+            let hm_h = updated.height() as i32;
+            let x0 = ((p.hm_x as i32) - br).max(0) as u32;
+            let y0 = ((p.hm_y as i32) - br).max(0) as u32;
+            let x1 = ((p.hm_x as i32) + br + 1).min(hm_w) as u32;
+            let y1 = ((p.hm_y as i32) + br + 1).min(hm_h) as u32;
+            let rw = x1 - x0;
+            let rh = y1 - y0;
+            if rw > 0 && rh > 0 {
+                let hm_ref = &updated;
+                let data: Vec<f32> = (y0..y1)
+                    .flat_map(|y| (x0..x1).map(move |x| hm_ref.get(x, y).unwrap_or(0.0)))
+                    .collect();
+                pane.renderer_mut()
+                    .update_heightmap_region(&gpu.queue, x0, y0, rw, rh, &data);
             }
+            pane.render_with_camera(&gpu.device, &gpu.queue, &camera, frame.as_ref());
         }
     }
 }
@@ -3451,7 +3431,7 @@ pub fn apply_compiled_bc1(
     gpu: &GpuContext,
     water_color: [f32; 3],
 ) -> LoadedBc1 {
-    if let Some(renderer) = core.terrain_renderer.as_mut() {
+    if let Some(renderer) = core.terrain_renderer_mut() {
         renderer.upload_bc1_texture(
             &gpu.device,
             &gpu.queue,
@@ -3467,7 +3447,7 @@ pub fn apply_compiled_bc1(
     }
     let mut loaded_hm: Option<bar_data::Heightmap> = None;
     if let Some(h) = result.height {
-        if let Some(renderer) = core.terrain_renderer.as_mut() {
+        if let Some(renderer) = core.terrain_renderer_mut() {
             // Coastmap bake for the shore-foam shader stage. Same
             // chamfer transform the sculpt-eval path uses; cost is
             // O(N) over heightmap texels.

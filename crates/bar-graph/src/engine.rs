@@ -317,6 +317,16 @@ impl GraphEngine {
                             a.to_bits().hash(&mut h);
                             b.to_bits().hash(&mut h);
                         }
+                        ParamValue::Spline(points) => {
+                            // Length first so two splines with the
+                            // same trailing coords but different
+                            // counts don't collide.
+                            (points.len() as u64).hash(&mut h);
+                            for [px, py] in points {
+                                px.to_bits().hash(&mut h);
+                                py.to_bits().hash(&mut h);
+                            }
+                        }
                     }
                 }
             }
