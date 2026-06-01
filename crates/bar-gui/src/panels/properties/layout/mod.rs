@@ -418,11 +418,18 @@ impl BarEditorApp {
         // recently-added item wins ties. Cloned so the closure owns
         // its inputs (the items Vec is mutated by the gesture loop).
         let hit_items = frame.items.clone();
+        let (map_w, map_h) = self.map.dimensions();
+        let grid = properties_canvas::GridSpec {
+            cols: map_w,
+            rows: map_h,
+            subdivisions: 4,
+        };
         let gestures = properties_canvas::draw(
             ui,
             egui::vec2(canvas_size, canvas_size),
             &mut frame.state,
             &handles,
+            grid,
             move |painter, xform| {
                 for (sel, snap) in &draw_data {
                     snap.draw(painter, xform, *sel);

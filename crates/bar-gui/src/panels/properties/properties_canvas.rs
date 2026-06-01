@@ -184,6 +184,31 @@ pub enum CanvasGesture {
     },
 }
 
+/// Background grid sizing for the canvas. `cols` / `rows` are the
+/// number of major (map-square) cells along each axis; `subdivisions`
+/// is the count of lighter sub-cells inside each major cell (set to
+/// 0 to draw only the major grid). Panels typically derive this from
+/// their host's map dimensions so the grid reads as "one square per
+/// map unit".
+#[derive(Clone, Copy, Debug)]
+pub struct GridSpec {
+    pub cols: u32,
+    pub rows: u32,
+    pub subdivisions: u32,
+}
+
+impl Default for GridSpec {
+    fn default() -> Self {
+        // Sensible fallback for callers that don't have a host map:
+        // a 10-cell square grid, no sub-grid.
+        Self {
+            cols: 10,
+            rows: 10,
+            subdivisions: 0,
+        }
+    }
+}
+
 /// Coord transform between normalised [0..1] and canvas-pixel space.
 /// The user draw callback receives one and uses it to project points
 /// for painting.
@@ -221,6 +246,7 @@ pub fn draw<F, H>(
     size: egui::Vec2,
     state: &mut CanvasState,
     handles: &[HandleSpec],
+    grid: GridSpec,
     draw_items: F,
     item_hit_test: H,
 ) -> Vec<CanvasGesture>
@@ -292,36 +318,33 @@ where
         egui::epaint::StrokeKind::Inside,
     );
 
-    // Grid lines at every 0.1; thicker at 0.5.
-    let grid_minor = egui::Stroke::new(
-        0.5,
-        ui.visuals()
-            .widgets
-            .noninteractive
-            .fg_stroke
-            .color
-            .gamma_multiply(0.35),
-    );
-    let grid_major = egui::Stroke::new(
-        1.0,
-        ui.visuals()
-            .widgets
-            .noninteractive
-            .fg_stroke
-            .color
-            .gamma_multiply(0.55),
-    );
-    for i in 1..10 {
-        let n = i as f32 / 10.0;
+    // Map-square grid. Major lines mark every map square (so a 4x4
+    // map shows 4 cells per axis); sub-lines are drawn lighter so the
+    // major grid still reads as the dominant structure.
+    let base = ui.visuals().widgets.noninteractive.fg_stroke.color;
+    let grid_minor = egui::Stroke::new(0.5, base.gamma_multiply(0.18));
+    let grid_major = egui::Stroke::new(1.0, base.gamma_multiply(0.45));
+    let cols = grid.cols.max(1);
+    let rows = grid.rows.max(1);
+    let subs = grid.subdivisions;
+    let total_x = cols * subs.max(1);
+    let total_y = rows * subs.max(1);
+    for i in 1..total_x {
+        let is_major = subs == 0 || i % subs == 0;
+        let n = i as f32 / total_x as f32;
         let x = xform.to_pixel([n, 0.0]).x;
         painter.line_segment(
             [egui::pos2(x, frame_min.y), egui::pos2(x, frame_max.y)],
-            if i == 5 { grid_major } else { grid_minor },
+            if is_major { grid_major } else { grid_minor },
         );
+    }
+    for i in 1..total_y {
+        let is_major = subs == 0 || i % subs == 0;
+        let n = i as f32 / total_y as f32;
         let y = xform.to_pixel([0.0, n]).y;
         painter.line_segment(
             [egui::pos2(frame_min.x, y), egui::pos2(frame_max.x, y)],
-            if i == 5 { grid_major } else { grid_minor },
+            if is_major { grid_major } else { grid_minor },
         );
     }
 
