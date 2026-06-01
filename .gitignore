@@ -9,3 +9,9 @@ tmp
 *.test
 *.log
 *.sd7
+
+# `.barproj` directories accumulate autosave snapshots while open in
+# BME. Demo `.barproj` directories are committed by hand; their
+# autosave subdirectories are not -- they're regenerated each session
+# and would otherwise create commit noise on every editor run.
+examples/**/autosave/

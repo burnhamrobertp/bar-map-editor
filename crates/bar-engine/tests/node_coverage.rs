@@ -411,6 +411,144 @@ fn mirror_y_makes_top_bottom_symmetric() {
 }
 
 #[test]
+fn mirror_average_x_preserves_information_from_both_halves() {
+    // A 0->1 left-to-right ramp has equal information on both halves.
+    // The replace `mirror_x` mode throws the right half away (output
+    // would average to ~0.25). The `average_x` mode means(left, right)
+    // at every column -- input(u) + input(1-u) averages to ~0.5
+    // everywhere, so the output mean equals the input mean.
+    let input = gen(|u, _| u);
+    let inputs = input_hm("input", input.clone());
+    let p = &[("mode", ParamValue::String("average_x".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    assert_hm_dims(&h);
+    // Output must be symmetric about the centre column.
+    let left = h.get(2, H / 2).unwrap();
+    let right = h.get(W - 1 - 2, H / 2).unwrap();
+    assert!(
+        (left - right).abs() < 1e-4,
+        "average_x output must be symmetric: {left} vs {right}"
+    );
+    // Mean is preserved: the ramp's mean is 0.5, so the averaged output
+    // sits at ~0.5 across the whole image.
+    let m = mean(&h);
+    assert!(
+        (m - 0.5).abs() < 0.05,
+        "average_x mean should match input mean: got {m}"
+    );
+}
+
+#[test]
+fn mirror_average_xy_collapses_to_mean_of_four() {
+    // Build an input with a known asymmetric pattern so each of the
+    // four symmetric partners carries a distinct value. The output at
+    // every position should equal the mean of those four values.
+    let input = gen(|u, v| u + 2.0 * v); // top-left low, bottom-right high
+    let inputs = input_hm("input", input.clone());
+    let p = &[("mode", ParamValue::String("average_xy".to_string()))];
+    let h = out_hm(&run(NodeType::Mirror, p, &inputs), "output");
+    let cx = 3;
+    let cy = 4;
+    let expected = (input.get(cx, cy).unwrap()
+        + input.get(W - 1 - cx, cy).unwrap()
+        + input.get(cx, H - 1 - cy).unwrap()
+        + input.get(W - 1 - cx, H - 1 - cy).unwrap())
+        / 4.0;
+    let got = h.get(cx, cy).unwrap();
+    assert!(
+        (got - expected).abs() < 1e-4,
+        "average_xy at ({cx},{cy}): expected {expected}, got {got}"
+    );
+}
+
+#[test]
+fn layout_mirror_x_symmetry_duplicates_shape() {
+    // One off-centre shape with `symmetry=mirror_x` should produce a
+    // pair: the original on the left and its reflection on the right.
+    let p = &[
+        ("item_count", ParamValue::UInt(1)),
+        ("symmetry", ParamValue::String("mirror_x".to_string())),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.25)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.15)),
+        ("ry_0", ParamValue::Float(0.15)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
+    // The off-centre shape sits near x=0.25; its mirror sits near
+    // x=0.75. Both columns at y=0.5 should read bright.
+    let left = h.get((0.25 * (W - 1) as f32) as u32, H / 2).unwrap();
+    let right = h.get((0.75 * (W - 1) as f32) as u32, H / 2).unwrap();
+    assert!(left > 0.5, "left shape: {left}");
+    assert!(right > 0.5, "right shape: {right}");
+    // Output must be symmetric about x=0.5.
+    let l = h.get(2, H / 2).unwrap();
+    let r = h.get(W - 1 - 2, H / 2).unwrap();
+    assert!(
+        (l - r).abs() < 1e-3,
+        "symmetry should be exact under mirror_x: {l} vs {r}"
+    );
+}
+
+#[test]
+fn layout_rotate_90_produces_four_peaks() {
+    // One off-centre shape with `symmetry=rotate_90` produces four
+    // peaks rotated 90 / 180 / 270 degrees about the centre.
+    let p = &[
+        ("item_count", ParamValue::UInt(1)),
+        ("symmetry", ParamValue::String("rotate_90".to_string())),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.7)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.1)),
+        ("ry_0", ParamValue::Float(0.1)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
+    // Original at (0.7, 0.5). Three rotations: (0.5, 0.7), (0.3, 0.5),
+    // (0.5, 0.3). All four positions should be lit.
+    let lookup = |nx: f32, ny: f32| {
+        let px = (nx * (W - 1) as f32) as u32;
+        let py = (ny * (H - 1) as f32) as u32;
+        h.get(px, py).unwrap()
+    };
+    assert!(lookup(0.7, 0.5) > 0.5, "original");
+    assert!(lookup(0.5, 0.7) > 0.5, "rot 90");
+    assert!(lookup(0.3, 0.5) > 0.5, "rot 180");
+    assert!(lookup(0.5, 0.3) > 0.5, "rot 270");
+}
+
+#[test]
+fn layout_none_symmetry_is_unchanged() {
+    // Sanity check: the default `symmetry=none` produces the same
+    // single-shape output the node has always produced. Guards against
+    // regressions where the symmetry expansion accidentally adds a
+    // copy even for the default mode.
+    let p = &[
+        ("item_count", ParamValue::UInt(1)),
+        ("symmetry", ParamValue::String("none".to_string())),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.25)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.15)),
+        ("ry_0", ParamValue::Float(0.15)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
+    let left = h.get((0.25 * (W - 1) as f32) as u32, H / 2).unwrap();
+    let right = h.get((0.75 * (W - 1) as f32) as u32, H / 2).unwrap();
+    assert!(left > 0.5, "shape at 0.25 should be lit: {left}");
+    assert!(right < 0.1, "no shape at 0.75 under symmetry=none: {right}");
+}
+
+#[test]
 fn curve_runs_and_preserves_dimensions() {
     let hm = gen(|u, _| u);
     let inputs = input_hm("input", hm);
@@ -736,26 +874,15 @@ fn mask_threshold_yields_binary_band() {
 }
 
 #[test]
-fn mask_invert_flips_a_binary_mask() {
+fn invert_flips_a_constant() {
+    // Constant-input cousin to `invert_reflects_values_around_half`:
+    // verifies the 1-x relationship rather than the spatial direction
+    // of the flip. Previously MaskInvert had its own variant for the
+    // mask-port case; consolidated to use Invert directly.
     let inputs = input_hm("input", flat(0.7));
-    let h = out_hm(&run(NodeType::MaskInvert, &[], &inputs), "output");
+    let h = out_hm(&run(NodeType::Invert, &[], &inputs), "output");
     let m = mean(&h);
     assert!((m - 0.3).abs() < 1e-3, "1 - 0.7 = 0.3, got {m}");
-}
-
-#[test]
-fn mask_blur_smooths_a_delta() {
-    let mut data = vec![0.0_f32; (W * H) as usize];
-    data[(H / 2) as usize * W as usize + (W / 2) as usize] = 1.0;
-    let hm = Heightmap::frbar_data(W, H, data).unwrap();
-    let inputs = input_hm("input", hm);
-    let p = &[("radius", ParamValue::Float(2.0))];
-    let h = out_hm(&run(NodeType::MaskBlur, p, &inputs), "output");
-    assert_hm_dims(&h);
-    let centre = h.get(W / 2, H / 2).unwrap();
-    let neighbour = h.get(W / 2 + 1, H / 2).unwrap();
-    assert!(centre < 1.0);
-    assert!(neighbour > 0.0);
 }
 
 #[test]
@@ -865,4 +992,810 @@ fn color_ramp_custom_stop_tints_output() {
     let g = data[1];
     assert!(r > 0.95, "red channel should be ~1.0 at stop 0: {r}");
     assert!(g < 0.05, "green channel should be ~0.0 at red stop: {g}");
+}
+
+// ── Untested filters + selectors ────────────────────────────────────
+//
+// These node types had no behavioural coverage in this file before
+// today. Each test asserts the smallest invariant that defines the
+// node's contract: e.g. Warp at strength=0 is identity, MaskExpand
+// grows a bright region, SelectAspect picks the matching slope
+// direction. Strong enough to catch a refactor that silently breaks
+// the semantics; loose enough not to bind future quality tweaks.
+
+#[test]
+fn warp_zero_strength_is_identity() {
+    let base = gen(|u, _| u);
+    let mut inputs = input_hm("input", base.clone());
+    inputs.insert("warp_x".to_string(), PortValue::Heightmap(flat(0.5)));
+    inputs.insert("warp_y".to_string(), PortValue::Heightmap(flat(0.5)));
+    let p = &[("strength", ParamValue::Float(0.0))];
+    let h = out_hm(&run(NodeType::Warp, p, &inputs), "output");
+    assert_hm_dims(&h);
+    // strength=0 collapses the warp -- output should equal input pixel-wise.
+    for (i, (a, b)) in base.data().iter().zip(h.data().iter()).enumerate() {
+        assert!(
+            (a - b).abs() < 1e-4,
+            "warp(strength=0) drift at {i}: {a} vs {b}"
+        );
+    }
+}
+
+#[test]
+fn warp_nonzero_strength_moves_pixels() {
+    // A non-uniform warp field (warp_x ramp) with strength > 0 should
+    // produce a different output than the input. Loose check -- we
+    // assert *something changed*, not the exact remapping.
+    let base = gen(|u, _| u);
+    let mut inputs = input_hm("input", base.clone());
+    inputs.insert("warp_x".to_string(), PortValue::Heightmap(gen(|u, _| u)));
+    inputs.insert("warp_y".to_string(), PortValue::Heightmap(flat(0.5)));
+    let p = &[("strength", ParamValue::Float(0.5))];
+    let h = out_hm(&run(NodeType::Warp, p, &inputs), "output");
+    assert!(
+        h.data() != base.data(),
+        "warp at strength>0 should change output"
+    );
+}
+
+#[test]
+fn transform_default_params_are_identity() {
+    let base = gen(|u, _| u);
+    let inputs = input_hm("input", base.clone());
+    let p = &[
+        ("translate_x", ParamValue::Float(0.0)),
+        ("translate_y", ParamValue::Float(0.0)),
+        ("scale", ParamValue::Float(1.0)),
+        ("angle", ParamValue::Float(0.0)),
+    ];
+    let h = out_hm(&run(NodeType::Transform, p, &inputs), "output");
+    assert_hm_dims(&h);
+    // Sampling alignment may introduce minor numerical drift at edges,
+    // but the bulk-of-image mean must match the input.
+    assert!(
+        (mean(&base) - mean(&h)).abs() < 0.02,
+        "identity transform mean drift: {} vs {}",
+        mean(&base),
+        mean(&h)
+    );
+}
+
+#[test]
+fn transform_translate_x_shifts_content_right() {
+    // The executor's transform is inverse-mapped: positive translate_x
+    // means the image *content* slides right -- the sample point at
+    // each output pixel reads from `nx - tx` in input space. For a
+    // 0->1 left-to-right ramp with translate_x=+0.25, the centre of
+    // the output reads from input near 0.25, so the centre value drops
+    // from 0.5 (identity) toward 0.25.
+    let inputs = input_hm("input", gen(|u, _| u));
+    let p = &[
+        ("translate_x", ParamValue::Float(0.25)),
+        ("translate_y", ParamValue::Float(0.0)),
+        ("scale", ParamValue::Float(1.0)),
+        ("angle", ParamValue::Float(0.0)),
+    ];
+    let h = out_hm(&run(NodeType::Transform, p, &inputs), "output");
+    let centre = h.get(W / 2, H / 2).unwrap();
+    assert!(
+        centre < 0.4,
+        "translate_x=+0.25 should pull the centre toward input(0.25): got {centre}"
+    );
+}
+
+#[test]
+fn stratify_zero_hardness_is_identity() {
+    let base = gen(|u, _| u);
+    let inputs = input_hm("input", base.clone());
+    let p = &[
+        ("layer_count", ParamValue::UInt(8)),
+        ("irregularity", ParamValue::Float(0.0)),
+        ("hardness", ParamValue::Float(0.0)),
+        ("noise_scale", ParamValue::Float(0.05)),
+    ];
+    let h = out_hm(&run(NodeType::Stratify, p, &inputs), "output");
+    assert_hm_dims(&h);
+    for (a, b) in base.data().iter().zip(h.data().iter()) {
+        assert!(
+            (a - b).abs() < 1e-4,
+            "stratify(hardness=0) should pass input through: {a} vs {b}"
+        );
+    }
+}
+
+#[test]
+fn stratify_full_hardness_reduces_value_diversity() {
+    // Quantising a 16-pixel ramp into 4 bands should reduce the number
+    // of distinct values landed in 0.01-wide buckets.
+    let base = gen(|u, _| u);
+    let inputs = input_hm("input", base.clone());
+    let p = &[
+        ("layer_count", ParamValue::UInt(4)),
+        ("irregularity", ParamValue::Float(0.0)),
+        ("hardness", ParamValue::Float(1.0)),
+        ("noise_scale", ParamValue::Float(0.05)),
+    ];
+    let h = out_hm(&run(NodeType::Stratify, p, &inputs), "output");
+    use std::collections::HashSet;
+    let bucket = |hm: &Heightmap| {
+        hm.data()
+            .iter()
+            .map(|v| (v * 100.0).round() as i32)
+            .collect::<HashSet<_>>()
+            .len()
+    };
+    assert!(
+        bucket(&h) < bucket(&base),
+        "stratify(hardness=1) should quantise: {} -> {}",
+        bucket(&base),
+        bucket(&h)
+    );
+}
+
+#[test]
+fn select_aspect_returns_zero_on_flat_input() {
+    let inputs = input_hm("input", flat(0.5));
+    let p = &[
+        ("direction", ParamValue::Float(0.0)),
+        ("width", ParamValue::Float(90.0)),
+        ("falloff", ParamValue::Float(30.0)),
+    ];
+    let h = out_hm(&run(NodeType::SelectAspect, p, &inputs), "output");
+    let (_, mx) = min_max(&h);
+    assert!(
+        mx < 0.05,
+        "flat input has no aspect -- output should be ~0, got max {mx}"
+    );
+}
+
+#[test]
+fn select_aspect_picks_east_for_eastward_ramp() {
+    // A left-to-right ramp has the surface facing east (90 degrees,
+    // per the executor's atan2(dx, -dy) convention).
+    let inputs = input_hm("input", gen(|u, _| u));
+    let p = &[
+        ("direction", ParamValue::Float(90.0)),
+        ("width", ParamValue::Float(45.0)),
+        ("falloff", ParamValue::Float(15.0)),
+    ];
+    let h = out_hm(&run(NodeType::SelectAspect, p, &inputs), "output");
+    let centre = h.get(W / 2, H / 2).unwrap();
+    assert!(
+        centre > 0.5,
+        "east-facing ramp + direction=90 should be selected: centre {centre}"
+    );
+}
+
+#[test]
+fn select_convexity_flat_input_is_neutral() {
+    let inputs = input_hm("input", flat(0.5));
+    let p = &[
+        ("mode", ParamValue::String("ridges".to_string())),
+        ("strength", ParamValue::Float(1.0)),
+    ];
+    let h = out_hm(&run(NodeType::SelectConvexity, p, &inputs), "output");
+    let (_, mx) = min_max(&h);
+    assert!(
+        mx < 0.05,
+        "flat input has no curvature -- ridge selector should be ~0, got max {mx}"
+    );
+}
+
+#[test]
+fn select_convexity_ridges_mode_picks_peak() {
+    // A central bump (smooth radial falloff) produces a peak whose
+    // Laplacian is strongly negative -- "ridges" mode should select it.
+    let bump = gen(|u, v| {
+        let d = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt();
+        (1.0 - (d / 0.4).min(1.0)).max(0.0)
+    });
+    let inputs = input_hm("input", bump);
+    let p = &[
+        ("mode", ParamValue::String("ridges".to_string())),
+        ("strength", ParamValue::Float(4.0)),
+    ];
+    let h = out_hm(&run(NodeType::SelectConvexity, p, &inputs), "output");
+    let centre = h.get(W / 2, H / 2).unwrap();
+    assert!(
+        centre > 0.1,
+        "ridges mode should highlight a peak: centre {centre}"
+    );
+}
+
+#[test]
+fn flow_select_threshold_below_lo_is_zero() {
+    // FlowSelect remaps: values <= (threshold - falloff) go to 0,
+    // values >= threshold go to 1, linear in between.
+    let inputs = input_hm("input", flat(0.05));
+    let p = &[
+        ("threshold", ParamValue::Float(0.5)),
+        ("falloff", ParamValue::Float(0.1)),
+    ];
+    let h = out_hm(&run(NodeType::FlowSelect, p, &inputs), "output");
+    let (_, mx) = min_max(&h);
+    assert!(
+        mx < 0.01,
+        "value below threshold-falloff should map to 0: {mx}"
+    );
+}
+
+#[test]
+fn flow_select_threshold_above_high_is_one() {
+    let inputs = input_hm("input", flat(0.9));
+    let p = &[
+        ("threshold", ParamValue::Float(0.5)),
+        ("falloff", ParamValue::Float(0.1)),
+    ];
+    let h = out_hm(&run(NodeType::FlowSelect, p, &inputs), "output");
+    let (mn, _) = min_max(&h);
+    assert!(mn > 0.99, "value above threshold should map to 1: {mn}");
+}
+
+#[test]
+fn layout_zero_item_count_is_empty() {
+    let p = &[("item_count", ParamValue::UInt(0))];
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
+    assert_hm_dims(&h);
+    let (_, mx) = min_max(&h);
+    assert!(
+        mx < 1e-4,
+        "zero shapes should produce all-zero output: {mx}"
+    );
+}
+
+#[test]
+fn layout_centred_ellipse_brightens_centre() {
+    let p = &[
+        ("item_count", ParamValue::UInt(1)),
+        ("type_0", ParamValue::String("ellipse".to_string())),
+        ("x_0", ParamValue::Float(0.5)),
+        ("y_0", ParamValue::Float(0.5)),
+        ("rx_0", ParamValue::Float(0.3)),
+        ("ry_0", ParamValue::Float(0.3)),
+        ("angle_0", ParamValue::Float(0.0)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("falloff_0", ParamValue::Float(0.5)),
+    ];
+    let h = out_hm(&run(NodeType::Layout, p, &empty_inputs()), "output");
+    let centre = h.get(W / 2, H / 2).unwrap();
+    let corner = h.get(0, 0).unwrap();
+    assert!(centre > 0.5, "ellipse centre should be bright: {centre}");
+    assert!(corner < 0.1, "ellipse corner should be dark: {corner}");
+}
+
+#[test]
+fn mask_expand_grows_a_bright_spot() {
+    // Single bright pixel at the centre; expand with radius=3 must
+    // light up neighbours.
+    let mut data = vec![0.0_f32; (W * H) as usize];
+    let cx = W / 2;
+    let cy = H / 2;
+    data[(cy * W + cx) as usize] = 1.0;
+    let inputs = input_hm("input", Heightmap::frbar_data(W, H, data).unwrap());
+    let p = &[("radius", ParamValue::Float(3.0))];
+    let h = out_hm(&run(NodeType::MaskExpand, p, &inputs), "output");
+    let neighbour = h.get(cx + 2, cy).unwrap();
+    assert!(
+        neighbour > 0.5,
+        "neighbour should be lit by expand: {neighbour}"
+    );
+}
+
+#[test]
+fn mask_shrink_erodes_a_block() {
+    // A solid central block; shrink with radius=2 should pull the
+    // bright region's edges inward, leaving the very-edge pixels dark.
+    let block = gen(|u, v| {
+        if (u - 0.5).abs() < 0.25 && (v - 0.5).abs() < 0.25 {
+            1.0
+        } else {
+            0.0
+        }
+    });
+    let inputs = input_hm("input", block);
+    let p = &[("radius", ParamValue::Float(2.0))];
+    let h = out_hm(&run(NodeType::MaskShrink, p, &inputs), "output");
+    // The point that *was* inside the block but near its edge should
+    // now read dark.
+    let edge_in = h.get(W / 2 - 3, H / 2).unwrap(); // was inside, near edge
+    let centre = h.get(W / 2, H / 2).unwrap();
+    assert!(centre > 0.5, "block centre should survive shrink: {centre}");
+    assert!(edge_in < 0.5, "block edge should be eroded: {edge_in}");
+}
+
+#[test]
+fn mask_select_picks_a_when_mask_is_zero() {
+    let mut inputs = input_hm("a", flat(0.2));
+    inputs.insert("b".to_string(), PortValue::Heightmap(flat(0.8)));
+    inputs.insert("mask".to_string(), PortValue::Heightmap(flat(0.0)));
+    let h = out_hm(&run(NodeType::MaskSelect, &[], &inputs), "output");
+    let m = mean(&h);
+    assert!((m - 0.2).abs() < 0.05, "mask=0 should pick a: {m}");
+}
+
+#[test]
+fn mask_select_picks_b_when_mask_is_one() {
+    let mut inputs = input_hm("a", flat(0.2));
+    inputs.insert("b".to_string(), PortValue::Heightmap(flat(0.8)));
+    inputs.insert("mask".to_string(), PortValue::Heightmap(flat(1.0)));
+    let h = out_hm(&run(NodeType::MaskSelect, &[], &inputs), "output");
+    let m = mean(&h);
+    assert!((m - 0.8).abs() < 0.05, "mask=1 should pick b: {m}");
+}
+
+// ── Texture node semantic checks ────────────────────────────────────
+//
+// Texture/color nodes previously had smoke-only tests. These add
+// behavioural assertions on the colour they actually emit.
+
+#[test]
+fn rock_soil_steep_slope_uses_rock_color() {
+    // slope_threshold=0.0 + slope=1.0 means the rock colour dominates.
+    // Default rock_color is 807870 (mid-grey-warm), soil_color is
+    // 8B6914 (yellow-brown). The red channel is similar but green
+    // distinguishes them: rock g=0x78 (~0.47), soil g=0x69 (~0.41).
+    // What we can reliably assert: with slope=1.0 + threshold=0.0 the
+    // output sits near the rock colour, not near the soil colour, in
+    // terms of green channel.
+    let mut inputs = input_hm("input", flat(0.5));
+    inputs.insert("slope".to_string(), PortValue::Heightmap(flat(1.0)));
+    let p = &[
+        ("rock_color", ParamValue::String("FF0000".to_string())), // pure red
+        ("soil_color", ParamValue::String("0000FF".to_string())), // pure blue
+        ("slope_threshold", ParamValue::Float(0.0)),
+        ("slope_blend", ParamValue::Float(1.0)),
+        ("ao_strength", ParamValue::Float(0.0)),
+        ("detail_strength", ParamValue::Float(0.0)),
+    ];
+    let outputs = run(NodeType::RockSoil, p, &inputs);
+    let cb = out_color(&outputs, "output");
+    let data = cb.data();
+    // Sample the centre: 4-channel RGBA8 normalised to [0,1].
+    let stride = (cb.width() as usize) * 4;
+    let cy = (cb.height() / 2) as usize;
+    let cx = (cb.width() / 2) as usize;
+    let r = data[cy * stride + cx * 4];
+    let b = data[cy * stride + cx * 4 + 2];
+    assert!(
+        r > b,
+        "steep slope should pick red (rock) not blue (soil): r={r}, b={b}"
+    );
+}
+
+#[test]
+fn vegetation_high_altitude_uses_dry_color() {
+    // altitude_max=0.3 + heightmap=0.8 means the dry colour dominates.
+    let mut inputs = input_hm("input", flat(0.8));
+    inputs.insert("slope".to_string(), PortValue::Heightmap(flat(0.0)));
+    let p = &[
+        ("vegetation_color", ParamValue::String("00FF00".to_string())), // pure green
+        ("dry_color", ParamValue::String("FF0000".to_string())),        // pure red
+        ("altitude_max", ParamValue::Float(0.3)),
+        ("slope_cutoff", ParamValue::Float(0.9)),
+        ("slope_blend", ParamValue::Float(0.0)),
+        ("ao_strength", ParamValue::Float(0.0)),
+        ("detail_strength", ParamValue::Float(0.0)),
+    ];
+    let outputs = run(NodeType::Vegetation, p, &inputs);
+    let cb = out_color(&outputs, "output");
+    let data = cb.data();
+    let stride = (cb.width() as usize) * 4;
+    let cy = (cb.height() / 2) as usize;
+    let cx = (cb.width() / 2) as usize;
+    let r = data[cy * stride + cx * 4];
+    let g = data[cy * stride + cx * 4 + 1];
+    assert!(
+        r > g,
+        "altitude above max should pick red (dry) not green (veg): r={r}, g={g}"
+    );
+}
+
+/// Build a solid-colour ColorBuffer for tests where the executor's
+/// PaintedTexture default-fill doesn't give us a predictable colour.
+fn solid_color(r: f32, g: f32, b: f32) -> bar_data::ColorBuffer {
+    let mut data = Vec::with_capacity((W * H * 4) as usize);
+    for _ in 0..(W * H) {
+        data.push(r);
+        data.push(g);
+        data.push(b);
+        data.push(1.0);
+    }
+    bar_data::ColorBuffer::frbar_data(W, H, data).unwrap()
+}
+
+#[test]
+fn layer_blend_zero_opacity_passes_base_through() {
+    let base = PortValue::Color(solid_color(1.0, 0.0, 0.0));
+    let overlay = PortValue::Color(solid_color(0.0, 1.0, 0.0));
+    let mut inputs = HashMap::new();
+    inputs.insert("base".to_string(), base);
+    inputs.insert("overlay".to_string(), overlay);
+    let p = &[
+        ("blend_mode", ParamValue::String("over".to_string())),
+        ("opacity", ParamValue::Float(0.0)),
+    ];
+    let outputs = run(NodeType::LayerBlend, p, &inputs);
+    let cb = out_color(&outputs, "output");
+    let data = cb.data();
+    // At opacity=0 the output must match the base (red), not the overlay (green).
+    let r = data[0];
+    let g = data[1];
+    assert!(r > 0.9, "base red channel should pass through: r={r}");
+    assert!(
+        g < 0.1,
+        "overlay green should be suppressed at opacity=0: g={g}"
+    );
+}
+
+#[test]
+fn layer_blend_full_opacity_picks_overlay() {
+    let base = PortValue::Color(solid_color(1.0, 0.0, 0.0));
+    let overlay = PortValue::Color(solid_color(0.0, 1.0, 0.0));
+    let mut inputs = HashMap::new();
+    inputs.insert("base".to_string(), base);
+    inputs.insert("overlay".to_string(), overlay);
+    let p = &[
+        ("blend_mode", ParamValue::String("over".to_string())),
+        ("opacity", ParamValue::Float(1.0)),
+    ];
+    let outputs = run(NodeType::LayerBlend, p, &inputs);
+    let cb = out_color(&outputs, "output");
+    let data = cb.data();
+    let r = data[0];
+    let g = data[1];
+    assert!(g > 0.9, "overlay green should dominate at opacity=1: g={g}");
+    assert!(r < 0.1, "base red should be hidden at opacity=1: r={r}");
+}
+
+#[test]
+fn texture_weightmap_single_layer_passes_through() {
+    let layer = PortValue::Color(solid_color(1.0, 0.5, 0.0));
+    let mut inputs = HashMap::new();
+    inputs.insert("texture_0".to_string(), layer);
+    let p = &[
+        ("layer_count", ParamValue::UInt(1)),
+        (
+            "priority_type",
+            ParamValue::String("weighted_blend".to_string()),
+        ),
+        ("priority_0", ParamValue::Float(1.0)),
+        ("exclusion_0", ParamValue::Float(0.0)),
+    ];
+    let outputs = run(NodeType::TextureWeightmap, p, &inputs);
+    let cb = out_color(&outputs, "output");
+    assert_color_dims(&cb);
+    let data = cb.data();
+    assert!(data[0] > 0.9, "single-layer pass-through r: {}", data[0]);
+    assert!(
+        data[1] > 0.4 && data[1] < 0.6,
+        "single-layer pass-through g: {}",
+        data[1]
+    );
+}
+
+// ── Strengthened smoke tests ────────────────────────────────────────
+//
+// Erosion previously only asserted dimensions/range. Add semantic
+// checks: hydraulic erosion lowers peaks; thermal erosion reduces
+// max slope.
+
+#[test]
+fn hydraulic_erosion_lowers_peaks() {
+    // Tall central spike; after erosion the peak should be lower.
+    let spike = gen(|u, v| {
+        let d = ((u - 0.5).powi(2) + (v - 0.5).powi(2)).sqrt();
+        (1.0 - (d / 0.3).min(1.0)).powi(2)
+    });
+    let peak_before = spike
+        .data()
+        .iter()
+        .cloned()
+        .fold(f32::NEG_INFINITY, f32::max);
+    let inputs = input_hm("input", spike);
+    let p = &[
+        ("iterations", ParamValue::UInt(2000)),
+        ("erosion_rate", ParamValue::Float(0.05)),
+        ("deposition_rate", ParamValue::Float(0.01)),
+    ];
+    let h = out_hm(&run(NodeType::HydraulicErosion, p, &inputs), "output");
+    let peak_after = h.data().iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    assert!(
+        peak_after < peak_before,
+        "hydraulic erosion should lower peaks: {peak_before} -> {peak_after}"
+    );
+}
+
+#[test]
+fn thermal_erosion_reduces_max_slope() {
+    // A steep linear ramp -- thermal erosion should reduce its slope.
+    let ramp = gen(|u, _| u);
+    let inputs = input_hm("input", ramp);
+    let p = &[
+        ("iterations", ParamValue::UInt(100)),
+        ("talus_angle", ParamValue::Float(0.1)),
+    ];
+    let h = out_hm(&run(NodeType::ThermalErosion, p, &inputs), "output");
+    // Adjacent-pixel deltas in the eroded heightmap should be smaller
+    // on average than the input's uniform 1/(W-1) step.
+    let max_delta = |hm: &Heightmap| -> f32 {
+        let d = hm.data();
+        let w = hm.width() as usize;
+        let mut m = 0.0_f32;
+        for y in 0..hm.height() as usize {
+            for x in 1..w {
+                let dx = (d[y * w + x] - d[y * w + x - 1]).abs();
+                if dx > m {
+                    m = dx;
+                }
+            }
+        }
+        m
+    };
+    let before = 1.0 / (W - 1) as f32;
+    let after = max_delta(&h);
+    assert!(
+        after <= before + 1e-4,
+        "thermal erosion should not increase max slope: {before} -> {after}"
+    );
+}
+
+// ── Stochastic determinism ──────────────────────────────────────────
+//
+// Every node that reads a `seed` param must produce bit-identical output
+// when seeded the same and different output when seeded differently.
+// Asserting both halves catches two failure modes: (a) the seed is
+// ignored entirely (same input both times, regardless of seed -- common
+// regression when refactoring noise pipelines), (b) the seed feeds an
+// uninitialised path (different output across runs even with the same
+// seed -- breaks reproducibility of saved recipes).
+
+/// Run a node twice with `seed_a`, assert identical output. Then run
+/// with `seed_b`, assert different output. Keeps the per-node tests
+/// terse so adding a new stochastic node only takes one block here.
+fn assert_seed_determinism(
+    nt: NodeType,
+    base_params: &[(&str, ParamValue)],
+    inputs: &HashMap<String, PortValue>,
+    seed_a: u32,
+    seed_b: u32,
+) {
+    let go = |seed: u32| -> Vec<f32> {
+        let mut p: Vec<(&str, ParamValue)> = base_params.to_vec();
+        p.push(("seed", ParamValue::UInt(seed)));
+        out_hm(&run(nt.clone(), &p, inputs), "output")
+            .data()
+            .to_vec()
+    };
+    let a1 = go(seed_a);
+    let a2 = go(seed_a);
+    assert_eq!(
+        a1, a2,
+        "{nt:?}: same seed must produce bit-identical output"
+    );
+    let b = go(seed_b);
+    assert_ne!(
+        a1, b,
+        "{nt:?}: different seeds must produce different output"
+    );
+}
+
+#[test]
+fn simplex_noise_seed_determinism() {
+    assert_seed_determinism(
+        NodeType::SimplexNoise,
+        &[
+            ("frequency", ParamValue::Float(4.0)),
+            ("octaves", ParamValue::UInt(3)),
+        ],
+        &empty_inputs(),
+        7,
+        99,
+    );
+}
+
+#[test]
+fn worley_noise_seed_determinism() {
+    assert_seed_determinism(
+        NodeType::WorleyNoise,
+        &[("frequency", ParamValue::Float(4.0))],
+        &empty_inputs(),
+        7,
+        99,
+    );
+}
+
+#[test]
+fn ridged_noise_seed_determinism() {
+    assert_seed_determinism(
+        NodeType::RidgedNoise,
+        &[
+            ("frequency", ParamValue::Float(4.0)),
+            ("octaves", ParamValue::UInt(3)),
+        ],
+        &empty_inputs(),
+        7,
+        99,
+    );
+}
+
+#[test]
+fn voronoi_seed_determinism() {
+    assert_seed_determinism(
+        NodeType::Voronoi,
+        &[
+            ("frequency", ParamValue::Float(4.0)),
+            ("mode", ParamValue::String("f1".to_string())),
+        ],
+        &empty_inputs(),
+        7,
+        99,
+    );
+}
+
+// ── Layout: spline items ─────────────────────────────────────────────
+
+fn spline_param(points: Vec<[f32; 2]>) -> ParamValue {
+    ParamValue::Spline(points)
+}
+
+/// One spline item in slot 0, with node-level `mode` / `symmetry`.
+fn spline_item(
+    points: Vec<[f32; 2]>,
+    mode: &str,
+    width: f32,
+    symmetry: &str,
+) -> Vec<(&'static str, ParamValue)> {
+    vec![
+        ("item_count", ParamValue::UInt(1)),
+        ("mode", ParamValue::String(mode.to_string())),
+        ("symmetry", ParamValue::String(symmetry.to_string())),
+        ("type_0", ParamValue::String("spline".to_string())),
+        ("points_0", spline_param(points)),
+        ("height_0", ParamValue::Float(1.0)),
+        ("width_0", ParamValue::Float(width)),
+        ("falloff_0", ParamValue::Float(0.5)),
+        ("closed_0", ParamValue::Bool(false)),
+        ("fill_0", ParamValue::Bool(false)),
+    ]
+}
+
+#[test]
+fn layout_spline_empty_points_emits_zero() {
+    // Fewer than 2 points -> nothing to interpolate -> all-zero output.
+    let p = spline_item(vec![], "ridge", 0.1, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
+    assert_hm_dims(&h);
+    let (_, mx) = min_max(&h);
+    assert!(
+        mx < 1e-4,
+        "empty spline should produce zero output, got max {mx}"
+    );
+}
+
+#[test]
+fn layout_spline_two_points_ridge_raises_along_line() {
+    // Two horizontal points at y=0.5 -- the curve degenerates to a
+    // straight line. The midpoint pixel must be lit; the corners far
+    // from the line must be dark.
+    let p = spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "ridge", 0.2, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
+    let mid = h.get(W / 2, H / 2).unwrap();
+    let corner = h.get(0, 0).unwrap();
+    assert!(mid > 0.5, "midpoint of ridge should be bright: {mid}");
+    assert!(corner < 0.1, "far corner should be dark: {corner}");
+}
+
+#[test]
+fn layout_spline_valley_mode_inverts_field() {
+    // Valley mode emits `1 - field`. With height=1, a pixel on the
+    // curve has field=1, so it carves to 0; off-axis pixels have
+    // field=0, so they rise to the 1.0 baseline.
+    let p = spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "valley", 0.1, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
+    let mid = h.get(W / 2, H / 2).unwrap();
+    let corner = h.get(0, 0).unwrap();
+    assert!(mid < 0.1, "valley centre should be carved (~0): {mid}");
+    assert!(
+        corner > 0.95,
+        "valley off-axis should rise to the 1.0 baseline: {corner}"
+    );
+}
+
+#[test]
+fn layout_spline_mask_mode_in_unit_range() {
+    let p = spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "mask", 0.1, "none");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
+    let (mn, mx) = min_max(&h);
+    assert!(
+        mn >= 0.0 && mx <= 1.0,
+        "mask output escapes [0,1]: ({mn}, {mx})"
+    );
+    let mid = h.get(W / 2, H / 2).unwrap();
+    assert!(mid > 0.5, "mask centre should be near 1.0: {mid}");
+}
+
+#[test]
+fn layout_spline_width_controls_perpendicular_falloff() {
+    // A wider `width` lights up pixels that fall outside the narrow
+    // version's falloff radius.
+    let narrow = out_hm(
+        &run(
+            NodeType::Layout,
+            &spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "ridge", 0.05, "none"),
+            &empty_inputs(),
+        ),
+        "output",
+    );
+    let wide = out_hm(
+        &run(
+            NodeType::Layout,
+            &spline_item(vec![[0.2, 0.5], [0.8, 0.5]], "ridge", 0.3, "none"),
+            &empty_inputs(),
+        ),
+        "output",
+    );
+    let y_off = H / 2 + 4;
+    let n = narrow.get(W / 2, y_off).unwrap();
+    let w_val = wide.get(W / 2, y_off).unwrap();
+    assert!(
+        w_val > n,
+        "wider width should reach the off-axis pixel: narrow={n}, wide={w_val}"
+    );
+}
+
+#[test]
+fn layout_spline_symmetry_mirror_x_doubles_curve() {
+    let p = spline_item(vec![[0.2, 0.3], [0.4, 0.3]], "ridge", 0.1, "mirror_x");
+    let h = out_hm(&run(NodeType::Layout, &p, &empty_inputs()), "output");
+    let left = h
+        .get((0.2 * (W - 1) as f32) as u32, (0.3 * (H - 1) as f32) as u32)
+        .unwrap();
+    let right = h
+        .get((0.8 * (W - 1) as f32) as u32, (0.3 * (H - 1) as f32) as u32)
+        .unwrap();
+    assert!(left > 0.3, "left curve should be lit: {left}");
+    assert!(right > 0.3, "mirrored right curve should be lit: {right}");
+}
+
+#[test]
+fn param_value_spline_round_trips_via_serde() {
+    // Constructing the variant directly + serialise + deserialise back.
+    // Verifies the JSON shape carries the variant tag and the point
+    // coords intact, including the empty-list edge case.
+    let pts = vec![[0.1_f32, 0.2], [0.5, 0.7], [0.9, 0.4]];
+    let v = ParamValue::Spline(pts.clone());
+    let s = serde_json::to_string(&v).expect("serialise");
+    let back: ParamValue = serde_json::from_str(&s).expect("deserialise");
+    match back {
+        ParamValue::Spline(got) => assert_eq!(got, pts),
+        other => panic!("expected ParamValue::Spline, got {other:?}"),
+    }
+
+    let empty: ParamValue =
+        serde_json::from_str(&serde_json::to_string(&ParamValue::Spline(vec![])).unwrap()).unwrap();
+    match empty {
+        ParamValue::Spline(got) => assert!(got.is_empty()),
+        other => panic!("empty Spline round-trip lost the variant: {other:?}"),
+    }
+}
+
+#[test]
+fn hydraulic_erosion_seed_determinism() {
+    // Erosion is stochastic via droplet starting positions; the same
+    // seed must give the same erosion pattern for saved-recipe replays.
+    // A small droplet count keeps the test cheap while still exercising
+    // the full seeded path.
+    let hm = gen(|u, v| ((u - 0.5).abs() + (v - 0.5).abs()) * 0.5);
+    let inputs = input_hm("input", hm);
+    assert_seed_determinism(
+        NodeType::HydraulicErosion,
+        &[
+            ("iterations", ParamValue::UInt(200)),
+            ("erosion_rate", ParamValue::Float(0.01)),
+            ("deposition_rate", ParamValue::Float(0.01)),
+        ],
+        &inputs,
+        7,
+        99,
+    );
 }

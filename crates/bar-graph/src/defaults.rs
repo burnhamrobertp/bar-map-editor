@@ -21,24 +21,46 @@ use crate::node::{NodeType, ParamValue};
 
 /// Return the full set of default parameter values for a node type.
 pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
-    // LayoutGenerator has dynamically-named per-shape params; handle it before
-    // the static-key match below.
-    if node_type == &NodeType::LayoutGenerator {
+    // Layout has dynamically-named per-item params; handle it before
+    // the static-key match below. Each of the 8 item slots carries the
+    // primitive fields (type / x / y / rx / ry / angle) plus the spline
+    // fields (points / closed / fill / width) so a slot can switch
+    // kinds without losing data; only the fields its `type_i` selects
+    // are read by the executor.
+    if node_type == &NodeType::Layout {
         let mut m = HashMap::new();
-        m.insert("shape_count".to_string(), ParamValue::UInt(1));
+        m.insert("item_count".to_string(), ParamValue::UInt(1));
+        // Output interpretation of the composited coverage field:
+        // ridge (raise), valley (invert -> carve via downstream
+        // Multiply), mask (0..1 selector). Surfaced as a dropdown.
+        m.insert("mode".to_string(), ParamValue::String("ridge".to_string()));
+        // Symmetry multiplier: duplicates every item across reflection
+        // / rotation axes so BAR-style symmetric maps need only one
+        // authored copy.
+        m.insert(
+            "symmetry".to_string(),
+            ParamValue::String("none".to_string()),
+        );
         for i in 0..8usize {
             let h = if i == 0 { 0.5 } else { 0.0 };
             m.insert(
                 format!("type_{i}"),
                 ParamValue::String("ellipse".to_string()),
             );
+            // Primitive fields.
             m.insert(format!("x_{i}"), ParamValue::Float(0.5));
             m.insert(format!("y_{i}"), ParamValue::Float(0.5));
             m.insert(format!("rx_{i}"), ParamValue::Float(0.2));
             m.insert(format!("ry_{i}"), ParamValue::Float(0.2));
             m.insert(format!("angle_{i}"), ParamValue::Float(0.0));
+            // Shared fields.
             m.insert(format!("height_{i}"), ParamValue::Float(h));
             m.insert(format!("falloff_{i}"), ParamValue::Float(0.5));
+            // Spline fields (used when type_i == "spline").
+            m.insert(format!("points_{i}"), ParamValue::Spline(Vec::new()));
+            m.insert(format!("closed_{i}"), ParamValue::Bool(false));
+            m.insert(format!("fill_{i}"), ParamValue::Bool(false));
+            m.insert(format!("width_{i}"), ParamValue::Float(0.05));
         }
         return m;
     }
@@ -90,7 +112,6 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
             ("threshold", ParamValue::Float(0.5)),
             ("smoothness", ParamValue::Float(0.0)),
         ],
-        NodeType::MaskBlur => vec![("radius", ParamValue::Float(2.0))],
         NodeType::BiasGain => vec![
             ("bias", ParamValue::Float(0.5)),
             ("gain", ParamValue::Float(0.5)),
@@ -349,11 +370,22 @@ pub fn default_params(node_type: &NodeType) -> HashMap<String, ParamValue> {
 pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'static str]> {
     match (node_type, key) {
         (NodeType::Mirror, "mode") => Some(&[
+            // `mirror_*` and `rotate_*` modes replace the non-canonical
+            // half with a copy of the canonical one (information from
+            // the discarded half is lost).
             "mirror_x",
             "mirror_y",
             "mirror_xy",
             "rotate_180",
             "rotate_90_4way",
+            // `average_*` modes preserve information from both halves
+            // by emitting the mean at each symmetric pixel pair. Use
+            // these when both halves carry detail that should survive.
+            "average_x",
+            "average_y",
+            "average_xy",
+            "average_180",
+            "average_90_4way",
         ]),
         (NodeType::Voronoi, "mode") => Some(&["f1", "f2", "f2_f1", "cell"]),
         (NodeType::Gradient, "direction") => Some(&["linear_x", "linear_y", "radial", "angular"]),
@@ -388,9 +420,18 @@ pub fn param_choices(node_type: &NodeType, key: &str) -> Option<&'static [&'stat
             Some(&["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"])
         }
         (NodeType::SelectConvexity, "mode") => Some(&["ridges", "valleys", "full"]),
-        (NodeType::LayoutGenerator, k) if k.starts_with("type_") => {
-            Some(&["ellipse", "rectangle", "ridge"])
+        (NodeType::Layout, k) if k.starts_with("type_") => {
+            Some(&["ellipse", "rectangle", "line", "spline"])
         }
+        (NodeType::Layout, "mode") => Some(&["ridge", "valley", "mask"]),
+        (NodeType::Layout, "symmetry") => Some(&[
+            "none",
+            "mirror_x",
+            "mirror_y",
+            "mirror_xy",
+            "rotate_180",
+            "rotate_90",
+        ]),
         _ => None,
     }
 }
@@ -652,7 +693,7 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         // Utility
         (Constant, "value") => (0.0, 1.0),
         // Filters
-        (Blur | MaskBlur, "radius") => (0.1, 20.0),
+        (Blur, "radius") => (0.1, 20.0),
         (Sharpen, "radius") => (0.1, 10.0),
         (Sharpen, "strength") => (0.0, 4.0),
         (Clamp, "min") | (Clamp, "max") => (0.0, 1.0),
@@ -720,8 +761,8 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         (SelectAspect, "direction") => (0.0, 360.0),
         (SelectAspect, "width") => (0.0, 180.0),
         (SelectAspect, "falloff") => (0.0, 90.0),
-        // LayoutGenerator per-shape numeric params
-        (LayoutGenerator, k)
+        // Layout per-item numeric params.
+        (Layout, k)
             if matches!(
                 k.trim_end_matches(|c: char| c.is_ascii_digit()),
                 "x_" | "y_" | "rx_" | "ry_" | "height_" | "falloff_"
@@ -729,7 +770,8 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
         {
             (0.0, 1.0)
         }
-        (LayoutGenerator, k) if k.starts_with("angle_") => (0.0, 360.0),
+        (Layout, k) if k.starts_with("angle_") => (0.0, 360.0),
+        (Layout, k) if k.starts_with("width_") => (0.001, 0.5),
         _ => return None,
     })
 }
@@ -744,7 +786,7 @@ pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
         (ThermalErosion, "iterations") => (10, 1_000),
         (TextureWeightmap, "layer_count") => (2, 8),
         (ColorRamp, "stop_count") => (2, 8),
-        (LayoutGenerator, "shape_count") => (1, 8),
+        (Layout, "item_count") => (1, 8),
         (Stratify, "layer_count") => (2, 32),
         _ => return None,
     })

@@ -14,7 +14,7 @@ use crate::app::{
     paint_atmosphere_icon, paint_bar_icon, paint_compile_icon, paint_dimensions_icon,
     paint_export_icon, paint_fog_icon, paint_grass_icon, paint_identity_icon, paint_lava_icon,
     paint_lighting_icon, paint_map_edge_icon, paint_physics_icon, paint_publish_icon,
-    paint_resources_icon, paint_water_icon, BarEditorApp, ConfirmAction, ConfirmDialog,
+    paint_resources_icon, paint_water_icon, BarEditorApp, CanvasView, ConfirmAction, ConfirmDialog,
     ExportStatus, GroupDeleteChoice, Layout, PendingAction, UnsavedDecision,
     CONFIRM_KEY_DELETE_CONNECTED_NODE,
 };
@@ -344,8 +344,12 @@ impl BarEditorApp {
 
         // Delete selected node via Delete / Backspace. Routes through the
         // confirm dialog when the user has destructive-confirmation enabled.
+        // Skipped while a node-edit view is active so the in-view canvas
+        // can handle Delete for its own selected shape instead.
+        let in_node_edit_view = matches!(self.current_view(), CanvasView::NodeEdit(_));
         let do_delete = !modal_open
             && !typing
+            && !in_node_edit_view
             && ctx
                 .input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
         if do_delete {

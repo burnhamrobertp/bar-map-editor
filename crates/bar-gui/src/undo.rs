@@ -171,6 +171,7 @@ impl BarEditorApp {
                     recipe_meta: self.map.recipe_meta.clone(),
                     features: self.map.features.clone(),
                 },
+                layout_selection: self.dialog.layout_selection_hint,
             },
             description: description.to_string(),
             painted_assets,
@@ -257,10 +258,54 @@ impl BarEditorApp {
         self.map.settings = snap.state.map.settings;
         self.map.recipe_meta = snap.state.map.recipe_meta;
         self.map.features = snap.state.map.features;
+        // Re-arm the layout-editor selection so the affected shape is
+        // re-selected on the frame the edit view next runs. The editor
+        // consumes (and clears) this when it next draws for that node.
+        self.dialog.layout_selection_hint = snap.state.layout_selection;
+        // The Layout edit view's live preview reflects evaluated params;
+        // since restore_snapshot just changed those, the preview is now
+        // stale and must re-render against the restored graph.
+        self.layout_preview.dirty = true;
         // Force a GPU instance rebuild on the next layout-manager
         // tick in case features changed (cheap when they didn't).
         self.map.features_placement_dirty = true;
-        self.clear_selection();
+
+        // Preserve a still-valid node / group selection across
+        // undo-redo. The previous unconditional `clear_selection()`
+        // closed the properties panel on every undo, which is jarring
+        // when iterating on one node's params (the surrounding comment
+        // claimed selection was skipped, but the clear contradicted
+        // it). Drop only the selection targets the restored graph no
+        // longer contains -- e.g. undoing a node's creation.
+        if self
+            .selection
+            .node
+            .map(|id| self.graph.get_node(id).is_none())
+            .unwrap_or(false)
+        {
+            self.selection.node = None;
+        }
+        self.selection
+            .nodes
+            .retain(|id| self.graph.get_node(*id).is_some());
+        if self
+            .selection
+            .group
+            .map(|gid| !self.visuals.groups.contains_key(&gid))
+            .unwrap_or(false)
+        {
+            self.selection.group = None;
+        }
+        // A wire selection can't be re-validated cheaply against the
+        // restored graph; drop it rather than risk a dangling
+        // reference.
+        self.selection.connection = None;
+        // Close the properties panel only when nothing selectable
+        // survived the restore.
+        if self.selection.node.is_none() && self.selection.group.is_none() {
+            self.dialog.pending_props_open = None;
+            self.props.close();
+        }
         // Replay painted-asset captures: write the recorded bytes back
         // to the asset path. Then clear the cached preview heightmap /
         // colour buffer so the next graph eval reloads them from disk.

@@ -320,6 +320,29 @@ pub struct BarEditorApp {
     /// palette re-fires the request and the thumbnail renders) or
     /// when the load fails terminally.
     pub feature_thumb_pending: std::collections::HashSet<String>,
+    /// Live-preview handoff for the Layout node-edit view. The GUI
+    /// sets `node` + `dirty` when the edited node's geometry changes;
+    /// bar-app's runner evaluates that one node in isolation, renders
+    /// it through the terrain renderer, uploads the result into
+    /// `texture`, and clears `dirty`. The edit view draws `texture`
+    /// if present, else a placeholder.
+    pub layout_preview: LayoutPreview,
+}
+
+/// See [`BarEditorApp::layout_preview`].
+#[derive(Default)]
+pub struct LayoutPreview {
+    pub node: Option<bar_graph::NodeId>,
+    pub dirty: bool,
+    /// Shared 3D-rendering primitive for the preview. Owns the
+    /// `TerrainRenderer`, its camera, and the registered egui
+    /// texture. Lazily constructed by bar-app's runner on the first
+    /// frame the GPU context is available; both the runner (render +
+    /// texture bind) and the edit view's pane (paint + camera
+    /// input) operate on the same instance. See
+    /// `crates/bar-gui/src/terrain_pane.rs` and
+    /// `docs/terrain-pane-plan.md`.
+    pub pane: Option<crate::terrain_pane::TerrainPane>,
 }
 
 /// Per-session viewport debug toggles. Surfaced via a small gear menu
@@ -409,6 +432,7 @@ impl Default for BarEditorApp {
             placement_ghost: None,
             viewport_debug: ViewportDebug::default(),
             feature_thumb_cache: std::collections::HashMap::new(),
+            layout_preview: LayoutPreview::default(),
             feature_thumb_requests: std::collections::HashSet::new(),
             feature_thumb_pending: std::collections::HashSet::new(),
         }
@@ -846,6 +870,23 @@ impl BarEditorApp {
         // GUI + CLI + viewport all go through the same `From` impl in
         // bar-render, so there's no second-copy drift.
         SmfLightingSnapshot::from(&self.map.settings)
+    }
+
+    /// Node currently targeted by the Layout edit-view preview, with a
+    /// clone of its type + params, if any. bar-app's runner calls this
+    /// each frame to evaluate that one node in isolation and render the
+    /// live preview. Returns `None` when no Layout node is being edited
+    /// or the node has since been deleted.
+    pub fn layout_preview_node(
+        &self,
+    ) -> Option<(
+        bar_graph::NodeId,
+        bar_graph::NodeType,
+        std::collections::HashMap<String, bar_graph::ParamValue>,
+    )> {
+        let id = self.layout_preview.node?;
+        let node = self.graph.get_node(id)?;
+        Some((id, node.node_type.clone(), node.params.clone()))
     }
 
     /// Composite cache key for the 3D preview's input state. Bumps

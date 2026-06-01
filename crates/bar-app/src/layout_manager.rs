@@ -17,9 +17,8 @@ use eframe::egui;
 
 use crate::viewport::{
     apply_compiled_bc1, build_feature_instances, draw_preview_placeholder, draw_preview_viewport,
-    draw_sculpt_viewport, eval_preview, live_smf_lighting, read_compiled_bc1_off_thread,
-    update_viewport_texture, EvalState, FeatureMapDims, OwnedFrame, PreviewResult,
-    ResolutionStatus, ViewportCore,
+    draw_sculpt_viewport, eval_preview, live_smf_lighting, read_compiled_bc1_off_thread, EvalState,
+    FeatureMapDims, OwnedFrame, PreviewResult, ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -319,8 +318,8 @@ impl LayoutManager {
         let hm_rev = app.paint.heightmap_rev;
         let needs_feature_rebuild = slot.eval.features_dirty || slot.eval.last_hm_rev != hm_rev;
         if needs_feature_rebuild && app.paint.heightmap.is_some() {
-            if let (Some(ref mut renderer), Some(ref gpu)) =
-                (&mut slot.core.terrain_renderer, gpu_context)
+            if let (Some(renderer), Some(gpu)) =
+                (slot.core.terrain_renderer_mut(), gpu_context.as_ref())
             {
                 let (w, h) = app.map.dimensions();
                 let (min_h, max_h) = app.map.height_range();
@@ -496,8 +495,8 @@ impl LayoutManager {
         let hm_rev = app.paint.heightmap_rev;
         let needs_feature_rebuild = slot.features_dirty || slot.last_hm_rev != hm_rev;
         if needs_feature_rebuild && app.paint.heightmap.is_some() {
-            if let (Some(ref mut renderer), Some(ref gpu)) =
-                (&mut slot.core.terrain_renderer, gpu_context)
+            if let (Some(renderer), Some(gpu)) =
+                (slot.core.terrain_renderer_mut(), gpu_context.as_ref())
             {
                 let (w, h) = app.map.dimensions();
                 let (min_h, max_h) = app.map.height_range();
@@ -633,14 +632,14 @@ impl LayoutManager {
         let in_sculpt = self
             .sculpt3d
             .as_ref()
-            .and_then(|s| s.core.terrain_renderer.as_ref())
+            .and_then(|s| s.core.terrain_renderer())
             .and_then(|r| r.feature_renderer())
             .map(|fr| fr.has_model(feature_type))
             .unwrap_or(false);
         let in_preview = self
             .preview
             .as_ref()
-            .and_then(|s| s.core.terrain_renderer.as_ref())
+            .and_then(|s| s.core.terrain_renderer())
             .and_then(|r| r.feature_renderer())
             .map(|fr| fr.has_model(feature_type))
             .unwrap_or(false);
@@ -681,7 +680,7 @@ impl LayoutManager {
             rgba: t.rgba.as_slice(),
         });
         if let Some(ref mut slot) = self.sculpt3d {
-            if let Some(ref mut renderer) = slot.core.terrain_renderer {
+            if let Some(renderer) = slot.core.terrain_renderer_mut() {
                 renderer.load_feature_mesh(
                     device,
                     queue,
@@ -693,7 +692,7 @@ impl LayoutManager {
             }
         }
         if let Some(ref mut slot) = self.preview {
-            if let Some(ref mut renderer) = slot.core.terrain_renderer {
+            if let Some(renderer) = slot.core.terrain_renderer_mut() {
                 renderer.load_feature_mesh(
                     device,
                     queue,
@@ -799,7 +798,7 @@ fn apply_preview_result(
         });
 
         if let Some(ref gpu) = gpu_context {
-            if let Some(ref mut renderer) = core.terrain_renderer {
+            if let Some(renderer) = core.terrain_renderer_mut() {
                 // Bake a coast-distance + invwaterdepth field from the
                 // raw heightmap and push it as the renderer's coastmap.
                 // Engine bakes its equivalent via a multi-pass shader;
@@ -851,20 +850,22 @@ fn apply_preview_result(
 
         if core.current_frame.is_some() {
             if let Some(ref gpu) = gpu_context {
-                if let Some(ref mut renderer) = core.terrain_renderer {
+                if let Some(pane) = core.terrain_pane.as_mut() {
                     let elapsed = core.started_at.elapsed().as_secs_f32();
                     let smf = live_smf_lighting(app);
                     let frame = core
                         .current_frame
                         .as_ref()
                         .map(|f| f.as_frame(elapsed, smf));
-                    renderer.render(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
-                    update_viewport_texture(
-                        &mut core.viewport_texture_id,
-                        &core.terrain_renderer,
-                        render_state,
-                        ctx,
-                    );
+                    pane.render_with_camera(&gpu.device, &gpu.queue, &core.camera, frame.as_ref());
+                    if let Some(rs) = render_state {
+                        pane.bind_egui_texture(rs);
+                    }
+                }
+                if render_state.is_some() {
+                    core.viewport_texture_id =
+                        core.terrain_pane.as_ref().and_then(|p| p.texture_id());
+                    ctx.request_repaint();
                 }
             }
         }

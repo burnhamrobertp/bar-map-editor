@@ -892,6 +892,11 @@ impl eframe::App for AppRunner {
         // palette is scrolling.
         self.process_one_thumbnail_request(ctx);
 
+        // Refresh the Layout edit-view live preview when its node is
+        // dirty (or on first entry). Evaluates that one node in
+        // isolation and renders it through a dedicated TerrainRenderer.
+        self.maybe_render_layout_preview(ctx);
+
         // Delegate layout rendering to the layout manager.
         let layout = self.app.active_layout();
         // Active engine dir (`<install>/data/engine/<version>/`) for
@@ -980,6 +985,94 @@ impl AppRunner {
             egui::TextureOptions::LINEAR,
         );
         self.app.feature_thumb_cache.insert(name, handle);
+    }
+
+    /// Render the Layout edit-view live preview when its target node
+    /// is dirty (or the pane hasn't rendered yet). Evaluates that one
+    /// node in isolation -- no upstream subtree, no downstream
+    /// pipeline, no mask input -- so the author sees exactly what
+    /// this node contributes, then drives the shared `TerrainPane`
+    /// primitive. The GUI side (`draw_layout_preview_pane`) paints
+    /// whatever the pane has bound.
+    fn maybe_render_layout_preview(&mut self, _ctx: &egui::Context) {
+        let pane_missing = self.app.layout_preview.pane.is_none();
+        let needs = self.app.layout_preview.dirty || pane_missing;
+        if !needs {
+            return;
+        }
+        let Some((_id, node_type, params)) = self.app.layout_preview_node() else {
+            return;
+        };
+        let Some(gpu) = self.gpu_context.as_ref() else {
+            return;
+        };
+
+        // Resolution of the isolated single-node eval + pane render.
+        // Sized so the preview reads crisply at typical pane widths
+        // (~400-700 px on screen) without eating eval budget.
+        const RES: u32 = 512;
+        let inputs = std::collections::HashMap::new();
+        let outputs = match self
+            .executor
+            .execute(&node_type, &params, &inputs, RES, RES, RES, RES)
+        {
+            Ok(o) => o,
+            Err(e) => {
+                tracing::warn!(err = %e, "Layout preview: node eval failed");
+                return;
+            }
+        };
+        let Some(bar_graph::PortValue::Heightmap(hm)) = outputs.get("output") else {
+            return;
+        };
+
+        // The Layout output is a normalised [0, 1] field. Lay it out
+        // as a square map filling the mesh's [-0.5, 0.5] XZ span; a
+        // modest height_scale gives visible relief at the default
+        // camera distance. No water, no edge extension -- this is a
+        // shape preview, not a map preview.
+        let params_t = bar_render::TerrainUpdateParams {
+            height_scale: 0.18,
+            x_extent: 0.5,
+            z_extent: 0.5,
+            water_y: -1.0,
+            water_color: [0.1, 0.3, 0.5],
+            grid_n: RES,
+            height_range_elmos: 1.0,
+            elmo_per_render_xz: [RES as f32, RES as f32],
+            include_edge_extension: false,
+        };
+        let frame = bar_render::PreviewFrame {
+            height_scale: params_t.height_scale,
+            x_extent: params_t.x_extent,
+            z_extent: params_t.z_extent,
+            water_y: params_t.water_y,
+            water_color: params_t.water_color,
+            quality_high: false,
+            time: 0.0,
+            smf_lighting: bar_render::SmfLighting::default(),
+            height_range_elmos: params_t.height_range_elmos,
+            elmo_per_render_xz: params_t.elmo_per_render_xz,
+        };
+
+        // Lazy-construct the pane on the first frame the GPU context
+        // is available. After that, the same instance is reused; the
+        // GUI side mutates its camera and paints its bound texture.
+        let pane = self.app.layout_preview.pane.get_or_insert_with(|| {
+            bar_gui::TerrainPane::new(
+                &gpu.device,
+                &gpu.queue,
+                wgpu::TextureFormat::Rgba8Unorm,
+                RES,
+                bar_gui::PaneQuality::Lit,
+            )
+        });
+        pane.update_heightmap(&gpu.device, &gpu.queue, hm, params_t);
+        pane.render(&gpu.device, &gpu.queue, Some(&frame));
+        if let Some(rs) = self.render_state.as_ref() {
+            pane.bind_egui_texture(rs);
+        }
+        self.app.layout_preview.dirty = false;
     }
 
     /// Spawn the background S3O model loader for all feature types in the current

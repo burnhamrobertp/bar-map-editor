@@ -62,7 +62,7 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::Gradient
         | NodeType::FileInput
         | NodeType::Constant
-        | NodeType::LayoutGenerator => tokens::NODE_CAT_GENERATOR,
+        | NodeType::Layout => tokens::NODE_CAT_GENERATOR,
 
         NodeType::HydraulicErosion
         | NodeType::ThermalErosion
@@ -108,8 +108,6 @@ pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
         | NodeType::PaintedHeightmap
         | NodeType::PaintedTexture
         | NodeType::MaskThreshold
-        | NodeType::MaskInvert
-        | NodeType::MaskBlur
         | NodeType::MaskApply
         | NodeType::MaskExpand
         | NodeType::MaskShrink => tokens::NODE_CAT_MASK,

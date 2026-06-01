@@ -33,7 +33,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Gradient", NodeType::Gradient),
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
-        ("Layout Generator", NodeType::LayoutGenerator),
+        ("Layout", NodeType::Layout),
     ];
 
     let filters = [
@@ -91,8 +91,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Painted Heightmap", NodeType::PaintedHeightmap),
         ("Painted Texture", NodeType::PaintedTexture),
         ("Mask Threshold", NodeType::MaskThreshold),
-        ("Mask Invert", NodeType::MaskInvert),
-        ("Mask Blur", NodeType::MaskBlur),
         ("Mask Apply", NodeType::MaskApply),
         ("Mask Expand", NodeType::MaskExpand),
         ("Mask Shrink", NodeType::MaskShrink),
@@ -113,7 +111,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Gradient", NodeType::Gradient),
         ("File Input", NodeType::FileInput),
         ("Constant", NodeType::Constant),
-        ("Layout Generator", NodeType::LayoutGenerator),
+        ("Layout", NodeType::Layout),
         ("Hydraulic Erosion", NodeType::HydraulicErosion),
         ("Thermal Erosion", NodeType::ThermalErosion),
         ("Blur", NodeType::Blur),
@@ -154,8 +152,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         ("Painted Heightmap", NodeType::PaintedHeightmap),
         ("Painted Texture", NodeType::PaintedTexture),
         ("Mask Threshold", NodeType::MaskThreshold),
-        ("Mask Invert", NodeType::MaskInvert),
-        ("Mask Blur", NodeType::MaskBlur),
         ("Mask Apply", NodeType::MaskApply),
         ("Mask Expand", NodeType::MaskExpand),
         ("Mask Shrink", NodeType::MaskShrink),
