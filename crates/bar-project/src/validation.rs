@@ -109,19 +109,9 @@ pub fn validate_project(
 /// validator works off the node's *type* so it can flag missing
 /// sources in a graph that wouldn't even pass topo sort.
 fn is_source_node(t: &NodeType) -> bool {
-    matches!(
-        t,
-        NodeType::PerlinNoise
-            | NodeType::SimplexNoise
-            | NodeType::WorleyNoise
-            | NodeType::RidgedNoise
-            | NodeType::Constant
-            | NodeType::FileInput
-            | NodeType::Voronoi
-            | NodeType::Gradient
-            | NodeType::PaintedHeightmap
-            | NodeType::PaintedTexture
-    )
+    bar_graph::nodes::def(t)
+        .map(|d| d.caps.is_source)
+        .unwrap_or(false)
 }
 
 /// True if the findings contain any blocking errors.
