@@ -1,6 +1,6 @@
 //! RGBA color buffer for diffuse textures and color maps.
 
-use crate::heightmap::HeightmapError;
+use crate::heightmap::{Heightmap, HeightmapError};
 
 /// An RGBA color buffer stored as `[r, g, b, a]` f32 per pixel, each in [0.0, 1.0].
 #[derive(Clone, Debug)]
@@ -146,6 +146,45 @@ impl ColorBuffer {
         }
         out
     }
+
+    /// Extract one channel (0=R, 1=G, 2=B, 3=A) as a Heightmap of the same dims.
+    pub fn channel(&self, c: usize) -> Heightmap {
+        let n = (self.width as usize) * (self.height as usize);
+        let mut data = vec![0.0f32; n];
+        for (i, px) in self.data.chunks_exact(4).enumerate() {
+            data[i] = px[c];
+        }
+        Heightmap::frbar_data(self.width, self.height, data).unwrap()
+    }
+
+    /// Interleave three (or four) single-channel Heightmaps into an RGBA buffer.
+    /// Uses the minimum common dimensions across all inputs; when `a` is None,
+    /// alpha is filled with 1.0 (fully opaque).
+    pub fn from_channels(
+        r: &Heightmap,
+        g: &Heightmap,
+        b: &Heightmap,
+        a: Option<&Heightmap>,
+    ) -> ColorBuffer {
+        let mut w = r.width().min(g.width()).min(b.width());
+        let mut h = r.height().min(g.height()).min(b.height());
+        if let Some(a) = a {
+            w = w.min(a.width());
+            h = h.min(a.height());
+        }
+
+        let mut data = vec![0.0f32; (w as usize) * (h as usize) * 4];
+        for y in 0..h {
+            for x in 0..w {
+                let idx = ((y as usize) * (w as usize) + (x as usize)) * 4;
+                data[idx] = r.get(x, y).unwrap_or(0.0);
+                data[idx + 1] = g.get(x, y).unwrap_or(0.0);
+                data[idx + 2] = b.get(x, y).unwrap_or(0.0);
+                data[idx + 3] = a.map_or(1.0, |a| a.get(x, y).unwrap_or(1.0));
+            }
+        }
+        ColorBuffer::frbar_data(w, h, data).unwrap()
+    }
 }
 
 #[cfg(test)]
@@ -185,5 +224,59 @@ mod tests {
         let resized = buf.resize(4, 4);
         assert_eq!(resized.width(), 4);
         assert_eq!(resized.height(), 4);
+    }
+
+    #[test]
+    fn test_channel_extracts_each_plane() {
+        let mut buf = ColorBuffer::new(2, 1).unwrap();
+        buf.set(0, 0, [0.1, 0.2, 0.3, 0.4]);
+        buf.set(1, 0, [0.5, 0.6, 0.7, 0.8]);
+
+        let r = buf.channel(0);
+        let g = buf.channel(1);
+        let b = buf.channel(2);
+        let a = buf.channel(3);
+
+        assert_eq!(r.data(), &[0.1, 0.5]);
+        assert_eq!(g.data(), &[0.2, 0.6]);
+        assert_eq!(b.data(), &[0.3, 0.7]);
+        assert_eq!(a.data(), &[0.4, 0.8]);
+        assert_eq!((r.width(), r.height()), (2, 1));
+    }
+
+    #[test]
+    fn test_split_then_merge_round_trips() {
+        let mut buf = ColorBuffer::new(3, 2).unwrap();
+        for y in 0..2 {
+            for x in 0..3 {
+                let f = (y * 3 + x) as f32 / 6.0;
+                buf.set(x, y, [f, 1.0 - f, f * 0.5, 0.25 + f * 0.5]);
+            }
+        }
+
+        let r = buf.channel(0);
+        let g = buf.channel(1);
+        let b = buf.channel(2);
+        let a = buf.channel(3);
+        let merged = ColorBuffer::from_channels(&r, &g, &b, Some(&a));
+
+        assert_eq!(merged.width(), buf.width());
+        assert_eq!(merged.height(), buf.height());
+        for (orig, got) in buf.data().iter().zip(merged.data()) {
+            assert!((orig - got).abs() < 1e-6, "{orig} != {got}");
+        }
+    }
+
+    #[test]
+    fn test_from_channels_missing_alpha_is_opaque() {
+        let r = Heightmap::frbar_data(2, 1, vec![0.2, 0.4]).unwrap();
+        let g = Heightmap::frbar_data(2, 1, vec![0.0, 0.0]).unwrap();
+        let b = Heightmap::frbar_data(2, 1, vec![0.0, 0.0]).unwrap();
+
+        let merged = ColorBuffer::from_channels(&r, &g, &b, None);
+
+        assert_eq!(merged.get(0, 0).unwrap()[3], 1.0);
+        assert_eq!(merged.get(1, 0).unwrap()[3], 1.0);
+        assert_eq!(merged.get(0, 0).unwrap()[0], 0.2);
     }
 }
