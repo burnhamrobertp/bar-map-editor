@@ -8,6 +8,7 @@ pub mod defaults;
 pub mod engine;
 pub mod eval;
 pub mod node;
+pub mod nodes;
 pub mod param_spec;
 pub mod port;
 
