@@ -21,6 +21,7 @@ fn noise_params(size: u32) -> NoiseParams {
         seed: 42,
         offset_x: 0.0,
         offset_y: 0.0,
+        ..Default::default()
     }
 }
 

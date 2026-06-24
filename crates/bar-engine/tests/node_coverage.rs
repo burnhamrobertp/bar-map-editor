@@ -1323,6 +1323,57 @@ fn mask_select_picks_b_when_mask_is_one() {
     assert!((m - 0.8).abs() < 0.05, "mask=1 should pick b: {m}");
 }
 
+// ── Channel ops ─────────────────────────────────────────────────────
+
+#[test]
+fn channel_split_isolates_each_plane() {
+    // A solid red ColorBuffer: split must put 1.0 on `r` and 0.0 on g/b.
+    let mut inputs = HashMap::new();
+    inputs.insert("color".to_string(), PortValue::Color(solid_color(1.0, 0.0, 0.0)));
+    let outputs = run(NodeType::ChannelSplit, &[], &inputs);
+    let r = out_hm(&outputs, "r");
+    let g = out_hm(&outputs, "g");
+    let b = out_hm(&outputs, "b");
+    let a = out_hm(&outputs, "a");
+    assert_hm_dims(&r);
+    assert!((mean(&r) - 1.0).abs() < 1e-4, "red plane: {}", mean(&r));
+    assert!(mean(&g) < 1e-4, "green plane: {}", mean(&g));
+    assert!(mean(&b) < 1e-4, "blue plane: {}", mean(&b));
+    assert!((mean(&a) - 1.0).abs() < 1e-4, "alpha plane: {}", mean(&a));
+}
+
+#[test]
+fn channel_merge_inverts_split() {
+    // Split a known colour, merge it back, and confirm a round-trip.
+    let src = solid_color(0.25, 0.5, 0.75);
+    let mut split_inputs = HashMap::new();
+    split_inputs.insert("color".to_string(), PortValue::Color(src.clone()));
+    let split = run(NodeType::ChannelSplit, &[], &split_inputs);
+
+    let mut merge_inputs = HashMap::new();
+    for ch in ["r", "g", "b", "a"] {
+        merge_inputs.insert(ch.to_string(), split[ch].clone());
+    }
+    let merged = run(NodeType::ChannelMerge, &[], &merge_inputs);
+    let cb = out_color(&merged, "color");
+    assert_color_dims(&cb);
+    for (orig, got) in src.data().iter().zip(cb.data()) {
+        assert!((orig - got).abs() < 1e-4, "round-trip drift: {orig} vs {got}");
+    }
+}
+
+#[test]
+fn channel_merge_without_alpha_is_opaque() {
+    let mut inputs = input_hm("r", flat(0.3));
+    inputs.insert("g".to_string(), PortValue::Heightmap(flat(0.0)));
+    inputs.insert("b".to_string(), PortValue::Heightmap(flat(0.0)));
+    let cb = out_color(&run(NodeType::ChannelMerge, &[], &inputs), "color");
+    assert_color_dims(&cb);
+    let centre = cb.get(W / 2, H / 2).unwrap();
+    assert!((centre[3] - 1.0).abs() < 1e-4, "missing alpha should be opaque: {}", centre[3]);
+    assert!((centre[0] - 0.3).abs() < 1e-4, "red preserved: {}", centre[0]);
+}
+
 // ── Texture node semantic checks ────────────────────────────────────
 //
 // Texture/color nodes previously had smoke-only tests. These add
@@ -1471,6 +1522,44 @@ fn texture_weightmap_single_layer_passes_through() {
         "single-layer pass-through g: {}",
         data[1]
     );
+}
+
+#[test]
+fn lightmap_bake_outputs_color_in_range() {
+    // A central spike heightfield. The bake emits a Color buffer of the
+    // working dims with every channel in [0,1] (R=AO, G=sun, B=AO*sun, A=1).
+    let mut data = vec![0.0_f32; (W * H) as usize];
+    data[((H / 2) * W + W / 2) as usize] = 1.0;
+    let inputs = input_hm("heightmap", Heightmap::frbar_data(W, H, data).unwrap());
+    let p = &[
+        ("ao_radius", ParamValue::Float(0.3)),
+        ("sun_azimuth", ParamValue::Float(45.0)),
+        ("sun_elevation", ParamValue::Float(20.0)),
+    ];
+    let outputs = run(NodeType::LightmapBake, p, &inputs);
+    let cb = out_color(&outputs, "lightmap");
+    assert_color_dims(&cb);
+    for (c, &v) in cb.data().iter().enumerate() {
+        assert!(
+            (0.0..=1.0).contains(&v),
+            "lightmap channel {} out of [0,1]: {v}",
+            c % 4
+        );
+    }
+    // Alpha is fully opaque.
+    let centre = cb.get(W / 2, H / 2).unwrap();
+    assert!((centre[3] - 1.0).abs() < 1e-6, "alpha should be 1: {}", centre[3]);
+}
+
+#[test]
+fn lightmap_bake_flat_field_is_fully_lit() {
+    // A flat heightfield has no occluders: AO ~ 1 and sun ~ 1 everywhere.
+    let inputs = input_hm("heightmap", flat(0.5));
+    let outputs = run(NodeType::LightmapBake, &[], &inputs);
+    let cb = out_color(&outputs, "lightmap");
+    let centre = cb.get(W / 2, H / 2).unwrap();
+    assert!(centre[0] > 0.95, "flat AO should be ~1: {}", centre[0]);
+    assert!(centre[1] > 0.95, "flat sun should be ~1: {}", centre[1]);
 }
 
 // ── Strengthened smoke tests ────────────────────────────────────────

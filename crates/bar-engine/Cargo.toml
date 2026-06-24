@@ -13,6 +13,7 @@ bar-project = { workspace = true }
 anyhow = { workspace = true }
 image = { workspace = true }
 rayon = { workspace = true }
+evalexpr = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }

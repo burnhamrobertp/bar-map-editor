@@ -37,6 +37,9 @@ rayon = "1"
 # Noise (CPU fallback)
 noise = "0.9"
 
+# Per-pixel expression evaluation (Equation node)
+evalexpr = "13"
+
 # Image I/O
 image = "0.25"
 # DDS parsing for skybox cubemaps -- `image` 0.25 has a DDS decoder but
