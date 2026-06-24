@@ -6,11 +6,54 @@
 //! through `add_node_at`. The canvas's drop handler (still in
 //! `app.rs`) is what actually creates the node.
 
+use bar_graph::nodes::NodeCategory;
 use bar_graph::NodeType;
 use eframe::egui;
 
 use crate::app::{BarEditorApp, PaletteDrag, PaletteKind};
 use crate::t;
+
+/// Palette section title for a node category. Drives both section
+/// order (via `SECTION_ORDER`) and the collapsing-header label.
+fn section_title(category: NodeCategory) -> &'static str {
+    match category {
+        NodeCategory::Generator => "Generators",
+        NodeCategory::Filter => "Filters",
+        NodeCategory::Combiner => "Combiners",
+        NodeCategory::Colorizer => "Colorizers",
+        NodeCategory::SplatMap => "Splat & Maps",
+        NodeCategory::Mask => "Masks",
+        NodeCategory::Source => "Sources",
+        NodeCategory::Io => "I/O",
+        NodeCategory::Terminal => "Output",
+    }
+}
+
+/// Section render order, top to bottom.
+const SECTION_ORDER: &[NodeCategory] = &[
+    NodeCategory::Generator,
+    NodeCategory::Filter,
+    NodeCategory::Combiner,
+    NodeCategory::Colorizer,
+    NodeCategory::SplatMap,
+    NodeCategory::Mask,
+    NodeCategory::Source,
+    NodeCategory::Io,
+    NodeCategory::Terminal,
+];
+
+/// Placeable nodes in a category, sorted by label. Excludes
+/// subgraph-only nodes -- those render only in the SubGraph IO block.
+fn placeable_in(category: NodeCategory) -> Vec<(&'static str, NodeType)> {
+    let mut v: Vec<(&'static str, NodeType)> = bar_graph::nodes::all_defs()
+        // Terminal (FinalComposition) is an auto-created singleton, not
+        // user-placeable; subgraph-IO nodes render only in the subgraph view.
+        .filter(|d| d.category == category && !d.caps.is_subgraph_only && !d.caps.is_terminal)
+        .map(|d| (d.label, d.node_type.clone()))
+        .collect();
+    v.sort_by(|a, b| a.0.cmp(b.0));
+    v
+}
 
 /// Render the palette into the surrounding `ui` (typically a
 /// `SidePanel` body).
@@ -23,141 +66,6 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     ));
     ui.separator();
     ui.add_space(2.0);
-
-    let generators = [
-        ("Perlin Noise", NodeType::PerlinNoise),
-        ("Simplex Noise", NodeType::SimplexNoise),
-        ("Worley Noise", NodeType::WorleyNoise),
-        ("Ridged Noise", NodeType::RidgedNoise),
-        ("Voronoi", NodeType::Voronoi),
-        ("Gradient", NodeType::Gradient),
-        ("File Input", NodeType::FileInput),
-        ("Constant", NodeType::Constant),
-        ("Layout", NodeType::Layout),
-    ];
-
-    let filters = [
-        ("Hydraulic Erosion", NodeType::HydraulicErosion),
-        ("Thermal Erosion", NodeType::ThermalErosion),
-        ("Blur", NodeType::Blur),
-        ("Sharpen", NodeType::Sharpen),
-        ("Clamp", NodeType::Clamp),
-        ("Mirror", NodeType::Mirror),
-        ("Terrace", NodeType::Terrace),
-        ("Curve", NodeType::Curve),
-        ("Normalize", NodeType::Normalize),
-        ("Bias / Gain", NodeType::BiasGain),
-        ("Displacement", NodeType::Displacement),
-        ("Transform", NodeType::Transform),
-        ("Warp", NodeType::Warp),
-        ("Stratify", NodeType::Stratify),
-    ];
-
-    let combiners = [
-        ("Blend", NodeType::Blend),
-        ("Add", NodeType::Add),
-        ("Subtract", NodeType::Subtract),
-        ("Multiply", NodeType::Multiply),
-        ("Max", NodeType::Max),
-        ("Min", NodeType::Min),
-        ("Mask Select", NodeType::MaskSelect),
-    ];
-
-    // Height-to-color and paint-style outputs.
-    let colorizers = [
-        ("Color Ramp", NodeType::ColorRamp),
-        ("Auto Texture", NodeType::AutoTexture),
-        ("Rock and Soil", NodeType::RockSoil),
-        ("Vegetation", NodeType::Vegetation),
-        ("Layer Blend", NodeType::LayerBlend),
-        ("Texture Weightmap", NodeType::TextureWeightmap),
-    ];
-
-    // Analytical maps derived from the heightmap.
-    let splat_maps = [
-        ("Slope Map", NodeType::SlopeMap),
-        ("Height Select", NodeType::HeightSelect),
-        ("Flow Select", NodeType::FlowSelect),
-        ("Select Convexity", NodeType::SelectConvexity),
-        ("Select Aspect", NodeType::SelectAspect),
-        ("Terrain Splat", NodeType::TerrainSplat),
-        ("Normal Map", NodeType::NormalMap),
-        ("Grass Map", NodeType::GrassMap),
-        ("Specular Map", NodeType::SpecularMap),
-    ];
-
-    let masks = [
-        ("Invert", NodeType::Invert),
-        ("Painted Heightmap", NodeType::PaintedHeightmap),
-        ("Painted Texture", NodeType::PaintedTexture),
-        ("Mask Threshold", NodeType::MaskThreshold),
-        ("Mask Apply", NodeType::MaskApply),
-        ("Mask Expand", NodeType::MaskExpand),
-        ("Mask Shrink", NodeType::MaskShrink),
-    ];
-
-    let sources = [
-        ("Pass-Through", NodeType::PassThrough),
-        ("File Reference", NodeType::FileReference),
-    ];
-
-    // Flat list of every node entry across all categories (for search).
-    let all_nodes: &[(&str, NodeType)] = &[
-        ("Perlin Noise", NodeType::PerlinNoise),
-        ("Simplex Noise", NodeType::SimplexNoise),
-        ("Worley Noise", NodeType::WorleyNoise),
-        ("Ridged Noise", NodeType::RidgedNoise),
-        ("Voronoi", NodeType::Voronoi),
-        ("Gradient", NodeType::Gradient),
-        ("File Input", NodeType::FileInput),
-        ("Constant", NodeType::Constant),
-        ("Layout", NodeType::Layout),
-        ("Hydraulic Erosion", NodeType::HydraulicErosion),
-        ("Thermal Erosion", NodeType::ThermalErosion),
-        ("Blur", NodeType::Blur),
-        ("Sharpen", NodeType::Sharpen),
-        ("Clamp", NodeType::Clamp),
-        ("Mirror", NodeType::Mirror),
-        ("Terrace", NodeType::Terrace),
-        ("Curve", NodeType::Curve),
-        ("Normalize", NodeType::Normalize),
-        ("Bias / Gain", NodeType::BiasGain),
-        ("Displacement", NodeType::Displacement),
-        ("Transform", NodeType::Transform),
-        ("Warp", NodeType::Warp),
-        ("Stratify", NodeType::Stratify),
-        ("Blend", NodeType::Blend),
-        ("Add", NodeType::Add),
-        ("Subtract", NodeType::Subtract),
-        ("Multiply", NodeType::Multiply),
-        ("Max", NodeType::Max),
-        ("Min", NodeType::Min),
-        ("Mask Select", NodeType::MaskSelect),
-        ("Color Ramp", NodeType::ColorRamp),
-        ("Auto Texture", NodeType::AutoTexture),
-        ("Rock and Soil", NodeType::RockSoil),
-        ("Vegetation", NodeType::Vegetation),
-        ("Layer Blend", NodeType::LayerBlend),
-        ("Texture Weightmap", NodeType::TextureWeightmap),
-        ("Slope Map", NodeType::SlopeMap),
-        ("Height Select", NodeType::HeightSelect),
-        ("Flow Select", NodeType::FlowSelect),
-        ("Select Convexity", NodeType::SelectConvexity),
-        ("Select Aspect", NodeType::SelectAspect),
-        ("Terrain Splat", NodeType::TerrainSplat),
-        ("Normal Map", NodeType::NormalMap),
-        ("Grass Map", NodeType::GrassMap),
-        ("Specular Map", NodeType::SpecularMap),
-        ("Invert", NodeType::Invert),
-        ("Painted Heightmap", NodeType::PaintedHeightmap),
-        ("Painted Texture", NodeType::PaintedTexture),
-        ("Mask Threshold", NodeType::MaskThreshold),
-        ("Mask Apply", NodeType::MaskApply),
-        ("Mask Expand", NodeType::MaskExpand),
-        ("Mask Shrink", NodeType::MaskShrink),
-        ("Pass-Through", NodeType::PassThrough),
-        ("File Reference", NodeType::FileReference),
-    ];
 
     let mut to_add: Option<(NodeType, String)> = None;
     let mut drag_start: Option<PaletteDrag> = None;
@@ -193,22 +101,30 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     }
 
     if !filter.is_empty() {
-        // Flat filtered list -- categories are suppressed.
+        // Flat filtered list -- categories are suppressed. Single source:
+        // every placeable descriptor, regardless of section.
         let mut any = false;
-        for (label, node_type) in all_nodes {
-            if label.to_lowercase().contains(&filter) {
-                let resp = palette_item(ui, label, node_type);
-                if resp.drag_started() && drag_start.is_none() {
-                    drag_start = Some(PaletteDrag {
-                        kind: PaletteKind::Node((*node_type).clone()),
-                        label: label.to_string(),
-                    });
-                }
-                if resp.double_clicked() {
-                    to_add = Some(((*node_type).clone(), label.to_string()));
-                }
-                any = true;
+        let mut matches: Vec<(&'static str, NodeType)> = bar_graph::nodes::all_defs()
+            .filter(|d| {
+                !d.caps.is_subgraph_only
+                    && !d.caps.is_terminal
+                    && d.label.to_lowercase().contains(&filter)
+            })
+            .map(|d| (d.label, d.node_type.clone()))
+            .collect();
+        matches.sort_by(|a, b| a.0.cmp(b.0));
+        for (label, node_type) in &matches {
+            let resp = palette_item(ui, label, node_type);
+            if resp.drag_started() && drag_start.is_none() {
+                drag_start = Some(PaletteDrag {
+                    kind: PaletteKind::Node(node_type.clone()),
+                    label: label.to_string(),
+                });
             }
+            if resp.double_clicked() {
+                to_add = Some((node_type.clone(), label.to_string()));
+            }
+            any = true;
         }
         // Also search macros.
         for group in crate::macros::BUILTIN_MACRO_GROUPS {
@@ -254,13 +170,13 @@ pub(crate) fn draw(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             ui.add_space(8.0);
         }
 
-        palette_group!(ui, "Generators", generators);
-        palette_group!(ui, "Filters", filters);
-        palette_group!(ui, "Combiners", combiners);
-        palette_group!(ui, "Colorizers", colorizers);
-        palette_group!(ui, "Splat / Maps", splat_maps);
-        palette_group!(ui, "Masks", masks);
-        palette_group!(ui, "Sources", sources);
+        for &category in SECTION_ORDER {
+            let items = placeable_in(category);
+            if items.is_empty() {
+                continue;
+            }
+            palette_group!(ui, section_title(category), items);
+        }
 
         // Macros -- pre-built SubGraphs that drop as a complete chunk
         // of graph wired up for a typical map archetype. Drop one and

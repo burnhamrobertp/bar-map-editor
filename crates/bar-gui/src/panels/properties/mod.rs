@@ -19,16 +19,19 @@
 //! clean -- `&mut self` already grants what's needed.
 
 pub(crate) mod color_ramp;
+pub(crate) mod equation;
 pub(crate) mod group;
 pub(crate) mod layout;
 pub(crate) mod painted_heightmap;
 pub(crate) mod painted_texture;
 pub(crate) mod pass_through;
 pub(crate) mod properties_canvas;
+pub(crate) mod switch;
 pub(crate) mod texture_weightmap;
 
 use std::time::Instant;
 
+use bar_graph::nodes::CustomPanel;
 use bar_graph::{self, NodeType, ParamValue};
 use eframe::egui;
 
@@ -63,6 +66,21 @@ pub(crate) fn close_icon_button(ui: &mut egui::Ui) -> bool {
         egui::Stroke::new(1.5, color),
     );
     resp.on_hover_text("Close").clicked()
+}
+
+/// Render a param's key in the grid's left cell. When the param is driven by an
+/// inbound scalar wire, append a weak "(wired)" badge so the user understands
+/// the disabled editor on the right is wire-controlled, not broken.
+fn param_key_label(ui: &mut egui::Ui, key: &str, wired: bool) {
+    if wired {
+        ui.horizontal(|ui| {
+            ui.label(key);
+            ui.label(egui::RichText::new("(wired)").weak().small())
+                .on_hover_text("Driven by a connected scalar input");
+        });
+    } else {
+        ui.label(key);
+    }
 }
 
 impl BarEditorApp {
@@ -364,30 +382,51 @@ impl BarEditorApp {
                     new_label = Some(label_buf);
                 }
 
-                if node_type == NodeType::PassThrough {
+                let custom_panel = bar_graph::nodes::def(&node_type).and_then(|d| d.custom_panel);
+                if let Some(CustomPanel::PassThrough) = custom_panel {
                     ui.separator();
                     self.draw_passthrough_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::PaintedHeightmap {
+                } else if let Some(CustomPanel::PaintedHeightmap) = custom_panel {
                     ui.separator();
                     self.draw_painted_heightmap_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::PaintedTexture {
+                } else if let Some(CustomPanel::PaintedTexture) = custom_panel {
                     ui.separator();
                     self.draw_painted_texture_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::TextureWeightmap {
+                } else if let Some(CustomPanel::TextureWeightmap) = custom_panel {
                     ui.separator();
                     self.draw_texture_weightmap_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::ColorRamp {
+                } else if let Some(CustomPanel::Switch) = custom_panel {
+                    ui.separator();
+                    self.draw_switch_properties(ui, node_id, &node_params);
+                } else if let Some(CustomPanel::ColorRamp) = custom_panel {
                     ui.separator();
                     self.draw_color_ramp_properties(ui, node_id, &node_params);
-                } else if node_type == NodeType::Layout {
+                } else if let Some(CustomPanel::Layout) = custom_panel {
                     ui.separator();
                     self.draw_layout_properties(ui, node_id, &node_params);
+                } else if let Some(CustomPanel::Equation) = custom_panel {
+                    ui.separator();
+                    self.draw_equation_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.
                     let mut params_to_show: Vec<(String, ParamValue)> =
                         bar_graph::default_params(&node_type).into_iter().collect();
                     params_to_show.sort_by(|a, b| a.0.cmp(&b.0));
+
+                    // Param keys driven by an inbound scalar wire: the
+                    // auto-appended Scalar input port is named after the param
+                    // key, so a connection landing on it overrides the literal
+                    // at eval time. Render those widgets disabled + badged so
+                    // the user sees the value is wire-driven, not editable here.
+                    let wired_params: std::collections::HashSet<String> = self
+                        .graph
+                        .connections()
+                        .iter()
+                        .filter(|c| c.to.node_id == node_id)
+                        .map(|c| c.to.port_name.clone())
+                        .filter(|name| params_to_show.iter().any(|(k, _)| k == name))
+                        .collect();
 
                     // IO node kind and name are system-managed; don't
                     // expose them as editable fields.
@@ -409,21 +448,31 @@ impl BarEditorApp {
                             .show(ui, |ui| {
                                 for (key, default_val) in &params_to_show {
                                     let current = node_params.get(key).unwrap_or(default_val);
+                                    let wired = wired_params.contains(key);
                                     match current {
                                         ParamValue::Float(v) => {
                                             let mut val = *v;
-                                            ui.label(key);
-                                            let changed = if let Some((mn, mx)) =
-                                                bar_graph::param_float_range(&node_type, key)
-                                            {
-                                                ui.add(crate::panels::widgets::ParamSlider::new(
-                                                    &mut val, mn, mx,
-                                                ))
-                                                .changed()
-                                            } else {
-                                                ui.add(egui::DragValue::new(&mut val).speed(0.01))
-                                                    .changed()
-                                            };
+                                            param_key_label(ui, key, wired);
+                                            let changed = ui
+                                                .add_enabled_ui(!wired, |ui| {
+                                                    if let Some((mn, mx)) =
+                                                        bar_graph::param_float_range(&node_type, key)
+                                                    {
+                                                        ui.add(
+                                                            crate::panels::widgets::ParamSlider::new(
+                                                                &mut val, mn, mx,
+                                                            ),
+                                                        )
+                                                        .changed()
+                                                    } else {
+                                                        ui.add(
+                                                            egui::DragValue::new(&mut val)
+                                                                .speed(0.01),
+                                                        )
+                                                        .changed()
+                                                    }
+                                                })
+                                                .inner;
                                             if changed {
                                                 changed_params
                                                     .push((key.clone(), ParamValue::Float(val)));
@@ -432,23 +481,30 @@ impl BarEditorApp {
                                         }
                                         ParamValue::UInt(v) => {
                                             let mut val = *v as i32;
-                                            ui.label(key);
-                                            let changed = if let Some((mn, mx)) =
-                                                bar_graph::param_uint_range(&node_type, key)
-                                            {
-                                                let mut vf = val as f32;
-                                                let r = ui.add(
-                                                    crate::panels::widgets::ParamSlider::new(
-                                                        &mut vf, mn as f32, mx as f32,
-                                                    )
-                                                    .integer(),
-                                                );
-                                                val = vf as i32;
-                                                r.changed()
-                                            } else {
-                                                ui.add(egui::DragValue::new(&mut val).range(1..=20))
-                                                    .changed()
-                                            };
+                                            param_key_label(ui, key, wired);
+                                            let changed = ui
+                                                .add_enabled_ui(!wired, |ui| {
+                                                    if let Some((mn, mx)) =
+                                                        bar_graph::param_uint_range(&node_type, key)
+                                                    {
+                                                        let mut vf = val as f32;
+                                                        let r = ui.add(
+                                                            crate::panels::widgets::ParamSlider::new(
+                                                                &mut vf, mn as f32, mx as f32,
+                                                            )
+                                                            .integer(),
+                                                        );
+                                                        val = vf as i32;
+                                                        r.changed()
+                                                    } else {
+                                                        ui.add(
+                                                            egui::DragValue::new(&mut val)
+                                                                .range(1..=20),
+                                                        )
+                                                        .changed()
+                                                    }
+                                                })
+                                                .inner;
                                             if changed {
                                                 changed_params.push((
                                                     key.clone(),
@@ -459,8 +515,13 @@ impl BarEditorApp {
                                         }
                                         ParamValue::Int(v) => {
                                             let mut val = *v;
-                                            ui.label(key);
-                                            if ui.add(egui::DragValue::new(&mut val)).changed() {
+                                            param_key_label(ui, key, wired);
+                                            let changed = ui
+                                                .add_enabled_ui(!wired, |ui| {
+                                                    ui.add(egui::DragValue::new(&mut val)).changed()
+                                                })
+                                                .inner;
+                                            if changed {
                                                 changed_params
                                                     .push((key.clone(), ParamValue::Int(val)));
                                             }
@@ -477,7 +538,8 @@ impl BarEditorApp {
                                         }
                                         ParamValue::String(v) => {
                                             let mut val = v.clone();
-                                            ui.label(key);
+                                            param_key_label(ui, key, wired);
+                                            ui.add_enabled_ui(!wired, |ui| {
                                             if let Some(choices) =
                                                 bar_graph::param_choices(&node_type, key)
                                             {
@@ -495,72 +557,16 @@ impl BarEditorApp {
                                                             {
                                                                 let prev = val.clone();
                                                                 val = (*choice).to_string();
-                                                                changed_params.push((
-                                                                    key.clone(),
-                                                                    ParamValue::String(val.clone()),
-                                                                ));
-                                                                if node_type
-                                                                    == NodeType::AutoTexture
-                                                                    && key == "biome"
-                                                                    && val != prev
-                                                                {
-                                                                    let bd =
-                                                                        bar_graph::biome_defaults(
-                                                                            &val,
-                                                                        );
-                                                                    changed_params.push((
-                                                                        "rock_color".to_string(),
-                                                                        ParamValue::String(
-                                                                            bd.rock_color
-                                                                                .to_string(),
+                                                                let new_val =
+                                                                    ParamValue::String(val.clone());
+                                                                changed_params
+                                                                    .push((key.clone(), new_val.clone()));
+                                                                if val != prev {
+                                                                    changed_params.extend(
+                                                                        bar_graph::param_side_effects(
+                                                                            &node_type, key, &new_val,
                                                                         ),
-                                                                    ));
-                                                                    changed_params.push((
-                                                                        "slope_power".to_string(),
-                                                                        ParamValue::Float(
-                                                                            bd.slope_power,
-                                                                        ),
-                                                                    ));
-                                                                }
-                                                                let is_noise = matches!(
-                                                                    node_type,
-                                                                    NodeType::PerlinNoise
-                                                                        | NodeType::SimplexNoise
-                                                                        | NodeType::WorleyNoise
-                                                                        | NodeType::RidgedNoise
-                                                                );
-                                                                if is_noise
-                                                                    && key == "character"
-                                                                    && val != prev
-                                                                {
-                                                                    let cd =
-                                                                    bar_graph::character_defaults(
-                                                                        &node_type, &val,
                                                                     );
-                                                                    changed_params.push((
-                                                                        "frequency".to_string(),
-                                                                        ParamValue::Float(
-                                                                            cd.frequency,
-                                                                        ),
-                                                                    ));
-                                                                    changed_params.push((
-                                                                        "octaves".to_string(),
-                                                                        ParamValue::UInt(
-                                                                            cd.octaves,
-                                                                        ),
-                                                                    ));
-                                                                    changed_params.push((
-                                                                        "lacunarity".to_string(),
-                                                                        ParamValue::Float(
-                                                                            cd.lacunarity,
-                                                                        ),
-                                                                    ));
-                                                                    changed_params.push((
-                                                                        "persistence".to_string(),
-                                                                        ParamValue::Float(
-                                                                            cd.persistence,
-                                                                        ),
-                                                                    ));
                                                                 }
                                                             }
                                                         }
@@ -614,6 +620,7 @@ impl BarEditorApp {
                                                     }
                                                 });
                                             }
+                                            });
                                             ui.end_row();
                                         }
                                         ParamValue::Vec2(_) => {}
