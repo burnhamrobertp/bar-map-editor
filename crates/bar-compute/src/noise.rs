@@ -38,6 +38,14 @@ pub struct NoiseParams {
     pub offset_x: f32,
     /// Y offset for tiling/panning
     pub offset_y: f32,
+    /// Contrast/sharpness about the midpoint (0..1, 0.5 = no-op).
+    pub steepness: f32,
+    /// Output bias (0..1, 0.5 = no-op).
+    pub elevation: f32,
+    /// Additive output offset (0.0 = no-op).
+    pub offset: f32,
+    /// Output contrast about 0.5 (0..1, 0.5 = no-op).
+    pub gain: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,8 +70,39 @@ impl Default for NoiseParams {
             seed: 0,
             offset_x: 0.0,
             offset_y: 0.0,
+            steepness: 0.5,
+            elevation: 0.5,
+            offset: 0.0,
+            gain: 0.5,
         }
     }
+}
+
+/// Apply WM-style output shaping to a normalized noise value.
+///
+/// All four params are an exact identity at their defaults
+/// (steepness=0.5, elevation=0.5, offset=0.0, gain=0.5), so a
+/// fully default `NoiseParams` reproduces the pre-shaping output bit-for-bit.
+pub(crate) fn shape(v: f32, p: &NoiseParams) -> f32 {
+    // steepness: blend toward a smoothstep (sharpen) or its inverse (soften).
+    // t in [-1, 1]; t=0 (steepness=0.5) contributes zero blend -> identity.
+    let t = (p.steepness - 0.5) * 2.0;
+    let smooth = v * v * (3.0 - 2.0 * v);
+    let inv = 0.5 + (v - smooth) + (v - 0.5);
+    let target = if t >= 0.0 { smooth } else { inv };
+    let mut out = v + (target - v) * t.abs();
+
+    // gain: contrast about 0.5. g maps 0.5 -> 1.0 -> identity.
+    let g = p.gain * 2.0;
+    out = 0.5 + (out - 0.5) * g;
+
+    // elevation: additive bias. 0.5 -> +0 -> identity.
+    out += (p.elevation - 0.5) * 2.0;
+
+    // offset: raw additive. 0.0 -> identity.
+    out += p.offset;
+
+    out.clamp(0.0, 1.0)
 }
 
 /// CPU-based noise generation (fallback when GPU unavailable).
@@ -93,6 +132,10 @@ pub fn generate_noise_cpu(params: &NoiseParams) -> Result<Heightmap, NoiseError>
         NoiseType::Worley => {
             fill_worley(params, &mut data);
         }
+    }
+
+    for v in data.iter_mut() {
+        *v = shape(*v, params);
     }
 
     Heightmap::frbar_data(params.width, params.height, data)
@@ -286,5 +329,72 @@ mod tests {
         let hm1 = generate_noise_cpu(&params).unwrap();
         let hm2 = generate_noise_cpu(&params).unwrap();
         assert_eq!(hm1.data(), hm2.data());
+    }
+
+    fn mean(d: &[f32]) -> f32 {
+        d.iter().sum::<f32>() / d.len() as f32
+    }
+
+    fn variance(d: &[f32]) -> f32 {
+        let m = mean(d);
+        d.iter().map(|&v| (v - m) * (v - m)).sum::<f32>() / d.len() as f32
+    }
+
+    #[test]
+    fn shape_default_is_identity() {
+        let p = NoiseParams::default();
+        // Sweep the full normalized range; defaults must reproduce input exactly.
+        for i in 0..=1000 {
+            let v = i as f32 / 1000.0;
+            let out = shape(v, &p);
+            assert!(
+                (out - v).abs() < 1e-5,
+                "default shaping not identity at v={v}: got {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn elevation_above_half_raises_mean() {
+        let base = NoiseParams {
+            width: 48,
+            height: 48,
+            seed: 7,
+            ..Default::default()
+        };
+        let raised = NoiseParams {
+            elevation: 0.7,
+            ..base.clone()
+        };
+
+        let m_base = mean(generate_noise_cpu(&base).unwrap().data());
+        let m_raised = mean(generate_noise_cpu(&raised).unwrap().data());
+
+        assert!(
+            m_raised > m_base,
+            "elevation>0.5 should raise mean: {m_base} -> {m_raised}"
+        );
+    }
+
+    #[test]
+    fn gain_above_half_increases_variance() {
+        let base = NoiseParams {
+            width: 48,
+            height: 48,
+            seed: 7,
+            ..Default::default()
+        };
+        let punchy = NoiseParams {
+            gain: 0.8,
+            ..base.clone()
+        };
+
+        let v_base = variance(generate_noise_cpu(&base).unwrap().data());
+        let v_punchy = variance(generate_noise_cpu(&punchy).unwrap().data());
+
+        assert!(
+            v_punchy > v_base,
+            "gain>0.5 should increase variance: {v_base} -> {v_punchy}"
+        );
     }
 }

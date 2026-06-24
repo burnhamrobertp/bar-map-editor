@@ -18,6 +18,10 @@ struct NoiseParams {
     offset_x: f32,
     offset_y: f32,
     noise_type: u32,  // selects the fractal variant (see above)
+    steepness: f32,   // contrast about midpoint (0.5 = no-op)
+    elevation: f32,   // output bias (0.5 = no-op)
+    offset: f32,      // additive offset (0.0 = no-op)
+    gain: f32,        // contrast about 0.5 (0.5 = no-op)
     _padding2: f32,
     _padding3: f32,
 }
@@ -125,6 +129,28 @@ fn billow(p: vec2<f32>) -> f32 {
     return clamp(value / max_amplitude, 0.0, 1.0);
 }
 
+// WM-style output shaping. Identity at default params
+// (steepness=0.5, elevation=0.5, offset=0.0, gain=0.5).
+// Must stay bit-identical to `shape` in noise.rs (CPU path).
+fn shape(v: f32) -> f32 {
+    let t = (params.steepness - 0.5) * 2.0;
+    let smoothed = v * v * (3.0 - 2.0 * v);
+    let inv = 0.5 + (v - smoothed) + (v - 0.5);
+    var shaped = smoothed;
+    if (t < 0.0) {
+        shaped = inv;
+    }
+    var result = v + (shaped - v) * abs(t);
+
+    let g = params.gain * 2.0;
+    result = 0.5 + (result - 0.5) * g;
+
+    result = result + (params.elevation - 0.5) * 2.0;
+    result = result + params.offset;
+
+    return clamp(result, 0.0, 1.0);
+}
+
 @compute @workgroup_size(16, 16)
 fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
     let x = global_id.x;
@@ -147,5 +173,5 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         default: { value = fbm(uv); }   // 0 = FBM (default for Perlin/Simplex)
     }
 
-    output[idx] = clamp(value, 0.0, 1.0);
+    output[idx] = shape(clamp(value, 0.0, 1.0));
 }
