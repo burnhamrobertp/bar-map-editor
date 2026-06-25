@@ -367,7 +367,7 @@ fn cmd_validate(recipe_path: &Path) -> Result<()> {
         .topological_sort()
         .context("Topological sort failed")?;
 
-    println!("✓ Recipe '{}' is valid", recipe.name);
+    println!("Recipe '{}'", recipe.name);
     println!("  Nodes:       {}", recipe.nodes.len());
     println!("  Connections: {}", recipe.connections.len());
     println!("  Eval order:  {} steps", order.len());
@@ -375,6 +375,37 @@ fn cmd_validate(recipe_path: &Path) -> Result<()> {
         "  Output:      {}x{}",
         recipe.output.width, recipe.output.height
     );
+
+    // Full project validation -- the same checks the GUI runs (missing
+    // FinalComposition/Bundler, disconnected inputs, cycles, map settings).
+    // A load + topological sort alone is not enough: a graph with no terminal
+    // node builds and topo-sorts fine but cannot export, so a shallow check
+    // would call an unexportable project "valid".
+    let findings = bar_engine::validate_project(
+        &graph,
+        &recipe.output.map_settings,
+        recipe.output.width,
+        recipe.output.height,
+    );
+    for f in &findings {
+        let tag = match f.severity {
+            bar_engine::Severity::Error => "ERROR",
+            bar_engine::Severity::Warning => "WARN ",
+            bar_engine::Severity::Info => "info ",
+        };
+        println!("  [{tag}] {}: {}", f.category, f.message);
+    }
+    if bar_engine::has_errors(&findings) {
+        anyhow::bail!(
+            "Validation failed: {} error(s)",
+            findings
+                .iter()
+                .filter(|f| f.severity == bar_engine::Severity::Error)
+                .count()
+        );
+    }
+
+    println!("✓ Recipe '{}' is valid", recipe.name);
 
     Ok(())
 }
