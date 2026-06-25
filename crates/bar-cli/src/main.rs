@@ -82,6 +82,11 @@ enum Commands {
         /// Override output height (pixels).
         #[arg(long)]
         height: Option<u32>,
+
+        /// Evaluate on the GPU (HybridExecutor) instead of the CPU -- matches
+        /// what the GUI compile produces.
+        #[arg(long)]
+        gpu: bool,
     },
 
     /// Print information about a recipe (nodes, connections, eval order).
@@ -216,7 +221,8 @@ fn main() -> Result<()> {
             output,
             width,
             height,
-        } => cmd_heightmap(&recipe, &output, width, height),
+            gpu,
+        } => cmd_heightmap(&recipe, &output, width, height, gpu),
         Commands::Info { recipe } => cmd_info(&recipe),
         Commands::New { output } => cmd_new(output.as_deref()),
         Commands::Targets => cmd_targets(),
@@ -415,8 +421,9 @@ fn cmd_heightmap(
     output_path: &Path,
     width: Option<u32>,
     height: Option<u32>,
+    use_gpu: bool,
 ) -> Result<()> {
-    use bar_graph::{evaluate_graph, get_heightmap_output};
+    use bar_graph::{evaluate_graph, get_heightmap_output, NodeExecutor};
 
     let recipe = Recipe::load(recipe_path)
         .with_context(|| format!("Failed to load recipe: {}", recipe_path.display()))?;
@@ -424,8 +431,18 @@ fn cmd_heightmap(
     let h = height.unwrap_or(recipe.output.height);
 
     let graph = recipe.build_graph().context("Failed to build graph")?;
-    let executor = CpuExecutor;
-    let results = evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
+    // CPU by default; `--gpu` evaluates with the HybridExecutor on a standalone
+    // wgpu device -- the same path the GUI compile uses, so the output can be
+    // compared against what the editor actually produces.
+    let executor: Box<dyn NodeExecutor> = if use_gpu {
+        let gpu = pollster::block_on(bar_compute::GpuContext::new_standalone())
+            .context("Failed to create standalone GPU device")?;
+        println!("Evaluating on GPU (HybridExecutor)");
+        Box::new(bar_engine::HybridExecutor::new(gpu))
+    } else {
+        Box::new(CpuExecutor)
+    };
+    let results = evaluate_graph(&graph, executor.as_ref(), w, h, (w - 1) * 8, (h - 1) * 8)
         .map_err(|e| anyhow::anyhow!("Graph evaluation failed: {e:?}"))?;
 
     let heightmap = get_heightmap_output(&graph, &results).ok_or_else(|| {
