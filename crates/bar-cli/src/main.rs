@@ -416,7 +416,7 @@ fn cmd_heightmap(
     width: Option<u32>,
     height: Option<u32>,
 ) -> Result<()> {
-    use bar_graph::{evaluate_graph, get_preview_heightmap};
+    use bar_graph::{evaluate_graph, get_heightmap_output};
 
     let recipe = Recipe::load(recipe_path)
         .with_context(|| format!("Failed to load recipe: {}", recipe_path.display()))?;
@@ -428,8 +428,11 @@ fn cmd_heightmap(
     let results = evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
         .map_err(|e| anyhow::anyhow!("Graph evaluation failed: {e:?}"))?;
 
-    let heightmap = get_preview_heightmap(&graph, &results)
-        .ok_or_else(|| anyhow::anyhow!("No heightmap output in graph"))?;
+    let heightmap = get_heightmap_output(&graph, &results).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No heightmap wired to a FinalComposition node -- add one and connect terrain to its heightmap input"
+        )
+    })?;
     bar_engine::export::write_heightmap_png(&heightmap, output_path)
         .with_context(|| format!("Failed to write {}", output_path.display()))?;
 
