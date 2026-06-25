@@ -87,6 +87,7 @@ pub fn validate_project(
     let mut findings = Vec::new();
     check_bundler(graph, &mut findings);
     check_bundler_inputs(graph, &mut findings);
+    check_bundler_texture(graph, &mut findings);
     check_cycles(graph, &mut findings);
     check_input_sources_present(graph, &mut findings);
     check_disconnected_filter_inputs(graph, &mut findings);
@@ -561,6 +562,31 @@ fn check_bundler_inputs(graph: &GraphEngine, out: &mut Vec<Finding>) {
     }
 }
 
+/// The compiler requires a texture on each Bundler's `texture` port:
+/// `compile_from_outputs` bails without one (the GUI Compile / Test-in-BAR
+/// path), even though headless bundler export only warns. Flag it as an error
+/// so validation agrees with what the compiler will actually accept.
+fn check_bundler_texture(graph: &GraphEngine, out: &mut Vec<Finding>) {
+    for (id, node) in graph.nodes() {
+        if node.node_type != NodeType::FinalComposition {
+            continue;
+        }
+        let has_texture = graph
+            .connections()
+            .iter()
+            .any(|c| c.to.node_id == *id && c.to.port_name == "texture");
+        if !has_texture {
+            out.push(Finding::err(
+                "texture",
+                format!(
+                    "Bundler '{}' has no texture on its texture port -- the GUI compile will reject it. Wire a texture (e.g. Auto Texture) to it.",
+                    node.label
+                ),
+            ));
+        }
+    }
+}
+
 /// Walk the graph backward from each Bundler. Any node not reachable
 /// from at least one Bundler contributes nothing to the output and is
 /// likely a leftover from a discarded experiment. Worth a Warning so
@@ -810,6 +836,19 @@ mod tests {
             f.iter()
                 .any(|x| x.category == "bundler" && x.severity == Severity::Error),
             "expected bundler error in {:?}",
+            f
+        );
+    }
+
+    #[test]
+    fn flags_bundler_without_texture() {
+        let mut graph = empty_graph();
+        graph.add_node(Node::new(NodeId(0), NodeType::FinalComposition, "out"));
+        let f = validate_project(&graph, &MapSettings::default(), 257, 257);
+        assert!(
+            f.iter()
+                .any(|x| x.category == "texture" && x.severity == Severity::Error),
+            "expected missing-texture error: {:?}",
             f
         );
     }
