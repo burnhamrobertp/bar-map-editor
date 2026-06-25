@@ -8,13 +8,16 @@ use bar_graph::{EvalError, ParamValue};
 
 use crate::exec::shared::{get_float, get_uint};
 
-pub(crate) fn generate_noise(
+/// Build `NoiseParams` from node params. The single source of truth shared by
+/// the CPU generator here and the GPU path in `hybrid_executor`, so the editor
+/// and the CLI export read every param (esp. the UInt seed/octaves) identically.
+pub(crate) fn build_noise_params(
     noise_type: NoiseType,
     params: &HashMap<String, ParamValue>,
     width: u32,
     height: u32,
-) -> Result<Heightmap, EvalError> {
-    let noise_params = NoiseParams {
+) -> NoiseParams {
+    NoiseParams {
         width,
         height,
         noise_type,
@@ -29,7 +32,16 @@ pub(crate) fn generate_noise(
         elevation: get_float(params, "elevation", 0.5),
         offset: get_float(params, "offset", 0.0),
         gain: get_float(params, "gain", 0.5),
-    };
+    }
+}
+
+pub(crate) fn generate_noise(
+    noise_type: NoiseType,
+    params: &HashMap<String, ParamValue>,
+    width: u32,
+    height: u32,
+) -> Result<Heightmap, EvalError> {
+    let noise_params = build_noise_params(noise_type, params, width, height);
 
     generate_noise_cpu(&noise_params).map_err(|e| EvalError::Compute(e.to_string()))
 }

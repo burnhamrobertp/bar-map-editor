@@ -251,17 +251,57 @@ use wgpu::util::DeviceExt;
 mod tests {
     use super::*;
     use crate::device::GpuContext;
-    use crate::noise::shape;
+    use crate::noise::{generate_noise_cpu, shape};
 
     fn try_gpu_context() -> Option<GpuContext> {
         pollster::block_on(GpuContext::new_standalone()).ok()
     }
 
-    /// The in-shader shaping must match the CPU `shape` formula exactly. The
-    /// GPU base field differs from the `noise`-crate CPU field, so we cannot
-    /// compare absolute heights against the CPU generator -- instead we hold the
-    /// GPU field fixed (same seed/params) and verify a shaped GPU pass equals the
-    /// unshaped GPU pass run through the CPU `shape`.
+    /// The GPU field must match the CPU `generate_noise_cpu` field: the editor
+    /// (GPU/HybridExecutor) and the CLI export (CPU) share one noise algorithm,
+    /// so a compile preview equals the exported terrain.
+    #[test]
+    fn gpu_noise_matches_cpu_noise() {
+        let Some(ctx) = try_gpu_context() else {
+            eprintln!("Skipping GPU test: no GPU adapter available");
+            return;
+        };
+
+        let pipeline = GpuNoisePipeline::new(&ctx.device);
+
+        for (nt, seed) in [
+            (NoiseType::Perlin, 7),
+            (NoiseType::Ridged, 13),
+            (NoiseType::Billow, 99),
+        ] {
+            let p = NoiseParams {
+                width: 96,
+                height: 96,
+                noise_type: nt,
+                octaves: 5,
+                seed,
+                ..Default::default()
+            };
+
+            let cpu = generate_noise_cpu(&p).unwrap();
+            let gpu = pipeline.generate(&ctx, &p, nt).unwrap();
+
+            let max_diff = cpu
+                .data()
+                .iter()
+                .zip(gpu.data().iter())
+                .fold(0.0f32, |m, (c, g)| m.max((c - g).abs()));
+
+            assert!(
+                max_diff < 1e-3,
+                "CPU/GPU noise diverge for {nt:?}: max|diff|={max_diff}"
+            );
+        }
+    }
+
+    /// The in-shader shaping must match the CPU `shape` formula exactly. We hold
+    /// the GPU field fixed (same seed/params) and verify a shaped GPU pass equals
+    /// the unshaped GPU pass run through the CPU `shape`.
     #[test]
     fn gpu_shaping_matches_cpu_shape_fn() {
         let Some(ctx) = try_gpu_context() else {

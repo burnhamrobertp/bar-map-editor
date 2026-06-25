@@ -3,7 +3,6 @@
 //! Provides both GPU (WGSL compute shader) and CPU (via `noise` crate) implementations.
 
 use bar_data::Heightmap;
-use noise::NoiseFn;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -107,31 +106,16 @@ pub(crate) fn shape(v: f32, p: &NoiseParams) -> f32 {
 
 /// CPU-based noise generation (fallback when GPU unavailable).
 pub fn generate_noise_cpu(params: &NoiseParams) -> Result<Heightmap, NoiseError> {
-    use noise::{Perlin, Simplex};
-
     let size = (params.width as usize) * (params.height as usize);
     let mut data = vec![0.0f32; size];
 
     match params.noise_type {
-        NoiseType::Perlin => {
-            let noise_fn = Perlin::new(params.seed);
-            fill_fbm(&noise_fn, params, &mut data);
-        }
-        NoiseType::Simplex => {
-            let noise_fn = Simplex::new(params.seed);
-            fill_fbm(&noise_fn, params, &mut data);
-        }
-        NoiseType::Ridged => {
-            let noise_fn = Perlin::new(params.seed);
-            fill_ridged(&noise_fn, params, &mut data);
-        }
-        NoiseType::Billow => {
-            let noise_fn = Perlin::new(params.seed);
-            fill_billow(&noise_fn, params, &mut data);
-        }
-        NoiseType::Worley => {
-            fill_worley(params, &mut data);
-        }
+        // Perlin and Simplex share the unified gradient-noise FBM (matching the
+        // single GPU FBM path); the historical distinction is dropped.
+        NoiseType::Perlin | NoiseType::Simplex => fill_fbm(params, &mut data),
+        NoiseType::Ridged => fill_ridged(params, &mut data),
+        NoiseType::Billow => fill_billow(params, &mut data),
+        NoiseType::Worley => fill_worley(params, &mut data),
     }
 
     for v in data.iter_mut() {
@@ -142,102 +126,140 @@ pub fn generate_noise_cpu(params: &NoiseParams) -> Result<Heightmap, NoiseError>
         .map_err(|e| NoiseError::Compute(e.to_string()))
 }
 
-fn fill_fbm(noise_fn: &dyn NoiseFn<f64, 2>, params: &NoiseParams, data: &mut [f32]) {
+/// 8-direction gradient table for the unified gradient noise.
+const GRADS: [(f32, f32); 8] = [
+    (1.0, 0.0),
+    (-1.0, 0.0),
+    (0.0, 1.0),
+    (0.0, -1.0),
+    (0.707_106_77, 0.707_106_77),
+    (-0.707_106_77, 0.707_106_77),
+    (0.707_106_77, -0.707_106_77),
+    (-0.707_106_77, -0.707_106_77),
+];
+
+/// PCG-style integer lattice hash. Identical to `hash_cell` in noise_fbm.wgsl.
+/// PCG is the standard portable WGSL integer hash, so the GPU reproduces this
+/// CPU result bit-for-bit and both paths select the same gradients.
+fn hash_cell(ix: i32, iy: i32, seed: u32) -> u32 {
+    let mut n = (ix as u32)
+        .wrapping_mul(1_597_334_677)
+        .wrapping_add((iy as u32).wrapping_mul(3_812_015_801))
+        .wrapping_add(seed.wrapping_mul(2_654_435_761));
+    n = n.wrapping_mul(747_796_405).wrapping_add(2_891_336_453);
+    let word = ((n >> ((n >> 28).wrapping_add(4))) ^ n).wrapping_mul(277_803_737);
+    (word >> 22) ^ word
+}
+
+fn quintic(t: f32) -> f32 {
+    t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+}
+
+/// Unified gradient (Perlin-style) noise in ~[-1, 1]. MUST stay identical to
+/// `gnoise` in noise_fbm.wgsl -- that parity is what makes the GPU editor and
+/// the CPU export agree.
+pub(crate) fn gnoise(px: f32, py: f32, seed: u32) -> f32 {
+    let x0 = px.floor();
+    let y0 = py.floor();
+    let (ix, iy) = (x0 as i32, y0 as i32);
+    let (fx, fy) = (px - x0, py - y0);
+
+    let g = |cx: i32, cy: i32| GRADS[(hash_cell(cx, cy, seed) & 7) as usize];
+    let (g00, g10, g01, g11) = (g(ix, iy), g(ix + 1, iy), g(ix, iy + 1), g(ix + 1, iy + 1));
+
+    let d00 = g00.0 * fx + g00.1 * fy;
+    let d10 = g10.0 * (fx - 1.0) + g10.1 * fy;
+    let d01 = g01.0 * fx + g01.1 * (fy - 1.0);
+    let d11 = g11.0 * (fx - 1.0) + g11.1 * (fy - 1.0);
+
+    let (u, v) = (quintic(fx), quintic(fy));
+    let x0m = d00 + u * (d10 - d00);
+    let x1m = d01 + u * (d11 - d01);
+    (x0m + v * (x1m - x0m)) * std::f32::consts::SQRT_2
+}
+
+fn fill_fbm(params: &NoiseParams, data: &mut [f32]) {
     let w = params.width as usize;
     let h = params.height as usize;
 
     for y in 0..h {
         for x in 0..w {
-            let mut amplitude = 1.0f64;
-            let mut frequency = params.frequency as f64;
-            let mut value = 0.0f64;
-            let mut max_amplitude = 0.0f64;
+            let bx = x as f32 / w as f32 + params.offset_x;
+            let by = y as f32 / h as f32 + params.offset_y;
+            let mut amplitude = 1.0f32;
+            let mut frequency = params.frequency;
+            let mut value = 0.0f32;
+            let mut max_amplitude = 0.0f32;
 
             for _ in 0..params.octaves {
-                let nx = (x as f64 / w as f64 + params.offset_x as f64) * frequency;
-                let ny = (y as f64 / h as f64 + params.offset_y as f64) * frequency;
-
-                value += noise_fn.get([nx, ny]) * amplitude;
+                value += gnoise(bx * frequency, by * frequency, params.seed) * amplitude;
                 max_amplitude += amplitude;
-                amplitude *= params.persistence as f64;
-                frequency *= params.lacunarity as f64;
+                amplitude *= params.persistence;
+                frequency *= params.lacunarity;
             }
 
-            // Normalize to [0, 1]
             let normalized = (value / max_amplitude + 1.0) * 0.5;
-            data[y * w + x] = normalized.clamp(0.0, 1.0) as f32;
+            data[y * w + x] = normalized.clamp(0.0, 1.0);
         }
     }
 }
 
 /// Ridged multi-fractal noise — produces sharp ridge lines where the noise
 /// signal crosses zero. Creates angular, mountain-like terrain features.
-fn fill_ridged(noise_fn: &dyn NoiseFn<f64, 2>, params: &NoiseParams, data: &mut [f32]) {
+fn fill_ridged(params: &NoiseParams, data: &mut [f32]) {
     let w = params.width as usize;
     let h = params.height as usize;
-    let offset = 1.0f64;
-    let gain = 2.0f64;
+    let offset = 1.0f32;
+    let gain = 2.0f32;
 
     for y in 0..h {
         for x in 0..w {
-            let mut frequency = params.frequency as f64;
-            let mut amplitude = 1.0f64;
-            let mut value = 0.0f64;
-            let mut weight = 1.0f64;
+            let bx = x as f32 / w as f32 + params.offset_x;
+            let by = y as f32 / h as f32 + params.offset_y;
+            let mut frequency = params.frequency;
+            let mut amplitude = 1.0f32;
+            let mut value = 0.0f32;
+            let mut weight = 1.0f32;
 
             for _ in 0..params.octaves {
-                let nx = (x as f64 / w as f64 + params.offset_x as f64) * frequency;
-                let ny = (y as f64 / h as f64 + params.offset_y as f64) * frequency;
-
-                // Get noise signal, create ridge by inverting absolute value
-                let signal = noise_fn.get([nx, ny]);
-                let signal = offset - signal.abs();
-                // Square to sharpen ridges
-                let signal = signal * signal;
-
-                // Weight by previous octave's contribution (signal-dependent)
-                let signal = signal * weight;
+                // Invert absolute value to ridge, square to sharpen, weight by
+                // the previous octave's signal strength.
+                let signal = offset - gnoise(bx * frequency, by * frequency, params.seed).abs();
+                let signal = signal * signal * weight;
                 value += signal * amplitude;
-
-                // Next octave weight is controlled by current signal strength
                 weight = (signal * gain).clamp(0.0, 1.0);
-                frequency *= params.lacunarity as f64;
-                amplitude *= params.persistence as f64;
+                frequency *= params.lacunarity;
+                amplitude *= params.persistence;
             }
 
-            // Ridged noise naturally falls in ~[0, 1] range but can exceed
-            data[y * w + x] = (value * 0.5).clamp(0.0, 1.0) as f32;
+            data[y * w + x] = (value * 0.5).clamp(0.0, 1.0);
         }
     }
 }
 
 /// Billow noise — takes absolute value of FBM noise to produce puffy,
 /// cloud-like or rolling-hill terrain.
-fn fill_billow(noise_fn: &dyn NoiseFn<f64, 2>, params: &NoiseParams, data: &mut [f32]) {
+fn fill_billow(params: &NoiseParams, data: &mut [f32]) {
     let w = params.width as usize;
     let h = params.height as usize;
 
     for y in 0..h {
         for x in 0..w {
-            let mut amplitude = 1.0f64;
-            let mut frequency = params.frequency as f64;
-            let mut value = 0.0f64;
-            let mut max_amplitude = 0.0f64;
+            let bx = x as f32 / w as f32 + params.offset_x;
+            let by = y as f32 / h as f32 + params.offset_y;
+            let mut amplitude = 1.0f32;
+            let mut frequency = params.frequency;
+            let mut value = 0.0f32;
+            let mut max_amplitude = 0.0f32;
 
             for _ in 0..params.octaves {
-                let nx = (x as f64 / w as f64 + params.offset_x as f64) * frequency;
-                let ny = (y as f64 / h as f64 + params.offset_y as f64) * frequency;
-
-                // Billow: take absolute value to create puffy shapes
-                let signal = noise_fn.get([nx, ny]).abs();
-                value += signal * amplitude;
+                value += gnoise(bx * frequency, by * frequency, params.seed).abs() * amplitude;
                 max_amplitude += amplitude;
-                amplitude *= params.persistence as f64;
-                frequency *= params.lacunarity as f64;
+                amplitude *= params.persistence;
+                frequency *= params.lacunarity;
             }
 
-            let normalized = value / max_amplitude;
-            data[y * w + x] = normalized.clamp(0.0, 1.0) as f32;
+            data[y * w + x] = (value / max_amplitude).clamp(0.0, 1.0);
         }
     }
 }

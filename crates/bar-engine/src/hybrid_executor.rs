@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use bar_compute::{
     GpuContext, GpuErosionPipeline, GpuFilterPipeline, GpuLightmapPipeline, GpuNoisePipeline,
-    LightmapParams, NoiseParams, NoiseType, ThermalErosionParams,
+    LightmapParams, NoiseType, ThermalErosionParams,
 };
 use bar_data::Heightmap;
 use bar_graph::{EvalError, NodeExecutor, NodeType, ParamValue, PortValue};
@@ -114,28 +114,8 @@ impl HybridExecutor {
         width: u32,
         height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
-        let frequency = get_float(params, "frequency", 2.0);
-        let octaves = get_float(params, "octaves", 6.0) as u32;
-        let persistence = get_float(params, "persistence", 0.5);
-        let lacunarity = get_float(params, "lacunarity", 2.0);
-        let seed = get_float(params, "seed", 0.0) as u32;
-
-        let noise_params = NoiseParams {
-            width,
-            height,
-            noise_type,
-            frequency,
-            octaves,
-            persistence,
-            lacunarity,
-            seed,
-            offset_x: 0.0,
-            offset_y: 0.0,
-            steepness: get_float(params, "steepness", 0.5),
-            elevation: get_float(params, "elevation", 0.5),
-            offset: get_float(params, "offset", 0.0),
-            gain: get_float(params, "gain", 0.5),
-        };
+        let noise_params =
+            crate::exec::noise::shared::build_noise_params(noise_type, params, width, height);
 
         let heightmap = self
             .noise_pipeline
