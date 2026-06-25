@@ -124,6 +124,7 @@ pub enum CustomPanel {
     Layout,
     Equation,
     Switch,
+    Curve,
 }
 
 /// The full static descriptor for one node type.

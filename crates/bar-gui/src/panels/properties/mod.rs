@@ -19,6 +19,7 @@
 //! clean -- `&mut self` already grants what's needed.
 
 pub(crate) mod color_ramp;
+pub(crate) mod curve;
 pub(crate) mod equation;
 pub(crate) mod group;
 pub(crate) mod layout;
@@ -407,6 +408,9 @@ impl BarEditorApp {
                 } else if let Some(CustomPanel::Equation) = custom_panel {
                     ui.separator();
                     self.draw_equation_properties(ui, node_id, &node_params);
+                } else if let Some(CustomPanel::Curve) = custom_panel {
+                    ui.separator();
+                    self.draw_curve_properties(ui, node_id, &node_params);
                 } else {
                     // Generic parameter editor — show every param the type
                     // declares, with sorted keys for stable layout.
