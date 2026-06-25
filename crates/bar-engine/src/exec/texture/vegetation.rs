@@ -3,16 +3,12 @@ use std::collections::HashMap;
 use bar_data::{ColorBuffer, Heightmap};
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::selectors::shared::compute_slope_map;
 use crate::exec::shared::{get_float, get_input_heightmap, get_optional_heightmap, get_string};
 use crate::exec::texture::shared::{
-    apply_color_modulation,
-    compute_local_ao,
-    micro_fbm,
-    parse_hex_color_srgb,
-    resize_color_to_tex,
+    apply_color_modulation, compute_local_ao, micro_fbm, parse_hex_color_srgb, resize_color_to_tex,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -22,7 +18,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let color = apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
     let color = resize_color_to_tex(color, ctx.tex_w, ctx.tex_h);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Color(color))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Color(color),
+    )]))
 }
 
 /// Altitude+slope vegetation overlay. Alpha encodes coverage so this composites

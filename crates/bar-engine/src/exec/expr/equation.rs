@@ -8,8 +8,8 @@ use evalexpr::{
 };
 use rayon::prelude::*;
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::get_optional_heightmap;
+use crate::exec::ExecCtx;
 
 type Tree = Node<DefaultNumericTypes>;
 
@@ -33,7 +33,9 @@ fn eval_pixel(tree: &Tree, ctx: &mut HashMapContext<DefaultNumericTypes>, vars: 
 
     // A formula that references an undefined variable, divides by zero, etc.
     // fails per-pixel; fall back to 0.0 rather than aborting the whole node.
-    tree.eval_float_with_context_mut(ctx).map(|v| v as f32).unwrap_or(0.0)
+    tree.eval_float_with_context_mut(ctx)
+        .map(|v| v as f32)
+        .unwrap_or(0.0)
 }
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
@@ -81,7 +83,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
 
     let hm = Heightmap::frbar_data(w, h, data).map_err(|e| EvalError::Compute(e.to_string()))?;
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 #[cfg(test)]
@@ -91,8 +96,18 @@ mod tests {
 
     fn run(formula: &str, inputs: &HashMap<String, PortValue>, w: u32, h: u32) -> Heightmap {
         let mut params = HashMap::new();
-        params.insert("formula".to_string(), ParamValue::String(formula.to_string()));
-        let ctx = ExecCtx { params: &params, inputs, hm_w: w, hm_h: h, tex_w: w, tex_h: h };
+        params.insert(
+            "formula".to_string(),
+            ParamValue::String(formula.to_string()),
+        );
+        let ctx = ExecCtx {
+            params: &params,
+            inputs,
+            hm_w: w,
+            hm_h: h,
+            tex_w: w,
+            tex_h: h,
+        };
         match super::exec(&ctx).unwrap().remove("output").unwrap() {
             PortValue::Heightmap(hm) => hm,
             _ => panic!("expected heightmap output"),
@@ -107,7 +122,10 @@ mod tests {
     fn formula_a_is_identity_of_input_a() {
         let data = vec![0.1, 0.4, 0.7, 0.9];
         let mut inputs = HashMap::new();
-        inputs.insert("a".to_string(), PortValue::Heightmap(hm(2, 2, data.clone())));
+        inputs.insert(
+            "a".to_string(),
+            PortValue::Heightmap(hm(2, 2, data.clone())),
+        );
 
         let out = run("a", &inputs, 2, 2);
         assert_eq!(out.width(), 2);
@@ -121,8 +139,14 @@ mod tests {
     #[test]
     fn averages_two_inputs() {
         let mut inputs = HashMap::new();
-        inputs.insert("a".to_string(), PortValue::Heightmap(hm(2, 1, vec![0.2, 0.8])));
-        inputs.insert("b".to_string(), PortValue::Heightmap(hm(2, 1, vec![0.4, 0.4])));
+        inputs.insert(
+            "a".to_string(),
+            PortValue::Heightmap(hm(2, 1, vec![0.2, 0.8])),
+        );
+        inputs.insert(
+            "b".to_string(),
+            PortValue::Heightmap(hm(2, 1, vec![0.4, 0.4])),
+        );
 
         let out = run("(a + b) / 2", &inputs, 2, 1);
         assert!((out.get(0, 0).unwrap() - 0.3).abs() < 1e-6);
@@ -152,7 +176,10 @@ mod tests {
     #[test]
     fn result_is_clamped_to_unit_range() {
         let mut inputs = HashMap::new();
-        inputs.insert("a".to_string(), PortValue::Heightmap(hm(2, 1, vec![0.5, 0.5])));
+        inputs.insert(
+            "a".to_string(),
+            PortValue::Heightmap(hm(2, 1, vec![0.5, 0.5])),
+        );
         let out = run("a * 10", &inputs, 2, 1);
         assert_eq!(out.get(0, 0).unwrap(), 1.0);
         let neg = run("a - 10", &inputs, 2, 1);
@@ -163,8 +190,18 @@ mod tests {
     fn parse_error_yields_failure_no_panic() {
         let inputs = HashMap::new();
         let mut params = HashMap::new();
-        params.insert("formula".to_string(), ParamValue::String("(a + b".to_string()));
-        let ctx = ExecCtx { params: &params, inputs: &inputs, hm_w: 4, hm_h: 4, tex_w: 4, tex_h: 4 };
+        params.insert(
+            "formula".to_string(),
+            ParamValue::String("(a + b".to_string()),
+        );
+        let ctx = ExecCtx {
+            params: &params,
+            inputs: &inputs,
+            hm_w: 4,
+            hm_h: 4,
+            tex_w: 4,
+            tex_h: 4,
+        };
         let result = super::exec(&ctx);
         assert!(result.is_err(), "malformed formula must fail the node");
     }

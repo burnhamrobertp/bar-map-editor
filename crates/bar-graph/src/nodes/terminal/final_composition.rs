@@ -16,14 +16,46 @@ static INPUTS: &[PortDef] = &[
 static OUTPUTS: &[PortDef] = &[];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "heightmap_layer_asset_id", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "heightmap_layer_asset_path", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "color_layer_asset_id", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "color_layer_asset_path", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "metalmap_layer_asset_id", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "metalmap_layer_asset_path", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "typemap_layer_asset_id", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
-    ParamDef { key: "typemap_layer_asset_path", default: || ParamValue::String(String::new()), ui: ParamUi::Hidden },
+    ParamDef {
+        key: "heightmap_layer_asset_id",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "heightmap_layer_asset_path",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "color_layer_asset_id",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "color_layer_asset_path",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "metalmap_layer_asset_id",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "metalmap_layer_asset_path",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "typemap_layer_asset_id",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
+    ParamDef {
+        key: "typemap_layer_asset_path",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Hidden,
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef::basic(
@@ -33,5 +65,9 @@ pub static DEF: NodeDef = NodeDef::basic(
     INPUTS,
     OUTPUTS,
     PARAMS,
-    NodeCaps { is_terminal: true, holds_assets: true, ..NodeCaps::NONE },
+    NodeCaps {
+        is_terminal: true,
+        holds_assets: true,
+        ..NodeCaps::NONE
+    },
 );

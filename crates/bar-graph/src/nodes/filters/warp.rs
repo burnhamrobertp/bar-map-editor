@@ -7,9 +7,11 @@ static INPUTS: &[PortDef] = &[
     PortDef::one("warp_x", "Warp X", PortKind::Heightmap),
     PortDef::one("warp_y", "Warp Y", PortKind::Heightmap),
 ];
-static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "strength", default: || ParamValue::Float(0.1), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-];
+static PARAMS: &[ParamDef] = &[ParamDef {
+    key: "strength",
+    default: || ParamValue::Float(0.1),
+    ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+}];
 
 pub static DEF: NodeDef = NodeDef::basic(
     NodeType::Warp,

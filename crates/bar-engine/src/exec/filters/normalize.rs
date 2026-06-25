@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{apply_modulation, get_input_heightmap, get_optional_heightmap};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -13,7 +13,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let hm = apply_normalize(&input);
     let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Normalize: remap all values to fill the 0..1 range.
@@ -57,7 +60,15 @@ mod tests {
         let inputs = HashMap::from([("input".to_string(), PortValue::Heightmap(hm))]);
 
         let result = executor
-            .execute(&NodeType::Normalize, &HashMap::<String, ParamValue>::new(), &inputs, 8, 8, 8, 8)
+            .execute(
+                &NodeType::Normalize,
+                &HashMap::<String, ParamValue>::new(),
+                &inputs,
+                8,
+                8,
+                8,
+                8,
+            )
             .unwrap();
         match result.get("output").unwrap() {
             PortValue::Heightmap(hm) => {

@@ -10,8 +10,4 @@ pub mod scalar_value;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
-    &scalar_value::DEF,
-    &scalar_math::DEF,
-    &int_value::DEF,
-];
+pub static NODES: &[&NodeDef] = &[&scalar_value::DEF, &scalar_math::DEF, &int_value::DEF];

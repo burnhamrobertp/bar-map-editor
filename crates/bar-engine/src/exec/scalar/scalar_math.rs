@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_input_scalar, get_string};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let a = get_input_scalar(ctx.inputs, "a").unwrap_or(0.0);
@@ -28,5 +28,8 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
         _ => a + b,
     };
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Scalar(out))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Scalar(out),
+    )]))
 }

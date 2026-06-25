@@ -18,7 +18,11 @@ pub(crate) fn get_uint(params: &HashMap<String, ParamValue>, key: &str, default:
     }
 }
 
-pub(crate) fn get_string<'a>(params: &'a HashMap<String, ParamValue>, key: &str, default: &'a str) -> &'a str {
+pub(crate) fn get_string<'a>(
+    params: &'a HashMap<String, ParamValue>,
+    key: &str,
+    default: &'a str,
+) -> &'a str {
     match params.get(key) {
         Some(ParamValue::String(s)) => s.as_str(),
         _ => default,

@@ -17,7 +17,7 @@ pub mod slope_select;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &slope_map::DEF,
     &height_select::DEF,
     &slope_select::DEF,

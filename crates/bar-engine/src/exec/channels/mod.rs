@@ -27,7 +27,14 @@ mod tests {
         params: &'a HashMap<String, bar_graph::ParamValue>,
         inputs: &'a HashMap<String, PortValue>,
     ) -> ExecCtx<'a> {
-        ExecCtx { params, inputs, hm_w: 4, hm_h: 4, tex_w: 4, tex_h: 4 }
+        ExecCtx {
+            params,
+            inputs,
+            hm_w: 4,
+            hm_h: 4,
+            tex_w: 4,
+            tex_h: 4,
+        }
     }
 
     #[test]

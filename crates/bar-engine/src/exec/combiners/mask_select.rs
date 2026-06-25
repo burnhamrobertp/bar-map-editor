@@ -3,15 +3,18 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::get_input_heightmap;
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let a = get_input_heightmap(ctx.inputs, "a")?;
     let b = get_input_heightmap(ctx.inputs, "b")?;
     let mask = get_input_heightmap(ctx.inputs, "mask")?;
     let hm = apply_chooser(&a, &b, &mask);
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// MaskSelect: select between A and B based on a mask (0=A, 1=B, interpolated in between).

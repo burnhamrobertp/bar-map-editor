@@ -11,7 +11,11 @@ pub static DEF: NodeDef = NodeDef {
     inputs: &[],
     outputs: OUTPUT,
     params: &[],
-    caps: NodeCaps { is_source: true, holds_assets: true, ..NodeCaps::NONE },
+    caps: NodeCaps {
+        is_source: true,
+        holds_assets: true,
+        ..NodeCaps::NONE
+    },
     dynamic_params: None,
     dynamic_param_ui: None,
     param_side_effects: None,

@@ -2,17 +2,23 @@
 //! INTO node params override the literal at eval time, scalar arithmetic works,
 //! and stray/mis-typed scalar wires are ignored.
 
-use bar_graph::{
-    evaluate_graph, get_node_output_heightmap_named, GraphEngine, Node, NodeId, ParamValue,
-    PortId, PortValue,
-};
 use bar_engine::CpuExecutor;
+use bar_graph::{
+    evaluate_graph, get_node_output_heightmap_named, GraphEngine, Node, NodeId, ParamValue, PortId,
+    PortValue,
+};
 
 fn connect(graph: &mut GraphEngine, from: NodeId, from_port: &str, to: NodeId, to_port: &str) {
     graph
         .connect(
-            PortId { node_id: from, port_name: from_port.into() },
-            PortId { node_id: to, port_name: to_port.into() },
+            PortId {
+                node_id: from,
+                port_name: from_port.into(),
+            },
+            PortId {
+                node_id: to,
+                port_name: to_port.into(),
+            },
         )
         .unwrap();
 }
@@ -69,17 +75,35 @@ fn scalar_cannot_wire_to_non_bindable_or_wrong_kind_port() {
 
     // `seed` is a param but not scalar_bindable -> no `seed` input port exists.
     let no_port = g.connect(
-        PortId { node_id: sv, port_name: "output".into() },
-        PortId { node_id: n, port_name: "seed".into() },
+        PortId {
+            node_id: sv,
+            port_name: "output".into(),
+        },
+        PortId {
+            node_id: n,
+            port_name: "seed".into(),
+        },
     );
-    assert!(no_port.is_err(), "no scalar port should exist for non-bindable `seed`");
+    assert!(
+        no_port.is_err(),
+        "no scalar port should exist for non-bindable `seed`"
+    );
 
     // `control` exists but is a Heightmap port; Scalar is incompatible with it.
     let wrong_kind = g.connect(
-        PortId { node_id: sv, port_name: "output".into() },
-        PortId { node_id: n, port_name: "control".into() },
+        PortId {
+            node_id: sv,
+            port_name: "output".into(),
+        },
+        PortId {
+            node_id: n,
+            port_name: "control".into(),
+        },
     );
-    assert!(wrong_kind.is_err(), "Scalar must not be compatible with a Heightmap port");
+    assert!(
+        wrong_kind.is_err(),
+        "Scalar must not be compatible with a Heightmap port"
+    );
 
     // The bindable port does accept the wire.
     connect(&mut g, sv, "output", n, "frequency");
@@ -108,7 +132,10 @@ fn scalar_math_add_and_multiply() {
         let got = out.get(&m).and_then(|o| o.get("output"));
         match got {
             Some(PortValue::Scalar(s)) => {
-                assert!((s - expected).abs() < 1e-5, "{op}: got {s}, want {expected}")
+                assert!(
+                    (s - expected).abs() < 1e-5,
+                    "{op}: got {s}, want {expected}"
+                )
             }
             other => panic!("{op}: expected Scalar output, got {other:?}"),
         }

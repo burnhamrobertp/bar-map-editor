@@ -146,11 +146,17 @@ mod tests {
             inland_height_influence: 0.0,
             underwater_smoothing: 0,
         };
-        let smoothed = CoastErosionParams { underwater_smoothing: 5, ..base.clone() };
+        let smoothed = CoastErosionParams {
+            underwater_smoothing: 5,
+            ..base.clone()
+        };
 
         let v0 = variance(coast_erosion(&input, &base).data());
         let v5 = variance(coast_erosion(&input, &smoothed).data());
-        assert!(v5 < v0, "smoothing should reduce seabed variance: {v5} !< {v0}");
+        assert!(
+            v5 < v0,
+            "smoothing should reduce seabed variance: {v5} !< {v0}"
+        );
     }
 
     #[test]

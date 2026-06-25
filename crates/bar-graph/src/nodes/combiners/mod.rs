@@ -14,7 +14,7 @@ pub mod subtract;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &blend::DEF,
     &add::DEF,
     &subtract::DEF,

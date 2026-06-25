@@ -3,14 +3,17 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::get_string;
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let path = get_string(ctx.params, "path", "");
     let hm = load_file_input(path, ctx.hm_w, ctx.hm_h)?;
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Load an image file as a heightmap. Supports PNG/TIFF 8/16-bit grayscale + RGB.

@@ -3,14 +3,10 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_uint,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_uint,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -22,7 +18,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let hm = apply_stratify(&input, layer_count, irregularity, hardness, noise_scale);
     let hm = apply_modulation(&input, hm, None, mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Simple 2D value noise in [0, 1].

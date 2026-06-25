@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_heightmap, get_string};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -12,7 +12,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let strength = get_float(ctx.params, "strength", 1.0);
     let hm = apply_select_convexity(&input, mode, strength);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Surface curvature (Laplacian) selector.

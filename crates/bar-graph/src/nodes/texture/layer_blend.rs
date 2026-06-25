@@ -11,8 +11,16 @@ static INPUTS: &[PortDef] = &[
 static BLEND_MODES: &[&str] = &["over", "multiply", "screen", "add"];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "blend_mode", default: || ParamValue::String("over".to_string()), ui: ParamUi::Choices(BLEND_MODES) },
-    ParamDef { key: "opacity", default: || ParamValue::Float(1.0), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
+    ParamDef {
+        key: "blend_mode",
+        default: || ParamValue::String("over".to_string()),
+        ui: ParamUi::Choices(BLEND_MODES),
+    },
+    ParamDef {
+        key: "opacity",
+        default: || ParamValue::Float(1.0),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef::basic(

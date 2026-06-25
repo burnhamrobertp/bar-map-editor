@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::ColorBuffer;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_string, get_uint};
+use crate::exec::ExecCtx;
 
 /// Sample `tex` at output pixel `(ox, oy)` using nearest-neighbour scaling
 /// to the output dimensions `(ow, oh)`.
@@ -66,8 +66,7 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
                             if remaining <= 0.001 {
                                 break;
                             }
-                            let raw_w =
-                                sample_color_nn(&layer.tex, x, y, w, h)[3].clamp(0.0, 1.0);
+                            let raw_w = sample_color_nn(&layer.tex, x, y, w, h)[3].clamp(0.0, 1.0);
                             let contribution = (raw_w * remaining).clamp(0.0, remaining);
                             let col = sample_color_nn(&layer.tex, x, y, w, h);
                             r += col[0] * contribution;

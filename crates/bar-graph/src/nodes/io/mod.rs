@@ -9,7 +9,7 @@ pub mod subgraph_output;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &subgraph_input::DEF,
     &subgraph_output::DEF,
     &pass_through::DEF,

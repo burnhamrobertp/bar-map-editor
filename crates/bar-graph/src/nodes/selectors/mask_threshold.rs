@@ -9,8 +9,16 @@ static INPUTS: &[PortDef] = &[
 static OUTPUT: &[PortDef] = &[PortDef::one("output", "Mask", PortKind::Heightmap)];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "threshold", default: || ParamValue::Float(0.5), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "smoothness", default: || ParamValue::Float(0.0), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
+    ParamDef {
+        key: "threshold",
+        default: || ParamValue::Float(0.5),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "smoothness",
+        default: || ParamValue::Float(0.0),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef::basic(

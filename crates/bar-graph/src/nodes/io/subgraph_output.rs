@@ -8,8 +8,16 @@ static VALUE_OUT: &[PortDef] = &[PortDef::one("value", "Value", PortKind::Height
 static KIND_CHOICES: &[&str] = &["Heightmap", "Color", "Mask", "Scalar", "File", "FileList"];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "name", default: || ParamValue::String(String::new()), ui: ParamUi::Text },
-    ParamDef { key: "kind", default: || ParamValue::String("Heightmap".to_string()), ui: ParamUi::Choices(KIND_CHOICES) },
+    ParamDef {
+        key: "name",
+        default: || ParamValue::String(String::new()),
+        ui: ParamUi::Text,
+    },
+    ParamDef {
+        key: "kind",
+        default: || ParamValue::String("Heightmap".to_string()),
+        ui: ParamUi::Choices(KIND_CHOICES),
+    },
 ];
 
 fn sync_kind(node: &mut Node) {
@@ -23,7 +31,10 @@ pub static DEF: NodeDef = NodeDef {
     inputs: VALUE_IN,
     outputs: VALUE_OUT,
     params: PARAMS,
-    caps: NodeCaps { is_subgraph_only: true, ..NodeCaps::NONE },
+    caps: NodeCaps {
+        is_subgraph_only: true,
+        ..NodeCaps::NONE
+    },
     dynamic_params: None,
     dynamic_param_ui: None,
     param_side_effects: None,

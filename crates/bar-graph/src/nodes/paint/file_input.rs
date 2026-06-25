@@ -11,5 +11,8 @@ pub static DEF: NodeDef = NodeDef::basic(
     &[],
     OUTPUT,
     &[],
-    NodeCaps { is_source: true, ..NodeCaps::NONE },
+    NodeCaps {
+        is_source: true,
+        ..NodeCaps::NONE
+    },
 );

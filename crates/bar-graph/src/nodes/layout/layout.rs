@@ -1,9 +1,7 @@
 use std::collections::HashMap;
 
 use crate::node::{NodeType, ParamValue};
-use crate::nodes::def::{
-    CustomPanel, NodeCaps, NodeCategory, NodeDef, ParamDef, ParamUi, PortDef,
-};
+use crate::nodes::def::{CustomPanel, NodeCaps, NodeCategory, NodeDef, ParamDef, ParamUi, PortDef};
 use crate::port::PortKind;
 
 /// Output interpretation of the composited coverage field; surfaced as a
@@ -12,7 +10,12 @@ const MODES: &[&str] = &["ridge", "valley", "mask"];
 /// Symmetry multiplier: duplicates every item across reflection / rotation
 /// axes so BAR-style symmetric maps need only one authored copy.
 const SYMMETRY: &[&str] = &[
-    "none", "mirror_x", "mirror_y", "mirror_xy", "rotate_180", "rotate_90",
+    "none",
+    "mirror_x",
+    "mirror_y",
+    "mirror_xy",
+    "rotate_180",
+    "rotate_90",
 ];
 const ITEM_TYPES: &[&str] = &["ellipse", "rectangle", "line", "spline"];
 
@@ -24,9 +27,21 @@ static INPUTS: &[PortDef] = &[PortDef::one("mask", "Mask", PortKind::Mask)];
 static OUTPUTS: &[PortDef] = &[PortDef::one("output", "Heightmap", PortKind::Heightmap)];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "item_count", default: || ParamValue::UInt(1), ui: ParamUi::UIntRange { min: 1, max: 8 } },
-    ParamDef { key: "mode", default: || ParamValue::String("ridge".to_string()), ui: ParamUi::Choices(MODES) },
-    ParamDef { key: "symmetry", default: || ParamValue::String("none".to_string()), ui: ParamUi::Choices(SYMMETRY) },
+    ParamDef {
+        key: "item_count",
+        default: || ParamValue::UInt(1),
+        ui: ParamUi::UIntRange { min: 1, max: 8 },
+    },
+    ParamDef {
+        key: "mode",
+        default: || ParamValue::String("ridge".to_string()),
+        ui: ParamUi::Choices(MODES),
+    },
+    ParamDef {
+        key: "symmetry",
+        default: || ParamValue::String("none".to_string()),
+        ui: ParamUi::Choices(SYMMETRY),
+    },
 ];
 
 /// Per-slot params. Each slot carries the primitive fields (type / x / y / rx /
@@ -37,7 +52,10 @@ fn dynamic_params() -> HashMap<String, ParamValue> {
     let mut m = HashMap::new();
     for i in 0..SLOTS {
         let height = if i == 0 { 0.5 } else { 0.0 };
-        m.insert(format!("type_{i}"), ParamValue::String("ellipse".to_string()));
+        m.insert(
+            format!("type_{i}"),
+            ParamValue::String("ellipse".to_string()),
+        );
         m.insert(format!("x_{i}"), ParamValue::Float(0.5));
         m.insert(format!("y_{i}"), ParamValue::Float(0.5));
         m.insert(format!("rx_{i}"), ParamValue::Float(0.2));
@@ -67,10 +85,16 @@ fn dynamic_param_ui(key: &str) -> Option<ParamUi> {
         return Some(ParamUi::FloatRange { min: 0.0, max: 1.0 });
     }
     if key.starts_with("angle_") {
-        return Some(ParamUi::FloatRange { min: 0.0, max: 360.0 });
+        return Some(ParamUi::FloatRange {
+            min: 0.0,
+            max: 360.0,
+        });
     }
     if key.starts_with("width_") {
-        return Some(ParamUi::FloatRange { min: 0.001, max: 0.5 });
+        return Some(ParamUi::FloatRange {
+            min: 0.001,
+            max: 0.5,
+        });
     }
     if key.starts_with("closed_") || key.starts_with("fill_") {
         return Some(ParamUi::Bool);

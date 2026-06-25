@@ -161,7 +161,9 @@ pub fn compile_from_outputs(
         let hm_path = pkg.compiled_heightmap_path();
         write_heightmap_bin(&hm_path, &hm)?;
     } else {
-        tracing::debug!("Compile: no heightmap wired to FinalComposition -- heightmap.bin not written");
+        tracing::debug!(
+            "Compile: no heightmap wired to FinalComposition -- heightmap.bin not written"
+        );
     }
 
     on_progress("[99%] Writing fingerprint");

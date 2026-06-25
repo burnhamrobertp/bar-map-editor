@@ -253,7 +253,11 @@ mod tests {
             for x in 4..28 {
                 let px = cb.get(x, y).unwrap();
                 assert!(px[0] > 0.98, "flat AO should be ~1 at ({x},{y}): {}", px[0]);
-                assert!(px[1] > 0.98, "flat sun should be ~1 at ({x},{y}): {}", px[1]);
+                assert!(
+                    px[1] > 0.98,
+                    "flat sun should be ~1 at ({x},{y}): {}",
+                    px[1]
+                );
                 assert!((px[3] - 1.0).abs() < 1e-6, "alpha must be 1");
             }
         }
@@ -270,10 +274,7 @@ mod tests {
         let cb = bake_lightmap_cpu(&hm, &params);
         for px in cb.data().chunks_exact(4) {
             for (c, &v) in px.iter().enumerate() {
-                assert!(
-                    (0.0..=1.0).contains(&v),
-                    "channel {c} out of [0,1]: {v}"
-                );
+                assert!((0.0..=1.0).contains(&v), "channel {c} out of [0,1]: {v}");
             }
         }
     }
@@ -329,6 +330,9 @@ mod tests {
             shadow < lit,
             "side away from sun should be darker: shadow {shadow} vs lit {lit}"
         );
-        assert!(shadow < 0.9, "shadowed side should be notably dim: {shadow}");
+        assert!(
+            shadow < 0.9,
+            "shadowed side should be notably dim: {shadow}"
+        );
     }
 }

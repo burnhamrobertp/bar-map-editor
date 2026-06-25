@@ -3,19 +3,28 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, ParamValue, PortValue};
 
+use crate::exec::shared::{
+    get_bool, get_float, get_optional_heightmap, get_string, scale_by_field,
+};
 use crate::exec::ExecCtx;
-use crate::exec::shared::{get_bool, get_float, get_optional_heightmap, get_string, scale_by_field};
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let ctrl = get_optional_heightmap(ctx.inputs, "control");
     let hm = generate_gradient(ctx.params, ctx.hm_w, ctx.hm_h);
     let hm = scale_by_field(hm, ctrl.as_ref());
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Generate a gradient (ramp).
 /// Params: direction ("linear_x", "linear_y", "radial", "angular"), invert
-pub(crate) fn generate_gradient(params: &HashMap<String, ParamValue>, width: u32, height: u32) -> Heightmap {
+pub(crate) fn generate_gradient(
+    params: &HashMap<String, ParamValue>,
+    width: u32,
+    height: u32,
+) -> Heightmap {
     let direction = get_string(params, "direction", "linear_y");
     let invert = get_bool(params, "invert", false);
     let center_x = get_float(params, "center_x", 0.5);

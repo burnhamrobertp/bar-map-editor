@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::get_string;
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let mut outputs: HashMap<String, PortValue> = HashMap::new();

@@ -14,7 +14,7 @@ pub mod worley;
 use crate::nodes::def::NodeDef;
 
 /// This family's descriptors -- the family index + exhaustiveness checkpoint.
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &perlin::DEF,
     &simplex::DEF,
     &worley::DEF,

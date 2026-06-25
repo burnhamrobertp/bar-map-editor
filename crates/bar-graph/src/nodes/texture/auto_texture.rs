@@ -20,12 +20,36 @@ static BIOMES: &[&str] = &[
 ];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "biome", default: || ParamValue::String("temperate".to_string()), ui: ParamUi::Choices(BIOMES) },
-    ParamDef { key: "slope_power", default: || ParamValue::Float(0.7), ui: ParamUi::FloatRange { min: 0.0, max: 4.0 } },
-    ParamDef { key: "slope_blend", default: || ParamValue::Float(1.0), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "rock_color", default: || ParamValue::String("736B61".to_string()), ui: ParamUi::Color },
-    ParamDef { key: "ao_strength", default: || ParamValue::Float(1.0), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "detail_strength", default: || ParamValue::Float(0.15), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
+    ParamDef {
+        key: "biome",
+        default: || ParamValue::String("temperate".to_string()),
+        ui: ParamUi::Choices(BIOMES),
+    },
+    ParamDef {
+        key: "slope_power",
+        default: || ParamValue::Float(0.7),
+        ui: ParamUi::FloatRange { min: 0.0, max: 4.0 },
+    },
+    ParamDef {
+        key: "slope_blend",
+        default: || ParamValue::Float(1.0),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "rock_color",
+        default: || ParamValue::String("736B61".to_string()),
+        ui: ParamUi::Color,
+    },
+    ParamDef {
+        key: "ao_strength",
+        default: || ParamValue::Float(1.0),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "detail_strength",
+        default: || ParamValue::Float(0.15),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef {
@@ -50,7 +74,10 @@ fn biome_side_effects(key: &str, v: &ParamValue) -> Vec<(String, ParamValue)> {
         if let ParamValue::String(b) = v {
             let bd = crate::defaults::biome_defaults(b);
             return vec![
-                ("rock_color".into(), ParamValue::String(bd.rock_color.into())),
+                (
+                    "rock_color".into(),
+                    ParamValue::String(bd.rock_color.into()),
+                ),
                 ("slope_power".into(), ParamValue::Float(bd.slope_power)),
             ];
         }

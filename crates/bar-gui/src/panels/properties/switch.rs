@@ -48,12 +48,8 @@ impl BarEditorApp {
         let mut sel_f = selected as f32;
         if ui
             .add(
-                crate::panels::widgets::ParamSlider::new(
-                    &mut sel_f,
-                    0.0,
-                    (input_count - 1) as f32,
-                )
-                .integer(),
+                crate::panels::widgets::ParamSlider::new(&mut sel_f, 0.0, (input_count - 1) as f32)
+                    .integer(),
             )
             .changed()
         {

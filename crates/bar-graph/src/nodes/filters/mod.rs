@@ -21,7 +21,7 @@ pub mod warp;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &hydraulic_erosion::DEF,
     &thermal_erosion::DEF,
     &blur::DEF,

@@ -2,8 +2,8 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::get_string;
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let files_str = get_string(ctx.params, "files", "");
@@ -24,7 +24,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
         })
         .collect();
 
-    Ok(HashMap::from([("files".to_string(), PortValue::FileList(file_list))]))
+    Ok(HashMap::from([(
+        "files".to_string(),
+        PortValue::FileList(file_list),
+    )]))
 }
 
 #[cfg(test)]

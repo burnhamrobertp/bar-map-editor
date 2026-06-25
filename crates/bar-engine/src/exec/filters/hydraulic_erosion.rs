@@ -3,15 +3,10 @@ use std::collections::HashMap;
 use bar_compute::{hydraulic_erosion, HydraulicErosionParams};
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_string,
-    get_uint,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_string, get_uint,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -62,9 +57,13 @@ mod tests {
         w: u32,
         h: u32,
     ) -> Heightmap {
-        let p: HashMap<String, ParamValue> =
-            params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-        let out = crate::CpuExecutor.execute(&nt, &p, &inputs, w, h, w, h).unwrap();
+        let p: HashMap<String, ParamValue> = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let out = crate::CpuExecutor
+            .execute(&nt, &p, &inputs, w, h, w, h)
+            .unwrap();
         match out.get("output").unwrap() {
             PortValue::Heightmap(hm) => hm.clone(),
             _ => panic!("expected heightmap output"),
@@ -106,7 +105,10 @@ mod tests {
             .zip(out2.data())
             .map(|(a, b)| (a - b).abs())
             .sum();
-        assert!(diff > 0.0, "the surfaced `seed` param must affect erosion output");
+        assert!(
+            diff > 0.0,
+            "the surfaced `seed` param must affect erosion output"
+        );
     }
 
     #[test]

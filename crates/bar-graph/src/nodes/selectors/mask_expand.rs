@@ -4,9 +4,14 @@ use crate::port::PortKind;
 
 static OUTPUT: &[PortDef] = &[PortDef::one("output", "Output", PortKind::Heightmap)];
 
-static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "radius", default: || ParamValue::Float(4.0), ui: ParamUi::FloatRange { min: 0.5, max: 20.0 } },
-];
+static PARAMS: &[ParamDef] = &[ParamDef {
+    key: "radius",
+    default: || ParamValue::Float(4.0),
+    ui: ParamUi::FloatRange {
+        min: 0.5,
+        max: 20.0,
+    },
+}];
 
 pub static DEF: NodeDef = NodeDef::basic(
     NodeType::MaskExpand,

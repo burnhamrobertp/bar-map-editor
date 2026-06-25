@@ -2,17 +2,12 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
+use crate::exec::selectors::shared::{compute_height_select, compute_slope_map};
 use crate::exec::shared::{
-    apply_invert,
-    get_bool,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_string,
+    apply_invert, get_bool, get_float, get_input_heightmap, get_optional_heightmap, get_string,
     scale_by_field,
 };
-use crate::exec::selectors::shared::{compute_height_select, compute_slope_map};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -33,7 +28,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     }
     let hm = scale_by_field(hm, ctrl.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 #[cfg(test)]
@@ -53,9 +51,13 @@ mod tests {
         w: u32,
         h: u32,
     ) -> Heightmap {
-        let p: HashMap<String, ParamValue> =
-            params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-        let out = crate::CpuExecutor.execute(&nt, &p, &inputs, w, h, w, h).unwrap();
+        let p: HashMap<String, ParamValue> = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let out = crate::CpuExecutor
+            .execute(&nt, &p, &inputs, w, h, w, h)
+            .unwrap();
         match out.get("output").unwrap() {
             PortValue::Heightmap(hm) => hm.clone(),
             _ => panic!("expected heightmap output"),
@@ -90,6 +92,9 @@ mod tests {
         }
         let steep = Heightmap::frbar_data(8, 8, steep_d).unwrap();
         assert!(sel_sum(flat) < 0.5, "flat terrain should select ~nothing");
-        assert!(sel_sum(steep) > 5.0, "steep ramp should select substantially");
+        assert!(
+            sel_sum(steep) > 5.0,
+            "steep ramp should select substantially"
+        );
     }
 }

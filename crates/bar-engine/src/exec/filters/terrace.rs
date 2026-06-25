@@ -3,14 +3,10 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_uint,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_uint,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -21,7 +17,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let hm = apply_terrace(&input, step_count, smoothing);
     let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 pub(crate) fn apply_terrace(input: &Heightmap, step_count: u32, smoothing: f32) -> Heightmap {

@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_heightmap};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -13,12 +13,20 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let falloff = get_float(ctx.params, "falloff", 30.0).max(1e-4);
     let hm = apply_select_aspect(&input, direction, width, falloff);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Aspect-direction mask. High where terrain faces `direction` degrees
 /// (0=North/up, 90=East, 180=South, 270=West).
-pub(crate) fn apply_select_aspect(input: &Heightmap, direction: f32, width: f32, falloff: f32) -> Heightmap {
+pub(crate) fn apply_select_aspect(
+    input: &Heightmap,
+    direction: f32,
+    width: f32,
+    falloff: f32,
+) -> Heightmap {
     let w = input.width() as usize;
     let h = input.height() as usize;
     let data = input.data();

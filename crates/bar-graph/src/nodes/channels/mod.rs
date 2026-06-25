@@ -5,4 +5,4 @@ pub mod channel_split;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[&channel_split::DEF, &channel_merge::DEF];
+pub static NODES: &[&NodeDef] = &[&channel_split::DEF, &channel_merge::DEF];

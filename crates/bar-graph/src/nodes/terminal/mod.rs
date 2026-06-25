@@ -6,4 +6,4 @@ pub mod final_composition;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[&final_composition::DEF];
+pub static NODES: &[&NodeDef] = &[&final_composition::DEF];

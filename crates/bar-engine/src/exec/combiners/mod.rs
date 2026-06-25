@@ -29,7 +29,10 @@ pub(crate) fn run_binop(
     let mask = get_optional_heightmap(ctx.inputs, "mask");
     let hm = combine_heightmaps(&a, &b, op);
     let hm = apply_modulation(&a, hm, None, mask.as_ref());
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 pub fn register(m: &mut HashMap<NodeType, ExecFn>) {

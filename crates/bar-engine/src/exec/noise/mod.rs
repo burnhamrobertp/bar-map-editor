@@ -27,7 +27,10 @@ pub(crate) fn run_noise(
     let ctrl = get_optional_heightmap(ctx.inputs, "control");
     let hm = generate_noise(noise_type, ctx.params, ctx.hm_w, ctx.hm_h)?;
     let hm = scale_by_field(hm, ctrl.as_ref());
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 pub fn register(m: &mut HashMap<NodeType, ExecFn>) {

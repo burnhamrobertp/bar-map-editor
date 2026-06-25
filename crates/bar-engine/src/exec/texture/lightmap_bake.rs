@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use bar_compute::{bake_lightmap_cpu, LightmapParams};
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_heightmap, get_uint};
 use crate::exec::texture::shared::resize_color_to_tex;
+use crate::exec::ExecCtx;
 
 /// Unit vector toward the sun from azimuth (compass degrees) + elevation
 /// (degrees above the horizon). +Z is up; azimuth 0 = +Y, increasing clockwise.
@@ -62,7 +62,10 @@ mod tests {
     fn elevation_90_points_straight_up() {
         let d = sun_dir_from_angles(123.0, 90.0);
         assert!(d[2] > 0.999, "z should be ~1 at zenith: {}", d[2]);
-        assert!(d[0].abs() < 1e-4 && d[1].abs() < 1e-4, "horizontal ~0 at zenith");
+        assert!(
+            d[0].abs() < 1e-4 && d[1].abs() < 1e-4,
+            "horizontal ~0 at zenith"
+        );
     }
 
     #[test]

@@ -4,9 +4,11 @@ use bar_data::ColorBuffer;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_input_heightmap, get_optional_heightmap};
-use crate::exec::texture::shared::{apply_color_modulation, parse_hex_color_srgb, resize_color_to_tex};
+use crate::exec::texture::shared::{
+    apply_color_modulation, parse_hex_color_srgb, resize_color_to_tex,
+};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -15,14 +17,20 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let color = apply_color_modulation([0.0, 0.0, 0.0, 0.0], color, None, mask.as_ref());
     let color = resize_color_to_tex(color, ctx.tex_w, ctx.tex_h);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Color(color))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Color(color),
+    )]))
 }
 
 /// Maps every pixel through the user-defined color-stop gradient.
 /// Stops are read from indexed params (pos_i, color_i) up to stop_count.
 /// Stops are sorted by position before interpolation so order in params
 /// doesn't matter.
-pub(crate) fn apply_color_ramp(input: &Heightmap, params: &HashMap<String, ParamValue>) -> ColorBuffer {
+pub(crate) fn apply_color_ramp(
+    input: &Heightmap,
+    params: &HashMap<String, ParamValue>,
+) -> ColorBuffer {
     let stop_count = match params.get("stop_count") {
         Some(ParamValue::UInt(n)) => (*n).clamp(2, 8) as usize,
         _ => 2,

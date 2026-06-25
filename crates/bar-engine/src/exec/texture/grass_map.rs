@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_heightmap, get_optional_heightmap, scale_by_field};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -17,7 +17,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let hm = scale_by_field(hm, ctrl.as_ref());
     let hm = scale_by_field(hm, mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Smooth band function: returns 1.0 inside [low,high], smoothly falls to 0 outside.

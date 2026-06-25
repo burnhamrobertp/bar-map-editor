@@ -354,7 +354,13 @@ impl Node {
         }
         let n = (n as usize).clamp(2, 8);
         self.inputs = (0..n)
-            .map(|i| Port::new(format!("input_{i}"), format!("Input {i}"), PortKind::Heightmap))
+            .map(|i| {
+                Port::new(
+                    format!("input_{i}"),
+                    format!("Input {i}"),
+                    PortKind::Heightmap,
+                )
+            })
             .collect();
     }
 

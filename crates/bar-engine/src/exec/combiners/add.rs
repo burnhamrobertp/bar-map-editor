@@ -33,7 +33,15 @@ mod tests {
             ("mask".to_string(), PortValue::Mask(mask)),
         ]);
         let result = executor
-            .execute(&NodeType::Add, &HashMap::<String, ParamValue>::new(), &inputs, 2, 2, 2, 2)
+            .execute(
+                &NodeType::Add,
+                &HashMap::<String, ParamValue>::new(),
+                &inputs,
+                2,
+                2,
+                2,
+                2,
+            )
             .unwrap();
         let PortValue::Heightmap(hm) = result.get("output").unwrap() else {
             panic!("expected heightmap")

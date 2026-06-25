@@ -3,16 +3,19 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::layout::raster::{rasterize_primitive_item, rasterize_spline_item};
 use crate::exec::shared::{get_float, get_optional_heightmap, get_uint};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let mask = get_optional_heightmap(ctx.inputs, "mask");
     let item_count = get_uint(ctx.params, "item_count", 1).min(8) as usize;
     let hm = apply_layout(ctx.params, item_count, ctx.hm_w, ctx.hm_h, mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Composite every layout item (primitive shapes + Catmull-Rom

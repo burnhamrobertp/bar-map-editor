@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::filters::shared::bilinear_sample;
 use crate::exec::shared::{get_float, get_input_heightmap, get_optional_heightmap};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -14,7 +14,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let strength = get_float(ctx.params, "strength", 0.1);
     let hm = apply_warp(&input, warp_x.as_ref(), warp_y.as_ref(), strength);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Domain warp using separate X and Y displacement maps.

@@ -12,11 +12,31 @@ static INPUTS: &[PortDef] = &[
 static OUTPUTS: &[PortDef] = &[PortDef::one("output", "Grass Density", PortKind::Heightmap)];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "min_height", default: || ParamValue::Float(0.15), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "max_height", default: || ParamValue::Float(0.7), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "max_slope", default: || ParamValue::Float(0.4), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "density", default: || ParamValue::Float(1.0), ui: ParamUi::FloatRange { min: 0.0, max: 2.0 } },
-    ParamDef { key: "falloff", default: || ParamValue::Float(0.05), ui: ParamUi::FloatRange { min: 0.0, max: 0.5 } },
+    ParamDef {
+        key: "min_height",
+        default: || ParamValue::Float(0.15),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "max_height",
+        default: || ParamValue::Float(0.7),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "max_slope",
+        default: || ParamValue::Float(0.4),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "density",
+        default: || ParamValue::Float(1.0),
+        ui: ParamUi::FloatRange { min: 0.0, max: 2.0 },
+    },
+    ParamDef {
+        key: "falloff",
+        default: || ParamValue::Float(0.05),
+        ui: ParamUi::FloatRange { min: 0.0, max: 0.5 },
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef::basic(

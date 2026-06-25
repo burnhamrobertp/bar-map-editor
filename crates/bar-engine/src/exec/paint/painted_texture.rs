@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
-use crate::exec::shared::get_string;
 use crate::exec::paint::shared::painted_rgb_to_color_buffer;
+use crate::exec::shared::get_string;
+use crate::exec::ExecCtx;
 
 /// Source resolution for the `PaintedTexture` node's brush canvas.
 /// Fixed for now; could be made a param like PaintedHeightmap.
@@ -28,5 +28,8 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     };
     let tex = painted_rgb_to_color_buffer(pixels, src_w, src_h, ctx.tex_w, ctx.tex_h);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Color(tex))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Color(tex),
+    )]))
 }

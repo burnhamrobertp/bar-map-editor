@@ -5,10 +5,21 @@ use crate::nodes::def::{NodeCaps, NodeCategory, NodeDef, ParamDef, ParamUi, Port
 use crate::port::PortKind;
 
 /// `character` presets for the FBM generators (Perlin / Simplex / Worley).
-pub const FBM_CHARACTERS: &[&str] = &["rolling_hills", "rugged", "broad_waves", "fine_detail", "wispy"];
+pub const FBM_CHARACTERS: &[&str] = &[
+    "rolling_hills",
+    "rugged",
+    "broad_waves",
+    "fine_detail",
+    "wispy",
+];
 /// `character` presets for RidgedNoise (its `|2x-1|` fold needs its own tuning).
-pub const RIDGED_CHARACTERS: &[&str] =
-    &["ridges", "jagged_peaks", "broken_terrain", "broad_ridges", "spires"];
+pub const RIDGED_CHARACTERS: &[&str] = &[
+    "ridges",
+    "jagged_peaks",
+    "broken_terrain",
+    "broad_ridges",
+    "spires",
+];
 
 /// A generator's one control input + one heightmap output (shared by the
 /// FBM nodes, Voronoi, Gradient).
@@ -17,16 +28,62 @@ pub static HEIGHTMAP_OUT: &[PortDef] = &[PortDef::one("output", "Heightmap", Por
 
 /// The six FBM params, identical for Perlin / Simplex / Worley.
 pub static FBM_PARAMS: &[ParamDef] = &[
-    ParamDef { key: "character", default: || ParamValue::String("rolling_hills".to_string()), ui: ParamUi::Choices(FBM_CHARACTERS) },
-    ParamDef { key: "frequency", default: || ParamValue::Float(4.0), ui: ParamUi::FloatRange { min: 0.1, max: 128.0 } },
-    ParamDef { key: "octaves", default: || ParamValue::UInt(6), ui: ParamUi::UIntRange { min: 1, max: 12 } },
-    ParamDef { key: "lacunarity", default: || ParamValue::Float(2.0), ui: ParamUi::FloatRange { min: 1.0, max: 4.0 } },
-    ParamDef { key: "persistence", default: || ParamValue::Float(0.5), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "seed", default: || ParamValue::UInt(0), ui: ParamUi::UIntFree },
-    ParamDef { key: "steepness", default: || ParamValue::Float(0.5), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "elevation", default: || ParamValue::Float(0.5), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "offset", default: || ParamValue::Float(0.0), ui: ParamUi::FloatRange { min: -0.5, max: 0.5 } },
-    ParamDef { key: "gain", default: || ParamValue::Float(0.5), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
+    ParamDef {
+        key: "character",
+        default: || ParamValue::String("rolling_hills".to_string()),
+        ui: ParamUi::Choices(FBM_CHARACTERS),
+    },
+    ParamDef {
+        key: "frequency",
+        default: || ParamValue::Float(4.0),
+        ui: ParamUi::FloatRange {
+            min: 0.1,
+            max: 128.0,
+        },
+    },
+    ParamDef {
+        key: "octaves",
+        default: || ParamValue::UInt(6),
+        ui: ParamUi::UIntRange { min: 1, max: 12 },
+    },
+    ParamDef {
+        key: "lacunarity",
+        default: || ParamValue::Float(2.0),
+        ui: ParamUi::FloatRange { min: 1.0, max: 4.0 },
+    },
+    ParamDef {
+        key: "persistence",
+        default: || ParamValue::Float(0.5),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "seed",
+        default: || ParamValue::UInt(0),
+        ui: ParamUi::UIntFree,
+    },
+    ParamDef {
+        key: "steepness",
+        default: || ParamValue::Float(0.5),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "elevation",
+        default: || ParamValue::Float(0.5),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "offset",
+        default: || ParamValue::Float(0.0),
+        ui: ParamUi::FloatRange {
+            min: -0.5,
+            max: 0.5,
+        },
+    },
+    ParamDef {
+        key: "gain",
+        default: || ParamValue::Float(0.5),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
 ];
 
 /// Build the descriptor for an FBM noise generator (Perlin / Simplex / Worley).
@@ -38,7 +95,10 @@ pub const fn fbm_def(node_type: NodeType, label: &'static str) -> NodeDef {
         inputs: CONTROL_IN,
         outputs: HEIGHTMAP_OUT,
         params: FBM_PARAMS,
-        caps: NodeCaps { gpu_eligible: true, ..NodeCaps::source() },
+        caps: NodeCaps {
+            gpu_eligible: true,
+            ..NodeCaps::source()
+        },
         dynamic_params: None,
         dynamic_param_ui: None,
         param_side_effects: Some(fbm_character_side_effects),

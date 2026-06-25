@@ -10,10 +10,26 @@ static INPUTS: &[PortDef] = &[
 static OUTPUTS: &[PortDef] = &[PortDef::one("output", "Output", PortKind::Heightmap)];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "sea_level", default: || ParamValue::Float(0.3), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "beach_size", default: || ParamValue::Float(0.05), ui: ParamUi::FloatRange { min: 0.0, max: 0.5 } },
-    ParamDef { key: "inland_height_influence", default: || ParamValue::Float(0.3), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "underwater_smoothing", default: || ParamValue::UInt(3), ui: ParamUi::UIntRange { min: 0, max: 20 } },
+    ParamDef {
+        key: "sea_level",
+        default: || ParamValue::Float(0.3),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "beach_size",
+        default: || ParamValue::Float(0.05),
+        ui: ParamUi::FloatRange { min: 0.0, max: 0.5 },
+    },
+    ParamDef {
+        key: "inland_height_influence",
+        default: || ParamValue::Float(0.3),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "underwater_smoothing",
+        default: || ParamValue::UInt(3),
+        ui: ParamUi::UIntRange { min: 0, max: 20 },
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef::basic(

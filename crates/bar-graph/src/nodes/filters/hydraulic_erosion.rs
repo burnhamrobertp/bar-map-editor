@@ -17,18 +17,75 @@ static OUTPUTS: &[PortDef] = &[
     PortDef::one("deposit", "Deposit", PortKind::Heightmap),
 ];
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "iterations", default: || ParamValue::UInt(50_000), ui: ParamUi::UIntRange { min: 1_000, max: 500_000 } },
-    ParamDef { key: "erosion_rate", default: || ParamValue::Float(0.01), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "deposition_rate", default: || ParamValue::Float(0.01), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "capacity_factor", default: || ParamValue::Float(4.0), ui: ParamUi::FloatRange { min: 0.5, max: 16.0 } },
-    ParamDef { key: "inertia", default: || ParamValue::Float(0.05), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "evaporation_rate", default: || ParamValue::Float(0.01), ui: ParamUi::FloatRange { min: 0.0, max: 0.2 } },
-    ParamDef { key: "gravity", default: || ParamValue::Float(4.0), ui: ParamUi::FloatRange { min: 1.0, max: 20.0 } },
-    ParamDef { key: "erosion_radius", default: || ParamValue::UInt(3), ui: ParamUi::UIntRange { min: 1, max: 16 } },
-    ParamDef { key: "max_lifetime", default: || ParamValue::UInt(30), ui: ParamUi::UIntRange { min: 5, max: 200 } },
-    ParamDef { key: "river_depth", default: || ParamValue::Float(0.0), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
-    ParamDef { key: "method", default: || ParamValue::String("droplet".to_string()), ui: ParamUi::Choices(METHODS) },
-    ParamDef { key: "seed", default: || ParamValue::UInt(0), ui: ParamUi::UIntFree },
+    ParamDef {
+        key: "iterations",
+        default: || ParamValue::UInt(50_000),
+        ui: ParamUi::UIntRange {
+            min: 1_000,
+            max: 500_000,
+        },
+    },
+    ParamDef {
+        key: "erosion_rate",
+        default: || ParamValue::Float(0.01),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "deposition_rate",
+        default: || ParamValue::Float(0.01),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "capacity_factor",
+        default: || ParamValue::Float(4.0),
+        ui: ParamUi::FloatRange {
+            min: 0.5,
+            max: 16.0,
+        },
+    },
+    ParamDef {
+        key: "inertia",
+        default: || ParamValue::Float(0.05),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "evaporation_rate",
+        default: || ParamValue::Float(0.01),
+        ui: ParamUi::FloatRange { min: 0.0, max: 0.2 },
+    },
+    ParamDef {
+        key: "gravity",
+        default: || ParamValue::Float(4.0),
+        ui: ParamUi::FloatRange {
+            min: 1.0,
+            max: 20.0,
+        },
+    },
+    ParamDef {
+        key: "erosion_radius",
+        default: || ParamValue::UInt(3),
+        ui: ParamUi::UIntRange { min: 1, max: 16 },
+    },
+    ParamDef {
+        key: "max_lifetime",
+        default: || ParamValue::UInt(30),
+        ui: ParamUi::UIntRange { min: 5, max: 200 },
+    },
+    ParamDef {
+        key: "river_depth",
+        default: || ParamValue::Float(0.0),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
+    ParamDef {
+        key: "method",
+        default: || ParamValue::String("droplet".to_string()),
+        ui: ParamUi::Choices(METHODS),
+    },
+    ParamDef {
+        key: "seed",
+        default: || ParamValue::UInt(0),
+        ui: ParamUi::UIntFree,
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef::basic(
@@ -38,5 +95,8 @@ pub static DEF: NodeDef = NodeDef::basic(
     INPUTS,
     OUTPUTS,
     PARAMS,
-    NodeCaps { gpu_eligible: true, ..NodeCaps::NONE },
+    NodeCaps {
+        gpu_eligible: true,
+        ..NodeCaps::NONE
+    },
 );

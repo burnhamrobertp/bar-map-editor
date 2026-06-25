@@ -3,25 +3,28 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{
-    get_float,
-    get_optional_heightmap,
-    get_string,
-    get_uint,
-    scale_by_field,
+    get_float, get_optional_heightmap, get_string, get_uint, scale_by_field,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let ctrl = get_optional_heightmap(ctx.inputs, "control");
     let hm = generate_voronoi(ctx.params, ctx.hm_w, ctx.hm_h);
     let hm = scale_by_field(hm, ctrl.as_ref());
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Generate Voronoi (plateau/cell) terrain.
 /// Params: frequency, seed, mode ("f1", "f2", "f2_f1", "cell")
-pub(crate) fn generate_voronoi(params: &HashMap<String, ParamValue>, width: u32, height: u32) -> Heightmap {
+pub(crate) fn generate_voronoi(
+    params: &HashMap<String, ParamValue>,
+    width: u32,
+    height: u32,
+) -> Heightmap {
     let frequency = get_float(params, "frequency", 8.0);
     let seed = get_uint(params, "seed", 0);
     let mode = get_string(params, "mode", "f1");

@@ -4,14 +4,11 @@ use std::f32::consts::PI;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::filters::shared::bilinear_sample;
 use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -23,11 +20,20 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let hm = apply_transform(&input, tx, ty, scale, angle);
     let hm = apply_modulation(&input, hm, None, mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Translate, scale, rotate a heightmap via inverse-mapped bilinear sampling.
-pub(crate) fn apply_transform(input: &Heightmap, tx: f32, ty: f32, scale: f32, angle_deg: f32) -> Heightmap {
+pub(crate) fn apply_transform(
+    input: &Heightmap,
+    tx: f32,
+    ty: f32,
+    scale: f32,
+    angle_deg: f32,
+) -> Heightmap {
     let w = input.width() as usize;
     let h = input.height() as usize;
     let angle_rad = angle_deg * PI / 180.0;

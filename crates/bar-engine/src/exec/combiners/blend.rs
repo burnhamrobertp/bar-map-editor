@@ -2,15 +2,11 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
-use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_string,
-};
 use crate::exec::combiners::shared::combine_mode_heightmaps;
+use crate::exec::shared::{
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_string,
+};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let a = get_input_heightmap(ctx.inputs, "a")?;
@@ -21,7 +17,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let mask = get_optional_heightmap(ctx.inputs, "mask");
     let combined = combine_mode_heightmaps(&a, &b, mode, factor);
     let hm = apply_modulation(&a, combined, ctrl.as_ref(), mask.as_ref());
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 #[cfg(test)]
@@ -42,9 +41,13 @@ mod tests {
         w: u32,
         h: u32,
     ) -> Heightmap {
-        let p: HashMap<String, ParamValue> =
-            params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-        let out = crate::CpuExecutor.execute(&nt, &p, &inputs, w, h, w, h).unwrap();
+        let p: HashMap<String, ParamValue> = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let out = crate::CpuExecutor
+            .execute(&nt, &p, &inputs, w, h, w, h)
+            .unwrap();
         match out.get("output").unwrap() {
             PortValue::Heightmap(hm) => hm.clone(),
             _ => panic!("expected heightmap output"),

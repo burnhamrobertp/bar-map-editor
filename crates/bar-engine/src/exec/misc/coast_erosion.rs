@@ -3,14 +3,10 @@ use std::collections::HashMap;
 use bar_compute::{coast_erosion, CoastErosionParams};
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_uint,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_uint,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -27,7 +23,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let result = coast_erosion(&input, &params);
     let hm = apply_modulation(&input, result, ctrl.as_ref(), mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 #[cfg(test)]
@@ -39,15 +38,19 @@ mod tests {
 
     use crate::exec::ExecCtx;
 
-    fn run(
-        params: &[(&str, ParamValue)],
-        inputs: &HashMap<String, PortValue>,
-    ) -> Heightmap {
+    fn run(params: &[(&str, ParamValue)], inputs: &HashMap<String, PortValue>) -> Heightmap {
         let params: HashMap<String, ParamValue> = params
             .iter()
             .map(|(k, v)| (k.to_string(), v.clone()))
             .collect();
-        let ctx = ExecCtx { params: &params, inputs, hm_w: 4, hm_h: 4, tex_w: 4, tex_h: 4 };
+        let ctx = ExecCtx {
+            params: &params,
+            inputs,
+            hm_w: 4,
+            hm_h: 4,
+            tex_w: 4,
+            tex_h: 4,
+        };
         match super::exec(&ctx).unwrap().remove("output").unwrap() {
             PortValue::Heightmap(h) => h,
             _ => panic!("expected heightmap output"),
@@ -100,7 +103,14 @@ mod tests {
     fn missing_input_errors() {
         let inputs = HashMap::new();
         let params: HashMap<String, ParamValue> = HashMap::new();
-        let ctx = ExecCtx { params: &params, inputs: &inputs, hm_w: 4, hm_h: 4, tex_w: 4, tex_h: 4 };
+        let ctx = ExecCtx {
+            params: &params,
+            inputs: &inputs,
+            hm_w: 4,
+            hm_h: 4,
+            tex_w: 4,
+            tex_h: 4,
+        };
         assert!(super::exec(&ctx).is_err());
     }
 }

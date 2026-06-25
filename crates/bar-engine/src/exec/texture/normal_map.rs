@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use bar_data::{ColorBuffer, Heightmap};
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_heightmap, get_optional_heightmap};
 use crate::exec::texture::shared::{apply_color_modulation, resize_color_to_tex};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -16,7 +16,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let color = apply_color_modulation([0.5, 0.5, 1.0, 1.0], color, None, mask.as_ref());
     let color = resize_color_to_tex(color, ctx.tex_w, ctx.tex_h);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Color(color))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Color(color),
+    )]))
 }
 
 /// Generate a tangent-space normal map from a heightmap.

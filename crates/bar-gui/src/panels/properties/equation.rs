@@ -38,7 +38,8 @@ impl BarEditorApp {
         if resp.changed() {
             self.push_undo("Change parameter");
             if let Some(node) = self.graph.get_node_mut(node_id) {
-                node.params.insert("formula".to_string(), ParamValue::String(formula));
+                node.params
+                    .insert("formula".to_string(), ParamValue::String(formula));
                 node.mark_dirty();
             }
         }

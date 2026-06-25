@@ -4,4 +4,4 @@ pub mod equation;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[&equation::DEF];
+pub static NODES: &[&NodeDef] = &[&equation::DEF];

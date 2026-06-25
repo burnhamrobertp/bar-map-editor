@@ -1,7 +1,5 @@
 use crate::node::{Node, NodeType, ParamValue};
-use crate::nodes::def::{
-    CustomPanel, NodeCaps, NodeCategory, NodeDef, ParamDef, ParamUi, PortDef,
-};
+use crate::nodes::def::{CustomPanel, NodeCaps, NodeCategory, NodeDef, ParamDef, ParamUi, PortDef};
 use crate::port::PortKind;
 
 // Default 2 inputs; `post_build` / `resize_switch_ports` grows them to
@@ -13,8 +11,16 @@ static INPUTS: &[PortDef] = &[
 static OUTPUTS: &[PortDef] = &[PortDef::one("output", "Output", PortKind::Heightmap)];
 
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "input_count", default: || ParamValue::UInt(2), ui: ParamUi::UIntRange { min: 2, max: 8 } },
-    ParamDef { key: "selected", default: || ParamValue::UInt(0), ui: ParamUi::UIntRange { min: 0, max: 7 } },
+    ParamDef {
+        key: "input_count",
+        default: || ParamValue::UInt(2),
+        ui: ParamUi::UIntRange { min: 2, max: 8 },
+    },
+    ParamDef {
+        key: "selected",
+        default: || ParamValue::UInt(0),
+        ui: ParamUi::UIntRange { min: 0, max: 7 },
+    },
 ];
 
 fn resize_ports(node: &mut Node) {

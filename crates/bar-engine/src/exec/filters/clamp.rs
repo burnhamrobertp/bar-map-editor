@@ -3,14 +3,10 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{
-    apply_modulation,
-    get_float,
-    get_input_heightmap,
-    get_optional_heightmap,
-    get_string,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_string,
 };
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -22,13 +18,21 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let hm = apply_clamp_mode(&input, min_val, max_val, mode);
     let hm = apply_modulation(&input, hm, ctrl.as_ref(), mask.as_ref());
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Range conditioning (WM Clamp/Restrict). `clamp` = hard clip to [min,max];
 /// `normalize` = rescale the input's actual min..max to fill [min,max];
 /// `soft_clip` = smooth tanh saturation toward the bounds (no hard cut).
-pub(crate) fn apply_clamp_mode(input: &Heightmap, min_val: f32, max_val: f32, mode: &str) -> Heightmap {
+pub(crate) fn apply_clamp_mode(
+    input: &Heightmap,
+    min_val: f32,
+    max_val: f32,
+    mode: &str,
+) -> Heightmap {
     let w = input.width();
     let h = input.height();
     let span = (max_val - min_val).abs().max(1e-6);
@@ -56,7 +60,11 @@ pub(crate) fn apply_clamp_mode(input: &Heightmap, min_val: f32, max_val: f32, mo
                 min_val + s * span
             })
             .collect(),
-        _ => input.data().iter().map(|&v| v.clamp(min_val, max_val)).collect(),
+        _ => input
+            .data()
+            .iter()
+            .map(|&v| v.clamp(min_val, max_val))
+            .collect(),
     };
     Heightmap::frbar_data(w, h, data).unwrap()
 }
@@ -73,9 +81,13 @@ mod tests {
         w: u32,
         h: u32,
     ) -> Heightmap {
-        let p: HashMap<String, ParamValue> =
-            params.iter().map(|(k, v)| (k.to_string(), v.clone())).collect();
-        let out = crate::CpuExecutor.execute(&nt, &p, &inputs, w, h, w, h).unwrap();
+        let p: HashMap<String, ParamValue> = params
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect();
+        let out = crate::CpuExecutor
+            .execute(&nt, &p, &inputs, w, h, w, h)
+            .unwrap();
         match out.get("output").unwrap() {
             PortValue::Heightmap(hm) => hm.clone(),
             _ => panic!("expected heightmap output"),
@@ -138,7 +150,10 @@ mod tests {
             4,
         );
         for &v in out.data() {
-            assert!((0.2 - 1e-4..=0.8 + 1e-4).contains(&v), "soft-clip out of bounds: {v}");
+            assert!(
+                (0.2 - 1e-4..=0.8 + 1e-4).contains(&v),
+                "soft-clip out of bounds: {v}"
+            );
         }
     }
 }

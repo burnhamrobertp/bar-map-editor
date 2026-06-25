@@ -2,16 +2,19 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
-use crate::exec::shared::{get_float, get_input_heightmap};
 use crate::exec::selectors::shared::apply_morphology;
+use crate::exec::shared::{get_float, get_input_heightmap};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
     let radius = get_float(ctx.params, "radius", 4.0).max(0.5);
     let hm = apply_morphology(&input, radius, false);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 #[cfg(test)]

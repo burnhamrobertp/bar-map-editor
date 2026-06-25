@@ -18,7 +18,7 @@ pub mod vegetation;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &terrain_splat::DEF,
     &auto_texture::DEF,
     &rock_soil::DEF,

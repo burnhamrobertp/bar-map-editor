@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::Heightmap;
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_heightmap, get_optional_heightmap};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let input = get_input_heightmap(ctx.inputs, "input")?;
@@ -36,12 +36,19 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
         apply_mask_threshold(&input, threshold, smoothness)
     };
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }
 
 /// Threshold a heightmap into a binary (or smooth) mask.
 /// With smoothness=0: hard binary. With smoothness>0: smooth sigmoid-like transition.
-pub(crate) fn apply_mask_threshold(input: &Heightmap, threshold: f32, smoothness: f32) -> Heightmap {
+pub(crate) fn apply_mask_threshold(
+    input: &Heightmap,
+    threshold: f32,
+    smoothness: f32,
+) -> Heightmap {
     let w = input.width();
     let h = input.height();
     let data: Vec<f32> = input

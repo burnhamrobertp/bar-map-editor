@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use bar_data::{ColorBuffer, Heightmap};
 use bar_graph::{EvalError, ParamValue, PortValue};
 
-use crate::exec::ExecCtx;
 use crate::exec::shared::{get_float, get_input_color, get_optional_heightmap, get_string};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let base = get_input_color(ctx.inputs, "base")?;
@@ -12,7 +12,10 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let distribution = get_optional_heightmap(ctx.inputs, "distribution");
     let color = generate_texture_overlay(&base, &overlay, distribution.as_ref(), ctx.params);
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Color(color))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Color(color),
+    )]))
 }
 
 /// Porter-Duff compositor for Color layers. Blends overlay over base using

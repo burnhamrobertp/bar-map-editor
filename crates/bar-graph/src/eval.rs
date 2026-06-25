@@ -557,8 +557,14 @@ mod tests {
         // Wire S.output -> N.frequency (auto-appended scalar port).
         graph
             .connect(
-                PortId { node_id: sv, port_name: "output".into() },
-                PortId { node_id: noise, port_name: "frequency".into() },
+                PortId {
+                    node_id: sv,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: noise,
+                    port_name: "frequency".into(),
+                },
             )
             .unwrap();
 

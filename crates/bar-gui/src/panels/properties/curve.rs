@@ -31,7 +31,10 @@ fn nearest_point(pts: &[(f32, f32)], rect: egui::Rect, sp: egui::Pos2) -> Option
     pts.iter()
         .enumerate()
         .map(|(i, &(x, y))| {
-            let c = egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height());
+            let c = egui::pos2(
+                rect.left() + x * rect.width(),
+                rect.bottom() - y * rect.height(),
+            );
             (i, (c - sp).length())
         })
         .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
@@ -62,12 +65,15 @@ impl BarEditorApp {
         };
         pts.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let size = ui.available_width().min(248.0).max(160.0);
+        let size = ui.available_width().clamp(160.0, 248.0);
         let (rect, resp) =
             ui.allocate_exact_size(egui::vec2(size, size), egui::Sense::click_and_drag());
 
         let to_screen = |p: (f32, f32)| {
-            egui::pos2(rect.left() + p.0 * rect.width(), rect.bottom() - p.1 * rect.height())
+            egui::pos2(
+                rect.left() + p.0 * rect.width(),
+                rect.bottom() - p.1 * rect.height(),
+            )
         };
         let to_data = |sp: egui::Pos2| {
             (
@@ -87,8 +93,14 @@ impl BarEditorApp {
                 let gx = rect.left() + t * rect.width();
                 let gy = rect.top() + t * rect.height();
                 let g = egui::Stroke::new(0.5, egui::Color32::from_gray(45));
-                p.line_segment([egui::pos2(gx, rect.top()), egui::pos2(gx, rect.bottom())], g);
-                p.line_segment([egui::pos2(rect.left(), gy), egui::pos2(rect.right(), gy)], g);
+                p.line_segment(
+                    [egui::pos2(gx, rect.top()), egui::pos2(gx, rect.bottom())],
+                    g,
+                );
+                p.line_segment(
+                    [egui::pos2(rect.left(), gy), egui::pos2(rect.right(), gy)],
+                    g,
+                );
             }
             // identity reference
             p.line_segment(
@@ -148,7 +160,9 @@ impl BarEditorApp {
         // Click on empty space -> add a point there.
         if resp.clicked() {
             if let Some(sp) = pointer {
-                let on_handle = nearest_point(&pts, rect, sp).map(|(_, d)| d <= 8.0).unwrap_or(false);
+                let on_handle = nearest_point(&pts, rect, sp)
+                    .map(|(_, d)| d <= 8.0)
+                    .unwrap_or(false);
                 if !on_handle && pts.len() < MAX_POINTS {
                     let (x, y) = to_data(sp);
                     pts.push((x.clamp(0.001, 0.999), y));

@@ -19,7 +19,10 @@ pub(crate) fn get_input_heightmap(
 }
 
 /// Optional heightmap input -- None if the port is unconnected or mistyped.
-pub(crate) fn get_optional_heightmap(inputs: &HashMap<String, PortValue>, name: &str) -> Option<Heightmap> {
+pub(crate) fn get_optional_heightmap(
+    inputs: &HashMap<String, PortValue>,
+    name: &str,
+) -> Option<Heightmap> {
     match inputs.get(name) {
         Some(PortValue::Heightmap(hm)) | Some(PortValue::Mask(hm)) => Some(hm.clone()),
         _ => None,

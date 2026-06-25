@@ -9,7 +9,7 @@ pub mod painted_texture;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[
+pub static NODES: &[&NodeDef] = &[
     &painted_heightmap::DEF,
     &painted_texture::DEF,
     &imported_texture::DEF,

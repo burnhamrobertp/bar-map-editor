@@ -35,7 +35,7 @@ use crate::node::NodeType;
 
 /// Per-family descriptor slices. Each family module exposes `pub static NODES:
 /// &[&NodeDef]`. All node types now live in the registry.
-static ALL: &[&[&'static NodeDef]] = &[
+static ALL: &[&[&NodeDef]] = &[
     noise::NODES,
     combiners::NODES,
     selectors::NODES,
@@ -85,8 +85,11 @@ use crate::port::{Port, PortKind};
 
 /// Default param map: each `ParamDef` default + any `dynamic_params`.
 pub fn build_params(d: &NodeDef) -> HashMap<String, ParamValue> {
-    let mut m: HashMap<String, ParamValue> =
-        d.params.iter().map(|p| (p.key.to_string(), (p.default)())).collect();
+    let mut m: HashMap<String, ParamValue> = d
+        .params
+        .iter()
+        .map(|p| (p.key.to_string(), (p.default)()))
+        .collect();
     if let Some(f) = d.dynamic_params {
         m.extend(f());
     }

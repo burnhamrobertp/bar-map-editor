@@ -2,9 +2,9 @@ use std::collections::HashMap;
 
 use bar_graph::{EvalError, PortValue};
 
-use crate::exec::ExecCtx;
-use crate::exec::shared::{get_string, get_uint};
 use crate::exec::paint::shared::{read_painted_heightmap_asset, GrayscaleSampling};
+use crate::exec::shared::{get_string, get_uint};
+use crate::exec::ExecCtx;
 
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     // `resolution` is a legacy single-dim fallback used when
@@ -22,5 +22,8 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
         asset_path, fallback_w, fallback_h, ctx.hm_w, ctx.hm_h, sampling,
     );
 
-    Ok(HashMap::from([("output".to_string(), PortValue::Heightmap(hm))]))
+    Ok(HashMap::from([(
+        "output".to_string(),
+        PortValue::Heightmap(hm),
+    )]))
 }

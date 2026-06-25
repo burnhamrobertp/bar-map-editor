@@ -7,4 +7,4 @@ pub mod switch;
 
 use crate::nodes::def::NodeDef;
 
-pub static NODES: &[&'static NodeDef] = &[&checkpoint::DEF, &switch::DEF, &coast_erosion::DEF];
+pub static NODES: &[&NodeDef] = &[&checkpoint::DEF, &switch::DEF, &coast_erosion::DEF];

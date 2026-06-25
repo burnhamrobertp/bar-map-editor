@@ -1329,7 +1329,10 @@ fn mask_select_picks_b_when_mask_is_one() {
 fn channel_split_isolates_each_plane() {
     // A solid red ColorBuffer: split must put 1.0 on `r` and 0.0 on g/b.
     let mut inputs = HashMap::new();
-    inputs.insert("color".to_string(), PortValue::Color(solid_color(1.0, 0.0, 0.0)));
+    inputs.insert(
+        "color".to_string(),
+        PortValue::Color(solid_color(1.0, 0.0, 0.0)),
+    );
     let outputs = run(NodeType::ChannelSplit, &[], &inputs);
     let r = out_hm(&outputs, "r");
     let g = out_hm(&outputs, "g");
@@ -1358,7 +1361,10 @@ fn channel_merge_inverts_split() {
     let cb = out_color(&merged, "color");
     assert_color_dims(&cb);
     for (orig, got) in src.data().iter().zip(cb.data()) {
-        assert!((orig - got).abs() < 1e-4, "round-trip drift: {orig} vs {got}");
+        assert!(
+            (orig - got).abs() < 1e-4,
+            "round-trip drift: {orig} vs {got}"
+        );
     }
 }
 
@@ -1370,8 +1376,16 @@ fn channel_merge_without_alpha_is_opaque() {
     let cb = out_color(&run(NodeType::ChannelMerge, &[], &inputs), "color");
     assert_color_dims(&cb);
     let centre = cb.get(W / 2, H / 2).unwrap();
-    assert!((centre[3] - 1.0).abs() < 1e-4, "missing alpha should be opaque: {}", centre[3]);
-    assert!((centre[0] - 0.3).abs() < 1e-4, "red preserved: {}", centre[0]);
+    assert!(
+        (centre[3] - 1.0).abs() < 1e-4,
+        "missing alpha should be opaque: {}",
+        centre[3]
+    );
+    assert!(
+        (centre[0] - 0.3).abs() < 1e-4,
+        "red preserved: {}",
+        centre[0]
+    );
 }
 
 // ── Texture node semantic checks ────────────────────────────────────
@@ -1548,7 +1562,11 @@ fn lightmap_bake_outputs_color_in_range() {
     }
     // Alpha is fully opaque.
     let centre = cb.get(W / 2, H / 2).unwrap();
-    assert!((centre[3] - 1.0).abs() < 1e-6, "alpha should be 1: {}", centre[3]);
+    assert!(
+        (centre[3] - 1.0).abs() < 1e-6,
+        "alpha should be 1: {}",
+        centre[3]
+    );
 }
 
 #[test]

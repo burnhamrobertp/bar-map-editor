@@ -2,7 +2,11 @@
 
 use bar_data::Heightmap;
 
-pub(crate) fn combine_heightmaps(a: &Heightmap, b: &Heightmap, op: impl Fn(f32, f32) -> f32) -> Heightmap {
+pub(crate) fn combine_heightmaps(
+    a: &Heightmap,
+    b: &Heightmap,
+    op: impl Fn(f32, f32) -> f32,
+) -> Heightmap {
     let w = a.width().min(b.width());
     let h = a.height().min(b.height());
     let mut data = vec![0.0f32; (w as usize) * (h as usize)];
@@ -23,7 +27,12 @@ pub(crate) fn combine_heightmaps(a: &Heightmap, b: &Heightmap, op: impl Fn(f32, 
 /// `lerp(a, op(a,b), factor)`. `blend` makes `op == b`, so the default
 /// (mode="blend", factor=0.5) is exactly the classic `blend_heightmaps`.
 /// Operands and results are kept in the engine's normalised 0..1 space.
-pub(crate) fn combine_mode_heightmaps(a: &Heightmap, b: &Heightmap, mode: &str, factor: f32) -> Heightmap {
+pub(crate) fn combine_mode_heightmaps(
+    a: &Heightmap,
+    b: &Heightmap,
+    mode: &str,
+    factor: f32,
+) -> Heightmap {
     combine_heightmaps(a, b, |va, vb| {
         let op = match mode {
             "add" => (va + vb).min(1.0),

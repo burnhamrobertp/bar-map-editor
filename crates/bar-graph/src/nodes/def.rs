@@ -25,10 +25,20 @@ pub struct PortDef {
 
 impl PortDef {
     pub const fn one(name: &'static str, label: &'static str, kind: PortKind) -> Self {
-        Self { name, label, kind, many: false }
+        Self {
+            name,
+            label,
+            kind,
+            many: false,
+        }
     }
     pub const fn many(name: &'static str, label: &'static str, kind: PortKind) -> Self {
-        Self { name, label, kind, many: true }
+        Self {
+            name,
+            label,
+            kind,
+            many: true,
+        }
     }
 }
 
@@ -37,9 +47,15 @@ impl PortDef {
 /// (`param_float_range` / `param_uint_range` / `param_choices` / `param_is_color`).
 #[derive(Debug, Clone, Copy)]
 pub enum ParamUi {
-    FloatRange { min: f32, max: f32 },
+    FloatRange {
+        min: f32,
+        max: f32,
+    },
     FloatFree,
-    UIntRange { min: u32, max: u32 },
+    UIntRange {
+        min: u32,
+        max: u32,
+    },
     UIntFree,
     IntFree,
     Bool,
@@ -107,7 +123,10 @@ impl NodeCaps {
         gpu_eligible: false,
     };
     pub const fn source() -> NodeCaps {
-        NodeCaps { is_source: true, ..NodeCaps::NONE }
+        NodeCaps {
+            is_source: true,
+            ..NodeCaps::NONE
+        }
     }
 }
 
@@ -126,6 +145,10 @@ pub enum CustomPanel {
     Switch,
     Curve,
 }
+
+/// Preset side-effect hook: editing one param returns overrides for others
+/// (AutoTexture biome, noise character).
+pub type ParamSideEffectFn = fn(&str, &ParamValue) -> Vec<(String, ParamValue)>;
 
 /// The full static descriptor for one node type.
 pub struct NodeDef {
@@ -147,7 +170,7 @@ pub struct NodeDef {
     pub dynamic_param_ui: Option<fn(&str) -> Option<ParamUi>>,
     /// Preset side-effects (AutoTexture biome, noise character) -- setting one
     /// param rewrites others.
-    pub param_side_effects: Option<fn(&str, &ParamValue) -> Vec<(String, ParamValue)>>,
+    pub param_side_effects: Option<ParamSideEffectFn>,
     /// Post-construction fixup after `Node::new` + recipe param merge
     /// (TextureWeightmap port resize, Subgraph kind sync).
     pub post_build: Option<fn(&mut Node)>,

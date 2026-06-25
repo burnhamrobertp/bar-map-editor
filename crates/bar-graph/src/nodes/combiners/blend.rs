@@ -4,8 +4,17 @@ use crate::port::PortKind;
 
 /// Combine method (WM Combiner "Method"); `blend` = lerp(a,b).
 const MODES: &[&str] = &[
-    "blend", "add", "subtract", "multiply", "divide", "average", "screen", "power",
-    "difference", "max", "min",
+    "blend",
+    "add",
+    "subtract",
+    "multiply",
+    "divide",
+    "average",
+    "screen",
+    "power",
+    "difference",
+    "max",
+    "min",
 ];
 
 static INPUTS: &[PortDef] = &[
@@ -15,8 +24,16 @@ static INPUTS: &[PortDef] = &[
     PortDef::one("mask", "Mask", PortKind::Mask),
 ];
 static PARAMS: &[ParamDef] = &[
-    ParamDef { key: "mode", default: || ParamValue::String("blend".to_string()), ui: ParamUi::Choices(MODES) },
-    ParamDef { key: "factor", default: || ParamValue::Float(0.5), ui: ParamUi::FloatRange { min: 0.0, max: 1.0 } },
+    ParamDef {
+        key: "mode",
+        default: || ParamValue::String("blend".to_string()),
+        ui: ParamUi::Choices(MODES),
+    },
+    ParamDef {
+        key: "factor",
+        default: || ParamValue::Float(0.5),
+        ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef {
