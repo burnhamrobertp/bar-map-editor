@@ -5,11 +5,14 @@ use std::collections::HashMap;
 
 use bar_compute::{
     GpuContext, GpuErosionPipeline, GpuFilterPipeline, GpuLightmapPipeline, GpuNoisePipeline,
-    LightmapParams, NoiseType, ThermalErosionParams,
+    LightmapParams, NoiseType,
 };
-use bar_data::Heightmap;
 use bar_graph::{EvalError, NodeExecutor, NodeType, ParamValue, PortValue};
 
+use crate::exec::filters::thermal_erosion::build_thermal_params;
+use crate::exec::shared::{
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_uint,
+};
 use crate::exec::CpuExecutor;
 
 /// Minimum resolution to prefer GPU over CPU for noise.
@@ -64,6 +67,12 @@ impl NodeExecutor for HybridExecutor {
         tex_width: u32,
         tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
+        // INVARIANT: any node dispatched to the GPU here must produce output
+        // identical to its CPU exec (a barproj must compile the same on a
+        // GPU-less machine). Each GPU path reuses the CPU param builder + input
+        // handling so only the kernel differs. Every node added below needs a
+        // case in tests/gpu_cpu_parity.rs.
+        //
         // GPU paths handle heightmap nodes only -- they use hm dims.
         let noise_type = match node_type {
             NodeType::PerlinNoise => Some(NoiseType::Perlin),
@@ -133,17 +142,16 @@ impl HybridExecutor {
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
-        let input = get_input_heightmap(inputs)?;
-        let erosion_params = ThermalErosionParams {
-            iterations: get_uint(params, "iterations", 50),
-            talus_angle: get_float(params, "talus_angle", 0.004),
-            erosion_rate: get_float(params, "erosion_rate", 0.5),
-        };
+        let input = get_input_heightmap(inputs, "input")?;
+        let ctrl = get_optional_heightmap(inputs, "control");
+        let mask = get_optional_heightmap(inputs, "mask");
+        let erosion_params = build_thermal_params(params);
 
         let result = self
             .erosion_pipeline
             .thermal_erode(&self.gpu_context, &input, &erosion_params)
             .map_err(|e| EvalError::Compute(format!("GPU thermal erosion failed: {e}")))?;
+        let result = apply_modulation(&input, result, ctrl.as_ref(), mask.as_ref());
 
         let mut outputs = HashMap::new();
         outputs.insert("output".to_string(), PortValue::Heightmap(result));
@@ -158,14 +166,7 @@ impl HybridExecutor {
         tex_width: u32,
         tex_height: u32,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
-        let input = inputs
-            .get("heightmap")
-            .and_then(|v| match v {
-                PortValue::Heightmap(h) => Some(h.clone()),
-                PortValue::Mask(h) => Some(h.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| EvalError::Compute("missing 'heightmap' input".to_string()))?;
+        let input = get_input_heightmap(inputs, "heightmap")?;
 
         let az = get_float(params, "sun_azimuth", 315.0).to_radians();
         let el = get_float(params, "sun_elevation", 45.0).to_radians();
@@ -203,48 +204,23 @@ impl HybridExecutor {
         params: &HashMap<String, ParamValue>,
         inputs: &HashMap<String, PortValue>,
     ) -> Result<HashMap<String, PortValue>, EvalError> {
-        let input = get_input_heightmap(inputs)?;
-        let radius = get_float(params, "radius", 2.0).round() as u32;
+        let input = get_input_heightmap(inputs, "input")?;
+        let ctrl = get_optional_heightmap(inputs, "control");
+        let mask = get_optional_heightmap(inputs, "mask");
+        // Match the CPU `apply_blur` radius handling exactly (default 1.0,
+        // round, clamp to [1, 64]) so both paths blur by the same amount.
+        let radius = (get_float(params, "radius", 1.0).round() as usize).clamp(1, 64) as u32;
 
         let result = self
             .filter_pipeline
             .box_blur(&self.gpu_context, &input, radius)
             .map_err(|e| EvalError::Compute(format!("GPU blur failed: {e}")))?;
+        let result = apply_modulation(&input, result, ctrl.as_ref(), mask.as_ref());
 
         let mut outputs = HashMap::new();
         outputs.insert("output".to_string(), PortValue::Heightmap(result));
         Ok(outputs)
     }
-}
-
-fn get_float(params: &HashMap<String, ParamValue>, key: &str, default: f32) -> f32 {
-    params
-        .get(key)
-        .and_then(|v| match v {
-            ParamValue::Float(f) => Some(*f),
-            _ => None,
-        })
-        .unwrap_or(default)
-}
-
-fn get_uint(params: &HashMap<String, ParamValue>, key: &str, default: u32) -> u32 {
-    params
-        .get(key)
-        .and_then(|v| match v {
-            ParamValue::UInt(n) => Some(*n),
-            _ => None,
-        })
-        .unwrap_or(default)
-}
-
-fn get_input_heightmap(inputs: &HashMap<String, PortValue>) -> Result<Heightmap, EvalError> {
-    inputs
-        .get("input")
-        .and_then(|v| match v {
-            PortValue::Heightmap(h) => Some(h.clone()),
-            _ => None,
-        })
-        .ok_or_else(|| EvalError::Compute("missing 'input' heightmap".to_string()))
 }
 
 #[cfg(test)]
