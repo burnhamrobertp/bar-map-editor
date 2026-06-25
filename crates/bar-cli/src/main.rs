@@ -65,6 +65,25 @@ enum Commands {
         recipe: PathBuf,
     },
 
+    /// Evaluate a recipe and write its heightmap as a 16-bit grayscale PNG.
+    /// For terrain comparison without a full export.
+    Heightmap {
+        /// Path to the recipe JSON file.
+        recipe: PathBuf,
+
+        /// Output PNG path.
+        #[arg(short, long, default_value = "heightmap.png")]
+        output: PathBuf,
+
+        /// Override output width (pixels).
+        #[arg(long)]
+        width: Option<u32>,
+
+        /// Override output height (pixels).
+        #[arg(long)]
+        height: Option<u32>,
+    },
+
     /// Print information about a recipe (nodes, connections, eval order).
     Info {
         /// Path to the recipe JSON file.
@@ -192,6 +211,12 @@ fn main() -> Result<()> {
             bundler.as_deref(),
         ),
         Commands::Validate { recipe } => cmd_validate(&recipe),
+        Commands::Heightmap {
+            recipe,
+            output,
+            width,
+            height,
+        } => cmd_heightmap(&recipe, &output, width, height),
         Commands::Info { recipe } => cmd_info(&recipe),
         Commands::New { output } => cmd_new(output.as_deref()),
         Commands::Targets => cmd_targets(),
@@ -349,6 +374,46 @@ fn cmd_validate(recipe_path: &Path) -> Result<()> {
     println!(
         "  Output:      {}x{}",
         recipe.output.width, recipe.output.height
+    );
+
+    Ok(())
+}
+
+fn cmd_heightmap(
+    recipe_path: &Path,
+    output_path: &Path,
+    width: Option<u32>,
+    height: Option<u32>,
+) -> Result<()> {
+    use bar_graph::{evaluate_graph, get_preview_heightmap};
+
+    let recipe = Recipe::load(recipe_path)
+        .with_context(|| format!("Failed to load recipe: {}", recipe_path.display()))?;
+    let w = width.unwrap_or(recipe.output.width);
+    let h = height.unwrap_or(recipe.output.height);
+
+    let graph = recipe.build_graph().context("Failed to build graph")?;
+    let executor = CpuExecutor;
+    let results = evaluate_graph(&graph, &executor, w, h, (w - 1) * 8, (h - 1) * 8)
+        .map_err(|e| anyhow::anyhow!("Graph evaluation failed: {e:?}"))?;
+
+    let heightmap = get_preview_heightmap(&graph, &results)
+        .ok_or_else(|| anyhow::anyhow!("No heightmap output in graph"))?;
+    bar_engine::export::write_heightmap_png(&heightmap, output_path)
+        .with_context(|| format!("Failed to write {}", output_path.display()))?;
+
+    let data = heightmap.data();
+    let mn = data.iter().copied().fold(f32::INFINITY, f32::min);
+    let mx = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mean = data.iter().copied().sum::<f32>() / data.len() as f32;
+    println!(
+        "Wrote {} ({}x{}) min={:.4} max={:.4} mean={:.4}",
+        output_path.display(),
+        heightmap.width(),
+        heightmap.height(),
+        mn,
+        mx,
+        mean
     );
 
     Ok(())
