@@ -503,7 +503,7 @@ mod tests {
         assert!(matches!(eff.get("frequency"), Some(ParamValue::Float(f)) if *f == 7.0));
         // octaves unchanged (heightmap input is not a scalar).
         assert!(matches!(eff.get("octaves"), Some(ParamValue::UInt(6))));
-        assert!(eff.get("not_a_param").is_none());
+        assert!(!eff.contains_key("not_a_param"));
     }
 
     /// Executor that echoes the (effective) `frequency` param as a Scalar so a
