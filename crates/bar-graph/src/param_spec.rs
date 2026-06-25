@@ -247,6 +247,10 @@ mod tests {
         NodeType::LayerBlend,
         NodeType::TextureWeightmap,
         NodeType::ColorRamp,
+        NodeType::LightmapBake,
+        // Channel ops
+        NodeType::ChannelSplit,
+        NodeType::ChannelMerge,
         // Map layers
         NodeType::NormalMap,
         NodeType::GrassMap,
@@ -273,6 +277,7 @@ mod tests {
         // Selectors
         NodeType::FlowSelect,
         NodeType::SelectConvexity,
+        NodeType::SlopeSelect,
         // Layout generator (primitives + splines)
         NodeType::Layout,
         // Transform / warp / strata filters
@@ -293,6 +298,15 @@ mod tests {
         NodeType::PassThrough,
         NodeType::SubgraphInput,
         NodeType::SubgraphOutput,
+        // Misc
+        NodeType::Checkpoint,
+        NodeType::Switch,
+        NodeType::CoastErosion,
+        NodeType::Equation,
+        // Scalar parameter graph
+        NodeType::ScalarValue,
+        NodeType::ScalarMath,
+        NodeType::IntValue,
     ];
 
     #[test]
@@ -301,7 +315,7 @@ mod tests {
         // NODE_TYPES_FOR_TEST. Update this constant AND the array when you add a variant.
         // (A compile-time version of this check requires nightly variant_count; this
         // test is the stable equivalent.)
-        const EXPECTED_VARIANT_COUNT: usize = 59;
+        const EXPECTED_VARIANT_COUNT: usize = 70;
         assert_eq!(
             NODE_TYPES_FOR_TEST.len(),
             EXPECTED_VARIANT_COUNT,

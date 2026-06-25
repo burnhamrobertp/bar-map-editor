@@ -315,7 +315,7 @@ fn scan_work_dir(
                 let src_w = tiles_x * TILE_SIZE;
                 let src_h = tiles_y * TILE_SIZE;
                 let (out_w, out_h) = scale_to_cap(src_w, src_h, TEX_RES);
-                let rgba = crate::executor::assemble_texture_preview(
+                let rgba = crate::exec::shared::assemble_texture_preview(
                     &tiles,
                     &smf.tile_indices,
                     tiles_x,

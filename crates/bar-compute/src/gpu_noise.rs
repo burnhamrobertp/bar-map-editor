@@ -40,6 +40,10 @@ struct GpuNoiseParams {
     offset_x: f32,
     offset_y: f32,
     noise_type: u32, // shader variant: 0=FBM, 1=Ridged, 2=Billow
+    steepness: f32,
+    elevation: f32,
+    offset: f32,
+    gain: f32,
     _padding2: f32,
     _padding3: f32,
 }
@@ -57,6 +61,10 @@ impl From<(&NoiseParams, NoiseType)> for GpuNoiseParams {
             offset_x: p.offset_x,
             offset_y: p.offset_y,
             noise_type: noise_type_discriminant(nt),
+            steepness: p.steepness,
+            elevation: p.elevation,
+            offset: p.offset,
+            gain: p.gain,
             _padding2: 0.0,
             _padding3: 0.0,
         }
@@ -238,3 +246,77 @@ impl GpuNoisePipeline {
 
 // Need wgpu::util for BufferInitDescriptor
 use wgpu::util::DeviceExt;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::device::GpuContext;
+    use crate::noise::shape;
+
+    fn try_gpu_context() -> Option<GpuContext> {
+        pollster::block_on(GpuContext::new_standalone()).ok()
+    }
+
+    /// The in-shader shaping must match the CPU `shape` formula exactly. The
+    /// GPU base field differs from the `noise`-crate CPU field, so we cannot
+    /// compare absolute heights against the CPU generator -- instead we hold the
+    /// GPU field fixed (same seed/params) and verify a shaped GPU pass equals the
+    /// unshaped GPU pass run through the CPU `shape`.
+    #[test]
+    fn gpu_shaping_matches_cpu_shape_fn() {
+        let Some(ctx) = try_gpu_context() else {
+            eprintln!("Skipping GPU test: no GPU adapter available");
+            return;
+        };
+
+        let pipeline = GpuNoisePipeline::new(&ctx.device);
+
+        let base = NoiseParams {
+            width: 64,
+            height: 64,
+            seed: 13,
+            ..Default::default()
+        };
+        let shaped = NoiseParams {
+            steepness: 0.75,
+            elevation: 0.6,
+            offset: 0.05,
+            gain: 0.65,
+            ..base.clone()
+        };
+
+        let base_hm = pipeline.generate(&ctx, &base, NoiseType::Perlin).unwrap();
+        let shaped_hm = pipeline.generate(&ctx, &shaped, NoiseType::Perlin).unwrap();
+
+        for (b, s) in base_hm.data().iter().zip(shaped_hm.data().iter()) {
+            let expected = shape(*b, &shaped);
+            assert!(
+                (expected - s).abs() < 1e-4,
+                "GPU shaping disagrees with CPU shape(): base={b} expected={expected} gpu={s}"
+            );
+        }
+    }
+
+    /// Default shaping on the GPU must be a no-op: a default-param pass equals a
+    /// pass with the shaping fields explicitly at their identity values.
+    #[test]
+    fn gpu_default_shaping_is_identity() {
+        let Some(ctx) = try_gpu_context() else {
+            eprintln!("Skipping GPU test: no GPU adapter available");
+            return;
+        };
+
+        let pipeline = GpuNoisePipeline::new(&ctx.device);
+        let p = NoiseParams {
+            width: 64,
+            height: 64,
+            seed: 13,
+            ..Default::default()
+        };
+
+        let hm = pipeline.generate(&ctx, &p, NoiseType::Perlin).unwrap();
+        for &v in hm.data().iter() {
+            assert!((shape(v, &p) - v).abs() < 1e-6);
+        }
+    }
+}

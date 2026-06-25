@@ -1,0 +1,88 @@
+{
+  "name": "WM-gap-feature-test",
+  "description": "Exercises every new param/node added to close the WM gap: Combine modes (screen), Clamp normalize, HeightSelect invert+smooth, the new SlopeSelect node, expanded HydraulicErosion params, and widened frequency/terrace ranges.",
+  "nodes": [
+    {
+      "key": "base",
+      "type": "PerlinNoise",
+      "label": "Base (high freq, tests >32 range)",
+      "params": {"frequency": {"Float": 64.0}, "octaves": {"UInt": 7}, "seed": {"UInt": 11}}
+    },
+    {
+      "key": "ridge",
+      "type": "RidgedNoise",
+      "label": "Ridges",
+      "params": {"frequency": {"Float": 3.0}, "octaves": {"UInt": 6}, "seed": {"UInt": 5}}
+    },
+    {
+      "key": "combine",
+      "type": "Blend",
+      "label": "Combine (screen mode)",
+      "params": {"mode": {"String": "screen"}, "factor": {"Float": 0.8}}
+    },
+    {
+      "key": "erode",
+      "type": "HydraulicErosion",
+      "label": "Erosion (expanded params)",
+      "params": {
+        "iterations": {"UInt": 80000},
+        "erosion_rate": {"Float": 0.4},
+        "deposition_rate": {"Float": 0.3},
+        "capacity_factor": {"Float": 6.0},
+        "inertia": {"Float": 0.1},
+        "evaporation_rate": {"Float": 0.02},
+        "gravity": {"Float": 6.0},
+        "erosion_radius": {"UInt": 4},
+        "max_lifetime": {"UInt": 45},
+        "seed": {"UInt": 7}
+      }
+    },
+    {
+      "key": "normclamp",
+      "type": "Clamp",
+      "label": "Clamp (normalize mode)",
+      "params": {"mode": {"String": "normalize"}, "min": {"Float": 0.0}, "max": {"Float": 1.0}}
+    },
+    {
+      "key": "hsel",
+      "type": "HeightSelect",
+      "label": "Height Select (invert + smooth)",
+      "params": {"low": {"Float": 0.0}, "high": {"Float": 0.4}, "falloff": {"Float": 0.1}, "falloff_type": {"String": "smooth"}, "invert": {"Bool": true}}
+    },
+    {
+      "key": "ssel",
+      "type": "SlopeSelect",
+      "label": "Slope Select (10-45 deg)",
+      "params": {"min_slope": {"Float": 10.0}, "max_slope": {"Float": 45.0}, "falloff": {"Float": 15.0}, "falloff_type": {"String": "smooth"}, "invert": {"Bool": false}}
+    },
+    {
+      "key": "terr",
+      "type": "Terrace",
+      "label": "Terrace (60 steps, tests >32 range)",
+      "params": {"step_count": {"UInt": 60}, "smoothing": {"Float": 0.3}}
+    },
+    {
+      "key": "fc",
+      "type": "FinalComposition",
+      "label": "Output",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {"from": "base.output", "to": "combine.a"},
+    {"from": "ridge.output", "to": "combine.b"},
+    {"from": "combine.output", "to": "erode.input"},
+    {"from": "erode.output", "to": "normclamp.input"},
+    {"from": "normclamp.output", "to": "terr.input"},
+    {"from": "normclamp.output", "to": "hsel.input"},
+    {"from": "normclamp.output", "to": "ssel.input"},
+    {"from": "terr.output", "to": "fc.heightmap"},
+    {"from": "hsel.output", "to": "fc.typemap"},
+    {"from": "ssel.output", "to": "fc.metalmap"}
+  ],
+  "output": {
+    "width": 257,
+    "height": 257,
+    "map_settings": {"min_height": -20.0, "max_height": 400.0}
+  }
+}

@@ -1,0 +1,274 @@
+{
+  "name": "canis_river",
+  "author": "Peter Sarkozy",
+  "description": "bar-editor recreation of World Machine map 'canis_river'. Representative terrain pipeline (the WM source has hundreds of devices; see coverage report). WM author: Peter Sarkozy. WM water level 0.24, sun dir [0.0, 0.0, 1.0].",
+  "nodes": [
+    {
+      "key": "base",
+      "type": "PerlinNoise",
+      "label": "Base terrain (APRL)",
+      "params": {
+        "character": {
+          "String": "rugged"
+        },
+        "frequency": {
+          "Float": 3.0
+        },
+        "octaves": {
+          "UInt": 7
+        },
+        "seed": {
+          "UInt": 1337
+        }
+      }
+    },
+    {
+      "key": "ridges",
+      "type": "RidgedNoise",
+      "label": "Ridge network (APRL/CMB2)",
+      "params": {
+        "character": {
+          "String": "ridges"
+        },
+        "frequency": {
+          "Float": 2.0
+        },
+        "octaves": {
+          "UInt": 6
+        },
+        "seed": {
+          "UInt": 7
+        }
+      }
+    },
+    {
+      "key": "combine",
+      "type": "Blend",
+      "label": "Combiner (CMB2: blend)",
+      "params": {
+        "factor": {
+          "Float": 0.4
+        }
+      }
+    },
+    {
+      "key": "erode",
+      "type": "HydraulicErosion",
+      "label": "Hydraulic erosion (ERD2)",
+      "params": {
+        "iterations": {
+          "UInt": 120000
+        },
+        "erosion_rate": {
+          "Float": 0.03
+        },
+        "deposition_rate": {
+          "Float": 0.02
+        }
+      }
+    },
+    {
+      "key": "clamp",
+      "type": "Clamp",
+      "label": "Clamp to Spring height (CLMP)",
+      "params": {
+        "min": {
+          "Float": 0.0
+        },
+        "max": {
+          "Float": 1.0
+        }
+      }
+    },
+    {
+      "key": "slope",
+      "type": "SlopeMap",
+      "label": "Slope map (SSEL source)",
+      "params": {}
+    },
+    {
+      "key": "tex",
+      "type": "AutoTexture",
+      "label": "Auto texture (PRCC/OLVW)",
+      "params": {
+        "biome": {
+          "String": "temperate"
+        },
+        "slope_blend": {
+          "Float": 1.0
+        }
+      }
+    },
+    {
+      "key": "nrm",
+      "type": "NormalMap",
+      "label": "Normal map (PRNO)",
+      "params": {
+        "strength": {
+          "Float": 1.0
+        }
+      }
+    },
+    {
+      "key": "spec",
+      "type": "SpecularMap",
+      "label": "Specular (PRLM-ish)",
+      "params": {}
+    },
+    {
+      "key": "grass",
+      "type": "GrassMap",
+      "label": "Grass density (LAYG/HSEL mask)",
+      "params": {}
+    },
+    {
+      "key": "metal",
+      "type": "Layout",
+      "label": "Metal spots (LAYG)",
+      "params": {
+        "item_count": {
+          "UInt": 2
+        },
+        "mode": {
+          "String": "mask"
+        }
+      }
+    },
+    {
+      "key": "type",
+      "type": "HeightSelect",
+      "label": "Typemap band (HSPL/HSEL)",
+      "params": {
+        "low": {
+          "Float": 0.0
+        },
+        "high": {
+          "Float": 0.45
+        },
+        "falloff": {
+          "Float": 0.1
+        }
+      }
+    },
+    {
+      "key": "fc",
+      "type": "FinalComposition",
+      "label": "Output (OUTP/PRBO)",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "base.output",
+      "to": "combine.a"
+    },
+    {
+      "from": "ridges.output",
+      "to": "combine.b"
+    },
+    {
+      "from": "combine.output",
+      "to": "erode.input"
+    },
+    {
+      "from": "erode.output",
+      "to": "clamp.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "slope.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "tex.input"
+    },
+    {
+      "from": "slope.output",
+      "to": "tex.slope"
+    },
+    {
+      "from": "clamp.output",
+      "to": "nrm.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "spec.input"
+    },
+    {
+      "from": "slope.output",
+      "to": "spec.slope"
+    },
+    {
+      "from": "clamp.output",
+      "to": "grass.input"
+    },
+    {
+      "from": "slope.output",
+      "to": "grass.slope"
+    },
+    {
+      "from": "clamp.output",
+      "to": "type.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "fc.heightmap"
+    },
+    {
+      "from": "tex.output",
+      "to": "fc.texture"
+    },
+    {
+      "from": "nrm.output",
+      "to": "fc.normalmap"
+    },
+    {
+      "from": "spec.output",
+      "to": "fc.specular"
+    },
+    {
+      "from": "grass.output",
+      "to": "fc.grassmap"
+    },
+    {
+      "from": "metal.output",
+      "to": "fc.metalmap"
+    },
+    {
+      "from": "type.output",
+      "to": "fc.typemap"
+    }
+  ],
+  "output": {
+    "width": 513,
+    "height": 513,
+    "map_settings": {
+      "min_height": -78.0,
+      "max_height": 480.0,
+      "lighting": {
+        "sun_dir": [
+          0.0,
+          0.0,
+          1.0
+        ]
+      },
+      "water": {
+        "base_color": [
+          0.4,
+          0.55,
+          0.75
+        ]
+      },
+      "start_positions": [
+        [
+          64,
+          256
+        ],
+        [
+          448,
+          256
+        ]
+      ]
+    }
+  }
+}

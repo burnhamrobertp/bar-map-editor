@@ -5,10 +5,27 @@
 //! Pulled out of `app.rs` so the visual-style decisions live with
 //! the canvas renderer instead of the application root.
 
+use bar_graph::nodes::NodeCategory;
 use bar_graph::{NodeType, PortKind};
 use eframe::egui;
 
 use crate::panels::tokens;
+
+/// Title-bar colour token for a node category. Colorizer and SplatMap
+/// share `NODE_CAT_TEXTURE` (no dedicated token); Io keeps its own
+/// `NODE_CAT_IO`.
+fn token_for(category: NodeCategory) -> egui::Color32 {
+    match category {
+        NodeCategory::Generator => tokens::NODE_CAT_GENERATOR,
+        NodeCategory::Filter => tokens::NODE_CAT_FILTER,
+        NodeCategory::Combiner => tokens::NODE_CAT_COMBINER,
+        NodeCategory::Colorizer | NodeCategory::SplatMap => tokens::NODE_CAT_TEXTURE,
+        NodeCategory::Mask => tokens::NODE_CAT_MASK,
+        NodeCategory::Source => tokens::NODE_CAT_SOURCE,
+        NodeCategory::Terminal => tokens::NODE_CAT_BUNDLER,
+        NodeCategory::Io => tokens::NODE_CAT_IO,
+    }
+}
 
 pub(crate) fn polyline_distance(p: egui::Pos2, points: &[egui::Pos2]) -> f32 {
     if points.len() < 2 {
@@ -53,72 +70,9 @@ pub(crate) fn cubic_bezier(
     egui::pos2(x, y)
 }
 pub(crate) fn node_type_color(node_type: &NodeType) -> egui::Color32 {
-    match node_type {
-        NodeType::PerlinNoise
-        | NodeType::SimplexNoise
-        | NodeType::WorleyNoise
-        | NodeType::RidgedNoise
-        | NodeType::Voronoi
-        | NodeType::Gradient
-        | NodeType::FileInput
-        | NodeType::Constant
-        | NodeType::Layout => tokens::NODE_CAT_GENERATOR,
-
-        NodeType::HydraulicErosion
-        | NodeType::ThermalErosion
-        | NodeType::Blur
-        | NodeType::Sharpen
-        | NodeType::Clamp
-        | NodeType::Terrace
-        | NodeType::Invert
-        | NodeType::Mirror
-        | NodeType::Curve
-        | NodeType::Normalize
-        | NodeType::BiasGain
-        | NodeType::Displacement
-        | NodeType::Transform
-        | NodeType::Warp
-        | NodeType::Stratify => tokens::NODE_CAT_FILTER,
-
-        NodeType::Blend
-        | NodeType::Add
-        | NodeType::Subtract
-        | NodeType::Multiply
-        | NodeType::Max
-        | NodeType::Min
-        | NodeType::MaskSelect => tokens::NODE_CAT_COMBINER,
-
-        NodeType::SlopeMap
-        | NodeType::HeightSelect
-        | NodeType::FlowSelect
-        | NodeType::SelectConvexity
-        | NodeType::SelectAspect
-        | NodeType::TerrainSplat
-        | NodeType::AutoTexture
-        | NodeType::RockSoil
-        | NodeType::Vegetation
-        | NodeType::LayerBlend
-        | NodeType::TextureWeightmap
-        | NodeType::ColorRamp
-        | NodeType::NormalMap
-        | NodeType::GrassMap
-        | NodeType::SpecularMap => tokens::NODE_CAT_TEXTURE,
-
-        NodeType::Mask
-        | NodeType::PaintedHeightmap
-        | NodeType::PaintedTexture
-        | NodeType::MaskThreshold
-        | NodeType::MaskApply
-        | NodeType::MaskExpand
-        | NodeType::MaskShrink => tokens::NODE_CAT_MASK,
-
-        NodeType::FinalComposition | NodeType::FileReference => tokens::NODE_CAT_BUNDLER,
-
-        NodeType::PassThrough | NodeType::ImportedTexture => tokens::NODE_CAT_SOURCE,
-
-        // Distinct dark teal — boundary markers, not generators/filters/combiners.
-        NodeType::SubgraphInput | NodeType::SubgraphOutput => tokens::NODE_CAT_IO,
-    }
+    bar_graph::nodes::def(node_type)
+        .map(|d| token_for(d.category))
+        .unwrap_or(tokens::NODE_CAT_GENERATOR)
 }
 
 pub(crate) fn port_kind_color(kind: &PortKind) -> egui::Color32 {
