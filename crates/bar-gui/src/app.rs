@@ -307,6 +307,9 @@ pub struct BarEditorApp {
     /// lifetime to the cache entry -- dropping it via `remove` frees
     /// the egui side automatically.
     pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureHandle>,
+    /// Lit relief thumbnails for the surface-detail preset gallery
+    /// (Rock/Gravel/Sand), generated once at a representative strength.
+    pub detail_normal_thumbs: Vec<egui::TextureHandle>,
     /// Lowercase feature type names whose thumbnail the palette wants
     /// rendered. Bar-app's runner reads + clears entries it has
     /// fulfilled; the palette only inserts when a name is in neither
@@ -432,6 +435,7 @@ impl Default for BarEditorApp {
             placement_ghost: None,
             viewport_debug: ViewportDebug::default(),
             feature_thumb_cache: std::collections::HashMap::new(),
+            detail_normal_thumbs: Vec::new(),
             layout_preview: LayoutPreview::default(),
             feature_thumb_requests: std::collections::HashSet::new(),
             feature_thumb_pending: std::collections::HashSet::new(),

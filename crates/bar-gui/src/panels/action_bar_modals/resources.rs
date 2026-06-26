@@ -269,6 +269,80 @@ fn dn_clear(app: &mut BarEditorApp) {
     app.map_settings_mut().resources.detail_normal_tex.clear();
 }
 
+/// Shade a tangent-space normal map into a lit grayscale relief (RGBA bytes) --
+/// reads as a recognisable rock/gravel/sand surface, unlike the raw bluish map.
+fn dn_thumb_bytes(nm: &bar_data::ColorBuffer) -> Vec<u8> {
+    let light = [0.45f32, -0.45, 0.77];
+    let mut out = Vec::with_capacity((nm.width() * nm.height() * 4) as usize);
+    for y in 0..nm.height() {
+        for x in 0..nm.width() {
+            let c = nm.get(x, y).unwrap_or([0.5, 0.5, 1.0, 1.0]);
+            let n = [c[0] * 2.0 - 1.0, c[1] * 2.0 - 1.0, c[2] * 2.0 - 1.0];
+            let d = (n[0] * light[0] + n[1] * light[1] + n[2] * light[2]).clamp(0.0, 1.0);
+            let v = ((0.25 + 0.7 * d) * 255.0) as u8;
+            out.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    out
+}
+
+/// One gallery cell: a swatch (thumbnail texture, or a glyph for None/Import)
+/// with a label and a selection / hover border. Returns true when clicked.
+fn dn_swatch(
+    ui: &mut egui::Ui,
+    label: &str,
+    tex: Option<&egui::TextureHandle>,
+    glyph: &str,
+    selected: bool,
+) -> bool {
+    let (rect, resp) = ui.allocate_exact_size(egui::vec2(84.0, 78.0), egui::Sense::click());
+    let sw = egui::Rect::from_min_size(
+        egui::pos2(rect.center().x - 28.0, rect.top()),
+        egui::vec2(56.0, 54.0),
+    );
+    let v = ui.visuals();
+    let bg = v.extreme_bg_color;
+    let sel_col = v.selection.stroke.color;
+    let hover_col = v.widgets.hovered.bg_stroke.color;
+    let idle_col = v.widgets.inactive.bg_stroke.color;
+    let weak = v.weak_text_color();
+    let strong = v.text_color();
+    let p = ui.painter();
+    p.rect_filled(sw, 6.0, bg);
+    if let Some(t) = tex {
+        p.image(
+            t.id(),
+            sw,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+    } else if !glyph.is_empty() {
+        p.text(
+            sw.center(),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            egui::FontId::proportional(22.0),
+            weak,
+        );
+    }
+    let stroke = if selected {
+        egui::Stroke::new(2.0, sel_col)
+    } else if resp.hovered() {
+        egui::Stroke::new(1.0, hover_col)
+    } else {
+        egui::Stroke::new(0.5, idle_col)
+    };
+    p.rect_stroke(sw, 6.0, stroke, egui::StrokeKind::Inside);
+    p.text(
+        egui::pos2(rect.center().x, sw.bottom() + 3.0),
+        egui::Align2::CENTER_TOP,
+        label,
+        egui::FontId::proportional(11.0),
+        if selected { strong } else { weak },
+    );
+    resp.clicked()
+}
+
 /// Surface-detail (detailNormalTex) picker: pick a tiling rock/gravel/sand
 /// bump or import one, adjust strength. Preview updates live; the file is
 /// bundled with the map. Replaces hand-typing a normal-map filename.
@@ -292,6 +366,23 @@ fn detail_normal_section(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         DetailNormalPreset::Gravel,
         DetailNormalPreset::Sand,
     ];
+
+    // Lazily build the relief thumbnails once (representative strength).
+    if app.detail_normal_thumbs.is_empty() {
+        let mut v = Vec::new();
+        for p in presets {
+            let nm = generate_detail_normal(p, 72, 1.0);
+            let img = egui::ColorImage::from_rgba_unmultiplied([72, 72], &dn_thumb_bytes(&nm));
+            v.push(ui.ctx().load_texture(
+                format!("dn_thumb_{}", p.label()),
+                img,
+                egui::TextureOptions::LINEAR,
+            ));
+        }
+        app.detail_normal_thumbs = v;
+    }
+    let thumbs = app.detail_normal_thumbs.clone();
+
     let sel = |p: DetailNormalPreset| {
         current.starts_with(&format!("{DN_PREFIX}{}_", p.label().to_lowercase()))
     };
@@ -306,15 +397,15 @@ fn detail_normal_section(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     let mut act: Option<Act> = None;
     ui.add_space(4.0);
     ui.horizontal_wrapped(|ui| {
-        if ui.selectable_label(sel_none, "None").clicked() {
+        if dn_swatch(ui, "None", None, "\u{2014}", sel_none) {
             act = Some(Act::None);
         }
-        for p in presets {
-            if ui.selectable_label(sel(p), p.label()).clicked() {
-                act = Some(Act::Preset(p));
+        for (i, p) in presets.iter().enumerate() {
+            if dn_swatch(ui, p.label(), thumbs.get(i), "", sel(*p)) {
+                act = Some(Act::Preset(*p));
             }
         }
-        if ui.selectable_label(is_import, "Import\u{2026}").clicked() {
+        if dn_swatch(ui, "Import", None, "+", is_import) {
             act = Some(Act::Import);
         }
     });
