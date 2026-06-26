@@ -139,6 +139,34 @@ fn sample_gradient(stops: &[([f32; 3], f32)], t: f32) -> [f32; 3] {
     stops.last().unwrap().0
 }
 
+/// Gradient `t` at which a biome's land begins (the beach/scree stop just above
+/// its water bands). `desert`/`lunar` have no water, so their land starts at 0.
+fn biome_shoreline(biome: &str) -> f32 {
+    match biome {
+        "desert" | "lunar" => 0.0,
+        "temperate" | "tropical" => 0.20,
+        _ => 0.15, // grassland, mountainous, tundra
+    }
+}
+
+/// Remap a normalized height so the biome's shoreline (`shore`) lands on the
+/// actual waterline (`sea`, the normalized position of world height 0). Below
+/// `sea` compresses into the gradient's water bands `[0, shore]`; above stretches
+/// across the land bands `[shore, 1]`. `sea <= 0` => no water (all land).
+fn remap_for_sea_level(h: f32, sea: f32, shore: f32) -> f32 {
+    if sea <= 0.0 {
+        return shore + h * (1.0 - shore);
+    }
+    if sea >= 1.0 {
+        return (h / sea) * shore;
+    }
+    if h <= sea {
+        (h / sea) * shore
+    } else {
+        shore + ((h - sea) / (1.0 - sea)) * (1.0 - shore)
+    }
+}
+
 /// Generate a diffuse texture from a heightmap using elevation-banded
 /// gradient mapping + slope-driven rock blending. Drives `AutoTexture`.
 pub(crate) fn generate_auto_texture(
@@ -158,6 +186,8 @@ pub(crate) fn generate_auto_texture(
     let rock_rgb = parse_hex_color_srgb(rock_hex).unwrap_or([0.45, 0.42, 0.38]);
     let biome = get_string(params, "biome", "temperate");
     let gradient = biome_gradient(biome);
+    let sea_level = get_float(params, "sea_level", 0.0).clamp(0.0, 1.0);
+    let shore = biome_shoreline(biome);
 
     for y in 0..h {
         for x in 0..w {
@@ -167,7 +197,8 @@ pub(crate) fn generate_auto_texture(
                 .unwrap_or(0.0)
                 .clamp(0.0, 1.0);
 
-            let base_color = sample_gradient(gradient, height_val);
+            let base_color =
+                sample_gradient(gradient, remap_for_sea_level(height_val, sea_level, shore));
 
             let slope_blend = slope_val.powf(slope_power) * slope_blend_scale;
             let r = base_color[0] * (1.0 - slope_blend) + rock_rgb[0] * slope_blend;
@@ -198,4 +229,56 @@ pub(crate) fn generate_auto_texture(
     }
 
     color
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bar_data::Heightmap;
+    use bar_graph::ParamValue;
+    use std::collections::HashMap;
+
+    fn ramp(n: u32) -> Heightmap {
+        let mut d = vec![0.0f32; (n * n) as usize];
+        for y in 0..n {
+            for x in 0..n {
+                d[(y * n + x) as usize] = x as f32 / (n - 1) as f32;
+            }
+        }
+        Heightmap::frbar_data(n, n, d).unwrap()
+    }
+
+    fn params(sea: f32) -> HashMap<String, ParamValue> {
+        HashMap::from([
+            ("biome".to_string(), ParamValue::String("temperate".into())),
+            ("sea_level".to_string(), ParamValue::Float(sea)),
+            ("slope_blend".to_string(), ParamValue::Float(0.0)),
+        ])
+    }
+
+    #[test]
+    fn sea_level_zero_paints_no_water() {
+        let tex = generate_auto_texture(&ramp(32), None, &params(0.0));
+        // Lowest terrain maps to the shoreline (sand) band, not blue water.
+        let c = tex.get(0, 16).unwrap();
+        assert!(
+            c[0] > c[2],
+            "sea_level=0 lowest should be land, not blue: {c:?}"
+        );
+    }
+
+    #[test]
+    fn water_only_below_sea_level() {
+        let tex = generate_auto_texture(&ramp(64), None, &params(0.3));
+        let below = tex.get(2, 32).unwrap(); // h ~0.03 < 0.3 -> water
+        let above = tex.get(50, 32).unwrap(); // h ~0.79 > 0.3 -> land
+        assert!(
+            below[2] > below[0],
+            "below sea_level should be blue: {below:?}"
+        );
+        assert!(
+            above[0] > above[2],
+            "above sea_level should be land: {above:?}"
+        );
+    }
 }

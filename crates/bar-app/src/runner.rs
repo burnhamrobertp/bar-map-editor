@@ -310,8 +310,9 @@ impl eframe::App for AppRunner {
         }
         if self.app.preview.take_compile_requested() && self.compile_result_rx.is_none() {
             if let Some(project_dir) = self.app.project.path.clone() {
-                let graph = self.app.graph().clone();
+                let mut graph = self.app.graph().clone();
                 let recipe = self.app.recipe_for_export();
+                crate::viewport::apply_autotexture_sea_level(&mut graph, recipe.sea_level());
                 let executor = Arc::clone(&self.executor);
                 let (tx, rx) = mpsc::channel::<Result<(), String>>();
                 self.compile_result_rx = Some(rx);
@@ -397,8 +398,9 @@ impl eframe::App for AppRunner {
         if let Some(pending) = self.pending_export_dir.take() {
             match pending.rx.try_recv() {
                 Ok(Some(output_dir)) => {
-                    let graph = self.app.graph().clone();
+                    let mut graph = self.app.graph().clone();
                     let recipe = self.app.recipe_for_export();
+                    crate::viewport::apply_autotexture_sea_level(&mut graph, recipe.sea_level());
                     let (w, h) = self.app.map.dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
@@ -1233,8 +1235,9 @@ impl AppRunner {
             return;
         }
 
-        let graph = self.app.graph().clone();
+        let mut graph = self.app.graph().clone();
         let recipe = self.app.recipe_for_export();
+        crate::viewport::apply_autotexture_sea_level(&mut graph, recipe.sea_level());
         let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
 

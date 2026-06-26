@@ -50,6 +50,14 @@ static PARAMS: &[ParamDef] = &[
         default: || ParamValue::Float(0.15),
         ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
     },
+    // Normalized heightmap value of the waterline (where world height 0 falls in
+    // [min_height, max_height]). Anchors the biome's water/beach bands; 0 = no
+    // water. Derived from map settings at graph-build, not hand-edited.
+    ParamDef {
+        key: "sea_level",
+        default: || ParamValue::Float(0.0),
+        ui: ParamUi::Hidden,
+    },
 ];
 
 pub static DEF: NodeDef = NodeDef {
