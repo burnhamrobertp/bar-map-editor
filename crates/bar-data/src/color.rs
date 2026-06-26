@@ -113,6 +113,18 @@ impl ColorBuffer {
             .collect()
     }
 
+    /// Write as an 8-bit RGBA PNG.
+    pub fn save_png(&self, path: &std::path::Path) -> std::io::Result<()> {
+        let buf = image::ImageBuffer::<image::Rgba<u8>, _>::from_raw(
+            self.width,
+            self.height,
+            self.to_rgba8(),
+        )
+        .ok_or_else(|| std::io::Error::other("color buffer too small for its dimensions"))?;
+        buf.save(path)
+            .map_err(|e| std::io::Error::other(e.to_string()))
+    }
+
     /// Resize to a new dimension using bilinear interpolation.
     pub fn resize(&self, new_w: u32, new_h: u32) -> Self {
         let mut out = ColorBuffer::new(new_w, new_h).unwrap();

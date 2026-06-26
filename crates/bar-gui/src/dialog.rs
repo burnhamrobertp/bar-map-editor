@@ -110,6 +110,9 @@ pub struct DialogState {
     pub show_lighting_editor: bool,
     pub show_water_editor: bool,
     pub show_resources_editor: bool,
+    /// Bump strength for the surface-detail (detailNormalTex) picker. 0 = use
+    /// the 1.0 default (Default derives 0; the panel lazily seeds it).
+    pub detail_normal_strength: f32,
     pub show_grass_editor: bool,
     pub show_map_edge_editor: bool,
     /// Snapshot captured the moment a `render_field` widget began
