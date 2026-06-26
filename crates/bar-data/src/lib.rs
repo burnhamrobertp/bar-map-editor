@@ -5,6 +5,7 @@
 
 pub mod coastmap;
 pub mod color;
+pub mod detail_normal;
 pub mod heightmap;
 pub mod s3o;
 pub mod sd7;
@@ -14,6 +15,7 @@ pub mod water_assets;
 
 pub use coastmap::{bake_coastmap, COAST_DISTANCE_TEXELS, FULL_DEPTH_ELMOS};
 pub use color::ColorBuffer;
+pub use detail_normal::{generate_detail_normal, DetailNormalPreset};
 pub use heightmap::Heightmap;
 pub use s3o::{parse_s3o, S3oError, S3oMesh, S3oVertex};
 pub use sd7::{SmfFeaturePlacement, SmfHeader, SmfMap};
