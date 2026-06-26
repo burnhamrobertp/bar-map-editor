@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use bar_data::{compress_image_dxt1, write_smt, ColorBuffer, Heightmap, SmfMap};
 use bar_graph::{
     evaluate_graph, get_grassmap_output, get_heightmap_output, get_metalmap_output,
-    get_normalmap_output, get_texture_output, get_typemap_output, GraphEngine, NodeExecutor,
+    get_texture_output, get_typemap_output, GraphEngine, NodeExecutor,
 };
 
 use crate::recipe::MapSettings;
@@ -199,34 +199,6 @@ pub fn export_texture_png(
     Ok(())
 }
 
-/// Export the normal map as an RGB PNG.
-pub fn export_normalmap_png(
-    graph: &GraphEngine,
-    executor: &dyn NodeExecutor,
-    width: u32,
-    height: u32,
-    path: &Path,
-) -> Result<()> {
-    let results = evaluate_graph(
-        graph,
-        executor,
-        width,
-        height,
-        (width - 1) * 8,
-        (height - 1) * 8,
-    )
-    .context("Failed to evaluate graph")?;
-
-    let normalmap = get_normalmap_output(graph, &results).context(
-        "No normal map output — connect a NormalMap node to the Bundler's normalmap port",
-    )?;
-
-    write_color_png(&normalmap, path)?;
-
-    tracing::debug!("Exported normal map PNG to {}", path.display());
-    Ok(())
-}
-
 /// Export the grass map as a grayscale PNG.
 pub fn export_grassmap_png(
     graph: &GraphEngine,
@@ -277,7 +249,7 @@ pub fn generate_minimap_dxt1(texture: &ColorBuffer) -> Vec<u8> {
 }
 
 /// Full SD7 export: writes .smf + .smt + all available layers + mapinfo.lua into a directory.
-/// Includes normal map, grass map, and specular data if those output nodes exist.
+/// Includes grass map and specular data if those output nodes exist.
 pub fn export_sd7_directory(
     graph: &GraphEngine,
     executor: &dyn NodeExecutor,
@@ -314,7 +286,6 @@ pub fn export_sd7_directory(
     let metalmap = get_metalmap_output(graph, &results);
     let typemap = get_typemap_output(graph, &results);
     let texture = get_texture_output(graph, &results);
-    let normalmap = get_normalmap_output(graph, &results);
     let grassmap = get_grassmap_output(graph, &results);
 
     // Write SMF into maps/ subdirectory
@@ -346,13 +317,6 @@ pub fn export_sd7_directory(
     // Write heightmap PNG (at root for debugging)
     let hm_png_path = output_dir.join(format!("{}_heightmap.png", map_name));
     write_heightmap_png(&heightmap, &hm_png_path)?;
-
-    // Write normal map (if present)
-    if let Some(ref nmap) = normalmap {
-        let nm_path = output_dir.join(format!("{}_normals.png", map_name));
-        write_color_png(nmap, &nm_path)?;
-        tracing::debug!("Wrote normal map: {}", nm_path.display());
-    }
 
     // Write grass map (if present)
     if let Some(ref gmap) = grassmap {
@@ -613,7 +577,6 @@ pub fn export_with_target(
         metalmap: get_metalmap_output(graph, &results),
         typemap: get_typemap_output(graph, &results),
         texture: get_texture_output(graph, &results),
-        normalmap: get_normalmap_output(graph, &results),
         grassmap: get_grassmap_output(graph, &results),
         specular: None,
     };

@@ -78,12 +78,6 @@ impl SpringSmfCodec {
                     resolution: DimensionRule::map_squares(), // texels handled by SMT tiling
                     status: LayerStatus::Optional,
                 },
-                LayerRequirement {
-                    name: "normalmap".to_string(),
-                    format: LayerFormat::Rgb8,
-                    resolution: DimensionRule::height_samples(),
-                    status: LayerStatus::Optional,
-                },
             ],
             packaging: PackagingConfig {
                 archive_format: ArchiveFormat::SevenZip,

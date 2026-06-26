@@ -447,7 +447,6 @@ fn collect_bundler_layers(
         metalmap: None,
         typemap: None,
         texture: None,
-        normalmap: None,
         grassmap: None,
         specular: None,
     };
@@ -505,11 +504,6 @@ fn collect_bundler_layers(
             "texture" => {
                 if let PortValue::Color(cb) = value {
                     layers.texture = Some(cb.clone());
-                }
-            }
-            "normalmap" => {
-                if let PortValue::Color(cb) = value {
-                    layers.normalmap = Some(cb.clone());
                 }
             }
             _ => {}

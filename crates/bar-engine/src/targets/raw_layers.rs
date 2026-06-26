@@ -59,12 +59,6 @@ impl RawLayersCodec {
                     status: LayerStatus::Optional,
                 },
                 LayerRequirement {
-                    name: "normalmap".to_string(),
-                    format: LayerFormat::Rgb8,
-                    resolution: DimensionRule::height_samples(),
-                    status: LayerStatus::Optional,
-                },
-                LayerRequirement {
                     name: "specular".to_string(),
                     format: LayerFormat::Rgb8,
                     resolution: DimensionRule::height_samples(),
@@ -179,13 +173,6 @@ impl ExportCodec for RawLayersCodec {
             written.files.push(format!("{}_texture.png", name));
         }
 
-        // Normal map as RGB PNG
-        if let Some(ref nm) = layers.normalmap {
-            let path = output_dir.join(format!("{}_normalmap.png", name));
-            write_color_png(nm, &path)?;
-            written.files.push(format!("{}_normalmap.png", name));
-        }
-
         // Specular as RGB PNG
         if let Some(ref sp) = layers.specular {
             let path = output_dir.join(format!("{}_specular.png", name));
@@ -256,7 +243,7 @@ mod tests {
         let config = RawLayersCodec::default_config();
         assert_eq!(config.id, "raw-layers");
         assert_eq!(config.codec, "raw-layers");
-        assert_eq!(config.layers.len(), 7);
+        assert_eq!(config.layers.len(), 6);
     }
 
     #[test]

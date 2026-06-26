@@ -9,10 +9,9 @@ use crate::exec::ExecCtx;
 pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let mut outputs: HashMap<String, PortValue> = HashMap::new();
 
-    // For non-paintable kinds (normalmap, grassmap, specular, files),
-    // FC is a pure pass-through: forward input to same-named output
-    // verbatim.
-    for port_name in ["normalmap", "grassmap", "specular"] {
+    // For non-paintable kinds (grassmap, specular, files), FC is a pure
+    // pass-through: forward input to same-named output verbatim.
+    for port_name in ["grassmap", "specular"] {
         if let Some(value) = ctx.inputs.get(port_name) {
             outputs.insert(port_name.to_string(), value.clone());
         }

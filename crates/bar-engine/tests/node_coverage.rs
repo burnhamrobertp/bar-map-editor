@@ -812,15 +812,6 @@ fn auto_texture_outputs_color_buffer() {
 // ── Map layers ──────────────────────────────────────────────────────
 
 #[test]
-fn normal_map_outputs_color_buffer() {
-    let inputs = input_hm("input", gen(|u, _| u));
-    let p = &[("strength", ParamValue::Float(1.0))];
-    let outputs = run(NodeType::NormalMap, p, &inputs);
-    let cb = out_color(&outputs, "output");
-    assert_color_dims(&cb);
-}
-
-#[test]
 fn grass_map_outputs_heightmap_in_range() {
     let mut inputs = input_hm("input", gen(|u, _| u));
     inputs.insert("slope".to_string(), PortValue::Heightmap(flat(0.1)));

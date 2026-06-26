@@ -3,7 +3,7 @@
 use crate::nodes::def::PortDef;
 use crate::port::PortKind;
 
-/// A `Color`-typed texture output (the colorizers + NormalMap emit this).
+/// A `Color`-typed texture output (the colorizers emit this).
 pub static TEXTURE_OUT: &[PortDef] = &[PortDef::one("output", "Texture", PortKind::Color)];
 
 /// Heightmap + slope inputs gated by a mask (RockSoil / Vegetation).
@@ -21,7 +21,7 @@ pub static INPUT_SLOPE_CONTROL_MASK_IN: &[PortDef] = &[
     PortDef::one("mask", "Mask", PortKind::Mask),
 ];
 
-/// Heightmap input gated by a mask (ColorRamp / NormalMap).
+/// Heightmap input gated by a mask (ColorRamp).
 pub static INPUT_MASK_IN: &[PortDef] = &[
     PortDef::one("input", "Heightmap", PortKind::Heightmap),
     PortDef::one("mask", "Mask", PortKind::Mask),

@@ -79,7 +79,6 @@ pub enum NodeType {
     ChannelMerge,
 
     // Map layers
-    NormalMap,
     GrassMap,
     SpecularMap,
 
@@ -185,7 +184,7 @@ pub enum NodeType {
     /// to the bundler / export action buttons. Singleton -- exactly one
     /// per project, auto-created at bootstrap, can't be deleted. Inputs
     /// mirror everything the SD7 export consumes (heightmap, texture,
-    /// normalmap, metalmap, typemap, grassmap, specular, files). Paint
+    /// metalmap, typemap, grassmap, specular, files). Paint
     /// layers are edited from Sculpt3D, not the inspector.
     FinalComposition,
     /// External file reference included in a bundle without modification.

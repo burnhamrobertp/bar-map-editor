@@ -232,14 +232,6 @@ pub fn get_texture_output(
     get_bundler_color(graph, outputs, "texture")
 }
 
-/// Get the normal map wired to the Bundler's `normalmap` port.
-pub fn get_normalmap_output(
-    graph: &GraphEngine,
-    outputs: &NodeOutputs,
-) -> Option<bar_data::ColorBuffer> {
-    get_bundler_color(graph, outputs, "normalmap")
-}
-
 /// Get the grass map wired to the Bundler's `grassmap` port.
 pub fn get_grassmap_output(graph: &GraphEngine, outputs: &NodeOutputs) -> Option<Heightmap> {
     get_bundler_heightmap(graph, outputs, "grassmap")

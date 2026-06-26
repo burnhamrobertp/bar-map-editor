@@ -1619,7 +1619,7 @@ mod tests {
                 },
                 RecipeConnection {
                     from: "sub_slope.value".to_string(),
-                    to: "out.normalmap".to_string(),
+                    to: "out.metalmap".to_string(),
                 },
             ],
             // Simulates the user changing width/height before saving.

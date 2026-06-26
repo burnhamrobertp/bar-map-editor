@@ -252,7 +252,6 @@ mod tests {
         NodeType::ChannelSplit,
         NodeType::ChannelMerge,
         // Map layers
-        NodeType::NormalMap,
         NodeType::GrassMap,
         NodeType::SpecularMap,
         // Mask operations
@@ -315,7 +314,7 @@ mod tests {
         // NODE_TYPES_FOR_TEST. Update this constant AND the array when you add a variant.
         // (A compile-time version of this check requires nightly variant_count; this
         // test is the stable equivalent.)
-        const EXPECTED_VARIANT_COUNT: usize = 70;
+        const EXPECTED_VARIANT_COUNT: usize = 69;
         assert_eq!(
             NODE_TYPES_FOR_TEST.len(),
             EXPECTED_VARIANT_COUNT,

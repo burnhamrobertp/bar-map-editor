@@ -37,7 +37,7 @@ pub enum LayerStatus {
 /// A layer requirement defined by a target.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct LayerRequirement {
-    /// Layer identifier (e.g., "heightmap", "metalmap", "normalmap").
+    /// Layer identifier (e.g., "heightmap", "metalmap", "typemap").
     pub name: String,
     /// Required data format.
     pub format: LayerFormat,
@@ -54,7 +54,6 @@ pub struct LayerSet {
     pub metalmap: Option<bar_data::Heightmap>,
     pub typemap: Option<bar_data::Heightmap>,
     pub grassmap: Option<bar_data::Heightmap>,
-    pub normalmap: Option<bar_data::ColorBuffer>,
     pub texture: Option<bar_data::ColorBuffer>,
     pub specular: Option<bar_data::ColorBuffer>,
 }
@@ -67,7 +66,6 @@ impl LayerSet {
             "metalmap" => self.metalmap.is_some(),
             "typemap" => self.typemap.is_some(),
             "grassmap" => self.grassmap.is_some(),
-            "normalmap" => self.normalmap.is_some(),
             "texture" => self.texture.is_some(),
             "specular" => self.specular.is_some(),
             _ => false,

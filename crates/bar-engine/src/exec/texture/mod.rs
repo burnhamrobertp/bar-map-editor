@@ -11,7 +11,6 @@ pub mod color_ramp;
 pub mod grass_map;
 pub mod layer_blend;
 pub mod lightmap_bake;
-pub mod normal_map;
 pub mod rock_soil;
 pub mod shared;
 pub mod specular_map;
@@ -28,7 +27,6 @@ pub fn register(m: &mut HashMap<NodeType, ExecFn>) {
     m.insert(NodeType::TextureWeightmap, texture_weightmap::exec);
     m.insert(NodeType::ColorRamp, color_ramp::exec);
     m.insert(NodeType::LightmapBake, lightmap_bake::exec);
-    m.insert(NodeType::NormalMap, normal_map::exec);
     m.insert(NodeType::GrassMap, grass_map::exec);
     m.insert(NodeType::SpecularMap, specular_map::exec);
 }

@@ -5,7 +5,6 @@ use crate::port::PortKind;
 static INPUTS: &[PortDef] = &[
     PortDef::one("heightmap", "Heightmap", PortKind::Heightmap),
     PortDef::one("texture", "Texture", PortKind::Color),
-    PortDef::one("normalmap", "Normal Map", PortKind::Color),
     PortDef::one("metalmap", "Metal Map", PortKind::Heightmap),
     PortDef::one("typemap", "Type Map", PortKind::Heightmap),
     PortDef::one("grassmap", "Grass Map", PortKind::Heightmap),
