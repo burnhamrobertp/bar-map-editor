@@ -148,14 +148,6 @@ fn outline_severity<R>(
     result.inner
 }
 
-/// Draw the label + optional info-icon tooltip target.
-fn draw_label(ui: &mut egui::Ui, spec_label: &str, description: Option<&str>) {
-    ui.label(spec_label);
-    if let Some(desc) = description {
-        info_icon(ui, desc);
-    }
-}
-
 /// Allocate a small info icon (the blocky serif `i`) and attach
 /// `tooltip` as hover text. Use this anywhere a paragraph of
 /// explanatory copy would otherwise sit next to a heading or field --
@@ -564,8 +556,8 @@ where
     let default = default_bool(spec);
     let mut intent = FieldIntent::None;
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let display = match current {
                 Some(true) => egui::RichText::new("true"),
@@ -605,6 +597,7 @@ where
                 });
         });
     });
+    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -794,8 +787,8 @@ where
     };
     let mut intent = FieldIntent::None;
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut buf = current.clone();
             let mut edit = egui::TextEdit::singleline(&mut buf).desired_width(220.0);
@@ -814,6 +807,7 @@ where
             }
         });
     });
+    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -832,8 +826,8 @@ where
     };
     let mut intent = FieldIntent::None;
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut buf = current.clone().unwrap_or_default();
             let mut edit = egui::TextEdit::singleline(&mut buf)
@@ -861,6 +855,7 @@ where
             }
         });
     });
+    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
