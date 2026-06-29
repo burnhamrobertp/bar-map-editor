@@ -54,38 +54,65 @@ fn worst_severity(a: bar_project::Severity, b: bar_project::Severity) -> bar_pro
     }
 }
 
-/// Walk a schema slice, call `render_field` for each spec, and fan
-/// out the returned intent through `process_intent`. Inserts a
-/// sub-section heading on every `spec.group` transition so the
-/// modal's fields read as logical clusters. Skips
-/// `PassthroughTexture` fields -- those want richer bespoke pickers
-/// upstream of the schema iteration.
+/// Settings search + "Advanced" toggle that sits at the top of a
+/// settings modal. Query text and the advanced flag persist in egui
+/// memory keyed by `id` so each modal keeps its own. Returns the
+/// lowercased query and the advanced flag for [`render_specs`] to
+/// filter on. Call once, as the first thing in the modal body, so the
+/// search is consistently in the same place across panels.
+pub(crate) fn settings_toolbar(ui: &mut egui::Ui, id: &str) -> (String, bool) {
+    let q_id = egui::Id::new(("settings_search", id));
+    let a_id = egui::Id::new(("settings_advanced", id));
+    let mut query: String = ui.data(|d| d.get_temp(q_id)).unwrap_or_default();
+    let mut advanced: bool = ui.data(|d| d.get_temp(a_id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.toggle_value(&mut advanced, "Advanced")
+                .on_hover_text("Show every engine field, not just the commonly-tuned ones");
+            ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .hint_text("Search settings")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(q_id, query.clone());
+        d.insert_temp(a_id, advanced);
+    });
+    ui.add_space(4.0);
+    (query.trim().to_lowercase(), advanced)
+}
+
+/// Walk a schema slice, call `render_field` for each visible spec, and
+/// fan the returned intent through `process_intent`. A field shows when
+/// it matches `query` (while searching) or otherwise when it is Common
+/// or `advanced` is on -- advanced fields appear inline in their own
+/// `group` section, not a separate region. Inserts a sub-section
+/// heading on each `group` transition among shown fields. Skips
+/// `PassthroughTexture` (bespoke pickers live upstream).
 pub(crate) fn render_specs(
     ui: &mut egui::Ui,
     app: &mut BarEditorApp,
     specs: &[FieldSpec<MapSettings>],
     findings: &FieldFindings,
+    query: &str,
+    advanced: bool,
 ) {
-    fn render_slice(
-        ui: &mut egui::Ui,
-        intents: &mut Vec<(&'static str, FieldIntent)>,
-        settings: &mut MapSettings,
-        specs: &[FieldSpec<MapSettings>],
-        findings: &FieldFindings,
-        tier: Option<bool>,
-        query: &str,
-    ) {
+    let mut intents: Vec<(&'static str, FieldIntent)> = Vec::new();
+    {
+        let settings = app.map_settings_mut();
         let mut last_group: &str = "";
         for spec in specs {
             if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
                 continue;
             }
-            if let Some(want) = tier {
-                if bar_project::recipe_fields::is_common(spec.id) != want {
-                    continue;
-                }
-            }
-            if !query.is_empty() && !spec.label.to_lowercase().contains(query) {
+            let show = if query.is_empty() {
+                advanced || bar_project::recipe_fields::is_common(spec.id)
+            } else {
+                spec.label.to_lowercase().contains(query)
+            };
+            if !show {
                 continue;
             }
             if !spec.group.is_empty() && spec.group != last_group {
@@ -97,52 +124,6 @@ pub(crate) fn render_specs(
             let severity = findings.field(spec.category, spec.id);
             let intent = render_field(ui, spec, settings, severity);
             intents.push((spec.label, intent));
-        }
-    }
-
-    let q_id = egui::Id::new(("spec_search", specs.as_ptr() as usize));
-    let mut query: String = ui.data(|d| d.get_temp::<String>(q_id)).unwrap_or_default();
-    ui.add(
-        egui::TextEdit::singleline(&mut query)
-            .hint_text("Search settings")
-            .desired_width(f32::INFINITY),
-    );
-    ui.data_mut(|d| d.insert_temp(q_id, query.clone()));
-    let query = query.trim().to_lowercase();
-    ui.add_space(4.0);
-
-    let mut intents: Vec<(&'static str, FieldIntent)> = Vec::new();
-    {
-        let settings = app.map_settings_mut();
-        if query.is_empty() {
-            render_slice(ui, &mut intents, settings, specs, findings, Some(true), "");
-
-            let adv_count = specs
-                .iter()
-                .filter(|s| {
-                    !matches!(s.kind, FieldKind::PassthroughTexture { .. })
-                        && !bar_project::recipe_fields::is_common(s.id)
-                })
-                .count();
-            if adv_count > 0 {
-                ui.add_space(8.0);
-                egui::CollapsingHeader::new(format!("Advanced  ({adv_count})"))
-                    .id_salt(specs.as_ptr() as usize)
-                    .default_open(false)
-                    .show(ui, |ui| {
-                        render_slice(
-                            ui,
-                            &mut intents,
-                            &mut *settings,
-                            specs,
-                            findings,
-                            Some(false),
-                            "",
-                        );
-                    });
-            }
-        } else {
-            render_slice(ui, &mut intents, settings, specs, findings, None, &query);
         }
     }
     for (label, intent) in intents {
