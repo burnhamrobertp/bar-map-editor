@@ -83,7 +83,7 @@ fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             ui.label(&label);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let edit = egui::TextEdit::singleline(&mut buf)
-                    .desired_width(220.0)
+                    .desired_width(f32::INFINITY)
                     .hint_text(&hint);
                 let resp = ui.add(edit);
                 crate::panels::widgets::select_all_on_focus(ui, &resp, &buf);
@@ -106,7 +106,7 @@ fn draw_description(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         ui.label(t!("common.description"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let edit = egui::TextEdit::multiline(&mut desc)
-                .desired_width(220.0)
+                .desired_width(f32::INFINITY)
                 .desired_rows(3);
             let resp = ui.add(edit);
             crate::panels::widgets::select_all_on_focus(ui, &resp, &desc);
@@ -133,7 +133,7 @@ fn draw_depend(ui: &mut egui::Ui, app: &mut BarEditorApp) {
         ui.label(&depend_label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let edit = egui::TextEdit::singleline(&mut depend_joined)
-                .desired_width(220.0)
+                .desired_width(f32::INFINITY)
                 .hint_text(t!("editor.modals.identity.field.depend_hint"));
             depend_resp = Some(ui.add(edit));
         });
