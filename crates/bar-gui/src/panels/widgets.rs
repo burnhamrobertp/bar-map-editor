@@ -119,6 +119,19 @@ fn snap(v: f32, min: f32, max: f32, integer: bool) -> f32 {
 /// The bar and text input share the row height (`INPUT_H`). The bar fills
 /// whatever space is left after the optional label and the text input.
 /// Label and input width are independently configurable via the builder.
+/// Outcome of a [`ParamSlider::show`] frame. `changed_live` is true on
+/// every frame the value moved (drag, click-bump, or text commit), so a
+/// caller writes the model each frame and the handle tracks; `begin` and
+/// `commit` bracket the edit for undo gating. Replaces the bare `Response`
+/// whose deferred `changed()` was easy to misread as "nothing changed
+/// during the drag" -- the source of the dead-slider bug.
+pub(crate) struct SliderEdit {
+    pub value: f32,
+    pub begin: bool,
+    pub changed_live: bool,
+    pub commit: bool,
+}
+
 pub(crate) struct ParamSlider<'a> {
     value: &'a mut f32,
     min: f32,
@@ -127,7 +140,6 @@ pub(crate) struct ParamSlider<'a> {
     integer: bool,
     label: Option<&'a str>,
     input_width: f32,
-    default: Option<f32>,
 }
 
 impl<'a> ParamSlider<'a> {
@@ -140,17 +152,7 @@ impl<'a> ParamSlider<'a> {
             integer: false,
             label: None,
             input_width: INPUT_W_DEFAULT,
-            default: None,
         }
-    }
-
-    /// Light grey tick on the bar marking the registry default, matching
-    /// the settings sliders. `None` hides it -- callers like the color-ramp
-    /// editor have no canonical default to point at.
-    #[allow(dead_code)] // superseded by render_field's native-slider tick; removed in slider cleanup
-    pub fn default_marker(mut self, d: Option<f32>) -> Self {
-        self.default = d;
-        self
     }
 
     pub fn integer(mut self) -> Self {
@@ -178,8 +180,12 @@ impl<'a> ParamSlider<'a> {
     }
 }
 
-impl<'a> egui::Widget for ParamSlider<'a> {
-    fn ui(self, ui: &mut egui::Ui) -> egui::Response {
+impl ParamSlider<'_> {
+    /// Render the slider and report what the user did this frame. The only
+    /// way to use a `ParamSlider` -- there is no `Widget` impl, so a caller
+    /// cannot read a deferred `.changed()` and silently drop the drag.
+    pub fn show(self, ui: &mut egui::Ui) -> SliderEdit {
+        let entry = *self.value;
         let id = ui.next_auto_id();
         let avail_w = ui.available_width().max(60.0);
 
@@ -307,18 +313,6 @@ impl<'a> egui::Widget for ParamSlider<'a> {
                     egui::Rect::from_min_max(bar_rect.min, egui::pos2(handle_cx, bar_rect.max.y));
                 painter.rect_filled(fill, rounding, slider_fill);
             }
-            // Registry-default marker, under the handle so the live value wins.
-            if let Some(d) = self.default {
-                if range > 1e-9 {
-                    let df = ((d - self.min) / range).clamp(0.0, 1.0);
-                    let dx = bar_rect.left() + df * bar_rect.width();
-                    painter.vline(
-                        dx,
-                        (bar_rect.top() + 1.0)..=(bar_rect.bottom() - 1.0),
-                        egui::Stroke::new(1.5, vis.weak_text_color()),
-                    );
-                }
-            }
             let handle_col = if is_handle_hovered {
                 handle_hot
             } else {
@@ -380,10 +374,56 @@ impl<'a> egui::Widget for ParamSlider<'a> {
             }
         }
 
-        let mut resp = te_resp | bar_resp;
-        if changed {
-            resp.mark_changed();
+        SliderEdit {
+            value: *self.value,
+            begin: bar_resp.drag_started() || te_resp.gained_focus(),
+            // True every frame the value moved, so callers commit live and
+            // the handle tracks; `changed` adds the drag-stop / text-commit edge.
+            changed_live: changed || *self.value != entry,
+            // End of an edit: drag stop, text blur, or a discrete click-bump
+            // (`changed` while not dragging). Not mid-drag, so callers can
+            // gate heavy work (undo, re-eval, port resize) on it once.
+            commit: te_resp.lost_focus() || (changed && !bar_resp.dragged()),
         }
-        resp
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn run<R>(body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input.screen_rect = Some(egui::Rect::from_min_size(
+            egui::pos2(0.0, 0.0),
+            egui::vec2(400.0, 300.0),
+        ));
+        let mut body = Some(body);
+        let mut out = None;
+        ctx.run(input, |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                if let Some(b) = body.take() {
+                    out = Some(b(ui));
+                }
+            });
+        });
+        out.unwrap()
+    }
+
+    // Headless smoke test: `show()` renders without panic and, with no
+    // pointer/keyboard input, reports an inert frame (value unchanged, no
+    // begin/changed/commit). Guards the render path; the commit/undo
+    // behaviour is covered at the model layer (field_editor / node_field).
+    #[test]
+    fn param_slider_show_is_inert_without_input() {
+        let e = run(|ui| {
+            let mut v = 0.5_f32;
+            ParamSlider::new(&mut v, 0.0, 1.0).show(ui)
+        });
+        assert_eq!(e.value, 0.5);
+        assert!(!e.begin);
+        assert!(!e.changed_live);
+        assert!(!e.commit);
     }
 }

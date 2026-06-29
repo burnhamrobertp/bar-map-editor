@@ -845,28 +845,21 @@ impl BarEditorApp {
         mutated: &mut bool,
         commit_undo_now: &mut bool,
     ) {
-        let resp = crate::panels::widgets::field_row(ui, label, None, |ui| {
-            ui.add(ParamSlider::new(value, lo, hi))
+        let e = crate::panels::widgets::field_row(ui, label, None, |ui| {
+            ParamSlider::new(value, lo, hi).show(ui)
         });
-        if (resp.drag_started() || resp.gained_focus())
-            && self.dialog.field_edit_in_progress.is_none()
-        {
+        if e.begin && self.dialog.field_edit_in_progress.is_none() {
             let snap = self.snapshot("Layout edit");
             self.dialog.field_edit_in_progress = Some(snap);
         }
-        // ParamSlider intentionally suppresses `changed()` during drag
-        // (so heavy callers don't fire per pixel) and only fires it on
-        // drag-stop. The layout editor reloads its items from graph
-        // params each frame, so a "mutated only on drag-stop" pattern
-        // would lose the value mid-drag -- the slider would visually
-        // snap back to the stored value next frame. Mark `mutated` on
-        // both `changed()` and `dragged()` so the value persists
-        // through the drag; `commit_undo_now` stays gated on drag-stop
-        // so the heavy preview re-render only fires once at the end.
-        if resp.changed() || resp.dragged() {
+        // `changed_live` fires every drag frame so the value persists through
+        // the drag (the editor reloads items from params each frame, so a
+        // commit-only write would snap back); `commit` gates the heavy preview
+        // re-render to once at drag stop.
+        if e.changed_live {
             *mutated = true;
         }
-        if resp.drag_stopped() || resp.lost_focus() {
+        if e.commit {
             *commit_undo_now = true;
         }
     }

@@ -197,15 +197,9 @@ impl BarEditorApp {
         ui.horizontal(|ui| {
             ui.label("Position");
             let mut pos_val = stops[sel_pi].0;
-            if ui
-                .add(crate::panels::widgets::ParamSlider::new(
-                    &mut pos_val,
-                    0.0,
-                    1.0,
-                ))
-                .changed()
-            {
-                changed.push((format!("pos_{sel_pi}"), ParamValue::Float(pos_val)));
+            let e = crate::panels::widgets::ParamSlider::new(&mut pos_val, 0.0, 1.0).show(ui);
+            if e.commit {
+                changed.push((format!("pos_{sel_pi}"), ParamValue::Float(e.value)));
             }
         });
 
