@@ -66,22 +66,55 @@ pub(crate) fn render_specs(
     specs: &[FieldSpec<MapSettings>],
     findings: &FieldFindings,
 ) {
+    fn render_slice(
+        ui: &mut egui::Ui,
+        intents: &mut Vec<(&'static str, FieldIntent)>,
+        settings: &mut MapSettings,
+        specs: &[FieldSpec<MapSettings>],
+        findings: &FieldFindings,
+        want_common: bool,
+    ) {
+        let mut last_group: &str = "";
+        for spec in specs {
+            if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
+                continue;
+            }
+            if bar_project::recipe_fields::is_common(spec.id) != want_common {
+                continue;
+            }
+            if !spec.group.is_empty() && spec.group != last_group {
+                ui.add_space(6.0);
+                ui.label(egui::RichText::new(spec.group).strong());
+                ui.add_space(2.0);
+            }
+            last_group = spec.group;
+            let severity = findings.field(spec.category, spec.id);
+            let intent = render_field(ui, spec, settings, severity);
+            intents.push((spec.label, intent));
+        }
+    }
+
     let mut intents: Vec<(&'static str, FieldIntent)> = Vec::new();
-    let settings = app.map_settings_mut();
-    let mut last_group: &str = "";
-    for spec in specs {
-        if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
-            continue;
+    {
+        let settings = app.map_settings_mut();
+        render_slice(ui, &mut intents, settings, specs, findings, true);
+
+        let adv_count = specs
+            .iter()
+            .filter(|s| {
+                !matches!(s.kind, FieldKind::PassthroughTexture { .. })
+                    && !bar_project::recipe_fields::is_common(s.id)
+            })
+            .count();
+        if adv_count > 0 {
+            ui.add_space(8.0);
+            egui::CollapsingHeader::new(format!("Advanced  ({adv_count})"))
+                .id_salt(specs.as_ptr() as usize)
+                .default_open(false)
+                .show(ui, |ui| {
+                    render_slice(ui, &mut intents, &mut *settings, specs, findings, false);
+                });
         }
-        if !spec.group.is_empty() && spec.group != last_group {
-            ui.add_space(6.0);
-            ui.label(egui::RichText::new(spec.group).strong());
-            ui.add_space(2.0);
-        }
-        last_group = spec.group;
-        let severity = findings.field(spec.category, spec.id);
-        let intent = render_field(ui, spec, settings, severity);
-        intents.push((spec.label, intent));
     }
     for (label, intent) in intents {
         process_intent(app, label, intent);
@@ -142,7 +175,7 @@ pub(crate) fn modal_frame(
         .open(open)
         .resizable(true)
         .collapsible(false)
-        .default_size([460.0, 520.0])
+        .default_size([560.0, 560.0])
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
