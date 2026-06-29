@@ -422,7 +422,12 @@ fn slider_with_default_tick(
     if range.1 > range.0 {
         let frac = ((default - range.0) / (range.1 - range.0)).clamp(0.0, 1.0);
         let r = resp.rect;
-        let x = r.left() + frac * r.width();
+        // egui centres the slider handle within [left+radius, right-radius]
+        // (handle radius = height/2.5), so place the tick on that same inset
+        // track -- otherwise it only lines up with the handle at mid-range and
+        // drifts to the handle's edge as the default approaches either end.
+        let radius = r.height() / 2.5;
+        let x = r.left() + radius + frac * (r.width() - 2.0 * radius);
         ui.painter().vline(
             x,
             (r.top() + 3.0)..=(r.bottom() - 3.0),
