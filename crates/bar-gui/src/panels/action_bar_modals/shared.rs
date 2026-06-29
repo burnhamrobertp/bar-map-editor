@@ -190,4 +190,9 @@ pub(crate) fn modal_frame(
                     scrollbar_clearance(ui, body);
                 });
         });
+    // Esc closes the modal, matching the contextual properties panel. Read
+    // after `show` so the title-bar close (which also writes `open`) wins.
+    if *open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        *open = false;
+    }
 }
