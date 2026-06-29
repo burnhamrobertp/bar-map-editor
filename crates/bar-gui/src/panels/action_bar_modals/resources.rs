@@ -13,7 +13,7 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, drive_text_edit_intent, modal_frame, settings_toolbar,
 };
-use crate::panels::field_editor::{heading_with_info, section_heading};
+use crate::panels::field_editor::{field_row, heading_with_info, section_heading};
 use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
@@ -162,10 +162,8 @@ fn text_field_atomic(
     field: fn(&mut bar_project::ResourcesSettings) -> &mut String,
 ) {
     let mut value = field(&mut app.map_settings_mut().resources).clone();
-    let mut resp_taken = None;
     let mut cleared = false;
-    ui.horizontal(|ui| {
-        ui.label(label);
+    let resp = field_row(ui, label, None, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if value.is_empty() {
                 ui.allocate_space(egui::vec2(18.0, 18.0));
@@ -180,10 +178,10 @@ fn text_field_atomic(
             let edit = egui::TextEdit::singleline(&mut value)
                 .desired_width(200.0)
                 .hint_text(t!("editor.modals.resources.field_hint_unset"));
-            resp_taken = Some(ui.add(edit));
-        });
+            ui.add(edit)
+        })
+        .inner
     });
-    let resp = resp_taken.expect("text field response captured above");
     if cleared {
         app.push_undo(label);
     }
@@ -210,19 +208,17 @@ fn splat_array_atomic(
     let mut intents: Vec<egui::Response> = Vec::with_capacity(4);
     let mut changed_any = false;
     for (i, ch) in labels.iter().enumerate() {
-        let mut resp_taken = None;
-        ui.horizontal(|ui| {
-            ui.label(format!("{label_base} {ch}"));
+        let row_label = format!("{label_base} {ch}");
+        let resp = field_row(ui, &row_label, None, |ui| {
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let resp = ui.add(
+                ui.add(
                     egui::DragValue::new(&mut current[i])
                         .range(range.0..=range.1)
                         .speed((range.1 - range.0) / 1000.0),
-                );
-                resp_taken = Some(resp);
-            });
+                )
+            })
+            .inner
         });
-        let resp = resp_taken.expect("splat channel response captured above");
         if resp.changed() {
             changed_any = true;
         }
