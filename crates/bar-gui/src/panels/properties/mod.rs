@@ -440,6 +440,13 @@ impl BarEditorApp {
                                 key.clone()
                             };
                             let is_default = current == default_val;
+                            // Registry default, as an f32, for the slider tick on the
+                            // numeric rows. None for kinds with no meaningful default mark.
+                            let default_f = match default_val {
+                                ParamValue::Float(d) => Some(*d),
+                                ParamValue::UInt(d) => Some(*d as f32),
+                                _ => None,
+                            };
                             // Revert-to-default arrow on the right of each row, shown
                             // when the value differs from the node's registry default.
                             let revert = |ui: &mut egui::Ui| {
@@ -461,7 +468,8 @@ impl BarEditorApp {
                                                         ui.add(
                                                             crate::panels::widgets::ParamSlider::new(
                                                                 &mut val, mn, mx,
-                                                            ),
+                                                            )
+                                                            .default_marker(default_f),
                                                         )
                                                         .changed()
                                                     } else {
@@ -501,7 +509,8 @@ impl BarEditorApp {
                                                             crate::panels::widgets::ParamSlider::new(
                                                                 &mut vf, mn as f32, mx as f32,
                                                             )
-                                                            .integer(),
+                                                            .integer()
+                                                            .default_marker(default_f),
                                                         );
                                                         val = vf as i32;
                                                         r.changed()

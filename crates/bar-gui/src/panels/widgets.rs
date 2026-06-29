@@ -127,6 +127,7 @@ pub(crate) struct ParamSlider<'a> {
     integer: bool,
     label: Option<&'a str>,
     input_width: f32,
+    default: Option<f32>,
 }
 
 impl<'a> ParamSlider<'a> {
@@ -139,7 +140,16 @@ impl<'a> ParamSlider<'a> {
             integer: false,
             label: None,
             input_width: INPUT_W_DEFAULT,
+            default: None,
         }
+    }
+
+    /// Light grey tick on the bar marking the registry default, matching
+    /// the settings sliders. `None` hides it -- callers like the color-ramp
+    /// editor have no canonical default to point at.
+    pub fn default_marker(mut self, d: Option<f32>) -> Self {
+        self.default = d;
+        self
     }
 
     pub fn integer(mut self) -> Self {
@@ -295,6 +305,18 @@ impl<'a> egui::Widget for ParamSlider<'a> {
                 let fill =
                     egui::Rect::from_min_max(bar_rect.min, egui::pos2(handle_cx, bar_rect.max.y));
                 painter.rect_filled(fill, rounding, slider_fill);
+            }
+            // Registry-default marker, under the handle so the live value wins.
+            if let Some(d) = self.default {
+                if range > 1e-9 {
+                    let df = ((d - self.min) / range).clamp(0.0, 1.0);
+                    let dx = bar_rect.left() + df * bar_rect.width();
+                    painter.vline(
+                        dx,
+                        (bar_rect.top() + 1.0)..=(bar_rect.bottom() - 1.0),
+                        egui::Stroke::new(1.5, vis.weak_text_color()),
+                    );
+                }
             }
             let handle_col = if is_handle_hovered {
                 handle_hot
