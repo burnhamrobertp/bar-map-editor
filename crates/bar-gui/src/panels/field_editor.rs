@@ -297,7 +297,15 @@ const LABEL_W: f32 = 160.0;
 /// of each field row so the controls align in a column.
 fn field_label(ui: &mut egui::Ui, text: &str) {
     let h = ui.spacing().interact_size.y;
-    ui.add_sized([LABEL_W, h], egui::Label::new(text).truncate());
+    // `add_sized` centers its widget; we want the label flush-left in the
+    // column, so lay it out left-to-right inside the fixed-size cell.
+    ui.allocate_ui_with_layout(
+        egui::vec2(LABEL_W, h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add(egui::Label::new(text).truncate());
+        },
+    );
 }
 
 /// Reset-to-default control. Reserves a fixed slot even when hidden so
