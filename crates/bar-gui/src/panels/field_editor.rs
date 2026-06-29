@@ -450,7 +450,6 @@ fn render_f32_opt(
         _ => return FieldIntent::None,
     };
     let default = default_f32(desc.default);
-    let is_unset = current.is_none();
     let at_default = model.is_at_default();
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
@@ -489,18 +488,10 @@ fn render_f32_opt(
                         }
                     }
                 });
-            // Unset value reads as a muted placeholder so it's visually
-            // distinct from a value the user actually entered.
-            let resp = if is_unset {
-                ui.scope(|ui| {
-                    let weak = ui.visuals().weak_text_color();
-                    ui.visuals_mut().override_text_color = Some(weak);
-                    ui.add(dv)
-                })
-                .inner
-            } else {
-                ui.add(dv)
-            };
+            // Default values render in normal colour (not a muted
+            // placeholder) -- the revert arrow's absence already conveys
+            // "this is the default", and normal text is far more legible.
+            let resp = ui.add(dv);
             if resp.drag_started() || resp.gained_focus() {
                 if resp.gained_focus() {
                     ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
@@ -546,7 +537,6 @@ fn render_u32_opt(
         _ => return FieldIntent::None,
     };
     let default = default_u32(desc.default);
-    let is_unset = current.is_none();
     let at_default = model.is_at_default();
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
@@ -579,16 +569,7 @@ fn render_u32_opt(
                         }
                     }
                 });
-            let resp = if is_unset {
-                ui.scope(|ui| {
-                    let weak = ui.visuals().weak_text_color();
-                    ui.visuals_mut().override_text_color = Some(weak);
-                    ui.add(dv)
-                })
-                .inner
-            } else {
-                ui.add(dv)
-            };
+            let resp = ui.add(dv);
             if resp.drag_started() || resp.gained_focus() {
                 if resp.gained_focus() {
                     ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
@@ -643,7 +624,10 @@ fn render_bool_opt(ui: &mut egui::Ui, desc: &FieldDesc, model: &mut dyn FieldMod
             let display = match current {
                 Some(true) => egui::RichText::new("true"),
                 Some(false) => egui::RichText::new("false"),
-                None => egui::RichText::new(default.to_string()).weak().italics(),
+                // Show the default value in normal colour (matching set
+                // values and the node-property style); the dropdown's
+                // "(default)" option is how it's reset.
+                None => egui::RichText::new(default.to_string()),
             };
             let mut local = current;
             egui::ComboBox::from_id_salt(("field_bool", desc.id))
