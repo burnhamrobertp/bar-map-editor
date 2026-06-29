@@ -48,6 +48,7 @@ use bar_project::Severity;
 use eframe::egui;
 
 use crate::app::BarEditorApp;
+use crate::panels::widgets::{field_row, revert_button};
 
 /// What happened to a field this frame. Returned by `render_field` so
 /// the caller can drive the undo + dirty-flag side-effects without
@@ -287,43 +288,6 @@ fn default_bool<S>(spec: &FieldSpec<S>) -> bool {
     }
 }
 
-/// Width of the label column. Fixing it makes the control column line
-/// up across every row regardless of label length; long (e.g.
-/// localized) labels truncate, with the full text still on the
-/// whole-row hover tooltip.
-const LABEL_W: f32 = 160.0;
-
-/// Fixed-width, left-aligned, truncating label cell. Use at the start
-/// of each field row so the controls align in a column.
-fn field_label(ui: &mut egui::Ui, text: &str) {
-    let h = ui.spacing().interact_size.y;
-    // `add_sized` centers its widget; we want the label flush-left in the
-    // column, so lay it out left-to-right inside the fixed-size cell.
-    ui.allocate_ui_with_layout(
-        egui::vec2(LABEL_W, h),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| {
-            ui.add(egui::Label::new(text).truncate());
-        },
-    );
-}
-
-/// Reset-to-default control. Reserves a fixed slot even when hidden so
-/// rows stay vertically aligned whether or not a field is set. Visible
-/// only when `set` (a field holding a value is what you can clear back
-/// to the engine default). Returns true when clicked.
-fn revert_button(ui: &mut egui::Ui, set: bool) -> bool {
-    let size = egui::vec2(18.0, 18.0);
-    if set {
-        ui.add_sized(size, egui::Button::new("\u{21ba}").frame(false))
-            .on_hover_text("Reset to default")
-            .clicked()
-    } else {
-        ui.allocate_space(size);
-        false
-    }
-}
-
 /// Slider whose track carries a faint tick at the engine-default
 /// position, so a set field still shows where "unset" would sit.
 fn slider_with_default_tick(
@@ -356,37 +320,6 @@ fn slider_with_default_tick(
         );
     }
     resp
-}
-
-/// Show `desc` as a hover tooltip anywhere within a field row. A bare
-/// `ui.horizontal` response only reports hover in the gaps between its
-/// child widgets, so re-interact the row's full rect with a hover sense
-/// (the trick `outline_severity` uses) so it covers the controls too.
-fn row_tooltip(ui: &mut egui::Ui, row: &egui::Response, desc: Option<&str>) {
-    if let Some(desc) = desc {
-        ui.interact(row.rect, row.id.with("row_tip"), egui::Sense::hover())
-            .on_hover_text(desc);
-    }
-}
-
-/// The single row layout every settings field uses, schema-driven or
-/// bespoke: a fixed-width, left-aligned label column, then the caller's
-/// control(s), with `description` shown as a whole-row hover tooltip.
-/// Routing every modal through this keeps their rows aligned identically
-/// -- a layout change here reaches all of them at once, so the panels
-/// can't drift apart.
-pub(crate) fn field_row<R>(
-    ui: &mut egui::Ui,
-    label: &str,
-    description: Option<&str>,
-    add_control: impl FnOnce(&mut egui::Ui) -> R,
-) -> R {
-    let inner = ui.horizontal(|ui| {
-        field_label(ui, label);
-        add_control(ui)
-    });
-    row_tooltip(ui, &inner.response, description);
-    inner.inner
 }
 
 fn render_f32_opt<S>(

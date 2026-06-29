@@ -23,6 +23,76 @@ pub(crate) fn select_all_on_focus(ui: &mut egui::Ui, resp: &egui::Response, text
     }
 }
 
+/// Cap on the aligned label column width. The actual width adapts to the
+/// row (see [`field_label`]) so a narrow side panel doesn't get a column
+/// that starves the control.
+pub(crate) const FIELD_LABEL_W: f32 = 160.0;
+
+/// Fixed-width, left-aligned, truncating label cell -- the left column of
+/// a settings/property row. Width is ~40% of the available row, capped at
+/// [`FIELD_LABEL_W`] and floored so labels stay readable; it's constant
+/// within a panel (rows share the same available width), so controls line
+/// up in a column. Long (e.g. localized) labels truncate, with the full
+/// text still reachable via the whole-row hover tooltip.
+pub(crate) fn field_label(ui: &mut egui::Ui, text: &str) {
+    let w = (ui.available_width() * 0.42).clamp(80.0, FIELD_LABEL_W);
+    let h = ui.spacing().interact_size.y;
+    // `add_sized` centers its widget; we want flush-left, so lay it out
+    // left-to-right inside the fixed-size cell.
+    ui.allocate_ui_with_layout(
+        egui::vec2(w, h),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            ui.add(egui::Label::new(text).truncate());
+        },
+    );
+}
+
+/// Reset-to-default control. Reserves a fixed slot even when hidden so
+/// rows stay vertically aligned whether or not a field is set. Visible
+/// only when `set`. Returns true when clicked.
+pub(crate) fn revert_button(ui: &mut egui::Ui, set: bool) -> bool {
+    let size = egui::vec2(18.0, 18.0);
+    if set {
+        ui.add_sized(size, egui::Button::new("\u{21ba}").frame(false))
+            .on_hover_text("Reset to default")
+            .clicked()
+    } else {
+        ui.allocate_space(size);
+        false
+    }
+}
+
+/// Show `desc` as a hover tooltip anywhere within a field row. A bare
+/// `ui.horizontal` response only reports hover in the gaps between its
+/// child widgets, so re-interact the row's full rect with a hover sense
+/// so the tooltip covers the controls too.
+pub(crate) fn row_tooltip(ui: &mut egui::Ui, row: &egui::Response, desc: Option<&str>) {
+    if let Some(desc) = desc {
+        ui.interact(row.rect, row.id.with("row_tip"), egui::Sense::hover())
+            .on_hover_text(desc);
+    }
+}
+
+/// The single row layout every editable field uses across the app --
+/// settings modals, node properties, layout properties: an aligned label
+/// column, then the caller's control(s), with `description` as a
+/// whole-row hover tooltip. One definition means every surface stays
+/// aligned identically and can't drift apart.
+pub(crate) fn field_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    description: Option<&str>,
+    add_control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let inner = ui.horizontal(|ui| {
+        field_label(ui, label);
+        add_control(ui)
+    });
+    row_tooltip(ui, &inner.response, description);
+    inner.inner
+}
+
 fn fmt_val(v: f32, integer: bool, precision: usize) -> String {
     if integer {
         format!("{:.0}", v)

@@ -18,9 +18,10 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, drive_text_edit_intent, modal_frame,
 };
-use crate::panels::field_editor::{field_row, section_heading};
+use crate::panels::field_editor::section_heading;
 use crate::panels::file_picker::FilePickerField;
 use crate::panels::image_preview::PreviewCache;
+use crate::panels::widgets::field_row;
 use crate::t;
 
 #[derive(Default)]

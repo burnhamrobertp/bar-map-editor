@@ -12,7 +12,7 @@ use eframe::egui;
 
 use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{drive_text_edit_intent, modal_frame};
-use crate::panels::field_editor::field_row;
+use crate::panels::widgets::field_row;
 use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
