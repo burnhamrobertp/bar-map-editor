@@ -259,6 +259,14 @@ fn splat_array_atomic(
 /// Filename prefix for generated detail-normal presets. Lets us recognise our
 /// own files (for selection highlight + cleanup) vs an imported texture.
 const DN_PREFIX: &str = "detailnormal_";
+/// Generated uniform splat-distribution (solid red = channel 1 everywhere) so
+/// the single picked detail normal tiles across the whole surface.
+const DN_DISTR: &str = "detailnormal_distr.png";
+/// World-space tiling rate for the detail normal (corpus median ~0.0075-0.01).
+const DN_SCALE: f32 = 0.01;
+/// Splat normals are authored at 1024px in the corpus regardless of map size
+/// (they're world-space tiles, not 1:1 with the terrain).
+const DN_SIZE: u32 = 1024;
 
 /// `<project>/passthrough/` -- where resource textures live so the preview and
 /// bundler resolve them (same convention as splat / minimap textures).
@@ -266,18 +274,47 @@ fn dn_passthrough_dir(app: &BarEditorApp) -> Option<std::path::PathBuf> {
     app.project.path.as_ref().map(|p| p.join("passthrough"))
 }
 
-/// Remove any previously-generated preset PNG so only one detail normal is
-/// active at a time (keeps the bundle clean; an imported file is left alone).
+/// Remove our generated detail-normal + distribution PNGs so only one is
+/// active at a time (an imported file is left alone).
 fn dn_remove_generated(dir: &std::path::Path) {
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             if let Some(name) = e.file_name().to_str() {
-                if name.starts_with(DN_PREFIX) && name.ends_with(".png") {
+                if (name.starts_with(DN_PREFIX) && name.ends_with(".png")) || name == DN_DISTR {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
         }
     }
+}
+
+/// Write the solid channel-1 distribution next to the normal so the splat
+/// path renders the normal uniformly across the map.
+fn dn_write_distr(dir: &std::path::Path) -> bool {
+    let Ok(mut c) = bar_data::ColorBuffer::new(4, 4) else {
+        return false;
+    };
+    for y in 0..4 {
+        for x in 0..4 {
+            c.set(x, y, [1.0, 0.0, 0.0, 0.0]);
+        }
+    }
+    c.save_png(&dir.join(DN_DISTR)).is_ok()
+}
+
+/// Point the splat system at `normal_file` on channel 1 with the uniform
+/// distribution + a sane tiling scale, and turn the splat path on. The bundler
+/// also auto-sets the flag, but setting it here keeps the "Detail-normal
+/// splatting" checkbox in sync.
+fn dn_assign(app: &mut BarEditorApp, normal_file: String) {
+    let r = &mut app.map_settings_mut().resources;
+    r.splat_detail_normal_tex_1 = normal_file;
+    r.splat_distr_tex = DN_DISTR.to_string();
+    r.splat_detail_normal_diffuse_alpha = true;
+    r.splat_detail_tex = bar_project::SPLAT_DETAIL_FLAG_PLACEHOLDER.to_string();
+    let mut sc = r.splat_tex_scales.unwrap_or([1.0; 4]);
+    sc[0] = DN_SCALE;
+    r.splat_tex_scales = Some(sc);
 }
 
 fn dn_strength(app: &BarEditorApp) -> f32 {
@@ -294,7 +331,7 @@ fn dn_apply_preset(app: &mut BarEditorApp, preset: DetailNormalPreset) {
         return;
     };
     let strength = dn_strength(app);
-    let nm = generate_detail_normal(preset, 256, strength);
+    let nm = generate_detail_normal(preset, DN_SIZE, strength);
     if std::fs::create_dir_all(&dir).is_err() {
         app.set_status("Could not write the surface-detail texture");
         return;
@@ -306,12 +343,12 @@ fn dn_apply_preset(app: &mut BarEditorApp, preset: DetailNormalPreset) {
         preset.label().to_lowercase(),
         (strength * 10.0).round() as i32
     );
-    if nm.save_png(&dir.join(&filename)).is_err() {
+    if nm.save_png(&dir.join(&filename)).is_err() || !dn_write_distr(&dir) {
         app.set_status("Could not write the surface-detail texture");
         return;
     }
     app.push_undo("Set surface detail");
-    app.map_settings_mut().resources.detail_normal_tex = filename;
+    dn_assign(app, filename);
 }
 
 fn dn_import(app: &mut BarEditorApp) {
@@ -333,8 +370,12 @@ fn dn_import(app: &mut BarEditorApp) {
         return;
     }
     dn_remove_generated(&dir);
+    if !dn_write_distr(&dir) {
+        app.set_status("Could not write the surface-detail distribution");
+        return;
+    }
     app.push_undo("Import surface detail");
-    app.map_settings_mut().resources.detail_normal_tex = basename;
+    dn_assign(app, basename);
 }
 
 fn dn_clear(app: &mut BarEditorApp) {
@@ -342,7 +383,11 @@ fn dn_clear(app: &mut BarEditorApp) {
         dn_remove_generated(&dir);
     }
     app.push_undo("Clear surface detail");
-    app.map_settings_mut().resources.detail_normal_tex.clear();
+    let r = &mut app.map_settings_mut().resources;
+    r.splat_detail_normal_tex_1.clear();
+    if r.splat_distr_tex == DN_DISTR {
+        r.splat_distr_tex.clear();
+    }
 }
 
 /// Shade a tangent-space normal map into a lit grayscale relief (RGBA bytes) --
@@ -436,7 +481,11 @@ fn detail_normal_section(app: &mut BarEditorApp, ui: &mut egui::Ui) {
     if app.dialog.detail_normal_strength <= 0.0 {
         app.dialog.detail_normal_strength = 1.0;
     }
-    let current = app.map_settings().resources.detail_normal_tex.clone();
+    let current = app
+        .map_settings()
+        .resources
+        .splat_detail_normal_tex_1
+        .clone();
     let presets = [
         DetailNormalPreset::Rock,
         DetailNormalPreset::Gravel,
