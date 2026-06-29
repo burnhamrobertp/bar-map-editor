@@ -14,7 +14,7 @@ use eframe::egui;
 use std::collections::HashMap;
 
 use crate::app::BarEditorApp;
-use crate::panels::field_editor::{process_intent, render_field, scrollbar_clearance, FieldIntent};
+use crate::panels::field_editor::{desc_of, render_field, scrollbar_clearance, SettingsField};
 
 /// Validation findings keyed by `(category, field_id)` so the modal
 /// renderer can decorate each widget with the worst-severity finding
@@ -99,35 +99,32 @@ pub(crate) fn render_specs(
     query: &str,
     advanced: bool,
 ) {
-    let mut intents: Vec<(&'static str, FieldIntent)> = Vec::new();
-    {
-        let settings = app.map_settings_mut();
-        let mut last_group: &str = "";
-        for spec in specs {
-            if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
-                continue;
-            }
-            let show = if query.is_empty() {
-                advanced || bar_project::recipe_fields::is_common(spec.id)
-            } else {
-                spec.label.to_lowercase().contains(query)
-            };
-            if !show {
-                continue;
-            }
-            if !spec.group.is_empty() && spec.group != last_group {
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(spec.group).strong());
-                ui.add_space(2.0);
-            }
-            last_group = spec.group;
-            let severity = findings.field(spec.category, spec.id);
-            let intent = render_field(ui, spec, settings, severity);
-            intents.push((spec.label, intent));
+    let mut last_group: &str = "";
+    for spec in specs {
+        if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
+            continue;
         }
-    }
-    for (label, intent) in intents {
-        process_intent(app, label, intent);
+        let show = if query.is_empty() {
+            advanced || bar_project::recipe_fields::is_common(spec.id)
+        } else {
+            spec.label.to_lowercase().contains(query)
+        };
+        if !show {
+            continue;
+        }
+        if !spec.group.is_empty() && spec.group != last_group {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(spec.group).strong());
+            ui.add_space(2.0);
+        }
+        last_group = spec.group;
+        let severity = findings.field(spec.category, spec.id);
+        // One model per field per frame; render_field reads/writes through
+        // it and drives undo via apply_intent. The reborrow of `app` ends
+        // when the model drops at the bottom of the loop.
+        let desc = desc_of(spec);
+        let mut model = SettingsField::new(app, spec);
+        render_field(ui, &desc, &mut model, severity);
     }
 }
 

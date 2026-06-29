@@ -61,6 +61,9 @@ pub mod categories {
 pub enum FieldValue {
     F32(Option<f32>),
     U32(Option<u32>),
+    /// Signed integer. Node params (`ParamValue::Int`) use it; the
+    /// settings schema has no signed fields today.
+    I32(Option<i32>),
     Bool(Option<bool>),
     Color(Option<[f32; 3]>),
     Vec3(Option<[f32; 3]>),
@@ -77,6 +80,7 @@ pub enum FieldValue {
 pub enum DefaultValue {
     F32(f32),
     U32(u32),
+    I32(i32),
     Bool(bool),
     Color([f32; 3]),
     Vec3([f32; 3]),
@@ -96,6 +100,7 @@ impl DefaultValue {
         match self {
             DefaultValue::F32(v) => FieldValue::F32(Some(*v)),
             DefaultValue::U32(v) => FieldValue::U32(Some(*v)),
+            DefaultValue::I32(v) => FieldValue::I32(Some(*v)),
             DefaultValue::Bool(v) => FieldValue::Bool(Some(*v)),
             DefaultValue::Color(v) => FieldValue::Color(Some(*v)),
             DefaultValue::Vec3(v) => FieldValue::Vec3(Some(*v)),
@@ -156,6 +161,17 @@ pub enum FieldKind {
     /// preview cache. Underlying storage is the same `String` shape
     /// as [`Self::Text`].
     PassthroughTexture { extensions: &'static [&'static str] },
+    /// Unranged f32 -- renders as a drag-value, not a slider. Node
+    /// params with no declared range map here (`ParamUi::FloatFree`).
+    FloatFree,
+    /// Unranged u32 drag-value (`ParamUi::UIntFree`).
+    UIntFree,
+    /// Unranged i32 drag-value (`ParamUi::IntFree`). Carries
+    /// [`FieldValue::I32`].
+    IntFree,
+    /// Fixed set of string choices -> dropdown. The selected option
+    /// is carried as [`FieldValue::Text`] (`ParamUi::Choices`).
+    Choices(&'static [&'static str]),
 }
 
 impl FieldKind {
@@ -634,6 +650,46 @@ mod tests {
             ),
             v,
             "None pass-through"
+        );
+    }
+
+    #[test]
+    fn free_and_choices_kinds_have_no_range() {
+        assert!(!FieldKind::FloatFree.has_range());
+        assert!(!FieldKind::UIntFree.has_range());
+        assert!(!FieldKind::IntFree.has_range());
+        assert!(!FieldKind::Choices(&["a", "b"]).has_range());
+    }
+
+    #[test]
+    fn free_numeric_clamp_is_identity() {
+        // Free kinds carry no range, so clamp_value must pass them through.
+        let v = FieldValue::I32(Some(-9999));
+        assert_eq!(clamp_value(&FieldKind::IntFree, v.clone()), v);
+        let v = FieldValue::F32(Some(1e9));
+        assert_eq!(clamp_value(&FieldKind::FloatFree, v.clone()), v);
+        let v = FieldValue::U32(Some(0));
+        assert_eq!(clamp_value(&FieldKind::UIntFree, v.clone()), v);
+    }
+
+    #[test]
+    fn free_numeric_check_range_is_ok() {
+        // No range -> never a violation, whatever the value.
+        assert_eq!(
+            check_range(&FieldKind::IntFree, &FieldValue::I32(Some(i32::MIN))),
+            RangeOutcome::Ok
+        );
+        assert_eq!(
+            check_range(&FieldKind::FloatFree, &FieldValue::F32(Some(f32::MAX))),
+            RangeOutcome::Ok
+        );
+    }
+
+    #[test]
+    fn default_i32_round_trips_to_field_value() {
+        assert_eq!(
+            DefaultValue::I32(7).as_field_value(),
+            FieldValue::I32(Some(7))
         );
     }
 }
