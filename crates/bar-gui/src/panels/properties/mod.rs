@@ -133,7 +133,10 @@ impl BarEditorApp {
                     .stroke(egui::Stroke::new(1.0, ui.visuals().window_stroke.color))
                     .inner_margin(egui::Margin::same(10))
                     .show(ui, |ui| {
-                        ui.set_min_width(280.0);
+                        // Fixed width (not a min/max range) so the panel
+                        // doesn't grow row-by-row as content sizes itself,
+                        // and the aligned label column stays put.
+                        ui.set_min_width(360.0);
                         ui.set_max_width(360.0);
                         ui.set_max_height(420.0);
                         egui::ScrollArea::vertical()

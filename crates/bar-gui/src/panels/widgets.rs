@@ -23,19 +23,19 @@ pub(crate) fn select_all_on_focus(ui: &mut egui::Ui, resp: &egui::Response, text
     }
 }
 
-/// Cap on the aligned label column width. The actual width adapts to the
-/// row (see [`field_label`]) so a narrow side panel doesn't get a column
-/// that starves the control.
-pub(crate) const FIELD_LABEL_W: f32 = 160.0;
+/// Fixed width of the aligned label column. Constant (not a fraction of
+/// available width) so every row's control column starts at the same x and
+/// the column can't drift as an auto-sizing panel settles frame-to-frame.
+pub(crate) const FIELD_LABEL_W: f32 = 150.0;
 
 /// Fixed-width, left-aligned, truncating label cell -- the left column of
-/// a settings/property row. Width is ~40% of the available row, capped at
-/// [`FIELD_LABEL_W`] and floored so labels stay readable; it's constant
-/// within a panel (rows share the same available width), so controls line
-/// up in a column. Long (e.g. localized) labels truncate, with the full
-/// text still reachable via the whole-row hover tooltip.
+/// a settings/property row. The width is a constant ([`FIELD_LABEL_W`]) so
+/// controls line up in a column across every row and every surface, and the
+/// column doesn't grow row-by-row as the panel sizes itself. Long (e.g.
+/// localized) labels truncate, with the full text still reachable via the
+/// whole-row hover tooltip.
 pub(crate) fn field_label(ui: &mut egui::Ui, text: &str) {
-    let w = (ui.available_width() * 0.42).clamp(80.0, FIELD_LABEL_W);
+    let w = FIELD_LABEL_W;
     let h = ui.spacing().interact_size.y;
     // `add_sized` centers its widget; we want flush-left, so lay it out
     // left-to-right inside the fixed-size cell.
