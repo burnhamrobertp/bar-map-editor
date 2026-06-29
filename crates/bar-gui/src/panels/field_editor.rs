@@ -369,6 +369,26 @@ fn row_tooltip(ui: &mut egui::Ui, row: &egui::Response, desc: Option<&str>) {
     }
 }
 
+/// The single row layout every settings field uses, schema-driven or
+/// bespoke: a fixed-width, left-aligned label column, then the caller's
+/// control(s), with `description` shown as a whole-row hover tooltip.
+/// Routing every modal through this keeps their rows aligned identically
+/// -- a layout change here reaches all of them at once, so the panels
+/// can't drift apart.
+pub(crate) fn field_row<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    description: Option<&str>,
+    add_control: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let inner = ui.horizontal(|ui| {
+        field_label(ui, label);
+        add_control(ui)
+    });
+    row_tooltip(ui, &inner.response, description);
+    inner.inner
+}
+
 fn render_f32_opt<S>(
     ui: &mut egui::Ui,
     spec: &FieldSpec<S>,
@@ -398,8 +418,7 @@ where
     let ctx = ui.ctx().clone();
     let range = soft.unwrap_or(hard);
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 spec.commit(state, FieldValue::F32(None));
@@ -465,7 +484,6 @@ where
             }
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -493,8 +511,7 @@ where
     let ctx = ui.ctx().clone();
     let range = soft.unwrap_or(hard);
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 spec.commit(state, FieldValue::U32(None));
@@ -566,7 +583,6 @@ where
             }
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -581,8 +597,7 @@ where
     let default = default_bool(spec);
     let mut intent = FieldIntent::None;
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let display = match current {
                 Some(true) => egui::RichText::new("true"),
@@ -622,7 +637,6 @@ where
                 });
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -639,8 +653,7 @@ where
     let displayed = current.unwrap_or(default);
     let mut intent = FieldIntent::None;
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 spec.commit(state, FieldValue::Color(None));
@@ -658,7 +671,6 @@ where
             }
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -726,8 +738,7 @@ where
     let cleared_key = egui::Id::new(("field_cleared", spec.id));
     let ctx = ui.ctx().clone();
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 secondary = true;
@@ -765,8 +776,6 @@ where
             }
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
-
     let cleared = ctx.data(|d| d.get_temp::<bool>(cleared_key).unwrap_or(false));
     let reverting = stopped && cleared;
     if reverting || secondary {
@@ -812,8 +821,7 @@ where
     };
     let mut intent = FieldIntent::None;
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut buf = current.clone();
             let mut edit = egui::TextEdit::singleline(&mut buf).desired_width(220.0);
@@ -832,7 +840,6 @@ where
             }
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -851,8 +858,7 @@ where
     };
     let mut intent = FieldIntent::None;
 
-    let row = ui.horizontal(|ui| {
-        field_label(ui, spec.label);
+    field_row(ui, spec.label, spec.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut buf = current.clone().unwrap_or_default();
             let mut edit = egui::TextEdit::singleline(&mut buf)
@@ -880,7 +886,6 @@ where
             }
         });
     });
-    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
