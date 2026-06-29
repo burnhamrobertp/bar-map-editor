@@ -341,6 +341,17 @@ fn slider_with_default_tick(
     resp
 }
 
+/// Show `desc` as a hover tooltip anywhere within a field row. A bare
+/// `ui.horizontal` response only reports hover in the gaps between its
+/// child widgets, so re-interact the row's full rect with a hover sense
+/// (the trick `outline_severity` uses) so it covers the controls too.
+fn row_tooltip(ui: &mut egui::Ui, row: &egui::Response, desc: Option<&str>) {
+    if let Some(desc) = desc {
+        ui.interact(row.rect, row.id.with("row_tip"), egui::Sense::hover())
+            .on_hover_text(desc);
+    }
+}
+
 fn render_f32_opt<S>(
     ui: &mut egui::Ui,
     spec: &FieldSpec<S>,
@@ -437,9 +448,7 @@ where
             }
         });
     });
-    if let Some(desc) = spec.description {
-        row.response.on_hover_text(desc);
-    }
+    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -540,9 +549,7 @@ where
             }
         });
     });
-    if let Some(desc) = spec.description {
-        row.response.on_hover_text(desc);
-    }
+    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -633,9 +640,7 @@ where
             }
         });
     });
-    if let Some(desc) = spec.description {
-        row.response.on_hover_text(desc);
-    }
+    row_tooltip(ui, &row.response, spec.description);
     intent
 }
 
@@ -742,9 +747,7 @@ where
             }
         });
     });
-    if let Some(desc) = spec.description {
-        row.response.on_hover_text(desc);
-    }
+    row_tooltip(ui, &row.response, spec.description);
 
     let cleared = ctx.data(|d| d.get_temp::<bool>(cleared_key).unwrap_or(false));
     let reverting = stopped && cleared;
