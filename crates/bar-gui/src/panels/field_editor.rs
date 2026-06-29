@@ -228,16 +228,8 @@ where
     S: 'static,
 {
     outline_severity(ui, finding_severity, |ui| match &spec.kind {
-        FieldKind::F32 {
-            hard,
-            soft: _,
-            unit,
-        } => render_f32_opt(ui, spec, state, *hard, unit),
-        FieldKind::U32 {
-            hard,
-            soft: _,
-            unit,
-        } => render_u32_opt(ui, spec, state, *hard, unit),
+        FieldKind::F32 { hard, soft, unit } => render_f32_opt(ui, spec, state, *hard, *soft, unit),
+        FieldKind::U32 { hard, soft, unit } => render_u32_opt(ui, spec, state, *hard, *soft, unit),
         FieldKind::Bool => render_bool_opt(ui, spec, state),
         FieldKind::Color => render_color_opt(ui, spec, state),
         FieldKind::Vec3 { hard, soft: _ } => render_vec_opt::<S, 3>(ui, spec, state, *hard),
@@ -304,11 +296,58 @@ fn default_bool<S>(spec: &FieldSpec<S>) -> bool {
     }
 }
 
+/// Reset-to-default control. Reserves a fixed slot even when hidden so
+/// rows stay vertically aligned whether or not a field is set. Visible
+/// only when `set` (a field holding a value is what you can clear back
+/// to the engine default). Returns true when clicked.
+fn revert_button(ui: &mut egui::Ui, set: bool) -> bool {
+    let size = egui::vec2(18.0, 18.0);
+    if set {
+        ui.add_sized(size, egui::Button::new("\u{21ba}").frame(false))
+            .on_hover_text("Reset to default")
+            .clicked()
+    } else {
+        ui.allocate_space(size);
+        false
+    }
+}
+
+/// Slider whose track carries a faint tick at the engine-default
+/// position, so a set field still shows where "unset" would sit.
+fn slider_with_default_tick(
+    ui: &mut egui::Ui,
+    value: &mut f32,
+    range: (f32, f32),
+    default: f32,
+) -> egui::Response {
+    let avail = ui.available_width();
+    if avail > 8.0 {
+        ui.spacing_mut().slider_width = avail - 8.0;
+    }
+    let resp = ui.add(
+        egui::Slider::new(value, range.0..=range.1)
+            .show_value(false)
+            .clamping(egui::SliderClamping::Never),
+    );
+    if range.1 > range.0 {
+        let frac = ((default - range.0) / (range.1 - range.0)).clamp(0.0, 1.0);
+        let r = resp.rect;
+        let x = r.left() + frac * r.width();
+        ui.painter().vline(
+            x,
+            (r.top() + 3.0)..=(r.bottom() - 3.0),
+            egui::Stroke::new(1.5, ui.visuals().weak_text_color()),
+        );
+    }
+    resp
+}
+
 fn render_f32_opt<S>(
     ui: &mut egui::Ui,
     spec: &FieldSpec<S>,
     state: &mut S,
     hard: (f32, f32),
+    soft: Option<(f32, f32)>,
     unit: &str,
 ) -> FieldIntent
 where
@@ -330,31 +369,46 @@ where
     // field tracks independently.
     let cleared_key = egui::Id::new(("field_cleared", spec.id));
     let ctx = ui.ctx().clone();
+    let range = soft.unwrap_or(hard);
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if revert_button(ui, !is_unset) {
+                spec.commit(state, FieldValue::F32(None));
+                intent = FieldIntent::EditAtomic;
+            }
             if !unit.is_empty() {
                 ui.label(egui::RichText::new(unit).weak());
             }
-            let resp = ui.add(
-                egui::DragValue::new(&mut value)
-                    .range(hard.0..=hard.1)
-                    .speed((hard.1 - hard.0) / 1000.0)
-                    .custom_parser({
-                        let ctx = ctx.clone();
-                        move |s| {
-                            let trimmed = s.trim();
-                            if trimmed.is_empty() {
-                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
-                                None
-                            } else {
-                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
-                                trimmed.parse::<f64>().ok()
-                            }
+            let dv = egui::DragValue::new(&mut value)
+                .range(hard.0..=hard.1)
+                .speed((hard.1 - hard.0) / 1000.0)
+                .custom_parser({
+                    let ctx = ctx.clone();
+                    move |s| {
+                        let trimmed = s.trim();
+                        if trimmed.is_empty() {
+                            ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
+                            None
+                        } else {
+                            ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                            trimmed.parse::<f64>().ok()
                         }
-                    }),
-            );
+                    }
+                });
+            // Unset value reads as a muted placeholder so it's visually
+            // distinct from a value the user actually entered.
+            let resp = if is_unset {
+                ui.scope(|ui| {
+                    let weak = ui.visuals().weak_text_color();
+                    ui.visuals_mut().override_text_color = Some(weak);
+                    ui.add(dv)
+                })
+                .inner
+            } else {
+                ui.add(dv)
+            };
             if resp.drag_started() || resp.gained_focus() {
                 if resp.gained_focus() {
                     ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
@@ -372,16 +426,21 @@ where
             if intent != FieldIntent::EditAtomic && (resp.drag_stopped() || resp.lost_focus()) {
                 intent = FieldIntent::EditCommitted;
             }
-            if resp.secondary_clicked() {
-                spec.commit(state, FieldValue::F32(None));
-                intent = FieldIntent::EditAtomic;
+            let s = slider_with_default_tick(ui, &mut value, range, default);
+            if s.drag_started() {
+                intent = FieldIntent::EditStarted;
             }
-            if is_unset {
-                ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
+            if s.changed() && (value - displayed).abs() > f32::EPSILON {
+                spec.commit(state, FieldValue::F32(Some(value)));
+            }
+            if s.drag_stopped() {
+                intent = FieldIntent::EditCommitted;
             }
         });
     });
+    if let Some(desc) = spec.description {
+        row.response.on_hover_text(desc);
+    }
     intent
 }
 
@@ -390,6 +449,7 @@ fn render_u32_opt<S>(
     spec: &FieldSpec<S>,
     state: &mut S,
     hard: (u32, u32),
+    soft: Option<(u32, u32)>,
     unit: &str,
 ) -> FieldIntent
 where
@@ -406,30 +466,43 @@ where
     let mut intent = FieldIntent::None;
     let cleared_key = egui::Id::new(("field_cleared", spec.id));
     let ctx = ui.ctx().clone();
+    let range = soft.unwrap_or(hard);
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if revert_button(ui, !is_unset) {
+                spec.commit(state, FieldValue::U32(None));
+                intent = FieldIntent::EditAtomic;
+            }
             if !unit.is_empty() {
                 ui.label(egui::RichText::new(unit).weak());
             }
-            let resp = ui.add(
-                egui::DragValue::new(&mut value)
-                    .range(hard.0..=hard.1)
-                    .custom_parser({
-                        let ctx = ctx.clone();
-                        move |s| {
-                            let trimmed = s.trim();
-                            if trimmed.is_empty() {
-                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
-                                None
-                            } else {
-                                ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
-                                trimmed.parse::<f64>().ok()
-                            }
+            let dv = egui::DragValue::new(&mut value)
+                .range(hard.0..=hard.1)
+                .custom_parser({
+                    let ctx = ctx.clone();
+                    move |s| {
+                        let trimmed = s.trim();
+                        if trimmed.is_empty() {
+                            ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, true));
+                            None
+                        } else {
+                            ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
+                            trimmed.parse::<f64>().ok()
                         }
-                    }),
-            );
+                    }
+                });
+            let resp = if is_unset {
+                ui.scope(|ui| {
+                    let weak = ui.visuals().weak_text_color();
+                    ui.visuals_mut().override_text_color = Some(weak);
+                    ui.add(dv)
+                })
+                .inner
+            } else {
+                ui.add(dv)
+            };
             if resp.drag_started() || resp.gained_focus() {
                 if resp.gained_focus() {
                     ctx.data_mut(|d| d.insert_temp::<bool>(cleared_key, false));
@@ -447,16 +520,30 @@ where
             if intent != FieldIntent::EditAtomic && (resp.drag_stopped() || resp.lost_focus()) {
                 intent = FieldIntent::EditCommitted;
             }
-            if resp.secondary_clicked() {
-                spec.commit(state, FieldValue::U32(None));
-                intent = FieldIntent::EditAtomic;
+            let mut fval = value as f32;
+            let s = slider_with_default_tick(
+                ui,
+                &mut fval,
+                (range.0 as f32, range.1 as f32),
+                default as f32,
+            );
+            if s.drag_started() {
+                intent = FieldIntent::EditStarted;
             }
-            if is_unset {
-                ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
+            if s.changed() {
+                let nv = fval.round().clamp(hard.0 as f32, hard.1 as f32) as u32;
+                if nv != displayed {
+                    spec.commit(state, FieldValue::U32(Some(nv)));
+                }
+            }
+            if s.drag_stopped() {
+                intent = FieldIntent::EditCommitted;
             }
         });
     });
+    if let Some(desc) = spec.description {
+        row.response.on_hover_text(desc);
+    }
     intent
 }
 
