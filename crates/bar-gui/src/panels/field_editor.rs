@@ -287,6 +287,19 @@ fn default_bool<S>(spec: &FieldSpec<S>) -> bool {
     }
 }
 
+/// Width of the label column. Fixing it makes the control column line
+/// up across every row regardless of label length; long (e.g.
+/// localized) labels truncate, with the full text still on the
+/// whole-row hover tooltip.
+const LABEL_W: f32 = 160.0;
+
+/// Fixed-width, left-aligned, truncating label cell. Use at the start
+/// of each field row so the controls align in a column.
+fn field_label(ui: &mut egui::Ui, text: &str) {
+    let h = ui.spacing().interact_size.y;
+    ui.add_sized([LABEL_W, h], egui::Label::new(text).truncate());
+}
+
 /// Reset-to-default control. Reserves a fixed slot even when hidden so
 /// rows stay vertically aligned whether or not a field is set. Visible
 /// only when `set` (a field holding a value is what you can clear back
@@ -378,7 +391,7 @@ where
     let range = soft.unwrap_or(hard);
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 spec.commit(state, FieldValue::F32(None));
@@ -473,7 +486,7 @@ where
     let range = soft.unwrap_or(hard);
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 spec.commit(state, FieldValue::U32(None));
@@ -561,7 +574,7 @@ where
     let mut intent = FieldIntent::None;
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let display = match current {
                 Some(true) => egui::RichText::new("true"),
@@ -619,7 +632,7 @@ where
     let mut intent = FieldIntent::None;
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 spec.commit(state, FieldValue::Color(None));
@@ -706,7 +719,7 @@ where
     let ctx = ui.ctx().clone();
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if revert_button(ui, !is_unset) {
                 secondary = true;
@@ -792,7 +805,7 @@ where
     let mut intent = FieldIntent::None;
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut buf = current.clone();
             let mut edit = egui::TextEdit::singleline(&mut buf).desired_width(220.0);
@@ -831,7 +844,7 @@ where
     let mut intent = FieldIntent::None;
 
     let row = ui.horizontal(|ui| {
-        ui.add(egui::Label::new(spec.label).truncate());
+        field_label(ui, spec.label);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let mut buf = current.clone().unwrap_or_default();
             let mut edit = egui::TextEdit::singleline(&mut buf)
