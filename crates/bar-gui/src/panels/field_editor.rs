@@ -48,7 +48,6 @@ use bar_project::Severity;
 use eframe::egui;
 
 use crate::app::BarEditorApp;
-use crate::t;
 
 /// What happened to a field this frame. Returned by `render_field` so
 /// the caller can drive the undo + dirty-flag side-effects without
@@ -615,13 +614,16 @@ where
     let displayed = current.unwrap_or(default);
     let mut intent = FieldIntent::None;
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Always-editable color swatch. When the recipe value is
-            // None, the swatch shows the engine default and the first
-            // change promotes the recipe to `Some(value)`. Right-click
-            // reverts to None.
+            if revert_button(ui, !is_unset) {
+                spec.commit(state, FieldValue::Color(None));
+                intent = FieldIntent::EditAtomic;
+            }
+            // Always-editable swatch. When the recipe value is None the
+            // swatch shows the engine default; the first change promotes
+            // it to Some(value).
             let mut linear = bar_render::color::srgb_to_linear_rgb(displayed);
             let resp = ui.color_edit_button_rgb(&mut linear);
             if resp.changed() {
@@ -629,16 +631,11 @@ where
                 spec.commit(state, FieldValue::Color(Some(srgb)));
                 intent = FieldIntent::EditAtomic;
             }
-            if resp.secondary_clicked() {
-                spec.commit(state, FieldValue::Color(None));
-                intent = FieldIntent::EditAtomic;
-            }
-            if is_unset {
-                ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
-            }
         });
     });
+    if let Some(desc) = spec.description {
+        row.response.on_hover_text(desc);
+    }
     intent
 }
 
@@ -706,9 +703,12 @@ where
     let cleared_key = egui::Id::new(("field_cleared", spec.id));
     let ctx = ui.ctx().clone();
 
-    ui.horizontal(|ui| {
-        draw_label(ui, spec.label, spec.description);
+    let row = ui.horizontal(|ui| {
+        ui.add(egui::Label::new(spec.label).truncate());
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if revert_button(ui, !is_unset) {
+                secondary = true;
+            }
             for slot in arr.iter_mut().take(N) {
                 let resp = ui.add(
                     egui::DragValue::new(slot)
@@ -739,16 +739,12 @@ where
                 if resp.changed() {
                     any_changed = true;
                 }
-                if resp.secondary_clicked() {
-                    secondary = true;
-                }
-            }
-            if is_unset {
-                ui.label(egui::RichText::new("default").weak().italics().small())
-                    .on_hover_text(t!("editor.field_editor.engine_default_hint"));
             }
         });
     });
+    if let Some(desc) = spec.description {
+        row.response.on_hover_text(desc);
+    }
 
     let cleared = ctx.data(|d| d.get_temp::<bool>(cleared_key).unwrap_or(false));
     let reverting = stopped && cleared;
