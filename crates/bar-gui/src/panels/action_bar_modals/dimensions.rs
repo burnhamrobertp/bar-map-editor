@@ -121,41 +121,65 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut max_val = *mx;
     let mut min_resp = None;
     let mut max_resp = None;
+    let mut min_sl = None;
+    let mut max_sl = None;
     ui.horizontal(|ui| {
         ui.label(t!("editor.modals.dimensions.field.min_height"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let resp = ui.add(
-                egui::DragValue::new(&mut min_val)
-                    .range(-2000.0..=4000.0)
-                    .speed(1.0),
+            min_resp = Some(
+                ui.add(
+                    egui::DragValue::new(&mut min_val)
+                        .range(-2000.0..=4000.0)
+                        .speed(1.0),
+                ),
             );
-            min_resp = Some(resp);
+            ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(40.0);
+            min_sl = Some(
+                ui.add(
+                    egui::Slider::new(&mut min_val, -500.0..=2000.0)
+                        .show_value(false)
+                        .clamping(egui::SliderClamping::Never),
+                ),
+            );
         });
     });
     ui.horizontal(|ui| {
         ui.label(t!("editor.modals.dimensions.field.max_height"));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let resp = ui.add(
-                egui::DragValue::new(&mut max_val)
-                    .range(-2000.0..=4000.0)
-                    .speed(1.0),
+            max_resp = Some(
+                ui.add(
+                    egui::DragValue::new(&mut max_val)
+                        .range(-2000.0..=4000.0)
+                        .speed(1.0),
+                ),
             );
-            max_resp = Some(resp);
+            ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(40.0);
+            max_sl = Some(
+                ui.add(
+                    egui::Slider::new(&mut max_val, -500.0..=2000.0)
+                        .show_value(false)
+                        .clamping(egui::SliderClamping::Never),
+                ),
+            );
         });
     });
     let min_resp = min_resp.expect("min response captured above");
     let max_resp = max_resp.expect("max response captured above");
+    let min_sl = min_sl.expect("min slider captured above");
+    let max_sl = max_sl.expect("max slider captured above");
     let (mn_mut, mx_mut) = app.map_height_range_mut();
-    if min_resp.changed() {
+    if min_resp.changed() || min_sl.changed() {
         *mn_mut = min_val;
     }
-    if max_resp.changed() {
+    if max_resp.changed() || max_sl.changed() {
         *mx_mut = max_val;
     }
     let min_label = t!("editor.modals.dimensions.field.min_height");
     let max_label = t!("editor.modals.dimensions.field.max_height");
     drive_drag_intent(app, &min_resp, &min_label);
+    drive_drag_intent(app, &min_sl, &min_label);
     drive_drag_intent(app, &max_resp, &max_label);
+    drive_drag_intent(app, &max_sl, &max_label);
 }
 
 /// Minimap override: an optional source file (DDS / PNG / TGA / etc.)
