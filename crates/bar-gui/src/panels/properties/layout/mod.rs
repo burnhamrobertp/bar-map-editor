@@ -752,7 +752,7 @@ impl BarEditorApp {
     fn draw_item_sidebar(
         &mut self,
         ui: &mut egui::Ui,
-        node_id: NodeId,
+        _node_id: NodeId,
         sel: usize,
         items: &mut [Item],
         mutated: &mut bool,
@@ -766,72 +766,73 @@ impl BarEditorApp {
         // radii / control points.
 
         // Shared + kind-specific sliders / toggles.
-        egui::Grid::new(("lay_side2", node_id.0))
-            .num_columns(2)
-            .spacing([8.0, 3.0])
-            .show(ui, |ui| match &mut items[sel] {
-                Item::Primitive(p) => {
-                    self.slider_row(
-                        ui,
-                        "height",
-                        &mut p.height,
-                        0.0,
-                        1.0,
-                        mutated,
-                        commit_undo_now,
-                    );
-                    self.slider_row(
-                        ui,
-                        "falloff",
-                        &mut p.falloff,
-                        0.0,
-                        1.0,
-                        mutated,
-                        commit_undo_now,
-                    );
+        match &mut items[sel] {
+            Item::Primitive(p) => {
+                self.slider_row(
+                    ui,
+                    "height",
+                    &mut p.height,
+                    0.0,
+                    1.0,
+                    mutated,
+                    commit_undo_now,
+                );
+                self.slider_row(
+                    ui,
+                    "falloff",
+                    &mut p.falloff,
+                    0.0,
+                    1.0,
+                    mutated,
+                    commit_undo_now,
+                );
+            }
+            Item::Spline(s) => {
+                self.slider_row(
+                    ui,
+                    "height",
+                    &mut s.height,
+                    0.0,
+                    1.0,
+                    mutated,
+                    commit_undo_now,
+                );
+                self.slider_row(
+                    ui,
+                    "falloff",
+                    &mut s.falloff,
+                    0.0,
+                    1.0,
+                    mutated,
+                    commit_undo_now,
+                );
+                self.slider_row(
+                    ui,
+                    "width",
+                    &mut s.width,
+                    0.001,
+                    0.5,
+                    mutated,
+                    commit_undo_now,
+                );
+                if crate::panels::widgets::field_row(ui, "closed", None, |ui| {
+                    ui.checkbox(&mut s.closed, "")
+                })
+                .changed()
+                {
+                    *mutated = true;
+                    *commit_undo_now = true;
                 }
-                Item::Spline(s) => {
-                    self.slider_row(
-                        ui,
-                        "height",
-                        &mut s.height,
-                        0.0,
-                        1.0,
-                        mutated,
-                        commit_undo_now,
-                    );
-                    self.slider_row(
-                        ui,
-                        "falloff",
-                        &mut s.falloff,
-                        0.0,
-                        1.0,
-                        mutated,
-                        commit_undo_now,
-                    );
-                    self.slider_row(
-                        ui,
-                        "width",
-                        &mut s.width,
-                        0.001,
-                        0.5,
-                        mutated,
-                        commit_undo_now,
-                    );
-                    ui.label("closed");
-                    if ui.checkbox(&mut s.closed, "").changed() {
-                        *mutated = true;
-                        *commit_undo_now = true;
-                    }
-                    ui.end_row();
-                    ui.label("fill");
-                    if ui.checkbox(&mut s.fill, "").changed() {
-                        *mutated = true;
-                        *commit_undo_now = true;
-                    }
-                    ui.end_row();
+                if crate::panels::widgets::field_row(ui, "fill", None, |ui| {
+                    ui.checkbox(&mut s.fill, "")
+                })
+                .changed()
+                {
+                    *mutated = true;
+                    *commit_undo_now = true;
                 }
-            });
+            }
+        }
     }
 
     fn slider_row(
@@ -844,8 +845,9 @@ impl BarEditorApp {
         mutated: &mut bool,
         commit_undo_now: &mut bool,
     ) {
-        ui.label(label);
-        let resp = ui.add(ParamSlider::new(value, lo, hi));
+        let resp = crate::panels::widgets::field_row(ui, label, None, |ui| {
+            ui.add(ParamSlider::new(value, lo, hi))
+        });
         if (resp.drag_started() || resp.gained_focus())
             && self.dialog.field_edit_in_progress.is_none()
         {
@@ -867,7 +869,6 @@ impl BarEditorApp {
         if resp.drag_stopped() || resp.lost_focus() {
             *commit_undo_now = true;
         }
-        ui.end_row();
     }
 }
 
