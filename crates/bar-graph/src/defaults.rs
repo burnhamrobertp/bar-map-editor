@@ -257,3 +257,26 @@ pub fn param_float_range(node_type: &NodeType, key: &str) -> Option<(f32, f32)> 
 pub fn param_uint_range(node_type: &NodeType, key: &str) -> Option<(u32, u32)> {
     crate::nodes::def(node_type).and_then(|d| crate::nodes::param_uint_range(d, key))
 }
+
+/// One-line tooltip describing a node parameter, or `None` for params whose
+/// meaning is clear from the key (not every param needs help text). Keyed on
+/// the param name for terms that mean the same thing across every node;
+/// node-specific entries can match on `node_type` as they're written.
+pub fn param_description(_node_type: &NodeType, key: &str) -> Option<&'static str> {
+    Some(match key {
+        "frequency" => {
+            "Base spatial frequency of the noise -- higher values pack more detail into the same area."
+        }
+        "octaves" => {
+            "Number of noise layers summed together; more octaves add finer detail at shrinking amplitude."
+        }
+        "persistence" => {
+            "Amplitude falloff per octave (0..1). Higher keeps later octaves louder, giving rougher terrain."
+        }
+        "lacunarity" => {
+            "Frequency multiplier between octaves. ~2.0 is standard; higher spreads detail across more scales."
+        }
+        "seed" => "Random seed. Change it for a different pattern with the same settings.",
+        _ => return None,
+    })
+}

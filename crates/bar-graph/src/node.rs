@@ -267,7 +267,7 @@ pub struct Node {
 }
 
 /// Parameter values that can be set on a node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParamValue {
     Float(f32),
     Int(i32),

@@ -442,8 +442,11 @@ impl BarEditorApp {
                             match current {
                                 ParamValue::Float(v) => {
                                     let mut val = *v;
-                                    let changed =
-                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                    let changed = crate::panels::widgets::field_row(
+                                        ui,
+                                        &label,
+                                        bar_graph::param_description(&node_type, key),
+                                        |ui| {
                                             ui.add_enabled_ui(!wired, |ui| {
                                                 if let Some((mn, mx)) =
                                                     bar_graph::param_float_range(&node_type, key)
@@ -462,15 +465,19 @@ impl BarEditorApp {
                                                 }
                                             })
                                             .inner
-                                        });
+                                        },
+                                    );
                                     if changed {
                                         changed_params.push((key.clone(), ParamValue::Float(val)));
                                     }
                                 }
                                 ParamValue::UInt(v) => {
                                     let mut val = *v as i32;
-                                    let changed =
-                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                    let changed = crate::panels::widgets::field_row(
+                                        ui,
+                                        &label,
+                                        bar_graph::param_description(&node_type, key),
+                                        |ui| {
                                             ui.add_enabled_ui(!wired, |ui| {
                                                 if let Some((mn, mx)) =
                                                     bar_graph::param_uint_range(&node_type, key)
@@ -493,7 +500,8 @@ impl BarEditorApp {
                                                 }
                                             })
                                             .inner
-                                        });
+                                        },
+                                    );
                                     if changed {
                                         changed_params.push((
                                             key.clone(),
@@ -503,34 +511,46 @@ impl BarEditorApp {
                                 }
                                 ParamValue::Int(v) => {
                                     let mut val = *v;
-                                    let changed =
-                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                    let changed = crate::panels::widgets::field_row(
+                                        ui,
+                                        &label,
+                                        bar_graph::param_description(&node_type, key),
+                                        |ui| {
                                             ui.add_enabled_ui(!wired, |ui| {
                                                 ui.add(egui::DragValue::new(&mut val)).changed()
                                             })
                                             .inner
-                                        });
+                                        },
+                                    );
                                     if changed {
                                         changed_params.push((key.clone(), ParamValue::Int(val)));
                                     }
                                 }
                                 ParamValue::Bool(v) => {
                                     let mut val = *v;
-                                    let changed =
-                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                    let changed = crate::panels::widgets::field_row(
+                                        ui,
+                                        &label,
+                                        bar_graph::param_description(&node_type, key),
+                                        |ui| {
                                             ui.add_enabled_ui(!wired, |ui| {
                                                 ui.checkbox(&mut val, "").changed()
                                             })
                                             .inner
-                                        });
+                                        },
+                                    );
                                     if changed {
                                         changed_params.push((key.clone(), ParamValue::Bool(val)));
                                     }
                                 }
                                 ParamValue::String(v) => {
                                     let mut val = v.clone();
-                                    crate::panels::widgets::field_row(ui, &label, None, |ui| {
-                                        ui.add_enabled_ui(!wired, |ui| {
+                                    crate::panels::widgets::field_row(
+                                        ui,
+                                        &label,
+                                        bar_graph::param_description(&node_type, key),
+                                        |ui| {
+                                            ui.add_enabled_ui(!wired, |ui| {
                                             if let Some(choices) =
                                                 bar_graph::param_choices(&node_type, key)
                                             {
@@ -607,7 +627,8 @@ impl BarEditorApp {
                                                 });
                                             }
                                         });
-                                    });
+                                        },
+                                    );
                                 }
                                 ParamValue::Vec2(_) => {}
                                 // Splines are only meaningful in a 2D canvas

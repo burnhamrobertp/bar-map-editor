@@ -13,8 +13,9 @@ pub mod param_spec;
 pub mod port;
 
 pub use defaults::{
-    biome_defaults, character_defaults, default_params, param_choices, param_float_range,
-    param_is_color, param_side_effects, param_uint_range, BiomeDefaults, CharacterDefaults,
+    biome_defaults, character_defaults, default_params, param_choices, param_description,
+    param_float_range, param_is_color, param_side_effects, param_uint_range, BiomeDefaults,
+    CharacterDefaults,
 };
 pub use engine::GraphEngine;
 pub use eval::{
