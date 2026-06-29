@@ -18,7 +18,7 @@ use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
     drive_drag_intent, drive_text_edit_intent, modal_frame,
 };
-use crate::panels::field_editor::section_heading;
+use crate::panels::field_editor::{field_row, section_heading};
 use crate::panels::file_picker::FilePickerField;
 use crate::panels::image_preview::PreviewCache;
 use crate::t;
@@ -119,56 +119,26 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let (mn, mx) = app.map_height_range_mut();
     let mut min_val = *mn;
     let mut max_val = *mx;
-    let mut min_resp = None;
-    let mut max_resp = None;
-    let mut min_sl = None;
-    let mut max_sl = None;
-    ui.horizontal(|ui| {
-        ui.label(t!("editor.modals.dimensions.field.min_height"));
+    let min_label = t!("editor.modals.dimensions.field.min_height");
+    let max_label = t!("editor.modals.dimensions.field.max_height");
+
+    let height_control = |ui: &mut egui::Ui, val: &mut f32| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            min_resp = Some(
-                ui.add(
-                    egui::DragValue::new(&mut min_val)
-                        .range(-2000.0..=4000.0)
-                        .speed(1.0),
-                ),
-            );
+            let dv = ui.add(egui::DragValue::new(val).range(-2000.0..=4000.0).speed(1.0));
             ui.add_space(8.0);
             ui.spacing_mut().slider_width = (ui.available_width() - 16.0).max(40.0);
-            min_sl = Some(
-                ui.add(
-                    egui::Slider::new(&mut min_val, -500.0..=2000.0)
-                        .show_value(false)
-                        .clamping(egui::SliderClamping::Never),
-                ),
+            let sl = ui.add(
+                egui::Slider::new(val, -500.0..=2000.0)
+                    .show_value(false)
+                    .clamping(egui::SliderClamping::Never),
             );
-        });
-    });
-    ui.horizontal(|ui| {
-        ui.label(t!("editor.modals.dimensions.field.max_height"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            max_resp = Some(
-                ui.add(
-                    egui::DragValue::new(&mut max_val)
-                        .range(-2000.0..=4000.0)
-                        .speed(1.0),
-                ),
-            );
-            ui.add_space(8.0);
-            ui.spacing_mut().slider_width = (ui.available_width() - 16.0).max(40.0);
-            max_sl = Some(
-                ui.add(
-                    egui::Slider::new(&mut max_val, -500.0..=2000.0)
-                        .show_value(false)
-                        .clamping(egui::SliderClamping::Never),
-                ),
-            );
-        });
-    });
-    let min_resp = min_resp.expect("min response captured above");
-    let max_resp = max_resp.expect("max response captured above");
-    let min_sl = min_sl.expect("min slider captured above");
-    let max_sl = max_sl.expect("max slider captured above");
+            (dv, sl)
+        })
+        .inner
+    };
+    let (min_resp, min_sl) = field_row(ui, &min_label, None, |ui| height_control(ui, &mut min_val));
+    let (max_resp, max_sl) = field_row(ui, &max_label, None, |ui| height_control(ui, &mut max_val));
+
     let (mn_mut, mx_mut) = app.map_height_range_mut();
     if min_resp.changed() || min_sl.changed() {
         *mn_mut = min_val;
@@ -176,8 +146,6 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     if max_resp.changed() || max_sl.changed() {
         *mx_mut = max_val;
     }
-    let min_label = t!("editor.modals.dimensions.field.min_height");
-    let max_label = t!("editor.modals.dimensions.field.max_height");
     drive_drag_intent(app, &min_resp, &min_label);
     drive_drag_intent(app, &min_sl, &min_label);
     drive_drag_intent(app, &max_resp, &max_label);
