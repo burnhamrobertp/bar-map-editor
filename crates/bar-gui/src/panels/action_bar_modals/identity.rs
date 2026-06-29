@@ -12,6 +12,7 @@ use eframe::egui;
 
 use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{drive_text_edit_intent, modal_frame};
+use crate::panels::field_editor::field_row;
 use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
@@ -25,14 +26,9 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         &t!("editor.modals.identity.title"),
         "identity_editor_modal",
         |ui| {
-            egui::Grid::new("identity_fields")
-                .num_columns(2)
-                .spacing([12.0, 8.0])
-                .show(ui, |ui| {
-                    draw_text_fields(ui, app);
-                    draw_description(ui, app);
-                    draw_depend(ui, app);
-                });
+            draw_text_fields(ui, app);
+            draw_description(ui, app);
+            draw_depend(ui, app);
         },
     );
     app.dialog.show_identity_editor = open;
@@ -83,13 +79,14 @@ fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             t!(hint_key)
         };
         let mut buf = getter(app.recipe_meta_mut());
-        ui.label(&label);
-        let edit = egui::TextEdit::singleline(&mut buf)
-            .desired_width(320.0)
-            .hint_text(&hint);
-        let resp = ui.add(edit);
-        crate::panels::widgets::select_all_on_focus(ui, &resp, &buf);
-        ui.end_row();
+        let resp = field_row(ui, &label, None, |ui| {
+            let edit = egui::TextEdit::singleline(&mut buf)
+                .desired_width(320.0)
+                .hint_text(&hint);
+            let r = ui.add(edit);
+            crate::panels::widgets::select_all_on_focus(ui, &r, &buf);
+            r
+        });
         let changed = resp.changed();
         if changed {
             setter(app.recipe_meta_mut(), buf.clone());
@@ -100,13 +97,15 @@ fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
 
 fn draw_description(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut desc = app.recipe_meta_mut().description.clone();
-    ui.label(t!("common.description"));
-    let edit = egui::TextEdit::multiline(&mut desc)
-        .desired_width(320.0)
-        .desired_rows(3);
-    let desc_resp = ui.add(edit);
-    crate::panels::widgets::select_all_on_focus(ui, &desc_resp, &desc);
-    ui.end_row();
+    let desc_label = t!("common.description");
+    let desc_resp = field_row(ui, &desc_label, None, |ui| {
+        let edit = egui::TextEdit::multiline(&mut desc)
+            .desired_width(320.0)
+            .desired_rows(3);
+        let r = ui.add(edit);
+        crate::panels::widgets::select_all_on_focus(ui, &r, &desc);
+        r
+    });
     if desc_resp.changed() {
         app.recipe_meta_mut().description = desc.clone();
     }
@@ -121,13 +120,13 @@ fn draw_description(ui: &mut egui::Ui, app: &mut BarEditorApp) {
 fn draw_depend(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut depend_joined = app.recipe_meta_mut().depend.join(", ");
     let depend_label = t!("editor.modals.identity.field.depend");
-    ui.label(&depend_label);
-    let depend_resp = ui.add(
-        egui::TextEdit::singleline(&mut depend_joined)
-            .desired_width(320.0)
-            .hint_text(t!("editor.modals.identity.field.depend_hint")),
-    );
-    ui.end_row();
+    let depend_resp = field_row(ui, &depend_label, None, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut depend_joined)
+                .desired_width(320.0)
+                .hint_text(t!("editor.modals.identity.field.depend_hint")),
+        )
+    });
     if depend_resp.changed() {
         app.recipe_meta_mut().depend = depend_joined
             .split(',')
