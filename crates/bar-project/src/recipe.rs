@@ -534,6 +534,14 @@ pub struct ResourcesSettings {
     pub splat_detail_tex: String,
 }
 
+/// `splatDetailTex` is a presence flag for the SSMF detail-normal splat
+/// path, not a sampled texture: the engine enables the splat pipeline only
+/// when it is non-empty, but never reads the file. BAR maps point it at a
+/// throwaway name; this is the de-facto community value ("I want detail
+/// normal textures"). Emitted when a map has splat detail normals but no
+/// explicit flag, so the normals don't silently render nothing in-game.
+pub const SPLAT_DETAIL_FLAG_PLACEHOLDER: &str = "iwantdnts.tga";
+
 /// Lighting configuration for mapinfo.lua.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]

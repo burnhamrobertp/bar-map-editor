@@ -53,6 +53,29 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 ui.add_space(8.0);
                 section_heading(ui, &t!("editor.modals.resources.detail_normals_heading"));
             }
+            // Master on/off for the four splat normals below. In the engine
+            // this is the `splatDetailTex` flag: a non-empty value switches the
+            // splat path on, the file itself is never sampled. Modelled as a
+            // checkbox so its real meaning (a switch, not a texture) is clear.
+            if vis("Detail-normal splatting") {
+                let mut on = !app.map_settings().resources.splat_detail_tex.is_empty();
+                if ui
+                    .checkbox(&mut on, "Detail-normal splatting")
+                    .on_hover_text(
+                        "Enables the four splat normals below (the engine's splatDetailTex \
+                         flag). Off = they're ignored in-game. The exported map sets this \
+                         automatically whenever a splat normal is present.",
+                    )
+                    .changed()
+                {
+                    app.push_undo("Toggle detail-normal splatting");
+                    app.map_settings_mut().resources.splat_detail_tex = if on {
+                        bar_project::SPLAT_DETAIL_FLAG_PLACEHOLDER.to_string()
+                    } else {
+                        String::new()
+                    };
+                }
+            }
             if vis("splatDetailNormalTex1") {
                 text_field_atomic(ui, app, "splatDetailNormalTex1", |r| {
                     &mut r.splat_detail_normal_tex_1

@@ -540,6 +540,22 @@ impl SpringSmfCodec {
         // unset sentinel for these path fields (matches the engine's
         // "absent ≡ no texture" convention), so we don't emit them.
         let res = &settings.resources;
+        // `splatDetailTex` is a presence flag, not a sampled texture: the SSMF
+        // shader enables the detail-normal splat path only when it is set, but
+        // never reads the file. So if the map declares splat detail normals but
+        // left the flag empty, emit the community placeholder -- otherwise the
+        // normals silently render nothing in-game.
+        let has_splat_normals = !res.splat_detail_normal_tex_1.is_empty()
+            || !res.splat_detail_normal_tex_2.is_empty()
+            || !res.splat_detail_normal_tex_3.is_empty()
+            || !res.splat_detail_normal_tex_4.is_empty();
+        let splat_detail_flag = if !res.splat_detail_tex.is_empty() {
+            res.splat_detail_tex.clone()
+        } else if has_splat_normals {
+            bar_project::SPLAT_DETAIL_FLAG_PLACEHOLDER.to_string()
+        } else {
+            String::new()
+        };
         let res_block = {
             let mut t = LuaTable::new(8);
             t.opt_str("detailTex", Some(res.detail_tex.as_str()))
@@ -565,7 +581,7 @@ impl SpringSmfCodec {
                 .opt_str("grassShadingTex", Some(res.grass_shading_tex.as_str()))
                 .opt_str("lightEmissionTex", Some(res.light_emission_tex.as_str()))
                 .opt_str("detailNormalTex", Some(res.detail_normal_tex.as_str()))
-                .opt_str("splatDetailTex", Some(res.splat_detail_tex.as_str()));
+                .opt_str("splatDetailTex", Some(splat_detail_flag.as_str()));
             if res.splat_detail_normal_diffuse_alpha {
                 t.opt_bool("splatDetailNormalDiffuseAlpha", Some(true));
             }
