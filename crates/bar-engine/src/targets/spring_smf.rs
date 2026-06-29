@@ -278,6 +278,39 @@ impl ExportCodec for SpringSmfCodec {
         written.files.push(format!("maps/{}.smt", map_name));
         tracing::debug!("Wrote SMT: {}", smt_path.display());
 
+        // detailNormalTex is the full-map normal sampled 1:1 across the terrain
+        // (not a tiling detail). If the map didn't supply one, bake it from the
+        // heightmap at its native resolution -- the macro normals can't be finer
+        // than the heightmap -- so the SSMF shader gets proper high-res surface
+        // normals instead of just the coarse runtime vertex normals.
+        let baked_plan;
+        let plan = if plan.settings.resources.detail_normal_tex.is_empty() {
+            match layers.heightmap {
+                Some(ref heightmap) => {
+                    let world_w = sq_x as f32 * 8.0;
+                    let world_l = sq_y as f32 * 8.0;
+                    let nm = bar_data::bake_terrain_normal(heightmap, world_w, world_l);
+                    let filename = format!("{}_detailnormal.png", map_name);
+                    match nm.save_png(&maps_dir.join(&filename)) {
+                        Ok(()) => {
+                            written.files.push(format!("maps/{}", filename));
+                            let mut p = plan.clone();
+                            p.settings.resources.detail_normal_tex = filename;
+                            baked_plan = p;
+                            &baked_plan
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "detailNormalTex bake: write failed");
+                            plan
+                        }
+                    }
+                }
+                None => plan,
+            }
+        } else {
+            plan
+        };
+
         // Write metadata (mapinfo.lua)
         let mapinfo = self.generate_mapinfo(map_name, sq_x, sq_y, plan);
         let mapinfo_path = output_dir.join("mapinfo.lua");
