@@ -72,14 +72,20 @@ pub(crate) fn render_specs(
         settings: &mut MapSettings,
         specs: &[FieldSpec<MapSettings>],
         findings: &FieldFindings,
-        want_common: bool,
+        tier: Option<bool>,
+        query: &str,
     ) {
         let mut last_group: &str = "";
         for spec in specs {
             if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
                 continue;
             }
-            if bar_project::recipe_fields::is_common(spec.id) != want_common {
+            if let Some(want) = tier {
+                if bar_project::recipe_fields::is_common(spec.id) != want {
+                    continue;
+                }
+            }
+            if !query.is_empty() && !spec.label.to_lowercase().contains(query) {
                 continue;
             }
             if !spec.group.is_empty() && spec.group != last_group {
@@ -94,26 +100,49 @@ pub(crate) fn render_specs(
         }
     }
 
+    let q_id = egui::Id::new(("spec_search", specs.as_ptr() as usize));
+    let mut query: String = ui.data(|d| d.get_temp::<String>(q_id)).unwrap_or_default();
+    ui.add(
+        egui::TextEdit::singleline(&mut query)
+            .hint_text("Search settings")
+            .desired_width(f32::INFINITY),
+    );
+    ui.data_mut(|d| d.insert_temp(q_id, query.clone()));
+    let query = query.trim().to_lowercase();
+    ui.add_space(4.0);
+
     let mut intents: Vec<(&'static str, FieldIntent)> = Vec::new();
     {
         let settings = app.map_settings_mut();
-        render_slice(ui, &mut intents, settings, specs, findings, true);
+        if query.is_empty() {
+            render_slice(ui, &mut intents, settings, specs, findings, Some(true), "");
 
-        let adv_count = specs
-            .iter()
-            .filter(|s| {
-                !matches!(s.kind, FieldKind::PassthroughTexture { .. })
-                    && !bar_project::recipe_fields::is_common(s.id)
-            })
-            .count();
-        if adv_count > 0 {
-            ui.add_space(8.0);
-            egui::CollapsingHeader::new(format!("Advanced  ({adv_count})"))
-                .id_salt(specs.as_ptr() as usize)
-                .default_open(false)
-                .show(ui, |ui| {
-                    render_slice(ui, &mut intents, &mut *settings, specs, findings, false);
-                });
+            let adv_count = specs
+                .iter()
+                .filter(|s| {
+                    !matches!(s.kind, FieldKind::PassthroughTexture { .. })
+                        && !bar_project::recipe_fields::is_common(s.id)
+                })
+                .count();
+            if adv_count > 0 {
+                ui.add_space(8.0);
+                egui::CollapsingHeader::new(format!("Advanced  ({adv_count})"))
+                    .id_salt(specs.as_ptr() as usize)
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        render_slice(
+                            ui,
+                            &mut intents,
+                            &mut *settings,
+                            specs,
+                            findings,
+                            Some(false),
+                            "",
+                        );
+                    });
+            }
+        } else {
+            render_slice(ui, &mut intents, settings, specs, findings, None, &query);
         }
     }
     for (label, intent) in intents {
