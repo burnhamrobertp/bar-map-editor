@@ -133,7 +133,8 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
                         .speed(1.0),
                 ),
             );
-            ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(40.0);
+            ui.add_space(8.0);
+            ui.spacing_mut().slider_width = (ui.available_width() - 16.0).max(40.0);
             min_sl = Some(
                 ui.add(
                     egui::Slider::new(&mut min_val, -500.0..=2000.0)
@@ -153,7 +154,8 @@ fn draw_height_range(ui: &mut egui::Ui, app: &mut BarEditorApp) {
                         .speed(1.0),
                 ),
             );
-            ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(40.0);
+            ui.add_space(8.0);
+            ui.spacing_mut().slider_width = (ui.available_width() - 16.0).max(40.0);
             max_sl = Some(
                 ui.add(
                     egui::Slider::new(&mut max_val, -500.0..=2000.0)

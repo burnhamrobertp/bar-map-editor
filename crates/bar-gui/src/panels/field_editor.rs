@@ -311,9 +311,13 @@ fn slider_with_default_tick(
     range: (f32, f32),
     default: f32,
 ) -> egui::Response {
+    // Gap from the value box (the slider's right neighbour in this RTL row)
+    // plus a left margin via the reduced width, so the handle at either
+    // extreme never tucks under the neighbouring widgets.
+    ui.add_space(8.0);
     let avail = ui.available_width();
-    if avail > 8.0 {
-        ui.spacing_mut().slider_width = avail - 8.0;
+    if avail > 24.0 {
+        ui.spacing_mut().slider_width = avail - 16.0;
     }
     let resp = ui.add(
         egui::Slider::new(value, range.0..=range.1)
