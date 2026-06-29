@@ -69,21 +69,6 @@ pub(crate) fn close_icon_button(ui: &mut egui::Ui) -> bool {
     resp.on_hover_text("Close").clicked()
 }
 
-/// Render a param's key in the grid's left cell. When the param is driven by an
-/// inbound scalar wire, append a weak "(wired)" badge so the user understands
-/// the disabled editor on the right is wire-controlled, not broken.
-fn param_key_label(ui: &mut egui::Ui, key: &str, wired: bool) {
-    if wired {
-        ui.horizontal(|ui| {
-            ui.label(key);
-            ui.label(egui::RichText::new("(wired)").weak().small())
-                .on_hover_text("Driven by a connected scalar input");
-        });
-    } else {
-        ui.label(key);
-    }
-}
-
 impl BarEditorApp {
     pub(crate) fn tick_props_panel(&mut self, ctx: &egui::Context) {
         // ── Pending → active promotion ────────────────────────────────
@@ -446,104 +431,106 @@ impl BarEditorApp {
                     // would otherwise render two back-to-back separators.
                     if !params_to_show.is_empty() {
                         ui.separator();
-                        egui::Grid::new(("params_grid", node_id.0))
-                            .num_columns(2)
-                            .spacing([8.0, 4.0])
-                            .show(ui, |ui| {
-                                for (key, default_val) in &params_to_show {
-                                    let current = node_params.get(key).unwrap_or(default_val);
-                                    let wired = wired_params.contains(key);
-                                    match current {
-                                        ParamValue::Float(v) => {
-                                            let mut val = *v;
-                                            param_key_label(ui, key, wired);
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    if let Some((mn, mx)) =
-                                                        bar_graph::param_float_range(&node_type, key)
-                                                    {
-                                                        ui.add(
-                                                            crate::panels::widgets::ParamSlider::new(
-                                                                &mut val, mn, mx,
-                                                            ),
-                                                        )
-                                                        .changed()
-                                                    } else {
-                                                        ui.add(
-                                                            egui::DragValue::new(&mut val)
-                                                                .speed(0.01),
-                                                        )
-                                                        .changed()
-                                                    }
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params
-                                                    .push((key.clone(), ParamValue::Float(val)));
-                                            }
-                                            ui.end_row();
-                                        }
-                                        ParamValue::UInt(v) => {
-                                            let mut val = *v as i32;
-                                            param_key_label(ui, key, wired);
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    if let Some((mn, mx)) =
-                                                        bar_graph::param_uint_range(&node_type, key)
-                                                    {
-                                                        let mut vf = val as f32;
-                                                        let r = ui.add(
-                                                            crate::panels::widgets::ParamSlider::new(
-                                                                &mut vf, mn as f32, mx as f32,
-                                                            )
-                                                            .integer(),
-                                                        );
-                                                        val = vf as i32;
-                                                        r.changed()
-                                                    } else {
-                                                        ui.add(
-                                                            egui::DragValue::new(&mut val)
-                                                                .range(1..=20),
-                                                        )
-                                                        .changed()
-                                                    }
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params.push((
-                                                    key.clone(),
-                                                    ParamValue::UInt(val.max(0) as u32),
-                                                ));
-                                            }
-                                            ui.end_row();
-                                        }
-                                        ParamValue::Int(v) => {
-                                            let mut val = *v;
-                                            param_key_label(ui, key, wired);
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    ui.add(egui::DragValue::new(&mut val)).changed()
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params
-                                                    .push((key.clone(), ParamValue::Int(val)));
-                                            }
-                                            ui.end_row();
-                                        }
-                                        ParamValue::Bool(v) => {
-                                            let mut val = *v;
-                                            ui.label("");
-                                            if ui.checkbox(&mut val, key).changed() {
-                                                changed_params
-                                                    .push((key.clone(), ParamValue::Bool(val)));
-                                            }
-                                            ui.end_row();
-                                        }
-                                        ParamValue::String(v) => {
-                                            let mut val = v.clone();
-                                            param_key_label(ui, key, wired);
+                        for (key, default_val) in &params_to_show {
+                            let current = node_params.get(key).unwrap_or(default_val);
+                            let wired = wired_params.contains(key);
+                            let label = if wired {
+                                format!("{key} (wired)")
+                            } else {
+                                key.clone()
+                            };
+                            match current {
+                                ParamValue::Float(v) => {
+                                    let mut val = *v;
+                                    let changed =
+                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
                                             ui.add_enabled_ui(!wired, |ui| {
+                                                if let Some((mn, mx)) =
+                                                    bar_graph::param_float_range(&node_type, key)
+                                                {
+                                                    ui.add(
+                                                        crate::panels::widgets::ParamSlider::new(
+                                                            &mut val, mn, mx,
+                                                        ),
+                                                    )
+                                                    .changed()
+                                                } else {
+                                                    ui.add(
+                                                        egui::DragValue::new(&mut val).speed(0.01),
+                                                    )
+                                                    .changed()
+                                                }
+                                            })
+                                            .inner
+                                        });
+                                    if changed {
+                                        changed_params.push((key.clone(), ParamValue::Float(val)));
+                                    }
+                                }
+                                ParamValue::UInt(v) => {
+                                    let mut val = *v as i32;
+                                    let changed =
+                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                            ui.add_enabled_ui(!wired, |ui| {
+                                                if let Some((mn, mx)) =
+                                                    bar_graph::param_uint_range(&node_type, key)
+                                                {
+                                                    let mut vf = val as f32;
+                                                    let r = ui.add(
+                                                        crate::panels::widgets::ParamSlider::new(
+                                                            &mut vf, mn as f32, mx as f32,
+                                                        )
+                                                        .integer(),
+                                                    );
+                                                    val = vf as i32;
+                                                    r.changed()
+                                                } else {
+                                                    ui.add(
+                                                        egui::DragValue::new(&mut val)
+                                                            .range(1..=20),
+                                                    )
+                                                    .changed()
+                                                }
+                                            })
+                                            .inner
+                                        });
+                                    if changed {
+                                        changed_params.push((
+                                            key.clone(),
+                                            ParamValue::UInt(val.max(0) as u32),
+                                        ));
+                                    }
+                                }
+                                ParamValue::Int(v) => {
+                                    let mut val = *v;
+                                    let changed =
+                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                            ui.add_enabled_ui(!wired, |ui| {
+                                                ui.add(egui::DragValue::new(&mut val)).changed()
+                                            })
+                                            .inner
+                                        });
+                                    if changed {
+                                        changed_params.push((key.clone(), ParamValue::Int(val)));
+                                    }
+                                }
+                                ParamValue::Bool(v) => {
+                                    let mut val = *v;
+                                    let changed =
+                                        crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                            ui.add_enabled_ui(!wired, |ui| {
+                                                ui.checkbox(&mut val, "").changed()
+                                            })
+                                            .inner
+                                        });
+                                    if changed {
+                                        changed_params.push((key.clone(), ParamValue::Bool(val)));
+                                    }
+                                }
+                                ParamValue::String(v) => {
+                                    let mut val = v.clone();
+                                    crate::panels::widgets::field_row(ui, &label, None, |ui| {
+                                        ui.add_enabled_ui(!wired, |ui| {
                                             if let Some(choices) =
                                                 bar_graph::param_choices(&node_type, key)
                                             {
@@ -553,10 +540,7 @@ impl BarEditorApp {
                                                     .show_ui(ui, |ui| {
                                                         for choice in choices {
                                                             if ui
-                                                                .selectable_label(
-                                                                    val == *choice,
-                                                                    *choice,
-                                                                )
+                                                                .selectable_label(val == *choice, *choice)
                                                                 .clicked()
                                                             {
                                                                 let prev = val.clone();
@@ -576,18 +560,17 @@ impl BarEditorApp {
                                                         }
                                                     });
                                             } else if bar_graph::param_is_color(&node_type, key) {
-                                                let rgb = parse_hex_color(&val)
-                                                    .unwrap_or([128, 128, 128]);
+                                                let rgb =
+                                                    parse_hex_color(&val).unwrap_or([128, 128, 128]);
                                                 let mut c32 =
                                                     egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
                                                 if ui.color_edit_button_srgba(&mut c32).changed() {
-                                                    let new_hex = format!(
+                                                    val = format!(
                                                         "{:02X}{:02X}{:02X}",
                                                         c32.r(),
                                                         c32.g(),
                                                         c32.b()
                                                     );
-                                                    val = new_hex;
                                                     changed_params.push((
                                                         key.clone(),
                                                         ParamValue::String(val.clone()),
@@ -607,7 +590,8 @@ impl BarEditorApp {
                                                             ParamValue::String(val.clone()),
                                                         ));
                                                     }
-                                                    if key == "path" && ui.button("…").clicked() {
+                                                    if key == "path" && ui.button("\u{2026}").clicked()
+                                                    {
                                                         if let Some(picked) =
                                                             make_path_dialog(self, &node_type)
                                                                 .pick_file()
@@ -615,27 +599,24 @@ impl BarEditorApp {
                                                             changed_params.push((
                                                                 key.clone(),
                                                                 ParamValue::String(
-                                                                    picked
-                                                                        .to_string_lossy()
-                                                                        .to_string(),
+                                                                    picked.to_string_lossy().to_string(),
                                                                 ),
                                                             ));
                                                         }
                                                     }
                                                 });
                                             }
-                                            });
-                                            ui.end_row();
-                                        }
-                                        ParamValue::Vec2(_) => {}
-                                        // Splines are only meaningful in a 2D canvas
-                                        // editor (the Layout node has its own panel);
-                                        // the generic property grid skips them rather
-                                        // than try to surface raw point arrays.
-                                        ParamValue::Spline(_) => {}
-                                    }
+                                        });
+                                    });
                                 }
-                            });
+                                ParamValue::Vec2(_) => {}
+                                // Splines are only meaningful in a 2D canvas
+                                // editor (the Layout node has its own panel);
+                                // the generic property grid skips them rather
+                                // than try to surface raw point arrays.
+                                ParamValue::Spline(_) => {}
+                            }
+                        }
                     } // end if !params_to_show.is_empty()
                 } // end else (generic params branch)
 
