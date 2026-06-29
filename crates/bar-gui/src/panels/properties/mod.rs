@@ -362,7 +362,6 @@ impl BarEditorApp {
                     });
                 }
 
-                let mut changed_params: Vec<(String, ParamValue)> = Vec::new();
                 let mut new_label: Option<String> = None;
                 if label_changed && label_buf != node_label {
                     new_label = Some(label_buf);
@@ -432,268 +431,81 @@ impl BarEditorApp {
                     if !params_to_show.is_empty() {
                         ui.separator();
                         for (key, default_val) in &params_to_show {
-                            let current = node_params.get(key).unwrap_or(default_val);
                             let wired = wired_params.contains(key);
-                            let label = if wired {
+                            let label_buf = if wired {
                                 format!("{key} (wired)")
                             } else {
                                 key.clone()
                             };
-                            let is_default = current == default_val;
-                            // Registry default, as an f32, for the slider tick on the
-                            // numeric rows. None for kinds with no meaningful default mark.
-                            let default_f = match default_val {
-                                ParamValue::Float(d) => Some(*d),
-                                ParamValue::UInt(d) => Some(*d as f32),
-                                _ => None,
-                            };
-                            // Revert-to-default arrow on the right of each row, shown
-                            // when the value differs from the node's registry default.
-                            let revert = |ui: &mut egui::Ui| {
-                                crate::panels::widgets::revert_button(ui, !is_default && !wired)
-                            };
-                            match current {
-                                ParamValue::Float(v) => {
-                                    let mut val = *v;
-                                    crate::panels::widgets::field_row(
-                                        ui,
-                                        &label,
-                                        bar_graph::param_description(&node_type, key),
-                                        |ui| {
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    if let Some((mn, mx)) =
-                                                        bar_graph::param_float_range(&node_type, key)
-                                                    {
-                                                        ui.add(
-                                                            crate::panels::widgets::ParamSlider::new(
-                                                                &mut val, mn, mx,
-                                                            )
-                                                            .default_marker(default_f),
-                                                        )
-                                                        .changed()
-                                                    } else {
-                                                        ui.add(
-                                                            egui::DragValue::new(&mut val)
-                                                                .speed(0.01),
-                                                        )
-                                                        .changed()
-                                                    }
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params
-                                                    .push((key.clone(), ParamValue::Float(val)));
-                                            }
-                                            if revert(ui) {
-                                                changed_params
-                                                    .push((key.clone(), default_val.clone()));
-                                            }
-                                        },
-                                    );
-                                }
-                                ParamValue::UInt(v) => {
-                                    let mut val = *v as i32;
-                                    crate::panels::widgets::field_row(
-                                        ui,
-                                        &label,
-                                        bar_graph::param_description(&node_type, key),
-                                        |ui| {
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    if let Some((mn, mx)) =
-                                                        bar_graph::param_uint_range(&node_type, key)
-                                                    {
-                                                        let mut vf = val as f32;
-                                                        let r = ui.add(
-                                                            crate::panels::widgets::ParamSlider::new(
-                                                                &mut vf, mn as f32, mx as f32,
-                                                            )
-                                                            .integer()
-                                                            .default_marker(default_f),
-                                                        );
-                                                        val = vf as i32;
-                                                        r.changed()
-                                                    } else {
-                                                        ui.add(
-                                                            egui::DragValue::new(&mut val)
-                                                                .range(1..=20),
-                                                        )
-                                                        .changed()
-                                                    }
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params.push((
-                                                    key.clone(),
-                                                    ParamValue::UInt(val.max(0) as u32),
-                                                ));
-                                            }
-                                            if revert(ui) {
-                                                changed_params
-                                                    .push((key.clone(), default_val.clone()));
-                                            }
-                                        },
-                                    );
-                                }
-                                ParamValue::Int(v) => {
-                                    let mut val = *v;
-                                    crate::panels::widgets::field_row(
-                                        ui,
-                                        &label,
-                                        bar_graph::param_description(&node_type, key),
-                                        |ui| {
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    ui.add(egui::DragValue::new(&mut val)).changed()
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params
-                                                    .push((key.clone(), ParamValue::Int(val)));
-                                            }
-                                            if revert(ui) {
-                                                changed_params
-                                                    .push((key.clone(), default_val.clone()));
-                                            }
-                                        },
-                                    );
-                                }
-                                ParamValue::Bool(v) => {
-                                    let mut val = *v;
-                                    crate::panels::widgets::field_row(
-                                        ui,
-                                        &label,
-                                        bar_graph::param_description(&node_type, key),
-                                        |ui| {
-                                            let changed = ui
-                                                .add_enabled_ui(!wired, |ui| {
-                                                    ui.checkbox(&mut val, "").changed()
-                                                })
-                                                .inner;
-                                            if changed {
-                                                changed_params
-                                                    .push((key.clone(), ParamValue::Bool(val)));
-                                            }
-                                            if revert(ui) {
-                                                changed_params
-                                                    .push((key.clone(), default_val.clone()));
-                                            }
-                                        },
-                                    );
-                                }
-                                ParamValue::String(v) => {
-                                    let mut val = v.clone();
-                                    crate::panels::widgets::field_row(
-                                        ui,
-                                        &label,
-                                        bar_graph::param_description(&node_type, key),
-                                        |ui| {
-                                            ui.add_enabled_ui(!wired, |ui| {
-                                            if let Some(choices) =
-                                                bar_graph::param_choices(&node_type, key)
+                            // File paths keep a bespoke browse dialog (it needs
+                            // the app + an OS picker), so they stay out of the
+                            // generic schema renderer.
+                            if matches!(key.as_str(), "path" | "bundle_path") {
+                                let mut val = match node_params.get(key) {
+                                    Some(ParamValue::String(s)) => s.clone(),
+                                    _ => String::new(),
+                                };
+                                let mut picked: Option<String> = None;
+                                crate::panels::widgets::field_row(ui, &label_buf, None, |ui| {
+                                    ui.add_enabled_ui(!wired, |ui| {
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .add(
+                                                    egui::TextEdit::singleline(&mut val)
+                                                        .desired_width(f32::INFINITY),
+                                                )
+                                                .changed()
                                             {
-                                                let id = ("param_choice", node_id.0, key.as_str());
-                                                egui::ComboBox::from_id_salt(id)
-                                                    .selected_text(&val)
-                                                    .show_ui(ui, |ui| {
-                                                        for choice in choices {
-                                                            if ui
-                                                                .selectable_label(val == *choice, *choice)
-                                                                .clicked()
-                                                            {
-                                                                let prev = val.clone();
-                                                                val = (*choice).to_string();
-                                                                let new_val =
-                                                                    ParamValue::String(val.clone());
-                                                                changed_params
-                                                                    .push((key.clone(), new_val.clone()));
-                                                                if val != prev {
-                                                                    changed_params.extend(
-                                                                        bar_graph::param_side_effects(
-                                                                            &node_type, key, &new_val,
-                                                                        ),
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    });
-                                            } else if bar_graph::param_is_color(&node_type, key) {
-                                                let rgb =
-                                                    parse_hex_color(&val).unwrap_or([128, 128, 128]);
-                                                let mut c32 =
-                                                    egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-                                                if ui.color_edit_button_srgba(&mut c32).changed() {
-                                                    val = format!(
-                                                        "{:02X}{:02X}{:02X}",
-                                                        c32.r(),
-                                                        c32.g(),
-                                                        c32.b()
-                                                    );
-                                                    changed_params.push((
-                                                        key.clone(),
-                                                        ParamValue::String(val.clone()),
-                                                    ));
+                                                picked = Some(val.clone());
+                                            }
+                                            if ui.button("\u{2026}").clicked() {
+                                                if let Some(p) =
+                                                    make_path_dialog(self, &node_type).pick_file()
+                                                {
+                                                    picked = Some(p.to_string_lossy().to_string());
                                                 }
-                                            } else {
-                                                ui.horizontal(|ui| {
-                                                    if ui
-                                                        .add(
-                                                            egui::TextEdit::singleline(&mut val)
-                                                                .desired_width(f32::INFINITY),
-                                                        )
-                                                        .changed()
-                                                    {
-                                                        changed_params.push((
-                                                            key.clone(),
-                                                            ParamValue::String(val.clone()),
-                                                        ));
-                                                    }
-                                                    if key == "path" && ui.button("\u{2026}").clicked()
-                                                    {
-                                                        if let Some(picked) =
-                                                            make_path_dialog(self, &node_type)
-                                                                .pick_file()
-                                                        {
-                                                            changed_params.push((
-                                                                key.clone(),
-                                                                ParamValue::String(
-                                                                    picked.to_string_lossy().to_string(),
-                                                                ),
-                                                            ));
-                                                        }
-                                                    }
-                                                });
                                             }
                                         });
-                                            if revert(ui) {
-                                                changed_params
-                                                    .push((key.clone(), default_val.clone()));
-                                            }
-                                        },
-                                    );
+                                    });
+                                });
+                                if let Some(nv) = picked {
+                                    self.push_undo("Change parameter");
+                                    if let Some(node) = self.graph.get_node_mut(node_id) {
+                                        node.params.insert(key.clone(), ParamValue::String(nv));
+                                        node.mark_dirty();
+                                    }
                                 }
-                                ParamValue::Vec2(_) => {}
-                                // Splines are only meaningful in a 2D canvas
-                                // editor (the Layout node has its own panel);
-                                // the generic property grid skips them rather
-                                // than try to surface raw point arrays.
-                                ParamValue::Spline(_) => {}
+                                continue;
                             }
+
+                            // Everything else flows through the one schema-driven
+                            // renderer: control, commit, revert, tooltip, and undo
+                            // are the renderer + NodeParamField's job, not ours.
+                            let Some(mut desc) =
+                                crate::panels::node_field::param_desc(&node_type, key, default_val)
+                            else {
+                                // Vec2 / Spline have no generic widget.
+                                continue;
+                            };
+                            desc.label = &label_buf;
+                            ui.add_enabled_ui(!wired, |ui| {
+                                let mut model = crate::panels::node_field::NodeParamField::new(
+                                    self,
+                                    node_id,
+                                    node_type.clone(),
+                                    key.clone(),
+                                    desc.kind.clone(),
+                                    default_val.clone(),
+                                    wired,
+                                );
+                                crate::panels::field_editor::render_field(
+                                    ui, &desc, &mut model, None,
+                                );
+                            });
                         }
                     } // end if !params_to_show.is_empty()
                 } // end else (generic params branch)
 
-                // Apply parameter changes
-                if !changed_params.is_empty() {
-                    self.push_undo("Change parameter");
-                    if let Some(node) = self.graph.get_node_mut(node_id) {
-                        for (key, value) in changed_params {
-                            node.params.insert(key, value);
-                        }
-                        node.mark_dirty();
-                    }
-                }
                 if let Some(new_label) = new_label {
                     self.push_undo("Rename node");
                     if let Some(node) = self.graph.get_node_mut(node_id) {

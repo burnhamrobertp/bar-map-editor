@@ -139,6 +139,12 @@ pub trait FieldModel {
     /// Node-param impls also re-evaluate the graph here. A no-op when no
     /// `set_value` ran this session (so idle focus leaves no undo entry).
     fn commit(&mut self);
+    /// True when the field is at its default -- drives revert-button
+    /// visibility. For optional settings this means "unset" (the inner
+    /// `Option` is `None`); for always-set node params it means the value
+    /// equals the registry default. A `set_value` of the kind's `None`
+    /// variant resets to default.
+    fn is_at_default(&self) -> bool;
 }
 
 /// [`FieldModel`] for a settings field: reads/writes `MapSettings`
@@ -171,6 +177,20 @@ impl FieldModel for SettingsField<'_> {
             self.app.history.push(snap);
         }
         self.app.mark_dirty();
+    }
+    fn is_at_default(&self) -> bool {
+        // Settings are optional: "at default" == the recipe field is unset.
+        matches!(
+            self.value(),
+            FieldValue::F32(None)
+                | FieldValue::U32(None)
+                | FieldValue::I32(None)
+                | FieldValue::Bool(None)
+                | FieldValue::Color(None)
+                | FieldValue::Vec3(None)
+                | FieldValue::Vec4(None)
+                | FieldValue::OptionText(None)
+        )
     }
 }
 
@@ -426,6 +446,7 @@ fn render_f32_opt(
     };
     let default = default_f32(desc.default);
     let is_unset = current.is_none();
+    let at_default = model.is_at_default();
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
     let mut intent = FieldIntent::None;
@@ -440,7 +461,7 @@ fn render_f32_opt(
 
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if revert_button(ui, !is_unset) {
+            if revert_button(ui, !at_default) {
                 model.set_value(FieldValue::F32(None));
                 intent = FieldIntent::EditAtomic;
             }
@@ -521,6 +542,7 @@ fn render_u32_opt(
     };
     let default = default_u32(desc.default);
     let is_unset = current.is_none();
+    let at_default = model.is_at_default();
     let displayed = current.unwrap_or(default);
     let mut value = displayed;
     let mut intent = FieldIntent::None;
@@ -530,7 +552,7 @@ fn render_u32_opt(
 
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if revert_button(ui, !is_unset) {
+            if revert_button(ui, !at_default) {
                 model.set_value(FieldValue::U32(None));
                 intent = FieldIntent::EditAtomic;
             }
@@ -664,13 +686,13 @@ fn render_color_opt(
         _ => return FieldIntent::None,
     };
     let default = default_color(desc.default);
-    let is_unset = current.is_none();
+    let at_default = model.is_at_default();
     let displayed = current.unwrap_or(default);
     let mut intent = FieldIntent::None;
 
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if revert_button(ui, !is_unset) {
+            if revert_button(ui, !at_default) {
                 model.set_value(FieldValue::Color(None));
                 intent = FieldIntent::EditAtomic;
             }
@@ -737,7 +759,7 @@ fn render_vec_opt<const N: usize>(
         _ => return FieldIntent::None,
     };
 
-    let is_unset = current_array.is_none();
+    let at_default = model.is_at_default();
     let mut arr = current_array.unwrap_or(default_array);
     let mut intent = FieldIntent::None;
     let mut any_changed = false;
@@ -752,7 +774,7 @@ fn render_vec_opt<const N: usize>(
 
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if revert_button(ui, !is_unset) {
+            if revert_button(ui, !at_default) {
                 secondary = true;
             }
             for slot in arr.iter_mut().take(N) {
@@ -922,9 +944,14 @@ fn render_float_free(
         FieldValue::F32(v) => v.unwrap_or_else(|| default_f32(desc.default)),
         _ => return FieldIntent::None,
     };
+    let at_default = model.is_at_default();
     let mut intent = FieldIntent::None;
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if revert_button(ui, !at_default) {
+                model.set_value(FieldValue::F32(None));
+                intent = FieldIntent::EditAtomic;
+            }
             let resp = ui.add(egui::DragValue::new(&mut value).speed(0.01));
             if resp.drag_started() || resp.gained_focus() {
                 intent = FieldIntent::EditStarted;
@@ -949,9 +976,14 @@ fn render_uint_free(
         FieldValue::U32(v) => v.unwrap_or_else(|| default_u32(desc.default)),
         _ => return FieldIntent::None,
     };
+    let at_default = model.is_at_default();
     let mut intent = FieldIntent::None;
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if revert_button(ui, !at_default) {
+                model.set_value(FieldValue::U32(None));
+                intent = FieldIntent::EditAtomic;
+            }
             let resp = ui.add(egui::DragValue::new(&mut value));
             if resp.drag_started() || resp.gained_focus() {
                 intent = FieldIntent::EditStarted;
@@ -972,9 +1004,14 @@ fn render_int_free(ui: &mut egui::Ui, desc: &FieldDesc, model: &mut dyn FieldMod
         FieldValue::I32(v) => v.unwrap_or_else(|| default_i32(desc.default)),
         _ => return FieldIntent::None,
     };
+    let at_default = model.is_at_default();
     let mut intent = FieldIntent::None;
     field_row(ui, desc.label, desc.description, |ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if revert_button(ui, !at_default) {
+                model.set_value(FieldValue::I32(None));
+                intent = FieldIntent::EditAtomic;
+            }
             let resp = ui.add(egui::DragValue::new(&mut value));
             if resp.drag_started() || resp.gained_focus() {
                 intent = FieldIntent::EditStarted;

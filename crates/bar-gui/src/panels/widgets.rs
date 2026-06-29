@@ -147,6 +147,7 @@ impl<'a> ParamSlider<'a> {
     /// Light grey tick on the bar marking the registry default, matching
     /// the settings sliders. `None` hides it -- callers like the color-ramp
     /// editor have no canonical default to point at.
+    #[allow(dead_code)] // superseded by render_field's native-slider tick; removed in slider cleanup
     pub fn default_marker(mut self, d: Option<f32>) -> Self {
         self.default = d;
         self
