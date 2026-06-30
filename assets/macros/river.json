@@ -1,23 +1,19 @@
 {
   "name": "river",
-  "description": "Wide river channel with a natural meander. Carve: blend onto base with mode subtract, using the mask (terrain is the depth to remove).",
+  "description": "Wide river following a drawn, meandering course. Double-click the inner Layout node to redraw the course. Carve: blend onto base with mode subtract, using the mask (terrain is the depth to remove).",
   "nodes": [
     {
       "key": "channel", "type": "Layout", "label": "Channel",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "rectangle" },
-        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.45 }, "ry_0": { "Float": 0.05 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 0.55 }, "falloff_0": { "Float": 0.5 } }
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "spline" },
+        "points_0": { "Spline": [[0.2, 0.25], [0.4, 0.46], [0.56, 0.4], [0.76, 0.7]] },
+        "closed_0": { "Bool": false }, "fill_0": { "Bool": false },
+        "width_0": { "Float": 0.05 }, "height_0": { "Float": 0.55 }, "falloff_0": { "Float": 0.5 } }
     },
-    { "key": "wx", "type": "PerlinNoise", "label": "Warp X", "params": { "character": { "String": "broad_waves" }, "frequency": { "Float": 1.5 }, "octaves": { "UInt": 2 }, "seed": { "UInt": 10 } } },
-    { "key": "wy", "type": "PerlinNoise", "label": "Warp Y", "params": { "character": { "String": "broad_waves" }, "frequency": { "Float": 1.5 }, "octaves": { "UInt": 2 }, "seed": { "UInt": 20 } } },
-    { "key": "meander", "type": "Warp", "label": "Meander", "params": { "strength": { "Float": 0.13 } } },
-    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 25.0 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
     { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.03 }, "smoothness": { "Float": 0.1 } } }
   ],
   "connections": [
-    { "from": "channel.output", "to": "meander.input" },
-    { "from": "wx.output", "to": "meander.warp_x" },
-    { "from": "wy.output", "to": "meander.warp_y" },
-    { "from": "meander.output", "to": "place.input" },
+    { "from": "channel.output", "to": "place.input" },
     { "from": "place.output", "to": "mask.input" }
   ],
   "subgraph": {
@@ -30,9 +26,8 @@
     { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
     { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
     { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
-    { "name": "length", "label": "Length", "kind": "Float", "binding": "channel:rx_0", "min": 0.2, "max": 0.5 },
-    { "name": "width", "label": "Width", "kind": "Float", "binding": "channel:ry_0", "min": 0.02, "max": 0.14 },
-    { "name": "depth", "label": "Depth", "kind": "Float", "binding": "channel:height_0", "min": 0.15, "max": 0.85 },
-    { "name": "meander", "label": "Meander", "kind": "Float", "binding": "meander:strength", "min": 0.0, "max": 0.25 }
+    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.4, "max": 2.0 },
+    { "name": "width", "label": "Width", "kind": "Float", "binding": "channel:width_0", "min": 0.02, "max": 0.14 },
+    { "name": "depth", "label": "Depth", "kind": "Float", "binding": "channel:height_0", "min": 0.15, "max": 0.85 }
   ]
 }

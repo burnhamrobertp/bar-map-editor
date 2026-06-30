@@ -1,11 +1,13 @@
 {
   "name": "basin",
-  "description": "Broad shallow bowl / lowland depression. Carve: blend onto base with mode subtract, using the mask.",
+  "description": "Broad lowland depression with a drawn outline. Double-click the inner Layout node to redraw the outline. Carve: blend onto base with mode subtract, using the mask.",
   "nodes": [
     {
       "key": "bowl", "type": "Layout", "label": "Bowl",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
-        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.32 }, "ry_0": { "Float": 0.28 }, "height_0": { "Float": 0.4 }, "falloff_0": { "Float": 0.7 } }
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "spline" },
+        "points_0": { "Spline": [[0.32, 0.34], [0.6, 0.3], [0.72, 0.5], [0.66, 0.72], [0.38, 0.74], [0.26, 0.52]] },
+        "closed_0": { "Bool": true }, "fill_0": { "Bool": true },
+        "width_0": { "Float": 0.05 }, "height_0": { "Float": 0.4 }, "falloff_0": { "Float": 0.7 } }
     },
     { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
     { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.02 }, "smoothness": { "Float": 0.12 } } }

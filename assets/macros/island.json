@@ -1,10 +1,13 @@
 {
   "name": "island",
-  "description": "A landmass rising from the sea, with an irregular coast. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
+  "description": "A landmass rising from the sea, with a drawn coastline. Double-click the inner Layout node to redraw the outline. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
   "nodes": [
     {
       "key": "core", "type": "Layout", "label": "Landmass",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.4 }, "ry_0": { "Float": 0.37 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.7 } }
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "spline" },
+        "points_0": { "Spline": [[0.36, 0.3], [0.66, 0.33], [0.74, 0.55], [0.6, 0.74], [0.36, 0.7], [0.28, 0.48]] },
+        "closed_0": { "Bool": true }, "fill_0": { "Bool": true },
+        "width_0": { "Float": 0.05 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.7 } }
     },
     { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
     { "key": "coastnoise", "type": "RidgedNoise", "label": "Coast", "params": { "character": { "String": "broad_ridges" }, "frequency": { "Float": 2.5 }, "octaves": { "UInt": 4 }, "seed": { "UInt": 9 } } },
