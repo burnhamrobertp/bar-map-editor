@@ -20,6 +20,10 @@ pub enum NodeType {
     // Filters
     HydraulicErosion,
     ThermalErosion,
+    /// Differential erosion: soft rock worn down, hard strata and slope-protected
+    /// faces left standing proud (mesas, benches, stratified walls). Distinct
+    /// from hydraulic erosion, which follows water flow and carves valleys.
+    DifferentialErosion,
     Blur,
     Sharpen,
     Clamp,

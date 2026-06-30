@@ -1590,8 +1590,12 @@ fn hydraulic_erosion_lowers_peaks() {
         .cloned()
         .fold(f32::NEG_INFINITY, f32::max);
     let inputs = input_hm("input", spike);
+    // `iterations` is a droplet count scaled by grid area against a 512x512
+    // reference (so erosion intensity is resolution-independent). On this tiny
+    // 16x16 test grid that scales down hard, so use a realistic full-map count
+    // to land enough droplets on the spike to measurably lower it.
     let p = &[
-        ("iterations", ParamValue::UInt(2000)),
+        ("iterations", ParamValue::UInt(500_000)),
         ("erosion_rate", ParamValue::Float(0.05)),
         ("deposition_rate", ParamValue::Float(0.01)),
     ];

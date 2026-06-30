@@ -7,6 +7,7 @@ pub mod bias_gain;
 pub mod blur;
 pub mod clamp;
 pub mod curve;
+pub mod differential_erosion;
 pub mod displacement;
 pub mod hydraulic_erosion;
 pub mod invert;
@@ -24,6 +25,7 @@ use crate::nodes::def::NodeDef;
 pub static NODES: &[&NodeDef] = &[
     &hydraulic_erosion::DEF,
     &thermal_erosion::DEF,
+    &differential_erosion::DEF,
     &blur::DEF,
     &sharpen::DEF,
     &clamp::DEF,

@@ -6,7 +6,6 @@ static INPUTS: &[PortDef] = &[
     PortDef::one("input", "Input", PortKind::Heightmap),
     PortDef::one("control", "Control", PortKind::Control),
     PortDef::one("mask", "Mask", PortKind::Mask),
-    PortDef::one("hardness", "Hardness", PortKind::Heightmap),
 ];
 
 static OUTPUTS: &[PortDef] = &[

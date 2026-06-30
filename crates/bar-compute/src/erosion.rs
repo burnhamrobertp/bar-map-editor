@@ -391,6 +391,143 @@ pub fn hydraulic_erosion(
     })
 }
 
+/// Differential erosion: soft rock is worn down while hard strata and steep
+/// (slope-protected) faces stand proud, forming mesas, benches and stratified
+/// walls -- the geological process that shapes buttes. Distinct from hydraulic
+/// (droplet) erosion, which follows water flow and carves valleys.
+///
+/// Model: `layers` hard/soft strata band the height range (squared sine). Each
+/// iteration, every cell's erodibility = `(1 - contrast * band)` (so `contrast`
+/// 0 = uniform wear, 1 = only soft rock erodes) times a slope factor that
+/// `slope_hardening` uses to spare steep faces (exposed bedrock). The cell is
+/// lowered by that erodibility. Crucially the strata are anchored to the
+/// ORIGINAL height range, so as a soft column wears down it eventually reaches a
+/// harder band and stops -- that band becomes a flat shelf/cap. `strength`
+/// (0..1) scales total wear; `iterations` sets how far the downcutting runs.
+pub fn differential_erosion(
+    heightmap: &Heightmap,
+    strength: f32,
+    layers: u32,
+    contrast: f32,
+    slope_hardening: f32,
+    iterations: u32,
+) -> Heightmap {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return heightmap.clone();
+    }
+    let contrast = contrast.clamp(0.0, 1.0);
+    let slope_hardening = slope_hardening.clamp(0.0, 1.0);
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let (ww, hh) = (w as i32, h as i32);
+    // Strata anchored to the original range so downcutting halts at hard bands.
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for &v in heightmap.data() {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    let span = (hi - lo).max(1e-4);
+    let bands = layers.max(1) as f32;
+    let iters = iterations.max(1);
+    // Per-iteration wear ceiling (fraction of span) for a fully-soft, flat cell.
+    let step = strength * 0.03;
+    let dim = w.max(h) as f32;
+    let mut cur = heightmap.data().to_vec();
+    let mut next = cur.clone();
+    let at = |buf: &[f32], x: i32, y: i32| -> f32 {
+        buf[(y.clamp(0, hh - 1) as usize) * w as usize + x.clamp(0, ww - 1) as usize]
+    };
+    for _ in 0..iters {
+        for y in 0..hh {
+            for x in 0..ww {
+                let v = at(&cur, x, y);
+                let nh = ((v - lo) / span).clamp(0.0, 1.0);
+                let s = 0.5 + 0.5 * (nh * bands * std::f32::consts::TAU).sin();
+                let band = s * s;
+                // slope in map-fraction units (resolution independent)
+                let gx = (at(&cur, x + 1, y) - at(&cur, x - 1, y)) / (2.0 * span);
+                let gy = (at(&cur, x, y + 1) - at(&cur, x, y - 1)) / (2.0 * span);
+                let slope_norm = ((gx * gx + gy * gy).sqrt() * dim * 0.1).min(1.0);
+                let erodibility = (1.0 - contrast * band) * (1.0 - slope_norm * slope_hardening);
+                let lowered = v - step * erodibility.max(0.0) * span;
+                next[(y * ww + x) as usize] = lowered.max(lo);
+            }
+        }
+        std::mem::swap(&mut cur, &mut next);
+    }
+    Heightmap::frbar_data(w, h, cur).unwrap_or_else(|_| heightmap.clone())
+}
+
+/// Differential strata terracing: the visible half of the geology model.
+///
+/// Hardness-gated hydraulic erosion alone produces only a faint, diffuse
+/// effect (droplets follow flow, not strata). This carves the actual
+/// differential landforms -- benches, mesas, stratified walls -- directly:
+/// height is quantised into `layers` shelves, each with a flat tread and a
+/// steep riser whose sharpness is set by `contrast` (0 = no terracing, off).
+/// `strength` blends the terraced surface over the original. `contrast` sets how
+/// pronounced the shelves are -- 0 = none (no terracing, the surface is left
+/// alone), 1 = full flat-tread/steep-riser steps -- and is intentionally gentle
+/// across the low/mid range so subtle benches are easy to dial in. The shelf
+/// shape is C1-continuous (smootherstep), so low values produce soft undulation
+/// rather than the hard contour-line creases a power curve leaves at every band
+/// edge. `slope_hardening` suppresses terracing on already-steep faces so
+/// existing cliffs/butte walls stay walls instead of being cut into stairs.
+/// Resolution independent: band quantisation keys off normalized height, and the
+/// slope term is normalized to map-fraction units (not raw per-cell deltas).
+pub fn apply_strata_terracing(
+    heightmap: &Heightmap,
+    strength: f32,
+    layers: u32,
+    contrast: f32,
+    slope_hardening: f32,
+) -> Heightmap {
+    let strength = strength.clamp(0.0, 1.0);
+    let contrast = contrast.clamp(0.0, 1.0);
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let data = heightmap.data();
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for &v in data {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    let span = (hi - lo).max(1e-4);
+    let bands = layers.max(1) as f32;
+    let (ww, hh) = (w as i32, h as i32);
+    // Slope is measured in normalized-height per map-fraction so a given physical
+    // steepness reads the same at any resolution: a raw per-cell delta shrinks as
+    // the grid gets finer, which is why slope-hardening did nothing at full res.
+    let dim = w.max(h) as f32;
+    let at = |x: i32, y: i32| -> f32 {
+        data[(y.clamp(0, hh - 1) as usize) * w as usize + x.clamp(0, ww - 1) as usize]
+    };
+    let mut out = vec![0.0f32; (w * h) as usize];
+    for y in 0..hh {
+        for x in 0..ww {
+            let v = at(x, y);
+            let nh = ((v - lo) / span).clamp(0.0, 1.0);
+            let t = nh * bands;
+            let k = t.floor();
+            let f = (t - k).clamp(0.0, 1.0);
+            // smootherstep shelf (zero slope at both band edges -> no crease),
+            // blended toward linear by contrast so low contrast is genuinely soft
+            let s = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+            let shaped = f + (s - f) * contrast;
+            let terr_nh = (k + shaped) / bands;
+            // preserve existing steep faces: per-cell gradient -> map-fraction units
+            let gx = (at(x + 1, y) - at(x - 1, y)) / (2.0 * span);
+            let gy = (at(x, y + 1) - at(x, y - 1)) / (2.0 * span);
+            let slope_norm = ((gx * gx + gy * gy).sqrt() * dim * 0.1).min(1.0);
+            let amt = strength * (1.0 - slope_norm * slope_hardening);
+            let blended = nh + (terr_nh - nh) * amt;
+            out[(y * ww + x) as usize] = blended * span + lo;
+        }
+    }
+    Heightmap::frbar_data(w, h, out).unwrap_or_else(|_| heightmap.clone())
+}
+
 /// Simulate thermal erosion (weathering) on a heightmap (CPU implementation).
 pub fn thermal_erosion(
     heightmap: &Heightmap,

@@ -16,8 +16,8 @@ pub mod noise;
 pub use coast::{coast_erosion, CoastErosionParams};
 pub use device::{ComputeDevice, ComputeError, GpuContext};
 pub use erosion::{
-    hydraulic_erosion, thermal_erosion, FlowErosionParams, HydraulicErosionMaps,
-    HydraulicErosionParams, ThermalErosionParams,
+    apply_strata_terracing, differential_erosion, hydraulic_erosion, thermal_erosion,
+    FlowErosionParams, HydraulicErosionMaps, HydraulicErosionParams, ThermalErosionParams,
 };
 pub use gpu_erosion::{GpuErosionError, GpuErosionPipeline};
 pub use gpu_filters::{GpuFilterError, GpuFilterPipeline};

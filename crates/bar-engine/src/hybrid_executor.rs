@@ -91,9 +91,9 @@ impl NodeExecutor for HybridExecutor {
             match node_type {
                 // HydraulicErosion is intentionally not dispatched to the GPU.
                 // The CPU droplet model is the only implementation that supports
-                // the hardness input map and the flow/wear/deposit outputs; the
-                // GPU pipe model produces only an eroded heightmap and would
-                // diverge. GPU pipe-model parity is a follow-up.
+                // the flow/wear/deposit outputs; the GPU pipe model produces only
+                // an eroded heightmap and would diverge. GPU pipe-model parity is
+                // a follow-up.
                 NodeType::ThermalErosion => {
                     return self.execute_gpu_thermal_erosion(params, inputs);
                 }
