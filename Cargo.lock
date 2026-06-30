@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "bar-app"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-compute",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "bar-cli"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-compute",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "bar-compute"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "bytemuck",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "bar-data"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "ddsfile",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "bar-engine"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-compute",
@@ -576,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "bar-graph"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "serde",
@@ -587,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "bar-gui"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "bar-graph",
@@ -610,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "bar-project"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-graph",
@@ -622,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "bar-render"
-version = "0.2.5"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "bar-project",
