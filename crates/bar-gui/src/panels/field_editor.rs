@@ -281,14 +281,15 @@ pub fn section_heading(ui: &mut egui::Ui, text: &str) {
     ));
 }
 
-/// Draw a section heading row with an info icon at the right
-/// carrying `tooltip` as hover text. Replaces the
-/// `heading + paragraph` pattern that used to clutter the modals.
+/// Section heading whose explanatory `tooltip` shows on hovering the heading
+/// itself -- no separate info icon, matching the whole-row hover tooltips used
+/// for fields.
 pub fn heading_with_info(ui: &mut egui::Ui, heading: &str, tooltip: &str) {
-    ui.horizontal(|ui| {
-        section_heading(ui, heading);
-        info_icon(ui, tooltip);
-    });
+    ui.add(
+        egui::Label::new(egui::RichText::new(heading).heading().strong())
+            .sense(egui::Sense::hover()),
+    )
+    .on_hover_text(tooltip);
 }
 
 /// Wrap a `ScrollArea` body so it always leaves room on the right
