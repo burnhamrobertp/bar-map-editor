@@ -20,6 +20,10 @@ pub enum NodeType {
     // Filters
     HydraulicErosion,
     ThermalErosion,
+    /// Differential erosion: soft rock worn down, hard strata and slope-protected
+    /// faces left standing proud (mesas, benches, stratified walls). Distinct
+    /// from hydraulic erosion, which follows water flow and carves valleys.
+    DifferentialErosion,
     Blur,
     Sharpen,
     Clamp,
@@ -267,7 +271,7 @@ pub struct Node {
 }
 
 /// Parameter values that can be set on a node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParamValue {
     Float(f32),
     Int(i32),

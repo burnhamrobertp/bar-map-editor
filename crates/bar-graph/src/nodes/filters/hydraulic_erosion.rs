@@ -6,10 +6,8 @@ static INPUTS: &[PortDef] = &[
     PortDef::one("input", "Input", PortKind::Heightmap),
     PortDef::one("control", "Control", PortKind::Control),
     PortDef::one("mask", "Mask", PortKind::Mask),
-    PortDef::one("hardness", "Hardness", PortKind::Heightmap),
 ];
 
-static METHODS: &[&str] = &["droplet"];
 static OUTPUTS: &[PortDef] = &[
     PortDef::one("output", "Output", PortKind::Heightmap),
     PortDef::one("flow", "Flow", PortKind::Heightmap),
@@ -75,11 +73,6 @@ static PARAMS: &[ParamDef] = &[
         key: "river_depth",
         default: || ParamValue::Float(0.0),
         ui: ParamUi::FloatRange { min: 0.0, max: 1.0 },
-    },
-    ParamDef {
-        key: "method",
-        default: || ParamValue::String("droplet".to_string()),
-        ui: ParamUi::Choices(METHODS),
     },
     ParamDef {
         key: "seed",

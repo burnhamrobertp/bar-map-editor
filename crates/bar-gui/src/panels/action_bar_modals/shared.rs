@@ -14,7 +14,7 @@ use eframe::egui;
 use std::collections::HashMap;
 
 use crate::app::BarEditorApp;
-use crate::panels::field_editor::{process_intent, render_field, scrollbar_clearance, FieldIntent};
+use crate::panels::field_editor::{desc_of, render_field, scrollbar_clearance, SettingsField};
 
 /// Validation findings keyed by `(category, field_id)` so the modal
 /// renderer can decorate each widget with the worst-severity finding
@@ -54,23 +54,62 @@ fn worst_severity(a: bar_project::Severity, b: bar_project::Severity) -> bar_pro
     }
 }
 
-/// Walk a schema slice, call `render_field` for each spec, and fan
-/// out the returned intent through `process_intent`. Inserts a
-/// sub-section heading on every `spec.group` transition so the
-/// modal's fields read as logical clusters. Skips
-/// `PassthroughTexture` fields -- those want richer bespoke pickers
-/// upstream of the schema iteration.
+/// Settings search + "Advanced" toggle that sits at the top of a
+/// settings modal. Query text and the advanced flag persist in egui
+/// memory keyed by `id` so each modal keeps its own. Returns the
+/// lowercased query and the advanced flag for [`render_specs`] to
+/// filter on. Call once, as the first thing in the modal body, so the
+/// search is consistently in the same place across panels.
+pub(crate) fn settings_toolbar(ui: &mut egui::Ui, id: &str) -> (String, bool) {
+    let q_id = egui::Id::new(("settings_search", id));
+    let a_id = egui::Id::new(("settings_advanced", id));
+    let mut query: String = ui.data(|d| d.get_temp(q_id)).unwrap_or_default();
+    let mut advanced: bool = ui.data(|d| d.get_temp(a_id)).unwrap_or(false);
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.toggle_value(&mut advanced, "Advanced")
+                .on_hover_text("Show every engine field, not just the commonly-tuned ones");
+            ui.add(
+                egui::TextEdit::singleline(&mut query)
+                    .hint_text("Search settings")
+                    .desired_width(f32::INFINITY),
+            );
+        });
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(q_id, query.clone());
+        d.insert_temp(a_id, advanced);
+    });
+    ui.add_space(4.0);
+    (query.trim().to_lowercase(), advanced)
+}
+
+/// Walk a schema slice, call `render_field` for each visible spec, and
+/// fan the returned intent through `process_intent`. A field shows when
+/// it matches `query` (while searching) or otherwise when it is Common
+/// or `advanced` is on -- advanced fields appear inline in their own
+/// `group` section, not a separate region. Inserts a sub-section
+/// heading on each `group` transition among shown fields. Skips
+/// `PassthroughTexture` (bespoke pickers live upstream).
 pub(crate) fn render_specs(
     ui: &mut egui::Ui,
     app: &mut BarEditorApp,
     specs: &[FieldSpec<MapSettings>],
     findings: &FieldFindings,
+    query: &str,
+    advanced: bool,
 ) {
-    let mut intents: Vec<(&'static str, FieldIntent)> = Vec::new();
-    let settings = app.map_settings_mut();
     let mut last_group: &str = "";
     for spec in specs {
         if matches!(spec.kind, FieldKind::PassthroughTexture { .. }) {
+            continue;
+        }
+        let show = if query.is_empty() {
+            advanced || bar_project::recipe_fields::is_common(spec.id)
+        } else {
+            spec.label.to_lowercase().contains(query)
+        };
+        if !show {
             continue;
         }
         if !spec.group.is_empty() && spec.group != last_group {
@@ -80,11 +119,12 @@ pub(crate) fn render_specs(
         }
         last_group = spec.group;
         let severity = findings.field(spec.category, spec.id);
-        let intent = render_field(ui, spec, settings, severity);
-        intents.push((spec.label, intent));
-    }
-    for (label, intent) in intents {
-        process_intent(app, label, intent);
+        // One model per field per frame; render_field reads/writes through
+        // it and drives undo via apply_intent. The reborrow of `app` ends
+        // when the model drops at the bottom of the loop.
+        let desc = desc_of(spec);
+        let mut model = SettingsField::new(app, spec);
+        render_field(ui, &desc, &mut model, severity);
     }
 }
 
@@ -142,7 +182,7 @@ pub(crate) fn modal_frame(
         .open(open)
         .resizable(true)
         .collapsible(false)
-        .default_size([460.0, 520.0])
+        .default_size([560.0, 560.0])
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false; 2])
@@ -150,4 +190,9 @@ pub(crate) fn modal_frame(
                     scrollbar_clearance(ui, body);
                 });
         });
+    // Esc closes the modal, matching the contextual properties panel. Read
+    // after `show` so the title-bar close (which also writes `open`) wins.
+    if *open && ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        *open = false;
+    }
 }

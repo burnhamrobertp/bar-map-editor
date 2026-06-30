@@ -1,0 +1,28 @@
+{
+  "name": "cliff",
+  "description": "Escarpment: a sharp step from low to high ground. Additive: blend onto base with mode add, using the mask (mask marks the high side).",
+  "nodes": [
+    { "key": "grad", "type": "Gradient", "label": "Across", "params": { "direction": { "String": "linear_x" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
+    { "key": "step", "type": "Terrace", "label": "Step", "params": { "step_count": { "UInt": 2 }, "smoothing": { "Float": 0.06 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "High side", "params": { "threshold": { "Float": 0.5 }, "smoothness": { "Float": 0.1 } } }
+  ],
+  "connections": [
+    { "from": "grad.output", "to": "step.input" },
+    { "from": "step.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "levels", "label": "Levels", "kind": "UInt", "binding": "step:step_count", "min": 2, "max": 5 },
+    { "name": "blend", "label": "Step softness", "kind": "Float", "binding": "step:smoothing", "min": 0.0, "max": 0.3 }
+  ]
+}

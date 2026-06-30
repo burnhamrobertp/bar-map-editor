@@ -18,7 +18,7 @@ pub struct WrittenFiles {
 }
 
 /// The export plan computed before writing.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ExportPlan {
     /// Filesystem slug used for output filenames and SMF basename
     /// (`maps/<map_name>.smf`). Lowercased, underscore-separated.

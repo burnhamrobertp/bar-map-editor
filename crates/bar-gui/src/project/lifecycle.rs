@@ -764,12 +764,20 @@ impl BarEditorApp {
                 .get(&recipe_node.key)
                 .map(|p| egui::pos2(p.x, p.y))
                 .unwrap_or_else(|| egui::pos2(200.0 + (idx as f32 * 180.0), 200.0));
+            // Never render a node shorter than its ports need -- floor both the
+            // saved size and the no-saved-size fallback at the port-driven
+            // minimum (the same one the resize handle clamps to).
+            let min_h = self
+                .graph
+                .get_node(node_id)
+                .map(crate::app::node_min_height)
+                .unwrap_or(60.0);
             let size = project
                 .layout
                 .node_sizes
                 .get(&recipe_node.key)
-                .map(|s| egui::vec2(s.width, s.height))
-                .unwrap_or_else(|| egui::vec2(150.0, 80.0));
+                .map(|s| egui::vec2(s.width, s.height.max(min_h)))
+                .unwrap_or_else(|| egui::vec2(150.0, min_h));
             self.visuals.node_visuals.insert(
                 node_id,
                 NodeVisual {
@@ -1404,7 +1412,7 @@ mod session_reset_tests {
     fn start_with_macro_resets_transient_state() {
         let mut app = dirtied_app();
         let prior_depth = app.history.undo_depth();
-        app.start_with_macro("Plains");
+        app.start_with_macro("Flat Plain");
         // History from the previous project is gone. The macro drop
         // pushes exactly one new undo entry (so the user can undo
         // their first action), so depth is 1, not the pre-reset value.

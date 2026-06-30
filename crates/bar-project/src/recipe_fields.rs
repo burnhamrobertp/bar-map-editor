@@ -35,6 +35,107 @@ use crate::recipe::MapSettings;
 // Physics
 // ──────────────────────────────────────────────────────────────────
 
+/// Field ids surfaced in the "Common" tier of the settings modals --
+/// the fields BAR mappers actually tune per map. Everything not listed
+/// renders under the collapsible "Advanced" section.
+///
+/// Derived empirically, not by intuition: harvested `mapinfo.lua` from
+/// 224 live BAR maps and kept the fields whose value diverges from the
+/// corpus-dominant default in a meaningful fraction of maps (high
+/// cross-corpus variance). Low-variance boilerplate and rarely-touched
+/// engine fields stay in Advanced. See `map-repro/analyze_corpus.py`.
+/// `common_ids_exist_in_some_spec` guards against id drift.
+pub static COMMON_FIELD_IDS: &[&str] = &[
+    // physics
+    "physics.gravity",
+    "physics.map_hardness",
+    "physics.tidal_strength",
+    "physics.max_metal",
+    "physics.extractor_radius",
+    // atmosphere / sky
+    "atmosphere.min_wind",
+    "atmosphere.max_wind",
+    "atmosphere.sky_color",
+    "atmosphere.sun_color",
+    "atmosphere.skybox",
+    "atmosphere.cloud_color",
+    "atmosphere.cloud_density",
+    // distance fog
+    "fog.fog_start",
+    "fog.fog_end",
+    "fog.fog_color",
+    // volumetric clouds: common when the feature is used (clamp_to_map stays advanced)
+    "clouds.speed",
+    "clouds.color",
+    "clouds.height",
+    "clouds.bottom",
+    "clouds.fade_alt",
+    "clouds.scale",
+    "clouds.opacity",
+    "clouds.sun_penetration",
+    // lighting
+    "lighting.sun_dir",
+    "lighting.ground_ambient",
+    "lighting.ground_diffuse",
+    "lighting.ground_shadow_density",
+    "lighting.unit_shadow_density",
+    "lighting.unit_ambient",
+    "lighting.unit_diffuse",
+    // water
+    "water.base_color",
+    "water.absorb",
+    "water.min_color",
+    "water.surface_color",
+    "water.surface_alpha",
+    "water.fresnel_min",
+    "water.fresnel_max",
+    "water.reflection_distortion",
+    "water.ambient_factor",
+    "water.perlin_amplitude",
+    "water.damage",
+    // lava (fewer lava maps in the corpus -> lower-confidence set)
+    "lava.color_correction",
+    "lava.damage",
+    "lava.uv_scale",
+    "lava.coast_color",
+    // grass
+    "grass.dist_tga",
+    "grass.blade_color_tex",
+    "grass.max_size",
+    "grass.map_color_base",
+    "grass.map_color_factor",
+];
+
+/// True when `id` belongs to the Common tier (see [`COMMON_FIELD_IDS`]).
+pub fn is_common(id: &str) -> bool {
+    COMMON_FIELD_IDS.contains(&id)
+}
+
+#[cfg(test)]
+mod common_tier_tests {
+    use super::*;
+
+    #[test]
+    fn common_ids_exist_in_some_spec() {
+        let all: std::collections::HashSet<&str> = [
+            PHYSICS_SPECS,
+            ATMOSPHERE_SPECS,
+            FOG_SPECS,
+            CLOUDS_SPECS,
+            LIGHTING_SPECS,
+            WATER_SPECS,
+            LAVA_SPECS,
+            GRASS_SPECS,
+        ]
+        .iter()
+        .flat_map(|s| s.iter().map(|f| f.id))
+        .collect();
+        for id in COMMON_FIELD_IDS {
+            assert!(all.contains(id), "COMMON_FIELD_IDS has unknown id {id:?}");
+        }
+    }
+}
+
 pub static PHYSICS_SPECS: &[FieldSpec<MapSettings>] = &[
     FieldSpec {
         id: "physics.gravity",
@@ -827,14 +928,36 @@ pub static LIGHTING_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Water (water-mode visual fields only; damage lives in LAVA_SPECS
-// because BAR treats `mapinfo.water.damage > 0` as lava and BME
-// only surfaces that field on the lava form. Core fields here; the
-// extra fields like force_rendering / has_water_plane / etc. can
-// be added incrementally.)
+// Water. Includes `water.damage`: damaging water (acid / caustic /
+// deep) is just water -- it does NOT make a map lava (lava is the
+// `mapconfig/lava.lua` config, handled separately). Core fields here;
+// force_rendering / has_water_plane / etc. can be added incrementally.
 // ──────────────────────────────────────────────────────────────────
 
 pub static WATER_SPECS: &[FieldSpec<MapSettings>] = &[
+    FieldSpec {
+        id: "water.damage",
+        label: "Damage / sec",
+        description: Some(
+            "Per-second damage to units in the water. Damaging water (acid, \
+             caustic, deep) is still water -- this does not make the map lava.",
+        ),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100000.0),
+            soft: Some((0.0, 2000.0)),
+            unit: "/s",
+        },
+        default: DefaultValue::F32(0.0),
+        get: |s| FieldValue::F32(s.water.damage),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.damage = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Damage",
+        blocks_export: false,
+    },
     FieldSpec {
         id: "water.absorb",
         label: "Absorb",

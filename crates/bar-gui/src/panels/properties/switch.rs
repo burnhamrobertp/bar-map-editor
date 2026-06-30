@@ -26,10 +26,10 @@ impl BarEditorApp {
 
         ui.label("Inputs");
         let mut ic_f = input_count as f32;
-        if ui
-            .add(crate::panels::widgets::ParamSlider::new(&mut ic_f, 2.0, 8.0).integer())
-            .changed()
-        {
+        let e = crate::panels::widgets::ParamSlider::new(&mut ic_f, 2.0, 8.0)
+            .integer()
+            .show(ui);
+        if e.commit && ic_f as u32 != input_count {
             input_count = ic_f as u32;
             new_input_count = Some(input_count);
             changed.push(("input_count".to_string(), ParamValue::UInt(input_count)));
@@ -46,13 +46,10 @@ impl BarEditorApp {
 
         ui.label("Selected input");
         let mut sel_f = selected as f32;
-        if ui
-            .add(
-                crate::panels::widgets::ParamSlider::new(&mut sel_f, 0.0, (input_count - 1) as f32)
-                    .integer(),
-            )
-            .changed()
-        {
+        let e = crate::panels::widgets::ParamSlider::new(&mut sel_f, 0.0, (input_count - 1) as f32)
+            .integer()
+            .show(ui);
+        if e.commit && sel_f as u32 != selected {
             selected = sel_f as u32;
             changed.push(("selected".to_string(), ParamValue::UInt(selected)));
         }

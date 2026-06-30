@@ -1,10 +1,14 @@
 //! Procedural tileable detail-normal maps.
 //!
 //! Generates a seamlessly-tiling tangent-space normal map from periodic
-//! fractal noise -- the map's `detailNormalTex`: high-frequency close-up
-//! surface bump (rock grain, gravel) the heightmap is too coarse to encode.
-//! Tiling is exact because the noise lattice wraps at an integer period and
-//! the Sobel pass samples neighbours with wraparound.
+//! fractal noise, for the SSMF splat-detail-normal slots
+//! (`splatDetailNormalTex1..4`): high-frequency close-up surface bump (rock
+//! grain, gravel) the heightmap is too coarse to encode, tiled across the
+//! terrain. RGB is the tangent-space normal; the alpha channel carries a
+//! grayscale diffuse/AO derived from the bump height, which the engine uses
+//! when `splatDetailNormalDiffuseAlpha` is set. Tiling is exact because the
+//! noise lattice wraps at an integer period and the Sobel pass samples
+//! neighbours with wraparound.
 
 use crate::ColorBuffer;
 
@@ -129,6 +133,10 @@ pub fn generate_detail_normal(preset: DetailNormalPreset, size: u32, strength: f
             let ny = -dy * s;
             let nz = 1.0f32;
             let len = (nx * nx + ny * ny + nz * nz).sqrt();
+            // Alpha = the bump height, a grayscale diffuse/AO the engine reads
+            // when splatDetailNormalDiffuseAlpha is set. Compressed toward
+            // mid-gray so it modulates the base diffuse rather than overriding.
+            let diffuse = 0.35 + 0.3 * at(x, y);
             color.set(
                 x as u32,
                 y as u32,
@@ -136,7 +144,7 @@ pub fn generate_detail_normal(preset: DetailNormalPreset, size: u32, strength: f
                     nx / len * 0.5 + 0.5,
                     ny / len * 0.5 + 0.5,
                     nz / len * 0.5 + 0.5,
-                    1.0,
+                    diffuse,
                 ],
             );
         }

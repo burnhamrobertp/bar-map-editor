@@ -11,7 +11,7 @@ use bar_project::recipe_fields::{LAVA_SPECS, WATER_SPECS};
 use eframe::egui;
 
 use crate::app::BarEditorApp;
-use crate::panels::action_bar_modals::shared::{render_specs, FieldFindings};
+use crate::panels::action_bar_modals::shared::{render_specs, settings_toolbar, FieldFindings};
 use crate::panels::field_editor::scrollbar_clearance;
 use crate::t;
 
@@ -30,7 +30,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         .title_bar(false)
         .resizable(true)
         .collapsible(false)
-        .default_size([460.0, 520.0])
+        .default_size([560.0, 560.0])
         .show(ctx, |ui| {
             draw_title_row(app, ui);
             ui.separator();
@@ -39,10 +39,11 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
                 .show(ui, |ui| {
                     scrollbar_clearance(ui, |ui| {
                         let findings = FieldFindings::from(app.validation.findings());
+                        let (query, advanced) = settings_toolbar(ui, "water");
                         if is_lava_mode(app) {
-                            render_specs(ui, app, LAVA_SPECS, &findings);
+                            render_specs(ui, app, LAVA_SPECS, &findings, &query, advanced);
                         } else {
-                            render_specs(ui, app, WATER_SPECS, &findings);
+                            render_specs(ui, app, WATER_SPECS, &findings, &query, advanced);
                         }
                     });
                 });

@@ -1,0 +1,278 @@
+{
+ "name": "mesa",
+ "description": "Irregular flat-topped tableland. Blend onto base with add.",
+ "nodes": [
+  {
+   "key": "shape",
+   "type": "Layout",
+   "label": "Mesa",
+   "params": {
+    "item_count": {
+     "UInt": 2
+    },
+    "mode": {
+     "String": "ridge"
+    },
+    "symmetry": {
+     "String": "none"
+    },
+    "type_0": {
+     "String": "spline"
+    },
+    "points_0": {
+     "Spline": [
+      [
+       0.6084,
+       0.5098
+      ],
+      [
+       0.5826,
+       0.5843
+      ],
+      [
+       0.5512,
+       0.6372
+      ],
+      [
+       0.3468,
+       0.6615
+      ],
+      [
+       0.3233,
+       0.564
+      ],
+      [
+       0.2909,
+       0.5069
+      ],
+      [
+       0.3161,
+       0.4604
+      ],
+      [
+       0.2928,
+       0.3357
+      ],
+      [
+       0.4994,
+       0.3127
+      ],
+      [
+       0.5658,
+       0.4096
+      ],
+      [
+       0.6457,
+       0.4238
+      ]
+     ]
+    },
+    "closed_0": {
+     "Bool": true
+    },
+    "fill_0": {
+     "Bool": true
+    },
+    "width_0": {
+     "Float": 0.05
+    },
+    "height_0": {
+     "Float": 0.92
+    },
+    "falloff_0": {
+     "Float": 0.13
+    },
+    "type_1": {
+     "String": "spline"
+    },
+    "points_1": {
+     "Spline": [
+      [
+       0.7635,
+       0.4988
+      ],
+      [
+       0.7537,
+       0.6187
+      ],
+      [
+       0.6717,
+       0.6884
+      ],
+      [
+       0.6206,
+       0.6611
+      ],
+      [
+       0.4572,
+       0.6398
+      ],
+      [
+       0.4634,
+       0.5497
+      ],
+      [
+       0.4469,
+       0.5095
+      ],
+      [
+       0.4538,
+       0.4194
+      ],
+      [
+       0.5109,
+       0.417
+      ],
+      [
+       0.6105,
+       0.3312
+      ],
+      [
+       0.6832,
+       0.4516
+      ]
+     ]
+    },
+    "closed_1": {
+     "Bool": true
+    },
+    "fill_1": {
+     "Bool": true
+    },
+    "width_1": {
+     "Float": 0.05
+    },
+    "height_1": {
+     "Float": 0.85
+    },
+    "falloff_1": {
+     "Float": 0.13
+    }
+   }
+  },
+  {
+   "key": "place",
+   "type": "Transform",
+   "label": "Placement",
+   "params": {
+    "translate_x": {
+     "Float": 0.0
+    },
+    "translate_y": {
+     "Float": 0.0
+    },
+    "scale": {
+     "Float": 1.0
+    },
+    "angle": {
+     "Float": 0.0
+    }
+   }
+  },
+  {
+   "key": "lift",
+   "type": "Constant",
+   "label": "Height",
+   "params": {
+    "value": {
+     "Float": 0.5
+    }
+   }
+  },
+  {
+   "key": "terrain",
+   "type": "Multiply",
+   "label": "Scale height",
+   "params": {}
+  },
+  {
+   "key": "mask",
+   "type": "MaskThreshold",
+   "label": "Footprint",
+   "params": {
+    "threshold": {
+     "Float": 0.04
+    },
+    "smoothness": {
+     "Float": 0.08
+    }
+   }
+  }
+ ],
+ "connections": [
+  {
+   "from": "shape.output",
+   "to": "place.input"
+  },
+  {
+   "from": "place.output",
+   "to": "terrain.a"
+  },
+  {
+   "from": "lift.output",
+   "to": "terrain.b"
+  },
+  {
+   "from": "place.output",
+   "to": "mask.input"
+  }
+ ],
+ "subgraph": {
+  "outputs": [
+   {
+    "name": "terrain",
+    "label": "Terrain",
+    "kind": "Heightmap",
+    "binding": "terrain:output"
+   },
+   {
+    "name": "mask",
+    "label": "Mask",
+    "kind": "Mask",
+    "binding": "mask:output"
+   }
+  ]
+ },
+ "macro_params": [
+  {
+   "name": "pos_x",
+   "label": "Position X",
+   "kind": "Float",
+   "binding": "place:translate_x",
+   "min": -0.5,
+   "max": 0.5
+  },
+  {
+   "name": "pos_y",
+   "label": "Position Y",
+   "kind": "Float",
+   "binding": "place:translate_y",
+   "min": -0.5,
+   "max": 0.5
+  },
+  {
+   "name": "size",
+   "label": "Size",
+   "kind": "Float",
+   "binding": "place:scale",
+   "min": 0.3,
+   "max": 2.5
+  },
+  {
+   "name": "rotation",
+   "label": "Rotation",
+   "kind": "Float",
+   "binding": "place:angle",
+   "min": 0.0,
+   "max": 360.0
+  },
+  {
+   "name": "height",
+   "label": "Height",
+   "kind": "Float",
+   "binding": "lift:value",
+   "min": 0.1,
+   "max": 1.0
+  }
+ ]
+}

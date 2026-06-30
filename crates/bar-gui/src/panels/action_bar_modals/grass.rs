@@ -11,7 +11,9 @@
 use eframe::egui;
 
 use crate::app::BarEditorApp;
-use crate::panels::action_bar_modals::shared::{modal_frame, render_specs, FieldFindings};
+use crate::panels::action_bar_modals::shared::{
+    modal_frame, render_specs, settings_toolbar, FieldFindings,
+};
 use crate::panels::field_editor::heading_with_info;
 use crate::panels::file_picker::FilePickerField;
 use crate::t;
@@ -37,6 +39,7 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         "grass_editor_modal",
         |ui| {
             let findings = FieldFindings::from(app.validation.findings());
+            let (query, advanced) = settings_toolbar(ui, "grass");
             ui.add_space(12.0);
             heading_with_info(
                 ui,
@@ -122,7 +125,14 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
             }
 
             ui.add_space(12.0);
-            render_specs(ui, app, bar_project::recipe_fields::GRASS_SPECS, &findings);
+            render_specs(
+                ui,
+                app,
+                bar_project::recipe_fields::GRASS_SPECS,
+                &findings,
+                &query,
+                advanced,
+            );
         },
     );
 

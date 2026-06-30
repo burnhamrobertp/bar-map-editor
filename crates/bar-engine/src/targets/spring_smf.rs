@@ -278,12 +278,65 @@ impl ExportCodec for SpringSmfCodec {
         written.files.push(format!("maps/{}.smt", map_name));
         tracing::debug!("Wrote SMT: {}", smt_path.display());
 
+        // detailNormalTex is the full-map normal sampled 1:1 across the terrain
+        // (not a tiling detail). If the map didn't supply one, bake it from the
+        // heightmap at its native resolution -- the macro normals can't be finer
+        // than the heightmap -- so the SSMF shader gets proper high-res surface
+        // normals instead of just the coarse runtime vertex normals.
+        let baked_plan;
+        let plan = if plan.settings.resources.detail_normal_tex.is_empty() {
+            match layers.heightmap {
+                Some(ref heightmap) => {
+                    let world_w = sq_x as f32 * 8.0;
+                    let world_l = sq_y as f32 * 8.0;
+                    let nm = bar_data::bake_terrain_normal(heightmap, world_w, world_l);
+                    let filename = format!("{}_detailnormal.png", map_name);
+                    match nm.save_png(&maps_dir.join(&filename)) {
+                        Ok(()) => {
+                            written.files.push(format!("maps/{}", filename));
+                            let mut p = plan.clone();
+                            p.settings.resources.detail_normal_tex = filename;
+                            baked_plan = p;
+                            &baked_plan
+                        }
+                        Err(e) => {
+                            tracing::warn!(error = %e, "detailNormalTex bake: write failed");
+                            plan
+                        }
+                    }
+                }
+                None => plan,
+            }
+        } else {
+            plan
+        };
+
         // Write metadata (mapinfo.lua)
         let mapinfo = self.generate_mapinfo(map_name, sq_x, sq_y, plan);
         let mapinfo_path = output_dir.join("mapinfo.lua");
         fs::write(&mapinfo_path, &mapinfo)?;
         written.files.push("mapinfo.lua".to_string());
         tracing::debug!("Wrote mapinfo: {}", mapinfo_path.display());
+
+        // Lava is signalled to BAR by shipping `mapconfig/lava.lua` -- the
+        // self-contained, reliable trigger (vs water.damage, which doesn't make
+        // a map lava, or BAR's game-side catalog, which we can't add to). The
+        // gadget reads level/damage from it; water.damage above is the fallback.
+        if matches!(
+            plan.settings.fluid_mode,
+            Some(bar_project::recipe::FluidMode::Lava)
+        ) {
+            let level = plan.settings.lava.level.unwrap_or(0.0);
+            let damage = plan.settings.lava.damage.unwrap_or(50.0);
+            let cfg_dir = output_dir.join("mapconfig");
+            if fs::create_dir_all(&cfg_dir).is_ok()
+                && fs::write(cfg_dir.join("lava.lua"), generate_lava_conf(level, damage)).is_ok()
+            {
+                written.files.push("mapconfig/lava.lua".to_string());
+            } else {
+                tracing::warn!("failed to write mapconfig/lava.lua");
+            }
+        }
 
         // The engine reads neither a separate normals.png (normals
         // are derived from the heightmap at runtime) nor a debug
@@ -540,6 +593,22 @@ impl SpringSmfCodec {
         // unset sentinel for these path fields (matches the engine's
         // "absent ≡ no texture" convention), so we don't emit them.
         let res = &settings.resources;
+        // `splatDetailTex` is a presence flag, not a sampled texture: the SSMF
+        // shader enables the detail-normal splat path only when it is set, but
+        // never reads the file. So if the map declares splat detail normals but
+        // left the flag empty, emit the community placeholder -- otherwise the
+        // normals silently render nothing in-game.
+        let has_splat_normals = !res.splat_detail_normal_tex_1.is_empty()
+            || !res.splat_detail_normal_tex_2.is_empty()
+            || !res.splat_detail_normal_tex_3.is_empty()
+            || !res.splat_detail_normal_tex_4.is_empty();
+        let splat_detail_flag = if !res.splat_detail_tex.is_empty() {
+            res.splat_detail_tex.clone()
+        } else if has_splat_normals {
+            bar_project::SPLAT_DETAIL_FLAG_PLACEHOLDER.to_string()
+        } else {
+            String::new()
+        };
         let res_block = {
             let mut t = LuaTable::new(8);
             t.opt_str("detailTex", Some(res.detail_tex.as_str()))
@@ -565,7 +634,7 @@ impl SpringSmfCodec {
                 .opt_str("grassShadingTex", Some(res.grass_shading_tex.as_str()))
                 .opt_str("lightEmissionTex", Some(res.light_emission_tex.as_str()))
                 .opt_str("detailNormalTex", Some(res.detail_normal_tex.as_str()))
-                .opt_str("splatDetailTex", Some(res.splat_detail_tex.as_str()));
+                .opt_str("splatDetailTex", Some(splat_detail_flag.as_str()));
             if res.splat_detail_normal_diffuse_alpha {
                 t.opt_bool("splatDetailNormalDiffuseAlpha", Some(true));
             }
@@ -796,19 +865,14 @@ impl SpringSmfCodec {
 
         let wat = &settings.water;
         let lav = &settings.lava;
-        // Water mode forces damage to zero so a stale value doesn't
-        // accidentally trip the engine's water-damage fallback in
-        // `bar-game/modules/lava.lua` (one of its lava triggers).
-        // Lava mode exports the lava-side damage value so the engine
-        // charges the right amount even if the lava gadget fails to
-        // load. `fluid_mode == None` means "user expressed no
-        // preference" -- leave the stored water damage alone so an
-        // empty recipe doesn't drag `water = { damage = 0 }` into
-        // mapinfo.
+        // `water.damage` is the engine's water damage, emitted as-is: damaging
+        // water (acid / caustic / deep) is just water and is NOT what makes a
+        // map lava. Lava is triggered by the `mapconfig/lava.lua` config (see
+        // `write`); in lava mode the lava gadget's own damage still rides on
+        // `water.damage` as the engine-side fallback if the gadget can't load.
         let exported_water_damage = match settings.fluid_mode {
-            Some(bar_project::recipe::FluidMode::Water) => Some(0.0),
             Some(bar_project::recipe::FluidMode::Lava) => lav.damage.or(wat.damage),
-            None => wat.damage,
+            _ => wat.damage,
         };
         let wat_block = {
             let mut t = LuaTable::new(8);
@@ -1190,6 +1254,30 @@ fn mapinfo_top_level_entries(lua: &str) -> Vec<(String, String)> {
     }
 
     entries
+}
+
+/// Build a `mapconfig/lava.lua` config for BAR's lava gadget: a static lava
+/// plane at `level` dealing `damage`, using BAR's built-in lava textures (the
+/// `LuaUI/images/lava` paths ship with the game, so nothing extra is bundled).
+/// A reasonable starting template -- the user can hand-tune tide/colour later.
+fn generate_lava_conf(level: f32, damage: f32) -> String {
+    format!(
+        "-- Generated by bar-editor. Read by BAR's lava gadget; its presence is\n\
+         -- what marks this map as lava (independent of water.damage).\n\
+         local conf = {{\n\
+         \tlevel = {level},\n\
+         \tdamage = {damage},\n\
+         \ttideAmplitude = 0,\n\
+         \ttidePeriod = 60,\n\
+         \tdiffuseEmitTex = \"LuaUI/images/lava/lava7_diffuseemit.dds\",\n\
+         \tnormalHeightTex = \"LuaUI/images/lava/lava7_normalheight.dds\",\n\
+         \tcoastColor = \"vec3(2.2, 0.4, 0.0)\",\n\
+         \tcoastWidth = 36.0,\n\
+         \tfogColor = \"vec3(2.0, 0.31, 0.0)\",\n\
+         \tfogFactor = 0.02,\n\
+         }}\n\
+         return conf\n"
+    )
 }
 
 /// Merge two `mapinfo.lua` strings. `generated` is authoritative for all

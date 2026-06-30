@@ -12,6 +12,7 @@ use eframe::egui;
 
 use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{drive_text_edit_intent, modal_frame};
+use crate::panels::widgets::field_row;
 use crate::t;
 
 pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
@@ -78,19 +79,14 @@ fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
             t!(hint_key)
         };
         let mut buf = getter(app.recipe_meta_mut());
-        let mut resp_taken = None;
-        ui.horizontal(|ui| {
-            ui.label(&label);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let edit = egui::TextEdit::singleline(&mut buf)
-                    .desired_width(220.0)
-                    .hint_text(&hint);
-                let resp = ui.add(edit);
-                crate::panels::widgets::select_all_on_focus(ui, &resp, &buf);
-                resp_taken = Some(resp);
-            });
+        let resp = field_row(ui, &label, None, |ui| {
+            let edit = egui::TextEdit::singleline(&mut buf)
+                .desired_width(320.0)
+                .hint_text(&hint);
+            let r = ui.add(edit);
+            crate::panels::widgets::select_all_on_focus(ui, &r, &buf);
+            r
         });
-        let resp = resp_taken.expect("text field response captured above");
         let changed = resp.changed();
         if changed {
             setter(app.recipe_meta_mut(), buf.clone());
@@ -101,19 +97,15 @@ fn draw_text_fields(ui: &mut egui::Ui, app: &mut BarEditorApp) {
 
 fn draw_description(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut desc = app.recipe_meta_mut().description.clone();
-    let mut desc_resp = None;
-    ui.horizontal(|ui| {
-        ui.label(t!("common.description"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let edit = egui::TextEdit::multiline(&mut desc)
-                .desired_width(220.0)
-                .desired_rows(3);
-            let resp = ui.add(edit);
-            crate::panels::widgets::select_all_on_focus(ui, &resp, &desc);
-            desc_resp = Some(resp);
-        });
+    let desc_label = t!("common.description");
+    let desc_resp = field_row(ui, &desc_label, None, |ui| {
+        let edit = egui::TextEdit::multiline(&mut desc)
+            .desired_width(320.0)
+            .desired_rows(3);
+        let r = ui.add(edit);
+        crate::panels::widgets::select_all_on_focus(ui, &r, &desc);
+        r
     });
-    let desc_resp = desc_resp.expect("description response captured above");
     if desc_resp.changed() {
         app.recipe_meta_mut().description = desc.clone();
     }
@@ -127,18 +119,14 @@ fn draw_description(ui: &mut egui::Ui, app: &mut BarEditorApp) {
 
 fn draw_depend(ui: &mut egui::Ui, app: &mut BarEditorApp) {
     let mut depend_joined = app.recipe_meta_mut().depend.join(", ");
-    let mut depend_resp = None;
-    ui.horizontal(|ui| {
-        let depend_label = t!("editor.modals.identity.field.depend");
-        ui.label(&depend_label);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let edit = egui::TextEdit::singleline(&mut depend_joined)
-                .desired_width(220.0)
-                .hint_text(t!("editor.modals.identity.field.depend_hint"));
-            depend_resp = Some(ui.add(edit));
-        });
+    let depend_label = t!("editor.modals.identity.field.depend");
+    let depend_resp = field_row(ui, &depend_label, None, |ui| {
+        ui.add(
+            egui::TextEdit::singleline(&mut depend_joined)
+                .desired_width(320.0)
+                .hint_text(t!("editor.modals.identity.field.depend_hint")),
+        )
     });
-    let depend_resp = depend_resp.expect("depend response captured above");
     if depend_resp.changed() {
         app.recipe_meta_mut().depend = depend_joined
             .split(',')

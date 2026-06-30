@@ -751,10 +751,7 @@ impl BarEditorApp {
             let (node_min_h, node_min_w) = if is_io {
                 (28.0_f32, 90.0_f32)
             } else {
-                (
-                    (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0),
-                    100.0_f32,
-                )
+                (crate::app::node_port_min_height(n_ports), 100.0_f32)
             };
 
             if is_io {

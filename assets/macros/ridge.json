@@ -1,0 +1,38 @@
+{
+  "name": "ridge",
+  "description": "Raised spine with a textured crest, following a drawn course. Double-click the inner Layout node to redraw the ridge line. Additive: blend onto base with mode add, using the mask.",
+  "nodes": [
+    {
+      "key": "spine", "type": "Layout", "label": "Spine",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "spline" },
+        "points_0": { "Spline": [[0.22, 0.32], [0.42, 0.48], [0.6, 0.5], [0.8, 0.66]] },
+        "closed_0": { "Bool": false }, "fill_0": { "Bool": false },
+        "width_0": { "Float": 0.07 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.6 } }
+    },
+    { "key": "crest", "type": "RidgedNoise", "label": "Crest", "params": { "character": { "String": "ridges" }, "frequency": { "Float": 3.0 }, "octaves": { "UInt": 5 }, "seed": { "UInt": 7 } } },
+    { "key": "shaped", "type": "Blend", "label": "Textured ridge", "params": { "mode": { "String": "multiply" }, "factor": { "Float": 1.0 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.04 }, "smoothness": { "Float": 0.12 } } }
+  ],
+  "connections": [
+    { "from": "spine.output", "to": "shaped.a" },
+    { "from": "crest.output", "to": "shaped.b" },
+    { "from": "shaped.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.3, "max": 2.5 },
+    { "name": "width", "label": "Width", "kind": "Float", "binding": "spine:width_0", "min": 0.02, "max": 0.2 },
+    { "name": "height", "label": "Height", "kind": "Float", "binding": "spine:height_0", "min": 0.3, "max": 1.0 },
+    { "name": "roughness", "label": "Crest roughness", "kind": "Float", "binding": "crest:frequency", "min": 1.0, "max": 6.0 }
+  ]
+}

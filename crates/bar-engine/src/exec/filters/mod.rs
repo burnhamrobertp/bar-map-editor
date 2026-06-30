@@ -10,6 +10,7 @@ pub mod bias_gain;
 pub mod blur;
 pub mod clamp;
 pub mod curve;
+pub mod differential_erosion;
 pub mod displacement;
 pub mod hydraulic_erosion;
 pub mod invert;
@@ -26,6 +27,7 @@ pub mod warp;
 pub fn register(m: &mut HashMap<NodeType, ExecFn>) {
     m.insert(NodeType::HydraulicErosion, hydraulic_erosion::exec);
     m.insert(NodeType::ThermalErosion, thermal_erosion::exec);
+    m.insert(NodeType::DifferentialErosion, differential_erosion::exec);
     m.insert(NodeType::Blur, blur::exec);
     m.insert(NodeType::Sharpen, sharpen::exec);
     m.insert(NodeType::Clamp, clamp::exec);
