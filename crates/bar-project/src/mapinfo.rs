@@ -67,18 +67,14 @@ pub fn apply_mapinfo_overrides(lua: &str, settings: &mut MapSettings) {
     water.absorb = parse_mapinfo_vec3(lua, "absorb");
     water.min_color = parse_mapinfo_vec3(lua, "mincolor");
     water.damage = parse_mapinfo_number(lua, "damage");
-    // BAR's lava gadget triggers on multiple inputs (archive
-    // mapconfig/lava.lua, game-side LavaMaps catalog match, or
-    // `water.damage > 0`). The importer only sees the last of those
-    // from mapinfo alone -- so for now, treat `damage > 0` as the
-    // signal to flip into lava mode. Maps that rely on the
-    // catalog-match path will need the user to flip the toggle in
-    // the modal after import. A future "bundle the LavaMaps catalog"
-    // pass can resolve those automatically.
-    settings.fluid_mode = Some(match water.damage {
-        Some(d) if d > 0.0 => crate::recipe::FluidMode::Lava,
-        _ => crate::recipe::FluidMode::Water,
-    });
+    // Lava is signalled by the map's `mapconfig/lava.lua` config (or BAR's
+    // game-side LavaMaps catalog), NOT by `water.damage`: damaging water is
+    // common on non-lava maps (acid / caustic / deep water -- ~95% of maps
+    // with damage>0 in the corpus are not lava). So default to water here,
+    // preserving any caustic damage; the archive-aware importer flips to lava
+    // when it finds the lava config (see `scan_to_project`). mapinfo alone
+    // cannot distinguish the two.
+    settings.fluid_mode = Some(crate::recipe::FluidMode::Water);
     water.surface_color = parse_mapinfo_vec3(lua, "surfaceColor");
     water.surface_alpha = parse_mapinfo_number(lua, "surfaceAlpha");
     water.diffuse_color = parse_mapinfo_vec3(lua, "diffuseColor");
@@ -899,6 +895,20 @@ pub fn parse_mapinfo_bool(lua: &str, key: &str) -> Option<bool> {
         }
     }
     None
+}
+
+/// Pull the gameplay values (`level`, `damage`) out of a `mapconfig/lava.lua`
+/// conf table into `LavaSettings`. The file's presence is the lava signal
+/// (the caller checks for it); these are the values the editor surfaces and
+/// re-emits. The conf's `damage` is the lava gadget's own value, distinct from
+/// the engine `water.damage` fallback.
+pub fn parse_lava_conf(conf_lua: &str, lava: &mut crate::recipe::LavaSettings) {
+    if let Some(v) = parse_mapinfo_number(conf_lua, "level") {
+        lava.level = Some(v);
+    }
+    if let Some(v) = parse_mapinfo_number(conf_lua, "damage") {
+        lava.damage = Some(v);
+    }
 }
 
 pub fn parse_mapinfo_number(lua: &str, key: &str) -> Option<f32> {

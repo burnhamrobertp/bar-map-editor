@@ -431,6 +431,19 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         crate::mapinfo::apply_mapinfo_overrides(lua, &mut map_settings);
     }
 
+    // Lava is keyed off the map's lava config, not water.damage (damaging
+    // water is common on non-lava maps). If the archive ships
+    // `mapconfig/lava.lua`, this is a lava map; pull its level/damage. Maps
+    // that are lava only via BAR's game-side catalog can't be detected from
+    // the archive and import as (caustic) water -- the user flips the modal.
+    let lava_cfg = scan.work_dir.join("mapconfig").join("lava.lua");
+    if lava_cfg.is_file() {
+        map_settings.fluid_mode = Some(crate::recipe::FluidMode::Lava);
+        if let Ok(conf) = std::fs::read_to_string(&lava_cfg) {
+            crate::mapinfo::parse_lava_conf(&conf, &mut map_settings.lava);
+        }
+    }
+
     // SMF grass-map fallback: if mapinfo didn't specify a custom
     // `grassDistTGA` and the scan materialised the SMF's vegetation
     // header into a `grassmap.png` (see `extract.rs::scan_work_dir`),
