@@ -92,6 +92,7 @@ pub static COMMON_FIELD_IDS: &[&str] = &[
     "water.reflection_distortion",
     "water.ambient_factor",
     "water.perlin_amplitude",
+    "water.damage",
     // lava (fewer lava maps in the corpus -> lower-confidence set)
     "lava.color_correction",
     "lava.damage",
@@ -927,14 +928,36 @@ pub static LIGHTING_SPECS: &[FieldSpec<MapSettings>] = &[
 ];
 
 // ──────────────────────────────────────────────────────────────────
-// Water (water-mode visual fields only; damage lives in LAVA_SPECS
-// because BAR treats `mapinfo.water.damage > 0` as lava and BME
-// only surfaces that field on the lava form. Core fields here; the
-// extra fields like force_rendering / has_water_plane / etc. can
-// be added incrementally.)
+// Water. Includes `water.damage`: damaging water (acid / caustic /
+// deep) is just water -- it does NOT make a map lava (lava is the
+// `mapconfig/lava.lua` config, handled separately). Core fields here;
+// force_rendering / has_water_plane / etc. can be added incrementally.
 // ──────────────────────────────────────────────────────────────────
 
 pub static WATER_SPECS: &[FieldSpec<MapSettings>] = &[
+    FieldSpec {
+        id: "water.damage",
+        label: "Damage / sec",
+        description: Some(
+            "Per-second damage to units in the water. Damaging water (acid, \
+             caustic, deep) is still water -- this does not make the map lava.",
+        ),
+        kind: FieldKind::F32 {
+            hard: (0.0, 100000.0),
+            soft: Some((0.0, 2000.0)),
+            unit: "/s",
+        },
+        default: DefaultValue::F32(0.0),
+        get: |s| FieldValue::F32(s.water.damage),
+        set: |s, v| {
+            if let FieldValue::F32(x) = v {
+                s.water.damage = x;
+            }
+        },
+        category: categories::WATER,
+        group: "Damage",
+        blocks_export: false,
+    },
     FieldSpec {
         id: "water.absorb",
         label: "Absorb",
