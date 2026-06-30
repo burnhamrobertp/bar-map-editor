@@ -380,10 +380,7 @@ impl BarEditorApp {
     }
 
     /// Stage each picked core-layer file as an asset and add the
-    /// matching graph node wired to the Final Composition. Heightmap
-    /// is special-cased: when present, also drops a NormalMap node
-    /// driven off the heightmap (matches the .sd7-import shape so
-    /// the bundler's normal-map input is populated automatically).
+    /// matching graph node wired to the Final Composition.
     fn build_core_input_nodes(
         &mut self,
         fc_id: NodeId,
@@ -408,27 +405,14 @@ impl BarEditorApp {
             next_y += size.y + 24.0;
         };
 
-        // Heightmap -- f32, plus a derived NormalMap node.
+        // Heightmap -- f32. (Terrain normals are derived from the heightmap by
+        // the engine at runtime, so no normal-map node is needed.)
         if let Some(src) = picks.heightmap_path.as_ref() {
             match stage_heightmap(src, assets_dir) {
                 Ok(staged) => {
                     let id = self.add_painted_heightmap_node("Heightmap", &staged);
                     place(self, id, egui::vec2(165.0, 80.0));
                     self.connect_to_fc(id, fc_id, "heightmap");
-
-                    let nm = self.add_normalmap_node();
-                    place(self, nm, egui::vec2(140.0, 60.0));
-                    let _ = self.graph.connect(
-                        bar_graph::PortId {
-                            node_id: id,
-                            port_name: "output".to_string(),
-                        },
-                        bar_graph::PortId {
-                            node_id: nm,
-                            port_name: "input".to_string(),
-                        },
-                    );
-                    self.connect_to_fc(nm, fc_id, "normalmap");
                 }
                 Err(e) => tracing::warn!(error = %e, "assemble_map: stage_heightmap failed"),
             }
@@ -522,11 +506,6 @@ impl BarEditorApp {
             "asset_path".to_string(),
             bar_graph::ParamValue::String(staged.asset_path.to_string_lossy().into_owned()),
         );
-        self.graph.add_node(node)
-    }
-
-    fn add_normalmap_node(&mut self) -> NodeId {
-        let node = bar_graph::Node::new(NodeId(0), NodeType::NormalMap, "Normal Map");
         self.graph.add_node(node)
     }
 
@@ -785,12 +764,20 @@ impl BarEditorApp {
                 .get(&recipe_node.key)
                 .map(|p| egui::pos2(p.x, p.y))
                 .unwrap_or_else(|| egui::pos2(200.0 + (idx as f32 * 180.0), 200.0));
+            // Never render a node shorter than its ports need -- floor both the
+            // saved size and the no-saved-size fallback at the port-driven
+            // minimum (the same one the resize handle clamps to).
+            let min_h = self
+                .graph
+                .get_node(node_id)
+                .map(crate::app::node_min_height)
+                .unwrap_or(60.0);
             let size = project
                 .layout
                 .node_sizes
                 .get(&recipe_node.key)
-                .map(|s| egui::vec2(s.width, s.height))
-                .unwrap_or_else(|| egui::vec2(150.0, 80.0));
+                .map(|s| egui::vec2(s.width, s.height.max(min_h)))
+                .unwrap_or_else(|| egui::vec2(150.0, min_h));
             self.visuals.node_visuals.insert(
                 node_id,
                 NodeVisual {
@@ -1149,8 +1136,8 @@ impl BarEditorApp {
         }
 
         // Auto-fill the rest of the Bundler's inputs so the preset
-        // exports a complete bundle out of the box. NormalMap, SpecularMap,
-        // and GrassMap derive from the macro's terrain/slope outputs.
+        // exports a complete bundle out of the box. SpecularMap and GrassMap
+        // derive from the macro's terrain/slope outputs.
         // Metal and type get Constant(0) -- those are project-specific data
         // the user replaces manually. The user is free to swap any node out.
         let aux_x = bundler_pos.x - 220.0;
@@ -1159,38 +1146,6 @@ impl BarEditorApp {
         let aux_size = egui::vec2(150.0, 80.0);
 
         if let Some((hm_id, hm_port)) = heightmap_src {
-            // NormalMap → Bundler.normalmap
-            let nm = Node::new(NodeId(0), NodeType::NormalMap, "Normal Map");
-            let nm_id = self.graph.add_node(nm);
-            self.visuals.node_visuals.insert(
-                nm_id,
-                NodeVisual {
-                    position: egui::pos2(aux_x, aux_y),
-                    size: aux_size,
-                },
-            );
-            let _ = self.graph.connect(
-                PortId {
-                    node_id: hm_id,
-                    port_name: hm_port.clone(),
-                },
-                PortId {
-                    node_id: nm_id,
-                    port_name: "input".into(),
-                },
-            );
-            let _ = self.graph.connect(
-                PortId {
-                    node_id: nm_id,
-                    port_name: "output".into(),
-                },
-                PortId {
-                    node_id: bundler_id,
-                    port_name: "normalmap".into(),
-                },
-            );
-            aux_y += aux_step;
-
             // SpecularMap → Bundler.specular (+ optional slope input)
             let sm = Node::new(NodeId(0), NodeType::SpecularMap, "Specular Map");
             let sm_id = self.graph.add_node(sm);
@@ -1457,7 +1412,7 @@ mod session_reset_tests {
     fn start_with_macro_resets_transient_state() {
         let mut app = dirtied_app();
         let prior_depth = app.history.undo_depth();
-        app.start_with_macro("Plains");
+        app.start_with_macro("Flat Plain");
         // History from the previous project is gone. The macro drop
         // pushes exactly one new undo entry (so the user can undo
         // their first action), so depth is 1, not the pre-reset value.

@@ -1,0 +1,269 @@
+{
+  "name": "ATG2",
+  "author": "Peter Sarkozy",
+  "description": "Param-faithful bar recreation of WM map 'ATG2'. 46 APRL generators decoded; base/detail use their real Scale/Persistence/Seed/Steepness. Erosion from real ERD2 params. Topology approximated (WM wiring is port-handle indirection, not recovered). Author Peter Sarkozy.",
+  "nodes": [
+    {
+      "key": "g10",
+      "type": "PerlinNoise",
+      "label": "sandy",
+      "params": {
+        "frequency": {
+          "Float": 1.0
+        },
+        "octaves": {
+          "UInt": 8
+        },
+        "lacunarity": {
+          "Float": 2.05132
+        },
+        "persistence": {
+          "Float": 0.5
+        },
+        "seed": {
+          "UInt": 44473
+        },
+        "steepness": {
+          "Float": 0.5
+        },
+        "elevation": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "g32",
+      "type": "PerlinNoise",
+      "label": "andy",
+      "params": {
+        "frequency": {
+          "Float": 1.83402
+        },
+        "octaves": {
+          "UInt": 8
+        },
+        "lacunarity": {
+          "Float": 2.05132
+        },
+        "persistence": {
+          "Float": 0.5
+        },
+        "seed": {
+          "UInt": 16691
+        },
+        "steepness": {
+          "Float": 0.5
+        },
+        "elevation": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "g24",
+      "type": "PerlinNoise",
+      "label": "rass color noise",
+      "params": {
+        "frequency": {
+          "Float": 32.0
+        },
+        "octaves": {
+          "UInt": 8
+        },
+        "lacunarity": {
+          "Float": 2.05132
+        },
+        "persistence": {
+          "Float": 0.5
+        },
+        "seed": {
+          "UInt": 16691
+        },
+        "steepness": {
+          "Float": 0.995
+        },
+        "elevation": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "mix",
+      "type": "Blend",
+      "label": "Base blend (CMB2)",
+      "params": {
+        "mode": {
+          "String": "blend"
+        },
+        "factor": {
+          "Float": 0.5
+        }
+      }
+    },
+    {
+      "key": "addD",
+      "type": "Blend",
+      "label": "Add detail (CMB2)",
+      "params": {
+        "mode": {
+          "String": "add"
+        },
+        "factor": {
+          "Float": 0.25
+        }
+      }
+    },
+    {
+      "key": "erode",
+      "type": "HydraulicErosion",
+      "label": "Erosion (ERD2 real params)",
+      "params": {
+        "iterations": {
+          "UInt": 150000
+        },
+        "erosion_rate": {
+          "Float": 0.09524
+        },
+        "deposition_rate": {
+          "Float": 0.03
+        },
+        "capacity_factor": {
+          "Float": 5.17464
+        },
+        "river_depth": {
+          "Float": 0.06944
+        },
+        "seed": {
+          "UInt": 22630
+        }
+      }
+    },
+    {
+      "key": "clamp",
+      "type": "Clamp",
+      "label": "Clamp (CLMP)",
+      "params": {
+        "mode": {
+          "String": "normalize"
+        },
+        "min": {
+          "Float": 0.0
+        },
+        "max": {
+          "Float": 1.0
+        }
+      }
+    },
+    {
+      "key": "slope",
+      "type": "SlopeMap",
+      "label": "Slope (SSEL src)",
+      "params": {}
+    },
+    {
+      "key": "tex",
+      "type": "AutoTexture",
+      "label": "Auto texture",
+      "params": {
+        "biome": {
+          "String": "temperate"
+        },
+        "slope_blend": {
+          "Float": 1.0
+        }
+      }
+    },
+    {
+      "key": "nrm",
+      "type": "NormalMap",
+      "label": "Normal map",
+      "params": {
+        "strength": {
+          "Float": 1.0
+        }
+      }
+    },
+    {
+      "key": "fc",
+      "type": "FinalComposition",
+      "label": "Output (OUTP)",
+      "params": {}
+    }
+  ],
+  "connections": [
+    {
+      "from": "g10.output",
+      "to": "mix.a"
+    },
+    {
+      "from": "g32.output",
+      "to": "mix.b"
+    },
+    {
+      "from": "mix.output",
+      "to": "addD.a"
+    },
+    {
+      "from": "g24.output",
+      "to": "addD.b"
+    },
+    {
+      "from": "addD.output",
+      "to": "erode.input"
+    },
+    {
+      "from": "erode.output",
+      "to": "clamp.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "slope.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "tex.input"
+    },
+    {
+      "from": "slope.output",
+      "to": "tex.slope"
+    },
+    {
+      "from": "clamp.output",
+      "to": "nrm.input"
+    },
+    {
+      "from": "clamp.output",
+      "to": "fc.heightmap"
+    },
+    {
+      "from": "tex.output",
+      "to": "fc.texture"
+    },
+    {
+      "from": "nrm.output",
+      "to": "fc.normalmap"
+    }
+  ],
+  "output": {
+    "width": 513,
+    "height": 513,
+    "map_settings": {
+      "min_height": -64.0,
+      "max_height": 512.0,
+      "lighting": {
+        "sun_dir": [
+          0.4703,
+          0.6026,
+          0.6448
+        ]
+      },
+      "water": {
+        "base_color": [
+          0.4,
+          0.55,
+          0.75
+        ]
+      }
+    }
+  }
+}

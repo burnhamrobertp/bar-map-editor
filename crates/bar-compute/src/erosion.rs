@@ -39,6 +39,10 @@ pub struct HydraulicErosionParams {
     pub erosion_radius: u32,
     /// Random seed.
     pub seed: u32,
+    /// River-channel incision strength (0 = no-op). Higher values amplify
+    /// erosion in fast-flowing droplets so channels carve deeper. 0.0 exactly
+    /// reproduces the baseline droplet model.
+    pub river_depth: f32,
 }
 
 impl Default for HydraulicErosionParams {
@@ -48,13 +52,14 @@ impl Default for HydraulicErosionParams {
             inertia: 0.05,
             capacity_factor: 4.0,
             min_capacity: 0.01,
-            deposition_rate: 0.3,
-            erosion_rate: 0.3,
+            deposition_rate: 0.01,
+            erosion_rate: 0.01,
             evaporation_rate: 0.01,
             gravity: 4.0,
             max_lifetime: 30,
             erosion_radius: 3,
             seed: 0,
+            river_depth: 0.0,
         }
     }
 }
@@ -147,9 +152,15 @@ pub struct HydraulicErosionMaps {
 
 /// Simulate hydraulic erosion on a heightmap (CPU implementation).
 /// Returns the eroded heightmap plus flow, wear, and deposit secondary maps.
+///
+/// `hardness` is an optional per-cell erosion-resistance map (0 = soft, erodes
+/// fully; 1 = hard, does not erode). `None` behaves as hardness 0 everywhere,
+/// reproducing the baseline droplet model exactly. The map is dimension-checked
+/// against the heightmap; a mismatch is treated as no hardness map.
 pub fn hydraulic_erosion(
     heightmap: &Heightmap,
     params: &HydraulicErosionParams,
+    hardness: Option<&Heightmap>,
 ) -> Result<HydraulicErosionMaps, ErosionError> {
     let w = heightmap.width();
     let h = heightmap.height();
@@ -159,10 +170,37 @@ pub fn hydraulic_erosion(
     let mut wear_accum = vec![0.0f32; n];
     let mut deposit_accum = vec![0.0f32; n];
 
+    let hardness_data = hardness
+        .filter(|hm| hm.width() == w && hm.height() == h)
+        .map(|hm| hm.data());
+
     let get = |data: &[f32], x: i32, y: i32| -> f32 {
         let cx = x.clamp(0, w as i32 - 1) as usize;
         let cy = y.clamp(0, h as i32 - 1) as usize;
         data[cy * w as usize + cx]
+    };
+
+    // Bilinear hardness sample at a fractional droplet position; mirrors the
+    // height sampling so resistance lines up with the terrain it gates.
+    let sample_hardness = |x: f32, y: f32| -> f32 {
+        let Some(hd) = hardness_data else {
+            return 0.0;
+        };
+
+        let ix = x.floor() as i32;
+        let iy = y.floor() as i32;
+        let fx = x - ix as f32;
+        let fy = y - iy as f32;
+        let s00 = get(hd, ix, iy);
+        let s10 = get(hd, ix + 1, iy);
+        let s01 = get(hd, ix, iy + 1);
+        let s11 = get(hd, ix + 1, iy + 1);
+
+        (s00 * (1.0 - fx) * (1.0 - fy)
+            + s10 * fx * (1.0 - fy)
+            + s01 * (1.0 - fx) * fy
+            + s11 * fx * fy)
+            .clamp(0.0, 1.0)
     };
 
     // Precompute erosion brush weights
@@ -287,8 +325,14 @@ pub fn hydraulic_erosion(
                     deposit_accum[idx] += deposit_amount;
                 }
             } else {
-                // Erode
-                let erode_amount = ((capacity - sediment) * params.erosion_rate).min(-height_diff);
+                // Erode. River incision amplifies erosion in fast, well-watered
+                // droplets (channels carve deeper); hardness gates it per-cell.
+                // river_depth == 0 and hardness == 0 leave erode_amount untouched.
+                let mut erode_amount =
+                    ((capacity - sediment) * params.erosion_rate).min(-height_diff);
+                let river_gain = 1.0 + params.river_depth * speed * water;
+                let resistance = 1.0 - sample_hardness(pos_x, pos_y);
+                erode_amount = (erode_amount * river_gain * resistance).min(-height_diff);
 
                 for &(dx, dy, weight) in &brush_offsets {
                     let ex = ix + dx;
@@ -345,6 +389,143 @@ pub fn hydraulic_erosion(
         wear: wear_hm,
         deposit: deposit_hm,
     })
+}
+
+/// Differential erosion: soft rock is worn down while hard strata and steep
+/// (slope-protected) faces stand proud, forming mesas, benches and stratified
+/// walls -- the geological process that shapes buttes. Distinct from hydraulic
+/// (droplet) erosion, which follows water flow and carves valleys.
+///
+/// Model: `layers` hard/soft strata band the height range (squared sine). Each
+/// iteration, every cell's erodibility = `(1 - contrast * band)` (so `contrast`
+/// 0 = uniform wear, 1 = only soft rock erodes) times a slope factor that
+/// `slope_hardening` uses to spare steep faces (exposed bedrock). The cell is
+/// lowered by that erodibility. Crucially the strata are anchored to the
+/// ORIGINAL height range, so as a soft column wears down it eventually reaches a
+/// harder band and stops -- that band becomes a flat shelf/cap. `strength`
+/// (0..1) scales total wear; `iterations` sets how far the downcutting runs.
+pub fn differential_erosion(
+    heightmap: &Heightmap,
+    strength: f32,
+    layers: u32,
+    contrast: f32,
+    slope_hardening: f32,
+    iterations: u32,
+) -> Heightmap {
+    let strength = strength.clamp(0.0, 1.0);
+    if strength <= 0.0 {
+        return heightmap.clone();
+    }
+    let contrast = contrast.clamp(0.0, 1.0);
+    let slope_hardening = slope_hardening.clamp(0.0, 1.0);
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let (ww, hh) = (w as i32, h as i32);
+    // Strata anchored to the original range so downcutting halts at hard bands.
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for &v in heightmap.data() {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    let span = (hi - lo).max(1e-4);
+    let bands = layers.max(1) as f32;
+    let iters = iterations.max(1);
+    // Per-iteration wear ceiling (fraction of span) for a fully-soft, flat cell.
+    let step = strength * 0.03;
+    let dim = w.max(h) as f32;
+    let mut cur = heightmap.data().to_vec();
+    let mut next = cur.clone();
+    let at = |buf: &[f32], x: i32, y: i32| -> f32 {
+        buf[(y.clamp(0, hh - 1) as usize) * w as usize + x.clamp(0, ww - 1) as usize]
+    };
+    for _ in 0..iters {
+        for y in 0..hh {
+            for x in 0..ww {
+                let v = at(&cur, x, y);
+                let nh = ((v - lo) / span).clamp(0.0, 1.0);
+                let s = 0.5 + 0.5 * (nh * bands * std::f32::consts::TAU).sin();
+                let band = s * s;
+                // slope in map-fraction units (resolution independent)
+                let gx = (at(&cur, x + 1, y) - at(&cur, x - 1, y)) / (2.0 * span);
+                let gy = (at(&cur, x, y + 1) - at(&cur, x, y - 1)) / (2.0 * span);
+                let slope_norm = ((gx * gx + gy * gy).sqrt() * dim * 0.1).min(1.0);
+                let erodibility = (1.0 - contrast * band) * (1.0 - slope_norm * slope_hardening);
+                let lowered = v - step * erodibility.max(0.0) * span;
+                next[(y * ww + x) as usize] = lowered.max(lo);
+            }
+        }
+        std::mem::swap(&mut cur, &mut next);
+    }
+    Heightmap::frbar_data(w, h, cur).unwrap_or_else(|_| heightmap.clone())
+}
+
+/// Differential strata terracing: the visible half of the geology model.
+///
+/// Hardness-gated hydraulic erosion alone produces only a faint, diffuse
+/// effect (droplets follow flow, not strata). This carves the actual
+/// differential landforms -- benches, mesas, stratified walls -- directly:
+/// height is quantised into `layers` shelves, each with a flat tread and a
+/// steep riser whose sharpness is set by `contrast` (0 = no terracing, off).
+/// `strength` blends the terraced surface over the original. `contrast` sets how
+/// pronounced the shelves are -- 0 = none (no terracing, the surface is left
+/// alone), 1 = full flat-tread/steep-riser steps -- and is intentionally gentle
+/// across the low/mid range so subtle benches are easy to dial in. The shelf
+/// shape is C1-continuous (smootherstep), so low values produce soft undulation
+/// rather than the hard contour-line creases a power curve leaves at every band
+/// edge. `slope_hardening` suppresses terracing on already-steep faces so
+/// existing cliffs/butte walls stay walls instead of being cut into stairs.
+/// Resolution independent: band quantisation keys off normalized height, and the
+/// slope term is normalized to map-fraction units (not raw per-cell deltas).
+pub fn apply_strata_terracing(
+    heightmap: &Heightmap,
+    strength: f32,
+    layers: u32,
+    contrast: f32,
+    slope_hardening: f32,
+) -> Heightmap {
+    let strength = strength.clamp(0.0, 1.0);
+    let contrast = contrast.clamp(0.0, 1.0);
+    let w = heightmap.width();
+    let h = heightmap.height();
+    let data = heightmap.data();
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for &v in data {
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    let span = (hi - lo).max(1e-4);
+    let bands = layers.max(1) as f32;
+    let (ww, hh) = (w as i32, h as i32);
+    // Slope is measured in normalized-height per map-fraction so a given physical
+    // steepness reads the same at any resolution: a raw per-cell delta shrinks as
+    // the grid gets finer, which is why slope-hardening did nothing at full res.
+    let dim = w.max(h) as f32;
+    let at = |x: i32, y: i32| -> f32 {
+        data[(y.clamp(0, hh - 1) as usize) * w as usize + x.clamp(0, ww - 1) as usize]
+    };
+    let mut out = vec![0.0f32; (w * h) as usize];
+    for y in 0..hh {
+        for x in 0..ww {
+            let v = at(x, y);
+            let nh = ((v - lo) / span).clamp(0.0, 1.0);
+            let t = nh * bands;
+            let k = t.floor();
+            let f = (t - k).clamp(0.0, 1.0);
+            // smootherstep shelf (zero slope at both band edges -> no crease),
+            // blended toward linear by contrast so low contrast is genuinely soft
+            let s = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+            let shaped = f + (s - f) * contrast;
+            let terr_nh = (k + shaped) / bands;
+            // preserve existing steep faces: per-cell gradient -> map-fraction units
+            let gx = (at(x + 1, y) - at(x - 1, y)) / (2.0 * span);
+            let gy = (at(x, y + 1) - at(x, y - 1)) / (2.0 * span);
+            let slope_norm = ((gx * gx + gy * gy).sqrt() * dim * 0.1).min(1.0);
+            let amt = strength * (1.0 - slope_norm * slope_hardening);
+            let blended = nh + (terr_nh - nh) * amt;
+            out[(y * ww + x) as usize] = blended * span + lo;
+        }
+    }
+    Heightmap::frbar_data(w, h, out).unwrap_or_else(|_| heightmap.clone())
 }
 
 /// Simulate thermal erosion (weathering) on a heightmap (CPU implementation).
@@ -454,7 +635,7 @@ mod tests {
             ..Default::default()
         };
 
-        let result = hydraulic_erosion(&input, &params).unwrap();
+        let result = hydraulic_erosion(&input, &params, None).unwrap();
         let hm = &result.heightmap;
         assert_eq!(hm.width(), 64);
         assert_eq!(hm.height(), 64);
@@ -513,7 +694,7 @@ mod tests {
     fn test_erosion_output_in_range() {
         let input = make_test_heightmap();
 
-        let h_result = hydraulic_erosion(&input, &HydraulicErosionParams::default()).unwrap();
+        let h_result = hydraulic_erosion(&input, &HydraulicErosionParams::default(), None).unwrap();
         for &v in h_result.heightmap.data() {
             assert!((0.0..=1.0).contains(&v), "Value out of range: {v}");
         }
@@ -546,5 +727,98 @@ mod tests {
             }
         }
         max_slope
+    }
+
+    fn uniform_hardness(input: &Heightmap, value: f32) -> Heightmap {
+        let n = (input.width() * input.height()) as usize;
+        Heightmap::frbar_data(input.width(), input.height(), vec![value; n]).unwrap()
+    }
+
+    /// Total material removed: sum of positive (input - eroded) deltas.
+    fn total_eroded(input: &Heightmap, eroded: &Heightmap) -> f32 {
+        input
+            .data()
+            .iter()
+            .zip(eroded.data())
+            .map(|(a, b)| (a - b).max(0.0))
+            .sum()
+    }
+
+    fn erosion_params() -> HydraulicErosionParams {
+        HydraulicErosionParams {
+            num_droplets: 5000,
+            max_lifetime: 20,
+            erosion_radius: 2,
+            seed: 42,
+            ..Default::default()
+        }
+    }
+
+    /// river_depth == 0 with no hardness map must reproduce the baseline droplet
+    /// model bit-for-bit -- this is the regression guard for the new params.
+    #[test]
+    fn test_default_params_reproduce_baseline() {
+        let input = make_test_heightmap();
+        let params = erosion_params();
+
+        let baseline = hydraulic_erosion(&input, &params, None).unwrap();
+
+        // An all-zero hardness map must be identical to no map.
+        let zero_hardness = uniform_hardness(&input, 0.0);
+        let with_zero = hydraulic_erosion(&input, &params, Some(&zero_hardness)).unwrap();
+
+        assert_eq!(
+            baseline.heightmap.data(),
+            with_zero.heightmap.data(),
+            "zero hardness map must match no map exactly"
+        );
+        assert_eq!(baseline.wear.data(), with_zero.wear.data());
+        assert_eq!(baseline.flow.data(), with_zero.flow.data());
+        assert_eq!(baseline.deposit.data(), with_zero.deposit.data());
+    }
+
+    /// An all-hard map (1.0) blocks erosion; total material removed must be far
+    /// below an all-soft map (0.0).
+    #[test]
+    fn test_hardness_reduces_erosion() {
+        let input = make_test_heightmap();
+        let params = erosion_params();
+
+        let soft = uniform_hardness(&input, 0.0);
+        let hard = uniform_hardness(&input, 1.0);
+
+        let soft_res = hydraulic_erosion(&input, &params, Some(&soft)).unwrap();
+        let hard_res = hydraulic_erosion(&input, &params, Some(&hard)).unwrap();
+
+        let soft_eroded = total_eroded(&input, &soft_res.heightmap);
+        let hard_eroded = total_eroded(&input, &hard_res.heightmap);
+
+        assert!(
+            hard_eroded < soft_eroded,
+            "hard rock should erode less: hard={hard_eroded} soft={soft_eroded}"
+        );
+    }
+
+    /// Positive river_depth amplifies channel incision -- total erosion must
+    /// exceed the river_depth == 0 baseline on the same seed.
+    #[test]
+    fn test_river_depth_increases_erosion() {
+        let input = make_test_heightmap();
+        let base_params = erosion_params();
+        let deep_params = HydraulicErosionParams {
+            river_depth: 1.0,
+            ..erosion_params()
+        };
+
+        let base = hydraulic_erosion(&input, &base_params, None).unwrap();
+        let deep = hydraulic_erosion(&input, &deep_params, None).unwrap();
+
+        let base_eroded = total_eroded(&input, &base.heightmap);
+        let deep_eroded = total_eroded(&input, &deep.heightmap);
+
+        assert!(
+            deep_eroded > base_eroded,
+            "river_depth should deepen channels: deep={deep_eroded} base={base_eroded}"
+        );
     }
 }

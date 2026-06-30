@@ -508,6 +508,10 @@ impl BarEditorApp {
         self.push_undo("Add node");
         let numbered = self.next_label_for(label);
         let node = Node::new(NodeId(0), node_type.clone(), numbered);
+        // Floor the default height at the same port-driven minimum the resize
+        // handle clamps to, so a freshly-dropped node is never shorter than its
+        // ports need (which previously clipped multi-port nodes at 80 px).
+        let min_h = crate::app::node_min_height(&node);
         let id = self.graph.add_node(node);
         // A freshly-dropped node is "what the user wants to look at"
         // — open the contextual properties panel immediately
@@ -517,12 +521,12 @@ impl BarEditorApp {
         self.props.active = Some(PropsTarget::Node(id));
         self.dialog.pending_props_open = None;
         let default_size = match node_type {
-            NodeType::PassThrough => egui::vec2(180.0, 200.0),
-            NodeType::FinalComposition => egui::vec2(210.0, 240.0),
+            NodeType::PassThrough => egui::vec2(180.0, 200.0_f32.max(min_h)),
+            NodeType::FinalComposition => egui::vec2(210.0, 240.0_f32.max(min_h)),
             NodeType::SubgraphInput | NodeType::SubgraphOutput => IO_NODE_SIZE,
-            // Start at the correct height for its default port count (2 inputs).
-            NodeType::TextureWeightmap => egui::vec2(150.0, PORT_Y_BASE + 2.0 * PORT_Y_STEP + 10.0),
-            _ => egui::vec2(150.0, 80.0),
+            // Every other node (incl. TextureWeightmap, which starts with 2
+            // ports) sizes to fit its ports.
+            _ => egui::vec2(150.0, min_h),
         };
         self.visuals.node_visuals.insert(
             id,

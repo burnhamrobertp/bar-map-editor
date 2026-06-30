@@ -62,8 +62,8 @@ pub struct PendingRawFile {
 ///
 /// Creates PaintedHeightmap nodes for the heightmap, metalmap, and typemap,
 /// a PaintedTexture (or ImportedTexture) for the assembled SMT texture, a
-/// NormalMap, a PassThrough for ancillary files, and a FinalComposition
-/// terminal that all procedural sources wire into.
+/// PassThrough for ancillary files, and a FinalComposition terminal that all
+/// procedural sources wire into.
 ///
 /// The returned `PendingAsset` list must be written to `<proj_dir>/assets/<id>.bin`
 /// before the graph can be evaluated; until then the executor will produce
@@ -72,7 +72,6 @@ pub struct PendingRawFile {
 pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<PendingRawFile>) {
     let source_x = 80.0_f32;
     let final_comp_x = 540.0_f32;
-    let nm_x = (source_x + 165.0 + final_comp_x) / 2.0;
 
     let mut nodes: Vec<RecipeNode> = Vec::new();
     let mut connections: Vec<RecipeConnection> = Vec::new();
@@ -354,24 +353,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
         );
     }
 
-    // NormalMap (derives from the heightmap)
-    if has_heightmap {
-        nodes.push(RecipeNode {
-            key: "nm".to_string(),
-            node_type: NodeType::NormalMap,
-            label: "Normal Map".to_string(),
-            params: HashMap::new(),
-        });
-        node_positions.insert("nm".to_string(), Position { x: nm_x, y: 478.0 });
-        node_sizes.insert(
-            "nm".to_string(),
-            NodeSize {
-                width: 140.0,
-                height: 60.0,
-            },
-        );
-    }
-
     // FinalComposition (always; mandatory anchor for paint layers).
     // Procedural outputs wire INTO this node, which forwards each
     // input to its matching output through the per-kind layer composite.
@@ -413,14 +394,6 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
             from: "hm.output".to_string(),
             to: "final_composition.heightmap".to_string(),
         });
-        connections.push(RecipeConnection {
-            from: "hm.output".to_string(),
-            to: "nm.input".to_string(),
-        });
-        connections.push(RecipeConnection {
-            from: "nm.output".to_string(),
-            to: "final_composition.normalmap".to_string(),
-        });
     }
     if !scan.metalmap_data.is_empty() {
         connections.push(RecipeConnection {
@@ -456,6 +429,19 @@ pub fn scan_to_project(scan: &WorkDirScan) -> (Project, Vec<PendingAsset>, Vec<P
     };
     if let Some(lua) = scan.mapinfo_lua.as_deref() {
         crate::mapinfo::apply_mapinfo_overrides(lua, &mut map_settings);
+    }
+
+    // Lava is keyed off the map's lava config, not water.damage (damaging
+    // water is common on non-lava maps). If the archive ships
+    // `mapconfig/lava.lua`, this is a lava map; pull its level/damage. Maps
+    // that are lava only via BAR's game-side catalog can't be detected from
+    // the archive and import as (caustic) water -- the user flips the modal.
+    let lava_cfg = scan.work_dir.join("mapconfig").join("lava.lua");
+    if lava_cfg.is_file() {
+        map_settings.fluid_mode = Some(crate::recipe::FluidMode::Lava);
+        if let Ok(conf) = std::fs::read_to_string(&lava_cfg) {
+            crate::mapinfo::parse_lava_conf(&conf, &mut map_settings.lava);
+        }
     }
 
     // SMF grass-map fallback: if mapinfo didn't specify a custom
@@ -607,7 +593,7 @@ mod tests {
         scan.map_dims = Some((512, 512));
         let (p, pending, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
-        for k in ["hm", "nm", "final_composition"] {
+        for k in ["hm", "final_composition"] {
             assert!(keys.contains(&k), "missing: {k}");
         }
         for k in ["metal", "type", "tex", "pass"] {
@@ -635,22 +621,14 @@ mod tests {
         scan.passthrough_files = vec![(PathBuf::from("/tmp/a.lua"), PathBuf::from("a.lua"))];
         let (p, pending, _) = scan_to_project(&scan);
         let keys = node_keys(&p);
-        for k in [
-            "hm",
-            "metal",
-            "type",
-            "tex",
-            "nm",
-            "pass",
-            "final_composition",
-        ] {
+        for k in ["hm", "metal", "type", "tex", "pass", "final_composition"] {
             assert!(keys.contains(&k), "missing: {k}");
         }
         assert_eq!(pending.len(), 4); // hm, metal, type, tex (PaintedTexture fallback -- no smt_abs)
     }
 
     #[test]
-    fn connections_wire_heightmap_through_nm_to_final_composition() {
+    fn connections_wire_heightmap_to_final_composition() {
         let mut scan = empty_scan("wire");
         scan.heightmap_data = vec![0u8; 64];
         scan.heightmap_w = 4;
@@ -668,7 +646,6 @@ mod tests {
             tos.contains(&"final_composition.heightmap"),
             "final_composition.heightmap not in tos"
         );
-        assert!(tos.contains(&"nm.input"), "nm.input not in tos");
     }
 
     #[test]

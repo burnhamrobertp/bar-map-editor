@@ -264,13 +264,13 @@
       "identity": {
         "title": "Identity",
         "field": {
-          "name": "name",
+          "name": "Name",
           "name_hint": "(map name)",
-          "shortname": "shortname",
-          "author": "author",
-          "version": "version",
-          "tip": "tip",
-          "depend": "depend",
+          "shortname": "Short name",
+          "author": "Author",
+          "version": "Version",
+          "tip": "Loading tip",
+          "depend": "Dependencies",
           "depend_hint": "Map Helper v1"
         }
       },

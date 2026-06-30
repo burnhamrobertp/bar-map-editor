@@ -29,6 +29,7 @@ pub mod icons;
 pub mod image_preview;
 pub mod inspector;
 pub mod log;
+pub mod node_field;
 pub mod opt_field;
 pub mod palette;
 pub mod properties;

@@ -219,36 +219,34 @@ impl BarEditorApp {
                     match (p.kind.as_str(), cur) {
                         ("Float", Some(ParamValue::Float(v))) => {
                             let mut val = v;
-                            let changed = if let (Some(lo), Some(hi)) = (p.min, p.max) {
-                                ui.add(crate::panels::widgets::ParamSlider::new(
+                            let committed = if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                                crate::panels::widgets::ParamSlider::new(
                                     &mut val, lo as f32, hi as f32,
-                                ))
-                                .changed()
+                                )
+                                .show(ui)
+                                .commit
                             } else {
                                 ui.add(egui::DragValue::new(&mut val).speed(0.01)).changed()
                             };
-                            if changed {
+                            if committed {
                                 writes.push((nid, param_name.clone(), ParamValue::Float(val)));
                             }
                         }
                         ("UInt", Some(ParamValue::UInt(v))) => {
                             let mut val = v as i64;
-                            let changed = if let (Some(lo), Some(hi)) = (p.min, p.max) {
+                            let committed = if let (Some(lo), Some(hi)) = (p.min, p.max) {
                                 let mut vf = val as f32;
-                                let r = ui
-                                    .add(
-                                        crate::panels::widgets::ParamSlider::new(
-                                            &mut vf, lo as f32, hi as f32,
-                                        )
-                                        .integer(),
-                                    )
-                                    .changed();
+                                let e = crate::panels::widgets::ParamSlider::new(
+                                    &mut vf, lo as f32, hi as f32,
+                                )
+                                .integer()
+                                .show(ui);
                                 val = vf as i64;
-                                r
+                                e.commit
                             } else {
                                 ui.add(egui::DragValue::new(&mut val)).changed()
                             };
-                            if changed {
+                            if committed {
                                 writes.push((
                                     nid,
                                     param_name.clone(),

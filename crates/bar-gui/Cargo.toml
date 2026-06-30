@@ -10,6 +10,7 @@ bar-data = { workspace = true }
 bar-graph = { workspace = true }
 bar-project = { workspace = true }
 bar-render = { workspace = true }
+evalexpr = { workspace = true }
 egui = { workspace = true }
 wgpu = { workspace = true }
 glam = { workspace = true }

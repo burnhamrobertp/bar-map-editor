@@ -8,20 +8,22 @@ pub mod defaults;
 pub mod engine;
 pub mod eval;
 pub mod node;
+pub mod nodes;
 pub mod param_spec;
 pub mod port;
 
 pub use defaults::{
-    biome_defaults, character_defaults, default_params, param_choices, param_float_range,
-    param_is_color, param_side_effects, param_uint_range, BiomeDefaults, CharacterDefaults,
+    biome_defaults, character_defaults, default_params, param_choices, param_description,
+    param_float_range, param_is_color, param_side_effects, param_uint_range, BiomeDefaults,
+    CharacterDefaults,
 };
 pub use engine::GraphEngine;
 pub use eval::{
     evaluate_graph, evaluate_graph_with_progress, get_bundler_node_heightmap,
     get_bundler_node_texture, get_grassmap_output, get_heightmap_output, get_metalmap_output,
     get_node_output_color_named, get_node_output_heightmap, get_node_output_heightmap_named,
-    get_normalmap_output, get_preview_heightmap, get_texture_output, get_typemap_output, EvalError,
-    NodeExecutor, NodeOutputs,
+    get_preview_heightmap, get_texture_output, get_typemap_output, EvalError, NodeExecutor,
+    NodeOutputs,
 };
 pub use node::{Node, NodeId, NodeType, ParamValue};
 pub use param_spec::{param_specs, validate_node_params, ParamError, ParamKind, ParamSpec};

@@ -473,7 +473,7 @@ dependencies = [
 
 [[package]]
 name = "bar-app"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-compute",
@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "bar-cli"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-compute",
@@ -521,7 +521,7 @@ dependencies = [
 
 [[package]]
 name = "bar-compute"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "bytemuck",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "bar-data"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "bytemuck",
  "ddsfile",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "bar-engine"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-compute",
@@ -558,6 +558,7 @@ dependencies = [
  "bar-project",
  "criterion",
  "directories",
+ "evalexpr",
  "flate2",
  "image",
  "mlua",
@@ -575,7 +576,7 @@ dependencies = [
 
 [[package]]
 name = "bar-graph"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "serde",
@@ -586,7 +587,7 @@ dependencies = [
 
 [[package]]
 name = "bar-gui"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "bar-graph",
@@ -595,6 +596,7 @@ dependencies = [
  "directories",
  "eframe",
  "egui",
+ "evalexpr",
  "glam",
  "image",
  "include_dir",
@@ -608,7 +610,7 @@ dependencies = [
 
 [[package]]
 name = "bar-project"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "bar-graph",
@@ -620,7 +622,7 @@ dependencies = [
 
 [[package]]
 name = "bar-render"
-version = "0.2.4"
+version = "0.3.0"
 dependencies = [
  "bar-data",
  "bar-project",
@@ -1587,6 +1589,12 @@ name = "error-code"
 version = "3.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+
+[[package]]
+name = "evalexpr"
+version = "13.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "25929004897f2bbab309121a60400d36992f6d911d09baa6c172f6cc55706601"
 
 [[package]]
 name = "event-listener"

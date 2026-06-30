@@ -11,7 +11,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use bar_data::write_smt;
 use bar_graph::{
-    evaluate_graph_with_progress, get_preview_heightmap, get_texture_output, GraphEngine,
+    evaluate_graph_with_progress, get_heightmap_output, get_texture_output, GraphEngine,
     NodeExecutor, NodeOutputs, NodeType, ParamValue,
 };
 use bar_project::{AssetStat, Fingerprint, PackageDir};
@@ -152,7 +152,7 @@ pub fn compile_from_outputs(
         .with_context(|| format!("Cannot write {}", idx_path.display()))?;
 
     on_progress("[97%] Writing heightmap");
-    if let Some(hm) = get_preview_heightmap(graph, outputs) {
+    if let Some(hm) = get_heightmap_output(graph, outputs) {
         tracing::debug!(
             w = hm.width(),
             h = hm.height(),
@@ -161,7 +161,9 @@ pub fn compile_from_outputs(
         let hm_path = pkg.compiled_heightmap_path();
         write_heightmap_bin(&hm_path, &hm)?;
     } else {
-        tracing::debug!("Compile: no preview heightmap available -- heightmap.bin not written");
+        tracing::debug!(
+            "Compile: no heightmap wired to FinalComposition -- heightmap.bin not written"
+        );
     }
 
     on_progress("[99%] Writing fingerprint");

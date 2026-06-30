@@ -1,0 +1,24 @@
+use crate::node::{NodeType, ParamValue};
+use crate::nodes::def::{NodeCaps, NodeCategory, NodeDef, ParamDef, ParamUi};
+
+static PARAMS: &[ParamDef] = &[ParamDef {
+    key: "radius",
+    default: || ParamValue::Float(1.0),
+    ui: ParamUi::FloatRange {
+        min: 0.1,
+        max: 20.0,
+    },
+}];
+
+pub static DEF: NodeDef = NodeDef::basic(
+    NodeType::Blur,
+    "Blur",
+    NodeCategory::Filter,
+    super::shared::INPUT_CONTROL_MASK_IN,
+    super::shared::OUTPUT,
+    PARAMS,
+    NodeCaps {
+        gpu_eligible: true,
+        ..NodeCaps::NONE
+    },
+);

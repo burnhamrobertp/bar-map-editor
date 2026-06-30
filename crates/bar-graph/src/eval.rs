@@ -90,11 +90,17 @@ pub fn evaluate_graph_with_progress(
             }
         }
 
+        // Scalar-parameter graph: any inbound `PortValue::Scalar` whose port
+        // name matches an existing param key overrides that param (coerced to
+        // the param's declared type). The topo sort guarantees the scalar
+        // producer ran first; executors stay oblivious and read params as usual.
+        let effective_params = apply_scalar_bindings(&node.params, &inputs);
+
         // Execute the node. Per-node failures are localised: the
         // failing node produces nothing; everything else proceeds.
         match executor.execute(
             &node.node_type,
-            &node.params,
+            &effective_params,
             &inputs,
             hm_width,
             hm_height,
@@ -133,6 +139,38 @@ pub fn evaluate_graph(
         tex_height,
         &|_| {},
     )
+}
+
+/// Coerce a scalar wire value into the same `ParamValue` variant as the param
+/// it overrides. Float/UInt/Int round-trip the number; any other variant keeps
+/// its existing value (a scalar can't sensibly drive a String/Bool/Vec2/Spline).
+pub fn coerce_scalar(existing: &ParamValue, s: f32) -> ParamValue {
+    match existing {
+        ParamValue::Float(_) => ParamValue::Float(s),
+        ParamValue::UInt(_) => ParamValue::UInt(s.round().max(0.0) as u32),
+        ParamValue::Int(_) => ParamValue::Int(s.round() as i32),
+        other => other.clone(),
+    }
+}
+
+/// Build the param map an executor actually sees: `params` with any inbound
+/// `PortValue::Scalar` overriding the same-named existing param (coerced to
+/// that param's type). Scalar inputs whose name isn't an existing param key are
+/// ignored. Returns a clone of `params` unchanged when no scalar binds.
+fn apply_scalar_bindings(
+    params: &HashMap<String, ParamValue>,
+    inputs: &HashMap<String, PortValue>,
+) -> HashMap<String, ParamValue> {
+    let mut effective = params.clone();
+    for (port_name, value) in inputs {
+        if let PortValue::Scalar(s) = value {
+            if let Some(existing) = effective.get(port_name) {
+                let coerced = coerce_scalar(existing, *s);
+                effective.insert(port_name.clone(), coerced);
+            }
+        }
+    }
+    effective
 }
 
 /// Get the heightmap wired to the Bundler's `heightmap` port.
@@ -192,14 +230,6 @@ pub fn get_texture_output(
     outputs: &NodeOutputs,
 ) -> Option<bar_data::ColorBuffer> {
     get_bundler_color(graph, outputs, "texture")
-}
-
-/// Get the normal map wired to the Bundler's `normalmap` port.
-pub fn get_normalmap_output(
-    graph: &GraphEngine,
-    outputs: &NodeOutputs,
-) -> Option<bar_data::ColorBuffer> {
-    get_bundler_color(graph, outputs, "normalmap")
 }
 
 /// Get the grass map wired to the Bundler's `grassmap` port.
@@ -414,5 +444,140 @@ mod tests {
         let hm = get_heightmap_output(&graph, &results);
         assert!(hm.is_some());
         assert_eq!(hm.unwrap().width(), 64);
+    }
+
+    // ── Scalar-parameter-graph contract ─────────────────────────────────────
+
+    #[test]
+    fn coerce_scalar_preserves_param_type() {
+        assert!(matches!(
+            coerce_scalar(&ParamValue::Float(0.0), 7.5),
+            ParamValue::Float(f) if f == 7.5
+        ));
+        // UInt rounds and clamps at 0.
+        assert!(matches!(
+            coerce_scalar(&ParamValue::UInt(1), 3.6),
+            ParamValue::UInt(4)
+        ));
+        assert!(matches!(
+            coerce_scalar(&ParamValue::UInt(1), -2.0),
+            ParamValue::UInt(0)
+        ));
+        // Int rounds (to nearest), keeps sign.
+        assert!(matches!(
+            coerce_scalar(&ParamValue::Int(0), -2.4),
+            ParamValue::Int(-2)
+        ));
+        // Non-numeric params are left as-is.
+        assert!(matches!(
+            coerce_scalar(&ParamValue::Bool(true), 1.0),
+            ParamValue::Bool(true)
+        ));
+    }
+
+    #[test]
+    fn apply_scalar_bindings_overrides_matching_param() {
+        let mut params = HashMap::new();
+        params.insert("frequency".to_string(), ParamValue::Float(4.0));
+        params.insert("octaves".to_string(), ParamValue::UInt(6));
+
+        let mut inputs = HashMap::new();
+        inputs.insert("frequency".to_string(), PortValue::Scalar(7.0));
+        // Wire on a non-existent param key: ignored.
+        inputs.insert("not_a_param".to_string(), PortValue::Scalar(99.0));
+        // A non-scalar input on a param-named port: ignored (wrong value kind).
+        inputs.insert(
+            "octaves".to_string(),
+            PortValue::Heightmap(Heightmap::new(2, 2).unwrap()),
+        );
+
+        let eff = apply_scalar_bindings(&params, &inputs);
+        assert!(matches!(eff.get("frequency"), Some(ParamValue::Float(f)) if *f == 7.0));
+        // octaves unchanged (heightmap input is not a scalar).
+        assert!(matches!(eff.get("octaves"), Some(ParamValue::UInt(6))));
+        assert!(!eff.contains_key("not_a_param"));
+    }
+
+    /// Executor that echoes the (effective) `frequency` param as a Scalar so a
+    /// test can observe whether a scalar wire overrode the literal at eval time.
+    struct FreqProbe;
+    impl NodeExecutor for FreqProbe {
+        fn execute(
+            &self,
+            node_type: &NodeType,
+            params: &HashMap<String, ParamValue>,
+            _inputs: &HashMap<String, PortValue>,
+            _hw: u32,
+            _hh: u32,
+            _tw: u32,
+            _th: u32,
+        ) -> Result<HashMap<String, PortValue>, EvalError> {
+            let mut out = HashMap::new();
+            match node_type {
+                NodeType::ScalarValue => {
+                    let v = match params.get("value") {
+                        Some(ParamValue::Float(f)) => *f,
+                        _ => 0.0,
+                    };
+                    out.insert("output".to_string(), PortValue::Scalar(v));
+                }
+                _ => {
+                    let f = match params.get("frequency") {
+                        Some(ParamValue::Float(f)) => *f,
+                        _ => -1.0,
+                    };
+                    out.insert("output".to_string(), PortValue::Scalar(f));
+                }
+            }
+            Ok(out)
+        }
+    }
+
+    #[test]
+    fn scalar_wire_overrides_param_through_eval() {
+        let mut graph = GraphEngine::new();
+        let sv = graph.add_node(Node::new(NodeId(0), NodeType::ScalarValue, "S"));
+        let noise = graph.add_node(Node::new(NodeId(0), NodeType::PerlinNoise, "N"));
+
+        // Set the scalar source to 7.0.
+        graph
+            .get_node_mut(sv)
+            .unwrap()
+            .params
+            .insert("value".into(), ParamValue::Float(7.0));
+
+        // Wire S.output -> N.frequency (auto-appended scalar port).
+        graph
+            .connect(
+                PortId {
+                    node_id: sv,
+                    port_name: "output".into(),
+                },
+                PortId {
+                    node_id: noise,
+                    port_name: "frequency".into(),
+                },
+            )
+            .unwrap();
+
+        let outputs = evaluate_graph(&graph, &FreqProbe, 8, 8, 8, 8).unwrap();
+        let probed = outputs.get(&noise).and_then(|o| o.get("output"));
+        // The literal frequency default is 4.0; the wire must have overridden it.
+        assert!(matches!(probed, Some(PortValue::Scalar(f)) if *f == 7.0));
+    }
+
+    #[test]
+    fn unconnected_scalar_port_keeps_literal() {
+        let mut graph = GraphEngine::new();
+        let noise = graph.add_node(Node::new(NodeId(0), NodeType::PerlinNoise, "N"));
+        graph
+            .get_node_mut(noise)
+            .unwrap()
+            .params
+            .insert("frequency".into(), ParamValue::Float(4.0));
+
+        let outputs = evaluate_graph(&graph, &FreqProbe, 8, 8, 8, 8).unwrap();
+        let probed = outputs.get(&noise).and_then(|o| o.get("output"));
+        assert!(matches!(probed, Some(PortValue::Scalar(f)) if *f == 4.0));
     }
 }

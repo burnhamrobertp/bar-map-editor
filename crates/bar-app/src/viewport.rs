@@ -2878,6 +2878,33 @@ pub fn eval_preview(
     (hm, tex)
 }
 
+/// Stamp the normalized waterline onto every node that keys off sea level
+/// (AutoTexture water/beach bands, CoastErosion shoreline) so the preview tracks
+/// the map's actual sea level (world height 0). Mirrors the derivation in
+/// `Recipe::build_graph`, applied to the cloned eval graph because the live
+/// editor graph is not rebuilt when height settings change.
+pub fn apply_sea_level(graph: &mut bar_graph::GraphEngine, sea_level: f32) {
+    let ids: Vec<bar_graph::NodeId> = graph
+        .nodes()
+        .iter()
+        .filter(|(_, n)| {
+            matches!(
+                n.node_type,
+                bar_graph::NodeType::AutoTexture | bar_graph::NodeType::CoastErosion
+            )
+        })
+        .map(|(id, _)| *id)
+        .collect();
+    for id in ids {
+        if let Some(node) = graph.get_node_mut(id) {
+            node.params.insert(
+                "sea_level".to_string(),
+                bar_graph::ParamValue::Float(sea_level),
+            );
+        }
+    }
+}
+
 // ── Feature instance building ─────────────────────────────────────────────────
 
 /// Build feature instance transforms, grouped by feature type.

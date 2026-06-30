@@ -5,15 +5,18 @@
 
 pub mod coastmap;
 pub mod color;
+pub mod detail_normal;
 pub mod heightmap;
 pub mod s3o;
 pub mod sd7;
 pub mod skybox;
 pub mod smt;
+pub mod terrain_normal;
 pub mod water_assets;
 
 pub use coastmap::{bake_coastmap, COAST_DISTANCE_TEXELS, FULL_DEPTH_ELMOS};
 pub use color::ColorBuffer;
+pub use detail_normal::{generate_detail_normal, DetailNormalPreset};
 pub use heightmap::Heightmap;
 pub use s3o::{parse_s3o, S3oError, S3oMesh, S3oVertex};
 pub use sd7::{SmfFeaturePlacement, SmfHeader, SmfMap};
@@ -26,6 +29,7 @@ pub use smt::{
     decode_tile_dxt1, generate_minimap_dxt1, read_smt, read_smt_raw, write_smt, DXT1_TILE_BYTES,
     MINIMAP_BASE_DXT1_BYTES, MINIMAP_SIZE,
 };
+pub use terrain_normal::bake_terrain_normal;
 pub use water_assets::{
     load_from_archive as load_water_assets_from_archive,
     load_from_engine_dir as load_water_assets_from_engine_dir, locate_bitmaps_archive,

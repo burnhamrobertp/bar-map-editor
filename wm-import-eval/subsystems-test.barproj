@@ -1,0 +1,32 @@
+{
+  "name": "WM-subsystems-test",
+  "description": "Exercises the new WM-gap subsystems end-to-end: a ScalarValue drives PerlinNoise.frequency via a scalar wire; Equation combines two noises; CoastErosion shapes a shoreline; AutoTexture + LightmapBake produce color/lightmap; ChannelSplit/Merge round-trip the lightmap.",
+  "nodes": [
+    {"key": "freq", "type": "ScalarValue", "label": "Frequency scalar", "params": {"value": {"Float": 8.0}}},
+    {"key": "base", "type": "PerlinNoise", "label": "Base (freq via wire)", "params": {"frequency": {"Float": 3.0}, "octaves": {"UInt": 6}, "seed": {"UInt": 3}}},
+    {"key": "ridge", "type": "RidgedNoise", "label": "Ridges", "params": {"frequency": {"Float": 2.0}, "seed": {"UInt": 9}}},
+    {"key": "eq", "type": "Equation", "label": "Equation max(a,b)", "params": {"formula": {"String": "max(a, b)"}}},
+    {"key": "coast", "type": "CoastErosion", "label": "Coast erosion", "params": {"sea_level": {"Float": 0.3}, "beach_size": {"Float": 0.06}, "inland_height_influence": {"Float": 0.4}, "underwater_smoothing": {"UInt": 4}}},
+    {"key": "tex", "type": "AutoTexture", "label": "Auto texture", "params": {"biome": {"String": "temperate"}}},
+    {"key": "light", "type": "LightmapBake", "label": "Lightmap bake", "params": {"sun_azimuth": {"Float": 315.0}, "sun_elevation": {"Float": 40.0}}},
+    {"key": "split", "type": "ChannelSplit", "label": "Split lightmap", "params": {}},
+    {"key": "merge", "type": "ChannelMerge", "label": "Re-merge", "params": {}},
+    {"key": "fc", "type": "FinalComposition", "label": "Output", "params": {}}
+  ],
+  "connections": [
+    {"from": "freq.output", "to": "base.frequency"},
+    {"from": "base.output", "to": "eq.a"},
+    {"from": "ridge.output", "to": "eq.b"},
+    {"from": "eq.output", "to": "coast.input"},
+    {"from": "coast.output", "to": "tex.input"},
+    {"from": "coast.output", "to": "light.heightmap"},
+    {"from": "light.lightmap", "to": "split.color"},
+    {"from": "split.r", "to": "merge.r"},
+    {"from": "split.g", "to": "merge.g"},
+    {"from": "split.b", "to": "merge.b"},
+    {"from": "coast.output", "to": "fc.heightmap"},
+    {"from": "tex.output", "to": "fc.texture"},
+    {"from": "merge.color", "to": "fc.normalmap"}
+  ],
+  "output": {"width": 257, "height": 257, "map_settings": {"min_height": -30.0, "max_height": 400.0}}
+}

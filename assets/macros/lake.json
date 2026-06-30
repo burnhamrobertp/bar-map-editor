@@ -1,0 +1,37 @@
+{
+  "name": "lake",
+  "description": "A water-filled depression with a drawn outline (floor below sea level). Double-click the inner Layout node to redraw the shore. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
+  "nodes": [
+    { "key": "base", "type": "Constant", "label": "Shore level", "params": { "value": { "Float": 0.42 } } },
+    {
+      "key": "bowl", "type": "Layout", "label": "Bowl",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "spline" },
+        "points_0": { "Spline": [[0.38, 0.34], [0.64, 0.36], [0.7, 0.56], [0.58, 0.7], [0.38, 0.68], [0.3, 0.5]] },
+        "closed_0": { "Bool": true }, "fill_0": { "Bool": true },
+        "width_0": { "Float": 0.05 }, "height_0": { "Float": 0.38 }, "falloff_0": { "Float": 0.6 } }
+    },
+    { "key": "carved", "type": "Subtract", "label": "Lake bed" },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "diff", "type": "Equation", "label": "Deviation", "params": { "formula": { "String": "abs(a-0.42)" } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.02 }, "smoothness": { "Float": 0.12 } } }
+  ],
+  "connections": [
+    { "from": "base.output", "to": "carved.a" },
+    { "from": "bowl.output", "to": "carved.b" },
+    { "from": "carved.output", "to": "place.input" },
+    { "from": "place.output", "to": "diff.a" },
+    { "from": "diff.output", "to": "mask.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.4, "max": 2.0 },
+    { "name": "depth", "label": "Depth", "kind": "Float", "binding": "bowl:height_0", "min": 0.2, "max": 0.5 }
+  ]
+}

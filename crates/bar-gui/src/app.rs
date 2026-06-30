@@ -77,6 +77,26 @@ pub(crate) fn node_port_pos(
     }
 }
 
+/// Minimum body height for a regular node with `n_ports` stacked on its tallest
+/// side (left inputs vs outputs). Single source of truth for both the resize
+/// handle's clamp (`canvas::render`) and the height fresh / imported / macro-
+/// dropped nodes default to, so a node is never created shorter than the height
+/// it could be manually shrunk to. IO nodes size separately (no stacked ports).
+pub(crate) fn node_port_min_height(n_ports: usize) -> f32 {
+    (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0)
+}
+
+/// [`node_port_min_height`] for a concrete node: counts left-placed inputs vs
+/// outputs (the two sides ports stack on) and takes the taller.
+pub(crate) fn node_min_height(node: &bar_graph::Node) -> f32 {
+    let left_inputs = node
+        .inputs
+        .iter()
+        .filter(|p| matches!(PortPlacement::for_input(p.kind), PortPlacement::Left))
+        .count();
+    node_port_min_height(left_inputs.max(node.outputs.len()))
+}
+
 // `NodeVisual` and `GroupRuntime` live in `crate::state` so the undo
 // module can snapshot them without going through stringly-typed JSON.
 // Imported at the top of this file.
@@ -307,6 +327,9 @@ pub struct BarEditorApp {
     /// lifetime to the cache entry -- dropping it via `remove` frees
     /// the egui side automatically.
     pub feature_thumb_cache: std::collections::HashMap<String, egui::TextureHandle>,
+    /// Lit relief thumbnails for the surface-detail preset gallery
+    /// (Rock/Gravel/Sand), generated once at a representative strength.
+    pub detail_normal_thumbs: Vec<egui::TextureHandle>,
     /// Lowercase feature type names whose thumbnail the palette wants
     /// rendered. Bar-app's runner reads + clears entries it has
     /// fulfilled; the palette only inserts when a name is in neither
@@ -432,6 +455,7 @@ impl Default for BarEditorApp {
             placement_ghost: None,
             viewport_debug: ViewportDebug::default(),
             feature_thumb_cache: std::collections::HashMap::new(),
+            detail_normal_thumbs: Vec::new(),
             layout_preview: LayoutPreview::default(),
             feature_thumb_requests: std::collections::HashSet::new(),
             feature_thumb_pending: std::collections::HashSet::new(),

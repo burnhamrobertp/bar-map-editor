@@ -1,0 +1,405 @@
+{
+  "source": "JsvrbAv6SwoC2BC4Kqs5-BSR.tmd",
+  "map_name": "BSR",
+  "wm_meta": {
+    "Author": "Peter Sarkozy",
+    "Description": "Starting Project. Customize to your liking!",
+    "DefaultPath": "D:\\Game Files\\BAR maps\\Blindside\\",
+    "Waterlevel": 0.015,
+    "Sunlight": [
+      -0.0819,
+      0.655,
+      0.7512
+    ]
+  },
+  "device_total": 561,
+  "distinct_types": 47,
+  "status_totals": {
+    "partial": 316,
+    "good": 185,
+    "gap": 60
+  },
+  "status_pct": {
+    "partial": 56.3,
+    "good": 33.0,
+    "gap": 10.7
+  },
+  "types": [
+    {
+      "cc": "CMB2",
+      "count": 117,
+      "wm_device": "Combiner",
+      "bar_node": "Add|Subtract|Multiply|Max|Min|Blend",
+      "status": "partial",
+      "note": "ONE device w/ Method enum (Add/Sub/Mul/Average/Screen/Power/Max/Min) + Strength + mask; bar splits across node types, lacks Screen/Power/Average/Divide"
+    },
+    {
+      "cc": "MACR",
+      "count": 53,
+      "wm_device": "Macro",
+      "bar_node": "SubgraphInput/Output",
+      "status": "partial",
+      "note": "reusable subgraph w/ exposed knobs + library; bar has subgraph nesting + presets"
+    },
+    {
+      "cc": "CLMP",
+      "count": 50,
+      "wm_device": "Clamp / Restrict",
+      "bar_node": "Clamp",
+      "status": "partial",
+      "note": "WM adds Normalize, Soft Clipping, Type modes; bar Clamp is hard min/max"
+    },
+    {
+      "cc": "APRL",
+      "count": 43,
+      "wm_device": "Advanced Perlin",
+      "bar_node": "PerlinNoise",
+      "status": "good",
+      "note": "core FBM noise"
+    },
+    {
+      "cc": "BLUR",
+      "count": 32,
+      "wm_device": "Blur",
+      "bar_node": "Blur",
+      "status": "good",
+      "note": "WM adds Approximate/Precise method enum"
+    },
+    {
+      "cc": "SSEL",
+      "count": 25,
+      "wm_device": "Select Slope",
+      "bar_node": "SlopeMap+HeightSelect",
+      "status": "partial",
+      "note": "no single slope-range selector; bar must chain; lacks Equalization/Invert/Falloff-type"
+    },
+    {
+      "cc": "HSEL",
+      "count": 24,
+      "wm_device": "Select Height",
+      "bar_node": "HeightSelect",
+      "status": "good",
+      "note": "WM adds Falloff-type + Invert"
+    },
+    {
+      "cc": "BIGA",
+      "count": 20,
+      "wm_device": "Bias/Gain",
+      "bar_node": "BiasGain",
+      "status": "good",
+      "note": ""
+    },
+    {
+      "cc": "FILI",
+      "count": 16,
+      "wm_device": "File Input",
+      "bar_node": "FileInput",
+      "status": "good",
+      "note": "external heightmap/image source"
+    },
+    {
+      "cc": "PRBO",
+      "count": 15,
+      "wm_device": "Bitmap Output",
+      "bar_node": "FinalComposition(channel)",
+      "status": "partial",
+      "note": "WM writes arbitrary named bitmaps (BMP/TIFF/PNG); bar only the fixed BAR channel set"
+    },
+    {
+      "cc": "MTRN",
+      "count": 14,
+      "wm_device": "Terrain Transform",
+      "bar_node": "Curve|BiasGain",
+      "status": "partial",
+      "note": "named geomorphic presets: Canyonize/Glaciate/Cubic-Midlands/Midland-Plateau; bar has none"
+    },
+    {
+      "cc": "CHOS",
+      "count": 12,
+      "wm_device": "Chooser",
+      "bar_node": "MaskSelect",
+      "status": "partial",
+      "note": "2-input select by control"
+    },
+    {
+      "cc": "IVRT",
+      "count": 12,
+      "wm_device": "Invert",
+      "bar_node": "Invert",
+      "status": "good",
+      "note": ""
+    },
+    {
+      "cc": "CHKP",
+      "count": 10,
+      "wm_device": "Checkpoint",
+      "bar_node": null,
+      "status": "gap",
+      "note": "multi-port cache/checkpoint; performance workflow"
+    },
+    {
+      "cc": "COG2",
+      "count": 9,
+      "wm_device": "Combiner-of-Channels gen2 (unconfirmed)",
+      "bar_node": null,
+      "status": "gap",
+      "note": "colour/channel combiner variant; identity not fully confirmed"
+    },
+    {
+      "cc": "PRLM",
+      "count": 9,
+      "wm_device": "Render / Lightmap",
+      "bar_node": null,
+      "status": "gap",
+      "note": "bakes raytraced lightmap/colour render to texture; bar lights at runtime only"
+    },
+    {
+      "cc": "SWCH",
+      "count": 7,
+      "wm_device": "Switch",
+      "bar_node": null,
+      "status": "gap",
+      "note": "N-way manual input selector (variant A/B testing)"
+    },
+    {
+      "cc": "LAYG",
+      "count": 7,
+      "wm_device": "Layout Generator",
+      "bar_node": "Layout",
+      "status": "good",
+      "note": "shapes + splines; strong match"
+    },
+    {
+      "cc": "TRCE",
+      "count": 6,
+      "wm_device": "Terrace",
+      "bar_node": "Terrace",
+      "status": "good",
+      "note": "WM adds Simple/Sharp/smooth method"
+    },
+    {
+      "cc": "OUTP",
+      "count": 6,
+      "wm_device": "Output",
+      "bar_node": "FinalComposition",
+      "status": "good",
+      "note": "terminal"
+    },
+    {
+      "cc": "PRCC",
+      "count": 6,
+      "wm_device": "Channel Splitter",
+      "bar_node": null,
+      "status": "gap",
+      "note": "split image into R/G/B or H/S/B channels"
+    },
+    {
+      "cc": "EQUA",
+      "count": 5,
+      "wm_device": "Equation",
+      "bar_node": null,
+      "status": "gap",
+      "note": "arbitrary per-pixel math expression over inputs"
+    },
+    {
+      "cc": "OLVW",
+      "count": 5,
+      "wm_device": "Overlay / Colorizer",
+      "bar_node": "LayerBlend|ColorRamp",
+      "status": "partial",
+      "note": "Mask Colors / Blend-with-Mask / Mask Ambient"
+    },
+    {
+      "cc": "WARP",
+      "count": 5,
+      "wm_device": "Displacement",
+      "bar_node": "Warp|Displacement",
+      "status": "partial",
+      "note": "WM: Direction/Edge-Handling/Strength"
+    },
+    {
+      "cc": "PRCS",
+      "count": 5,
+      "wm_device": "Channel Combiner",
+      "bar_node": null,
+      "status": "gap",
+      "note": "pack channels into RGB/HSB (typemap/splat authoring)"
+    },
+    {
+      "cc": "COLG",
+      "count": 5,
+      "wm_device": "Color Generator",
+      "bar_node": "PaintedTexture|ColorRamp",
+      "status": "partial",
+      "note": "no solid-colour source node"
+    },
+    {
+      "cc": "S_GN",
+      "count": 5,
+      "wm_device": "Scalar Generator",
+      "bar_node": null,
+      "status": "gap",
+      "note": "first-class scalar value wired into device params; bar params are literals only"
+    },
+    {
+      "cc": "CHGT",
+      "count": 5,
+      "wm_device": "Constant Height",
+      "bar_node": "Constant",
+      "status": "good",
+      "note": ""
+    },
+    {
+      "cc": "CELL",
+      "count": 4,
+      "wm_device": "Voronoi",
+      "bar_node": "Voronoi",
+      "status": "good",
+      "note": "Scale/Style -> frequency/mode"
+    },
+    {
+      "cc": "EXPA",
+      "count": 4,
+      "wm_device": "Expander",
+      "bar_node": "MaskExpand|MaskShrink",
+      "status": "partial",
+      "note": "WM has Expand/Shrink/Open/Close + Gaussian; bar lacks Open/Close compound"
+    },
+    {
+      "cc": "PULL",
+      "count": 3,
+      "wm_device": "Pull-up / Override",
+      "bar_node": "Max|Min|MaskApply",
+      "status": "partial",
+      "note": "conditional override"
+    },
+    {
+      "cc": "ANOI",
+      "count": 3,
+      "wm_device": "Add Noise",
+      "bar_node": "PerlinNoise+Add",
+      "status": "partial",
+      "note": "Normal/Additive convenience combine"
+    },
+    {
+      "cc": "ERD2",
+      "count": 2,
+      "wm_device": "Erosion",
+      "bar_node": "HydraulicErosion",
+      "status": "partial",
+      "note": "WM: Amount/Hardness/Capacity/Filter/River-Depth/Method; bar: 3 params"
+    },
+    {
+      "cc": "CGRD",
+      "count": 2,
+      "wm_device": "Radial Gradient",
+      "bar_node": "Gradient",
+      "status": "good",
+      "note": "radial mode"
+    },
+    {
+      "cc": "SELU",
+      "count": 2,
+      "wm_device": "Select Color",
+      "bar_node": null,
+      "status": "gap",
+      "note": "build a mask by selecting a colour/hue"
+    },
+    {
+      "cc": "FLIP",
+      "count": 2,
+      "wm_device": "Flip",
+      "bar_node": "Mirror",
+      "status": "good",
+      "note": "H/V flip"
+    },
+    {
+      "cc": "SELF",
+      "count": 1,
+      "wm_device": "Select by Direction",
+      "bar_node": "SelectAspect",
+      "status": "good",
+      "note": "Heading/Elevation"
+    },
+    {
+      "cc": "PRNO",
+      "count": 1,
+      "wm_device": "Normal Map Maker",
+      "bar_node": "NormalMap",
+      "status": "good",
+      "note": ""
+    },
+    {
+      "cc": "BPRL",
+      "count": 1,
+      "wm_device": "Basic Perlin",
+      "bar_node": "PerlinNoise",
+      "status": "good",
+      "note": ""
+    },
+    {
+      "cc": "NORM",
+      "count": 1,
+      "wm_device": "Texture Weightmap",
+      "bar_node": "TextureWeightmap",
+      "status": "good",
+      "note": "priority/weighted blend"
+    },
+    {
+      "cc": "S_AR",
+      "count": 1,
+      "wm_device": "Scalar Arithmetic",
+      "bar_node": null,
+      "status": "gap",
+      "note": "math on scalar graph values"
+    },
+    {
+      "cc": "I_GN",
+      "count": 1,
+      "wm_device": "Integer Generator",
+      "bar_node": null,
+      "status": "gap",
+      "note": "integer scalar parameter node"
+    },
+    {
+      "cc": "SELC",
+      "count": 1,
+      "wm_device": "Select Convexity",
+      "bar_node": "SelectConvexity",
+      "status": "good",
+      "note": "Exposed/Recessed/Transition"
+    },
+    {
+      "cc": "GRAD",
+      "count": 1,
+      "wm_device": "Gradient",
+      "bar_node": "Gradient",
+      "status": "good",
+      "note": ""
+    },
+    {
+      "cc": "EWTH",
+      "count": 1,
+      "wm_device": "Thermal Weathering",
+      "bar_node": "ThermalErosion",
+      "status": "partial",
+      "note": "WM: Talus-production/repose/fracture/size/length; bar: iterations+talus_angle"
+    },
+    {
+      "cc": "C_DG",
+      "count": 1,
+      "wm_device": "Distortion Generator",
+      "bar_node": "Warp",
+      "status": "partial",
+      "note": "Angle&Power / Vector distortion"
+    },
+    {
+      "cc": "HSPL",
+      "count": 1,
+      "wm_device": "Height Splitter",
+      "bar_node": "HeightSelect(xN)",
+      "status": "partial",
+      "note": "N height bands in one device"
+    }
+  ]
+}

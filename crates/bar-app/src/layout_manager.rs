@@ -16,9 +16,10 @@ use bar_graph::NodeExecutor;
 use eframe::egui;
 
 use crate::viewport::{
-    apply_compiled_bc1, build_feature_instances, draw_preview_placeholder, draw_preview_viewport,
-    draw_sculpt_viewport, eval_preview, live_smf_lighting, read_compiled_bc1_off_thread, EvalState,
-    FeatureMapDims, OwnedFrame, PreviewResult, ResolutionStatus, ViewportCore,
+    apply_compiled_bc1, apply_sea_level, build_feature_instances, draw_preview_placeholder,
+    draw_preview_viewport, draw_sculpt_viewport, eval_preview, live_smf_lighting,
+    read_compiled_bc1_off_thread, EvalState, FeatureMapDims, OwnedFrame, PreviewResult,
+    ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -921,6 +922,9 @@ fn spawn_eval_passes(
     // values take effect without waiting for the next graph evaluation.
     let height_scale = hs;
     let water_y = wy;
+    // Normalized waterline (world 0 in the height range) for AutoTexture; matches
+    // Recipe::build_graph. min_h >= 0 -> <= 0 -> clamps to 0 (no water).
+    let sea_level = ((0.0 - min_h) / height_range).clamp(0.0, 1.0);
     let x_extent = xe;
     let z_extent = ze;
     let session_id = slot.core.session_id;
@@ -948,7 +952,8 @@ fn spawn_eval_passes(
             tex = format!("{low_tex_w}x{low_tex_h}"),
             "Eval: spawning low-res pass"
         );
-        let graph = app.graph().clone();
+        let mut graph = app.graph().clone();
+        apply_sea_level(&mut graph, sea_level);
         let tx = slot.eval.preview_tx.clone();
         let ctx_clone = ctx.clone();
         let exec = Arc::clone(executor);
@@ -999,7 +1004,8 @@ fn spawn_eval_passes(
             tex = format!("{tex_w}x{tex_h}"),
             "Eval: spawning high-res pass"
         );
-        let graph = app.graph().clone();
+        let mut graph = app.graph().clone();
+        apply_sea_level(&mut graph, sea_level);
         let tx = slot.eval.preview_tx.clone();
         let ctx_clone = ctx.clone();
         let exec = Arc::clone(executor);

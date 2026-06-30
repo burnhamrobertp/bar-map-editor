@@ -1,0 +1,38 @@
+{
+  "name": "mountain",
+  "description": "Eroded mountain massif: a radial envelope shapes jagged ridged noise; thermal erosion cuts talus slopes. Additive: blend onto base with mode add, using the mask.",
+  "nodes": [
+    {
+      "key": "env", "type": "Layout", "label": "Massif envelope",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.32 }, "ry_0": { "Float": 0.3 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.7 } }
+    },
+    { "key": "peaks", "type": "RidgedNoise", "label": "Peaks", "params": { "character": { "String": "jagged_peaks" }, "frequency": { "Float": 4.0 }, "octaves": { "UInt": 6 }, "persistence": { "Float": 0.55 }, "seed": { "UInt": 5 } } },
+    { "key": "shaped", "type": "Blend", "label": "Shaped peaks", "params": { "mode": { "String": "multiply" }, "factor": { "Float": 1.0 } } },
+    { "key": "erode", "type": "ThermalErosion", "label": "Talus erosion", "params": { "iterations": { "UInt": 100 }, "talus_angle": { "Float": 0.45 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.03 }, "smoothness": { "Float": 0.12 } } }
+  ],
+  "connections": [
+    { "from": "env.output", "to": "shaped.a" },
+    { "from": "peaks.output", "to": "shaped.b" },
+    { "from": "shaped.output", "to": "erode.input" },
+    { "from": "erode.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.3, "max": 2.5 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "roughness", "label": "Roughness", "kind": "Float", "binding": "peaks:frequency", "min": 2.0, "max": 8.0 },
+    { "name": "erosion", "label": "Erosion", "kind": "UInt", "binding": "erode:iterations", "min": 0, "max": 300 },
+    { "name": "seed", "label": "Seed", "kind": "UInt", "binding": "peaks:seed" }
+  ]
+}

@@ -534,6 +534,14 @@ pub struct ResourcesSettings {
     pub splat_detail_tex: String,
 }
 
+/// `splatDetailTex` is a presence flag for the SSMF detail-normal splat
+/// path, not a sampled texture: the engine enables the splat pipeline only
+/// when it is non-empty, but never reads the file. BAR maps point it at a
+/// throwaway name; this is the de-facto community value ("I want detail
+/// normal textures"). Emitted when a map has splat detail normals but no
+/// explicit flag, so the normals don't silently render nothing in-game.
+pub const SPLAT_DETAIL_FLAG_PLACEHOLDER: &str = "iwantdnts.tga";
+
 /// Lighting configuration for mapinfo.lua.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -1168,9 +1176,22 @@ impl Recipe {
 
     /// Build a `GraphEngine` from this recipe by constructing nodes and connections
     /// through the validated APIs.
+    /// Normalized position of world height 0 within the map's height range (the
+    /// waterline). 0 when the terrain sits entirely at/above sea level. Drives
+    /// AutoTexture's water/beach bands so the texture matches where water is.
+    pub fn sea_level(&self) -> f32 {
+        let ms = self.output.map_settings.resolved();
+        ((0.0f32 - ms.min_height) / (ms.max_height - ms.min_height).abs().max(1.0)).clamp(0.0, 1.0)
+    }
+
     pub fn build_graph(&self) -> Result<GraphEngine> {
         let mut graph = GraphEngine::new();
         let mut key_to_id: HashMap<&str, NodeId> = HashMap::new();
+
+        // Waterline stamped onto nodes that key off sea level (AutoTexture's
+        // water/beach bands, CoastErosion's shoreline) so they sit at the actual
+        // sea level instead of a fixed bottom fraction.
+        let sea_level = self.sea_level();
 
         // Add nodes
         for recipe_node in &self.nodes {
@@ -1185,6 +1206,13 @@ impl Recipe {
             let mut node = Node::new(NodeId(0), recipe_node.node_type.clone(), label);
             for (k, v) in recipe_node.params.iter() {
                 node.params.insert(k.clone(), v.clone());
+            }
+            if matches!(
+                node.node_type,
+                NodeType::AutoTexture | NodeType::CoastErosion
+            ) {
+                node.params
+                    .insert("sea_level".to_string(), ParamValue::Float(sea_level));
             }
             if node.node_type == NodeType::TextureWeightmap {
                 if let Some(ParamValue::UInt(lc)) = node.params.get("layer_count") {
@@ -1357,6 +1385,18 @@ mod tests {
         // Topological sort should work (no cycles)
         let order = graph.topological_sort().unwrap();
         assert_eq!(order.len(), 5);
+    }
+
+    #[test]
+    fn sea_level_tracks_height_range() {
+        let mut r = Recipe::sample();
+        // world 0 sits a quarter up the [-100, 300] range.
+        r.output.map_settings.min_height = Some(-100.0);
+        r.output.map_settings.max_height = Some(300.0);
+        assert!((r.sea_level() - 0.25).abs() < 1e-3, "got {}", r.sea_level());
+        // Terrain entirely at/above sea level -> no water.
+        r.output.map_settings.min_height = Some(0.0);
+        assert_eq!(r.sea_level(), 0.0);
     }
 
     #[test]
@@ -1591,7 +1631,7 @@ mod tests {
                 },
                 RecipeConnection {
                     from: "sub_slope.value".to_string(),
-                    to: "out.normalmap".to_string(),
+                    to: "out.metalmap".to_string(),
                 },
             ],
             // Simulates the user changing width/height before saving.

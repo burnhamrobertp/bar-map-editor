@@ -22,6 +22,7 @@ fn make_heightmap(size: u32) -> bar_data::Heightmap {
         seed: 1,
         offset_x: 0.0,
         offset_y: 0.0,
+        ..Default::default()
     };
     generate_noise_cpu(&params).unwrap()
 }
@@ -38,7 +39,7 @@ fn bench_cpu_hydraulic(c: &mut Criterion) {
         };
 
         group.bench_with_input(BenchmarkId::new("droplets_5k", size), &size, |b, _| {
-            b.iter(|| hydraulic_erosion(&hm, &params));
+            b.iter(|| hydraulic_erosion(&hm, &params, None));
         });
     }
     group.finish();

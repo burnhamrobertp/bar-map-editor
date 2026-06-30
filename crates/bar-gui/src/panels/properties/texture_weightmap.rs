@@ -27,10 +27,10 @@ impl BarEditorApp {
 
         ui.label("Layers");
         let mut lc_f = layer_count as f32;
-        if ui
-            .add(crate::panels::widgets::ParamSlider::new(&mut lc_f, 2.0, 8.0).integer())
-            .changed()
-        {
+        let e = crate::panels::widgets::ParamSlider::new(&mut lc_f, 2.0, 8.0)
+            .integer()
+            .show(ui);
+        if e.commit && lc_f as u32 != layer_count {
             layer_count = lc_f as u32;
             new_layer_count = Some(layer_count);
             changed.push(("layer_count".to_string(), ParamValue::UInt(layer_count)));
@@ -98,13 +98,10 @@ impl BarEditorApp {
                             Some(ParamValue::Float(v)) => *v,
                             _ => (7 - i) as f32,
                         };
-                        if ui
-                            .add(crate::panels::widgets::ParamSlider::new(
-                                &mut prio, 0.0, 16.0,
-                            ))
-                            .changed()
-                        {
-                            changed.push((priority_key, ParamValue::Float(prio)));
+                        let e =
+                            crate::panels::widgets::ParamSlider::new(&mut prio, 0.0, 16.0).show(ui);
+                        if e.commit {
+                            changed.push((priority_key, ParamValue::Float(e.value)));
                         }
 
                         if in_priority_mode {
@@ -112,13 +109,10 @@ impl BarEditorApp {
                                 Some(ParamValue::Float(v)) => *v,
                                 _ => 0.0,
                             };
-                            if ui
-                                .add(crate::panels::widgets::ParamSlider::new(
-                                    &mut excl, 0.0, 1.0,
-                                ))
-                                .changed()
-                            {
-                                changed.push((exclusion_key, ParamValue::Float(excl)));
+                            let e = crate::panels::widgets::ParamSlider::new(&mut excl, 0.0, 1.0)
+                                .show(ui);
+                            if e.commit {
+                                changed.push((exclusion_key, ParamValue::Float(e.value)));
                             }
                         }
                     } else {

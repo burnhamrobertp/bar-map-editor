@@ -65,6 +65,30 @@ enum Commands {
         recipe: PathBuf,
     },
 
+    /// Evaluate a recipe and write its heightmap as a 16-bit grayscale PNG.
+    /// For terrain comparison without a full export.
+    Heightmap {
+        /// Path to the recipe JSON file.
+        recipe: PathBuf,
+
+        /// Output PNG path.
+        #[arg(short, long, default_value = "heightmap.png")]
+        output: PathBuf,
+
+        /// Override output width (pixels).
+        #[arg(long)]
+        width: Option<u32>,
+
+        /// Override output height (pixels).
+        #[arg(long)]
+        height: Option<u32>,
+
+        /// Evaluate on the GPU (HybridExecutor) instead of the CPU -- matches
+        /// what the GUI compile produces.
+        #[arg(long)]
+        gpu: bool,
+    },
+
     /// Print information about a recipe (nodes, connections, eval order).
     Info {
         /// Path to the recipe JSON file.
@@ -132,11 +156,11 @@ enum Commands {
     },
 
     /// Render a macro to a heightmap PNG for value-iteration. Takes a
-    /// macro name (e.g. `mountain-range`) or a path to a macro JSON,
+    /// macro name (e.g. `ridge`) or a path to a macro JSON,
     /// optional knob overrides via `--knob name=value`, and writes
     /// `heightmap.png` (grayscale) to the output directory.
     PreviewMacro {
-        /// Macro name (e.g. `plains`) or path to a macro JSON file.
+        /// Macro name (e.g. `river`) or path to a macro JSON file.
         macro_arg: String,
 
         /// Override a macro_param value. Repeat: `--knob ridge_density=3.0
@@ -192,6 +216,13 @@ fn main() -> Result<()> {
             bundler.as_deref(),
         ),
         Commands::Validate { recipe } => cmd_validate(&recipe),
+        Commands::Heightmap {
+            recipe,
+            output,
+            width,
+            height,
+            gpu,
+        } => cmd_heightmap(&recipe, &output, width, height, gpu),
         Commands::Info { recipe } => cmd_info(&recipe),
         Commands::New { output } => cmd_new(output.as_deref()),
         Commands::Targets => cmd_targets(),
@@ -342,13 +373,98 @@ fn cmd_validate(recipe_path: &Path) -> Result<()> {
         .topological_sort()
         .context("Topological sort failed")?;
 
-    println!("✓ Recipe '{}' is valid", recipe.name);
+    println!("Recipe '{}'", recipe.name);
     println!("  Nodes:       {}", recipe.nodes.len());
     println!("  Connections: {}", recipe.connections.len());
     println!("  Eval order:  {} steps", order.len());
     println!(
         "  Output:      {}x{}",
         recipe.output.width, recipe.output.height
+    );
+
+    // Full project validation -- the same checks the GUI runs (missing
+    // FinalComposition/Bundler, disconnected inputs, cycles, map settings).
+    // A load + topological sort alone is not enough: a graph with no terminal
+    // node builds and topo-sorts fine but cannot export, so a shallow check
+    // would call an unexportable project "valid".
+    let findings = bar_engine::validate_project(
+        &graph,
+        &recipe.output.map_settings,
+        recipe.output.width,
+        recipe.output.height,
+    );
+    for f in &findings {
+        let tag = match f.severity {
+            bar_engine::Severity::Error => "ERROR",
+            bar_engine::Severity::Warning => "WARN ",
+            bar_engine::Severity::Info => "info ",
+        };
+        println!("  [{tag}] {}: {}", f.category, f.message);
+    }
+    if bar_engine::has_errors(&findings) {
+        anyhow::bail!(
+            "Validation failed: {} error(s)",
+            findings
+                .iter()
+                .filter(|f| f.severity == bar_engine::Severity::Error)
+                .count()
+        );
+    }
+
+    println!("✓ Recipe '{}' is valid", recipe.name);
+
+    Ok(())
+}
+
+fn cmd_heightmap(
+    recipe_path: &Path,
+    output_path: &Path,
+    width: Option<u32>,
+    height: Option<u32>,
+    use_gpu: bool,
+) -> Result<()> {
+    use bar_graph::{evaluate_graph, get_heightmap_output, NodeExecutor};
+
+    let recipe = Recipe::load(recipe_path)
+        .with_context(|| format!("Failed to load recipe: {}", recipe_path.display()))?;
+    let w = width.unwrap_or(recipe.output.width);
+    let h = height.unwrap_or(recipe.output.height);
+
+    let graph = recipe.build_graph().context("Failed to build graph")?;
+    // CPU by default; `--gpu` evaluates with the HybridExecutor on a standalone
+    // wgpu device -- the same path the GUI compile uses, so the output can be
+    // compared against what the editor actually produces.
+    let executor: Box<dyn NodeExecutor> = if use_gpu {
+        let gpu = pollster::block_on(bar_compute::GpuContext::new_standalone())
+            .context("Failed to create standalone GPU device")?;
+        println!("Evaluating on GPU (HybridExecutor)");
+        Box::new(bar_engine::HybridExecutor::new(gpu))
+    } else {
+        Box::new(CpuExecutor)
+    };
+    let results = evaluate_graph(&graph, executor.as_ref(), w, h, (w - 1) * 8, (h - 1) * 8)
+        .map_err(|e| anyhow::anyhow!("Graph evaluation failed: {e:?}"))?;
+
+    let heightmap = get_heightmap_output(&graph, &results).ok_or_else(|| {
+        anyhow::anyhow!(
+            "No heightmap wired to a FinalComposition node -- add one and connect terrain to its heightmap input"
+        )
+    })?;
+    bar_engine::export::write_heightmap_png(&heightmap, output_path)
+        .with_context(|| format!("Failed to write {}", output_path.display()))?;
+
+    let data = heightmap.data();
+    let mn = data.iter().copied().fold(f32::INFINITY, f32::min);
+    let mx = data.iter().copied().fold(f32::NEG_INFINITY, f32::max);
+    let mean = data.iter().copied().sum::<f32>() / data.len() as f32;
+    println!(
+        "Wrote {} ({}x{}) min={:.4} max={:.4} mean={:.4}",
+        output_path.display(),
+        heightmap.width(),
+        heightmap.height(),
+        mn,
+        mx,
+        mean
     );
 
     Ok(())

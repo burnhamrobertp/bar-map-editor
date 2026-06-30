@@ -6,7 +6,9 @@ use bar_project::recipe_fields::ATMOSPHERE_SPECS;
 use eframe::egui;
 
 use crate::app::BarEditorApp;
-use crate::panels::action_bar_modals::shared::{modal_frame, render_specs, FieldFindings};
+use crate::panels::action_bar_modals::shared::{
+    modal_frame, render_specs, settings_toolbar, FieldFindings,
+};
 use crate::panels::field_editor::section_heading;
 use crate::panels::file_picker::FilePickerField;
 use crate::t;
@@ -23,7 +25,8 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         "atmosphere_editor_modal",
         |ui| {
             let findings = FieldFindings::from(app.validation.findings());
-            render_specs(ui, app, ATMOSPHERE_SPECS, &findings);
+            let (query, advanced) = settings_toolbar(ui, "atmosphere");
+            render_specs(ui, app, ATMOSPHERE_SPECS, &findings, &query, advanced);
             ui.add_space(12.0);
             draw_skybox(ui, app);
         },

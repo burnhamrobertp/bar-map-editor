@@ -164,25 +164,16 @@ fn draw_layer_panel(app: &mut BarEditorApp, ui: &mut egui::Ui) {
             .spacing([8.0, 4.0])
             .show(ui, |ui| {
                 ui.label(t!("editor.inspector.brush_radius"));
-                ui.add(crate::panels::widgets::ParamSlider::new(
-                    &mut app.paint.brush.radius_px,
-                    0.5,
-                    96.0,
-                ));
+                crate::panels::widgets::ParamSlider::new(&mut app.paint.brush.radius_px, 0.5, 96.0)
+                    .show(ui);
                 ui.end_row();
                 ui.label(t!("editor.inspector.brush_strength"));
-                ui.add(crate::panels::widgets::ParamSlider::new(
-                    &mut app.paint.brush.strength,
-                    0.001,
-                    0.2,
-                ));
+                crate::panels::widgets::ParamSlider::new(&mut app.paint.brush.strength, 0.001, 0.2)
+                    .show(ui);
                 ui.end_row();
                 ui.label(t!("editor.inspector.brush_falloff"));
-                ui.add(crate::panels::widgets::ParamSlider::new(
-                    &mut app.paint.brush.falloff,
-                    0.5,
-                    4.0,
-                ));
+                crate::panels::widgets::ParamSlider::new(&mut app.paint.brush.falloff, 0.5, 4.0)
+                    .show(ui);
                 ui.end_row();
             });
     }

@@ -8,7 +8,7 @@ use eframe::egui;
 
 use crate::app::BarEditorApp;
 use crate::panels::action_bar_modals::shared::{
-    drive_drag_intent, modal_frame, render_specs, FieldFindings,
+    drive_drag_intent, modal_frame, render_specs, settings_toolbar, FieldFindings,
 };
 use crate::panels::field_editor::{heading_with_info, section_heading};
 use crate::t;
@@ -25,11 +25,12 @@ pub(crate) fn draw(app: &mut BarEditorApp, ctx: &egui::Context) {
         "fog_editor_modal",
         |ui| {
             let findings = FieldFindings::from(app.validation.findings());
-            render_specs(ui, app, FOG_SPECS, &findings);
+            let (query, advanced) = settings_toolbar(ui, "fog");
+            render_specs(ui, app, FOG_SPECS, &findings, &query, advanced);
             ui.add_space(12.0);
             draw_height_fog(ui, app);
             ui.add_space(12.0);
-            draw_clouds(ui, app, &findings);
+            draw_clouds(ui, app, &findings, &query, advanced);
         },
     );
     app.dialog.show_fog_editor = open;
@@ -122,7 +123,13 @@ fn draw_height_fog(ui: &mut egui::Ui, app: &mut BarEditorApp) {
 }
 
 /// `custom.clouds` block: volumetric cloud layer widget.
-fn draw_clouds(ui: &mut egui::Ui, app: &mut BarEditorApp, findings: &FieldFindings) {
+fn draw_clouds(
+    ui: &mut egui::Ui,
+    app: &mut BarEditorApp,
+    findings: &FieldFindings,
+    query: &str,
+    advanced: bool,
+) {
     section_heading(ui, &t!("editor.modals.fog.clouds_heading"));
-    render_specs(ui, app, CLOUDS_SPECS, findings);
+    render_specs(ui, app, CLOUDS_SPECS, findings, query, advanced);
 }

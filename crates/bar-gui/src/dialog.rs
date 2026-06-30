@@ -110,6 +110,13 @@ pub struct DialogState {
     pub show_lighting_editor: bool,
     pub show_water_editor: bool,
     pub show_resources_editor: bool,
+    /// Bump strength for the surface-detail (detailNormalTex) picker. 0 = use
+    /// the 1.0 default (Default derives 0; the panel lazily seeds it).
+    pub detail_normal_strength: f32,
+    /// In-flight surface-detail generation. The 1024px noise + PNG encode is
+    /// too heavy for the UI thread (especially in debug), so it runs on a
+    /// worker thread; the panel polls this for the finished filename.
+    pub(crate) detail_normal_job: Option<std::sync::mpsc::Receiver<Option<String>>>,
     pub show_grass_editor: bool,
     pub show_map_edge_editor: bool,
     /// Snapshot captured the moment a `render_field` widget began

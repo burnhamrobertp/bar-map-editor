@@ -1,0 +1,33 @@
+{
+  "name": "ramp",
+  "description": "An inclined access slope connecting a low level to a high level within a corridor. Additive: blend onto base with mode add, using the mask.",
+  "nodes": [
+    { "key": "grad", "type": "Gradient", "label": "Incline", "params": { "direction": { "String": "linear_y" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
+    {
+      "key": "corridor", "type": "Layout", "label": "Corridor",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "rectangle" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.12 }, "ry_0": { "Float": 0.34 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.35 } }
+    },
+    { "key": "ramped", "type": "Blend", "label": "Ramp", "params": { "mode": { "String": "multiply" }, "factor": { "Float": 1.0 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.04 }, "smoothness": { "Float": 0.1 } } }
+  ],
+  "connections": [
+    { "from": "grad.output", "to": "ramped.a" },
+    { "from": "corridor.output", "to": "ramped.b" },
+    { "from": "ramped.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
+    ]
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "length", "label": "Length", "kind": "Float", "binding": "corridor:ry_0", "min": 0.15, "max": 0.45 },
+    { "name": "width", "label": "Width", "kind": "Float", "binding": "corridor:rx_0", "min": 0.05, "max": 0.25 }
+  ]
+}

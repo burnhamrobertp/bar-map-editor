@@ -13,7 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.2.4"
+version = "0.3.0"
 edition = "2021"
 license = "GPL-2.0-or-later"
 repository = "https://github.com/burnhamrobertp/bar-map-editor"
@@ -36,6 +36,9 @@ rayon = "1"
 
 # Noise (CPU fallback)
 noise = "0.9"
+
+# Per-pixel expression evaluation (Equation node)
+evalexpr = "13"
 
 # Image I/O
 image = "0.25"
