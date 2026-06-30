@@ -1,32 +1,278 @@
 {
-  "name": "basin",
-  "description": "Broad lowland depression with a drawn outline. Double-click the inner Layout node to redraw the outline. Carve: blend onto base with mode subtract, using the mask.",
-  "nodes": [
-    {
-      "key": "bowl", "type": "Layout", "label": "Bowl",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "spline" },
-        "points_0": { "Spline": [[0.32, 0.34], [0.6, 0.3], [0.72, 0.5], [0.66, 0.72], [0.38, 0.74], [0.26, 0.52]] },
-        "closed_0": { "Bool": true }, "fill_0": { "Bool": true },
-        "width_0": { "Float": 0.05 }, "height_0": { "Float": 0.4 }, "falloff_0": { "Float": 0.7 } }
+ "name": "basin",
+ "description": "Broad irregular lowland depression. Blend onto base with subtract.",
+ "nodes": [
+  {
+   "key": "shape",
+   "type": "Layout",
+   "label": "Basin",
+   "params": {
+    "item_count": {
+     "UInt": 2
     },
-    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
-    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.02 }, "smoothness": { "Float": 0.12 } } }
-  ],
-  "connections": [
-    { "from": "bowl.output", "to": "place.input" },
-    { "from": "place.output", "to": "mask.input" }
-  ],
-  "subgraph": {
-    "outputs": [
-      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
-    ]
+    "mode": {
+     "String": "ridge"
+    },
+    "symmetry": {
+     "String": "none"
+    },
+    "type_0": {
+     "String": "spline"
+    },
+    "points_0": {
+     "Spline": [
+      [
+       0.8794,
+       0.4535
+      ],
+      [
+       0.8129,
+       0.608
+      ],
+      [
+       0.6523,
+       0.6767
+      ],
+      [
+       0.4037,
+       0.6978
+      ],
+      [
+       0.2928,
+       0.6791
+      ],
+      [
+       0.2151,
+       0.579
+      ],
+      [
+       0.1434,
+       0.4604
+      ],
+      [
+       0.2986,
+       0.3685
+      ],
+      [
+       0.402,
+       0.2931
+      ],
+      [
+       0.6384,
+       0.2004
+      ],
+      [
+       0.6858,
+       0.3818
+      ]
+     ]
+    },
+    "closed_0": {
+     "Bool": true
+    },
+    "fill_0": {
+     "Bool": true
+    },
+    "width_0": {
+     "Float": 0.05
+    },
+    "height_0": {
+     "Float": 0.9
+    },
+    "falloff_0": {
+     "Float": 0.5
+    },
+    "type_1": {
+     "String": "spline"
+    },
+    "points_1": {
+     "Spline": [
+      [
+       0.6163,
+       0.4565
+      ],
+      [
+       0.6535,
+       0.5517
+      ],
+      [
+       0.5637,
+       0.6155
+      ],
+      [
+       0.4041,
+       0.6007
+      ],
+      [
+       0.3199,
+       0.6178
+      ],
+      [
+       0.3053,
+       0.5524
+      ],
+      [
+       0.2883,
+       0.3861
+      ],
+      [
+       0.3695,
+       0.3287
+      ],
+      [
+       0.4122,
+       0.3126
+      ],
+      [
+       0.5445,
+       0.2321
+      ],
+      [
+       0.6314,
+       0.3433
+      ]
+     ]
+    },
+    "closed_1": {
+     "Bool": true
+    },
+    "fill_1": {
+     "Bool": true
+    },
+    "width_1": {
+     "Float": 0.05
+    },
+    "height_1": {
+     "Float": 0.7
+    },
+    "falloff_1": {
+     "Float": 0.5
+    }
+   }
   },
-  "macro_params": [
-    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
-    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
-    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.4, "max": 2.5 },
-    { "name": "depth", "label": "Depth", "kind": "Float", "binding": "bowl:height_0", "min": 0.1, "max": 0.7 },
-    { "name": "edge", "label": "Edge softness", "kind": "Float", "binding": "bowl:falloff_0", "min": 0.3, "max": 0.9 }
+  {
+   "key": "place",
+   "type": "Transform",
+   "label": "Placement",
+   "params": {
+    "translate_x": {
+     "Float": 0.0
+    },
+    "translate_y": {
+     "Float": 0.0
+    },
+    "scale": {
+     "Float": 1.0
+    },
+    "angle": {
+     "Float": 0.0
+    }
+   }
+  },
+  {
+   "key": "lift",
+   "type": "Constant",
+   "label": "Height",
+   "params": {
+    "value": {
+     "Float": 0.5
+    }
+   }
+  },
+  {
+   "key": "terrain",
+   "type": "Multiply",
+   "label": "Scale height",
+   "params": {}
+  },
+  {
+   "key": "mask",
+   "type": "MaskThreshold",
+   "label": "Footprint",
+   "params": {
+    "threshold": {
+     "Float": 0.04
+    },
+    "smoothness": {
+     "Float": 0.08
+    }
+   }
+  }
+ ],
+ "connections": [
+  {
+   "from": "shape.output",
+   "to": "place.input"
+  },
+  {
+   "from": "place.output",
+   "to": "terrain.a"
+  },
+  {
+   "from": "lift.output",
+   "to": "terrain.b"
+  },
+  {
+   "from": "place.output",
+   "to": "mask.input"
+  }
+ ],
+ "subgraph": {
+  "outputs": [
+   {
+    "name": "terrain",
+    "label": "Terrain",
+    "kind": "Heightmap",
+    "binding": "terrain:output"
+   },
+   {
+    "name": "mask",
+    "label": "Mask",
+    "kind": "Mask",
+    "binding": "mask:output"
+   }
   ]
+ },
+ "macro_params": [
+  {
+   "name": "pos_x",
+   "label": "Position X",
+   "kind": "Float",
+   "binding": "place:translate_x",
+   "min": -0.5,
+   "max": 0.5
+  },
+  {
+   "name": "pos_y",
+   "label": "Position Y",
+   "kind": "Float",
+   "binding": "place:translate_y",
+   "min": -0.5,
+   "max": 0.5
+  },
+  {
+   "name": "size",
+   "label": "Size",
+   "kind": "Float",
+   "binding": "place:scale",
+   "min": 0.3,
+   "max": 2.5
+  },
+  {
+   "name": "rotation",
+   "label": "Rotation",
+   "kind": "Float",
+   "binding": "place:angle",
+   "min": 0.0,
+   "max": 360.0
+  },
+  {
+   "name": "height",
+   "label": "Depth",
+   "kind": "Float",
+   "binding": "lift:value",
+   "min": 0.1,
+   "max": 1.0
+  }
+ ]
 }

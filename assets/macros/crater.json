@@ -1,49 +1,421 @@
 {
-  "name": "crater",
-  "description": "Crater with a raised rim and sunken floor around a mid baseline. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
-  "nodes": [
-    { "key": "base", "type": "Constant", "label": "Baseline", "params": { "value": { "Float": 0.4 } } },
-    {
-      "key": "rim_big", "type": "Layout", "label": "Outer cone",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.2 }, "ry_0": { "Float": 0.2 }, "height_0": { "Float": 0.35 }, "falloff_0": { "Float": 0.55 } }
-    },
-    {
-      "key": "rim_small", "type": "Layout", "label": "Inner cone",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.13 }, "ry_0": { "Float": 0.13 }, "height_0": { "Float": 0.35 }, "falloff_0": { "Float": 0.55 } }
-    },
-    { "key": "ring", "type": "Subtract", "label": "Rim ring" },
-    {
-      "key": "pit", "type": "Layout", "label": "Pit",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.11 }, "ry_0": { "Float": 0.11 }, "height_0": { "Float": 0.28 }, "falloff_0": { "Float": 0.4 } }
-    },
-    { "key": "with_rim", "type": "Add", "label": "Base + rim" },
-    { "key": "carved", "type": "Subtract", "label": "Carve floor" },
-    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
-    { "key": "diff", "type": "Equation", "label": "Deviation", "params": { "formula": { "String": "abs(a-0.4)" } } },
-    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.02 }, "smoothness": { "Float": 0.15 } } }
-  ],
-  "connections": [
-    { "from": "rim_big.output", "to": "ring.a" },
-    { "from": "rim_small.output", "to": "ring.b" },
-    { "from": "base.output", "to": "with_rim.a" },
-    { "from": "ring.output", "to": "with_rim.b" },
-    { "from": "with_rim.output", "to": "carved.a" },
-    { "from": "pit.output", "to": "carved.b" },
-    { "from": "carved.output", "to": "place.input" },
-    { "from": "place.output", "to": "diff.a" },
-    { "from": "diff.output", "to": "mask.input" }
-  ],
-  "subgraph": {
-    "outputs": [
-      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
-    ]
+ "name": "crater",
+ "description": "Irregular crater (lumpy rim + sunken floor). Combine with MaskApply.",
+ "nodes": [
+  {
+   "key": "base",
+   "type": "Constant",
+   "label": "Baseline",
+   "params": {
+    "value": {
+     "Float": 0.4
+    }
+   }
   },
-  "macro_params": [
-    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
-    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
-    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.4, "max": 2.0 },
-    { "name": "rim", "label": "Rim height", "kind": "Float", "binding": "rim_big:height_0", "min": 0.1, "max": 0.6 },
-    { "name": "depth", "label": "Floor depth", "kind": "Float", "binding": "pit:height_0", "min": 0.1, "max": 0.5 }
+  {
+   "key": "rim_o",
+   "type": "Layout",
+   "label": "Rim outer",
+   "params": {
+    "item_count": {
+     "UInt": 1
+    },
+    "mode": {
+     "String": "ridge"
+    },
+    "type_0": {
+     "String": "spline"
+    },
+    "points_0": {
+     "Spline": [
+      [
+       0.7204,
+       0.4693
+      ],
+      [
+       0.6692,
+       0.5968
+      ],
+      [
+       0.6564,
+       0.6668
+      ],
+      [
+       0.4974,
+       0.6914
+      ],
+      [
+       0.44,
+       0.6494
+      ],
+      [
+       0.3913,
+       0.6417
+      ],
+      [
+       0.3548,
+       0.5286
+      ],
+      [
+       0.3435,
+       0.4424
+      ],
+      [
+       0.381,
+       0.4212
+      ],
+      [
+       0.4667,
+       0.2851
+      ],
+      [
+       0.5599,
+       0.3049
+      ],
+      [
+       0.5701,
+       0.3431
+      ],
+      [
+       0.6362,
+       0.4319
+      ]
+     ]
+    },
+    "closed_0": {
+     "Bool": true
+    },
+    "fill_0": {
+     "Bool": true
+    },
+    "width_0": {
+     "Float": 0.05
+    },
+    "height_0": {
+     "Float": 0.35
+    },
+    "falloff_0": {
+     "Float": 0.5
+    }
+   }
+  },
+  {
+   "key": "rim_i",
+   "type": "Layout",
+   "label": "Rim inner",
+   "params": {
+    "item_count": {
+     "UInt": 1
+    },
+    "mode": {
+     "String": "ridge"
+    },
+    "type_0": {
+     "String": "spline"
+    },
+    "points_0": {
+     "Spline": [
+      [
+       0.5902,
+       0.519
+      ],
+      [
+       0.6513,
+       0.5447
+      ],
+      [
+       0.5566,
+       0.5681
+      ],
+      [
+       0.4923,
+       0.6034
+      ],
+      [
+       0.4354,
+       0.5724
+      ],
+      [
+       0.3988,
+       0.5307
+      ],
+      [
+       0.347,
+       0.493
+      ],
+      [
+       0.375,
+       0.4161
+      ],
+      [
+       0.4648,
+       0.4255
+      ],
+      [
+       0.5227,
+       0.3804
+      ],
+      [
+       0.5405,
+       0.4164
+      ],
+      [
+       0.6183,
+       0.4575
+      ]
+     ]
+    },
+    "closed_0": {
+     "Bool": true
+    },
+    "fill_0": {
+     "Bool": true
+    },
+    "width_0": {
+     "Float": 0.05
+    },
+    "height_0": {
+     "Float": 0.35
+    },
+    "falloff_0": {
+     "Float": 0.5
+    }
+   }
+  },
+  {
+   "key": "ring",
+   "type": "Subtract",
+   "label": "Rim ring",
+   "params": {}
+  },
+  {
+   "key": "pit",
+   "type": "Layout",
+   "label": "Pit",
+   "params": {
+    "item_count": {
+     "UInt": 1
+    },
+    "mode": {
+     "String": "ridge"
+    },
+    "type_0": {
+     "String": "spline"
+    },
+    "points_0": {
+     "Spline": [
+      [
+       0.6274,
+       0.5269
+      ],
+      [
+       0.5513,
+       0.5475
+      ],
+      [
+       0.5353,
+       0.5836
+      ],
+      [
+       0.4882,
+       0.5702
+      ],
+      [
+       0.4492,
+       0.5777
+      ],
+      [
+       0.4118,
+       0.5383
+      ],
+      [
+       0.4282,
+       0.4972
+      ],
+      [
+       0.4461,
+       0.4261
+      ],
+      [
+       0.4842,
+       0.3909
+      ],
+      [
+       0.5244,
+       0.4377
+      ],
+      [
+       0.5966,
+       0.4584
+      ]
+     ]
+    },
+    "closed_0": {
+     "Bool": true
+    },
+    "fill_0": {
+     "Bool": true
+    },
+    "width_0": {
+     "Float": 0.05
+    },
+    "height_0": {
+     "Float": 0.3
+    },
+    "falloff_0": {
+     "Float": 0.45
+    }
+   }
+  },
+  {
+   "key": "with_rim",
+   "type": "Add",
+   "label": "Base+rim",
+   "params": {}
+  },
+  {
+   "key": "carved",
+   "type": "Subtract",
+   "label": "Carve floor",
+   "params": {}
+  },
+  {
+   "key": "place",
+   "type": "Transform",
+   "label": "Placement",
+   "params": {
+    "translate_x": {
+     "Float": 0.0
+    },
+    "translate_y": {
+     "Float": 0.0
+    },
+    "scale": {
+     "Float": 1.0
+    },
+    "angle": {
+     "Float": 0.0
+    }
+   }
+  },
+  {
+   "key": "diff",
+   "type": "Equation",
+   "label": "Deviation",
+   "params": {
+    "formula": {
+     "String": "abs(a-0.4)"
+    }
+   }
+  },
+  {
+   "key": "mask",
+   "type": "MaskThreshold",
+   "label": "Footprint",
+   "params": {
+    "threshold": {
+     "Float": 0.02
+    },
+    "smoothness": {
+     "Float": 0.13
+    }
+   }
+  }
+ ],
+ "connections": [
+  {
+   "from": "rim_o.output",
+   "to": "ring.a"
+  },
+  {
+   "from": "rim_i.output",
+   "to": "ring.b"
+  },
+  {
+   "from": "base.output",
+   "to": "with_rim.a"
+  },
+  {
+   "from": "ring.output",
+   "to": "with_rim.b"
+  },
+  {
+   "from": "with_rim.output",
+   "to": "carved.a"
+  },
+  {
+   "from": "pit.output",
+   "to": "carved.b"
+  },
+  {
+   "from": "carved.output",
+   "to": "place.input"
+  },
+  {
+   "from": "place.output",
+   "to": "diff.a"
+  },
+  {
+   "from": "diff.output",
+   "to": "mask.input"
+  }
+ ],
+ "subgraph": {
+  "outputs": [
+   {
+    "name": "terrain",
+    "label": "Terrain",
+    "kind": "Heightmap",
+    "binding": "place:output"
+   },
+   {
+    "name": "mask",
+    "label": "Mask",
+    "kind": "Mask",
+    "binding": "mask:output"
+   }
   ]
+ },
+ "macro_params": [
+  {
+   "name": "pos_x",
+   "label": "Position X",
+   "kind": "Float",
+   "binding": "place:translate_x",
+   "min": -0.5,
+   "max": 0.5
+  },
+  {
+   "name": "pos_y",
+   "label": "Position Y",
+   "kind": "Float",
+   "binding": "place:translate_y",
+   "min": -0.5,
+   "max": 0.5
+  },
+  {
+   "name": "size",
+   "label": "Size",
+   "kind": "Float",
+   "binding": "place:scale",
+   "min": 0.4,
+   "max": 2.0
+  },
+  {
+   "name": "rim",
+   "label": "Rim height",
+   "kind": "Float",
+   "binding": "rim_o:height_0",
+   "min": 0.1,
+   "max": 0.6
+  },
+  {
+   "name": "depth",
+   "label": "Floor depth",
+   "kind": "Float",
+   "binding": "pit:height_0",
+   "min": 0.1,
+   "max": 0.5
+  }
+ ]
 }
