@@ -4,7 +4,7 @@ use bar_compute::{hydraulic_erosion, HydraulicErosionParams};
 use bar_graph::{EvalError, PortValue};
 
 use crate::exec::shared::{
-    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_string, get_uint,
+    apply_modulation, get_float, get_input_heightmap, get_optional_heightmap, get_uint,
 };
 use crate::exec::ExecCtx;
 
@@ -14,17 +14,13 @@ pub fn exec(ctx: &ExecCtx) -> Result<HashMap<String, PortValue>, EvalError> {
     let mask = get_optional_heightmap(ctx.inputs, "mask");
     let hardness = get_optional_heightmap(ctx.inputs, "hardness");
 
-    // Only "droplet" is implemented; the param exists for forward-compat with a
-    // future "pipe" model. Read it so the descriptor and executor stay paired.
-    let _method = get_string(ctx.params, "method", "droplet");
-
     let params_e = HydraulicErosionParams {
         num_droplets: get_uint(ctx.params, "iterations", 50_000),
         inertia: get_float(ctx.params, "inertia", 0.05),
         capacity_factor: get_float(ctx.params, "capacity_factor", 4.0),
         min_capacity: get_float(ctx.params, "min_capacity", 0.01),
-        deposition_rate: get_float(ctx.params, "deposition_rate", 0.3),
-        erosion_rate: get_float(ctx.params, "erosion_rate", 0.3),
+        deposition_rate: get_float(ctx.params, "deposition_rate", 0.01),
+        erosion_rate: get_float(ctx.params, "erosion_rate", 0.01),
         evaporation_rate: get_float(ctx.params, "evaporation_rate", 0.01),
         gravity: get_float(ctx.params, "gravity", 4.0),
         max_lifetime: get_uint(ctx.params, "max_lifetime", 30),
