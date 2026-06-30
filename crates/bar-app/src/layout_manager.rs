@@ -16,10 +16,10 @@ use bar_graph::NodeExecutor;
 use eframe::egui;
 
 use crate::viewport::{
-    apply_autotexture_sea_level, apply_compiled_bc1, build_feature_instances,
-    draw_preview_placeholder, draw_preview_viewport, draw_sculpt_viewport, eval_preview,
-    live_smf_lighting, read_compiled_bc1_off_thread, EvalState, FeatureMapDims, OwnedFrame,
-    PreviewResult, ResolutionStatus, ViewportCore,
+    apply_compiled_bc1, apply_sea_level, build_feature_instances, draw_preview_placeholder,
+    draw_preview_viewport, draw_sculpt_viewport, eval_preview, live_smf_lighting,
+    read_compiled_bc1_off_thread, EvalState, FeatureMapDims, OwnedFrame, PreviewResult,
+    ResolutionStatus, ViewportCore,
 };
 
 // ── Slot types ────────────────────────────────────────────────────────────────
@@ -953,7 +953,7 @@ fn spawn_eval_passes(
             "Eval: spawning low-res pass"
         );
         let mut graph = app.graph().clone();
-        apply_autotexture_sea_level(&mut graph, sea_level);
+        apply_sea_level(&mut graph, sea_level);
         let tx = slot.eval.preview_tx.clone();
         let ctx_clone = ctx.clone();
         let exec = Arc::clone(executor);
@@ -1005,7 +1005,7 @@ fn spawn_eval_passes(
             "Eval: spawning high-res pass"
         );
         let mut graph = app.graph().clone();
-        apply_autotexture_sea_level(&mut graph, sea_level);
+        apply_sea_level(&mut graph, sea_level);
         let tx = slot.eval.preview_tx.clone();
         let ctx_clone = ctx.clone();
         let exec = Arc::clone(executor);

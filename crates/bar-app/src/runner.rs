@@ -312,7 +312,7 @@ impl eframe::App for AppRunner {
             if let Some(project_dir) = self.app.project.path.clone() {
                 let mut graph = self.app.graph().clone();
                 let recipe = self.app.recipe_for_export();
-                crate::viewport::apply_autotexture_sea_level(&mut graph, recipe.sea_level());
+                crate::viewport::apply_sea_level(&mut graph, recipe.sea_level());
                 let executor = Arc::clone(&self.executor);
                 let (tx, rx) = mpsc::channel::<Result<(), String>>();
                 self.compile_result_rx = Some(rx);
@@ -400,7 +400,7 @@ impl eframe::App for AppRunner {
                 Ok(Some(output_dir)) => {
                     let mut graph = self.app.graph().clone();
                     let recipe = self.app.recipe_for_export();
-                    crate::viewport::apply_autotexture_sea_level(&mut graph, recipe.sea_level());
+                    crate::viewport::apply_sea_level(&mut graph, recipe.sea_level());
                     let (w, h) = self.app.map.dimensions();
                     let (tx, rx) = mpsc::channel::<String>();
                     self.export_result_rx = Some(rx);
@@ -1237,7 +1237,7 @@ impl AppRunner {
 
         let mut graph = self.app.graph().clone();
         let recipe = self.app.recipe_for_export();
-        crate::viewport::apply_autotexture_sea_level(&mut graph, recipe.sea_level());
+        crate::viewport::apply_sea_level(&mut graph, recipe.sea_level());
         let (w, h) = self.app.map.dimensions();
         let executor = Arc::clone(&self.executor);
 

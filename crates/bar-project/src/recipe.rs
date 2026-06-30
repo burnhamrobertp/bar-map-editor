@@ -1188,8 +1188,9 @@ impl Recipe {
         let mut graph = GraphEngine::new();
         let mut key_to_id: HashMap<&str, NodeId> = HashMap::new();
 
-        // Waterline stamped onto AutoTexture nodes so its water/beach bands sit
-        // at the actual sea level instead of a fixed bottom fraction.
+        // Waterline stamped onto nodes that key off sea level (AutoTexture's
+        // water/beach bands, CoastErosion's shoreline) so they sit at the actual
+        // sea level instead of a fixed bottom fraction.
         let sea_level = self.sea_level();
 
         // Add nodes
@@ -1206,7 +1207,10 @@ impl Recipe {
             for (k, v) in recipe_node.params.iter() {
                 node.params.insert(k.clone(), v.clone());
             }
-            if node.node_type == NodeType::AutoTexture {
+            if matches!(
+                node.node_type,
+                NodeType::AutoTexture | NodeType::CoastErosion
+            ) {
                 node.params
                     .insert("sea_level".to_string(), ParamValue::Float(sea_level));
             }
