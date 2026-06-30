@@ -17,7 +17,7 @@ use eframe::egui;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 
-use crate::app::{IO_NODE_SIZE, PORT_Y_BASE, PORT_Y_STEP};
+use crate::app::IO_NODE_SIZE;
 use crate::state::{GroupRuntime, NodeVisual, SubgraphPortRuntime};
 
 /// On-disk shape of a macro. JSON-deserialised once per drop.
@@ -161,14 +161,11 @@ pub fn instantiate(
                 }
             }
         }
-        let n_ports = node.inputs.len().max(node.outputs.len());
+        let min_h = crate::app::node_min_height(&node);
         let default_size = match node.node_type {
-            NodeType::PassThrough => egui::vec2(180.0, 200.0),
-            NodeType::FinalComposition => egui::vec2(210.0, 240.0),
-            _ => egui::vec2(
-                150.0,
-                (PORT_Y_BASE + n_ports as f32 * PORT_Y_STEP + 10.0).max(60.0),
-            ),
+            NodeType::PassThrough => egui::vec2(180.0, 200.0_f32.max(min_h)),
+            NodeType::FinalComposition => egui::vec2(210.0, 240.0_f32.max(min_h)),
+            _ => egui::vec2(150.0, min_h),
         };
         let id = graph.add_node(node);
         key_to_id.insert(n.key.clone(), id);
