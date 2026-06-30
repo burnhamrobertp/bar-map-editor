@@ -66,8 +66,8 @@ pub struct BiomeDefaults {
 /// individually. Re-selecting the same character is a no-op so
 /// tweaks survive UI redraws.
 ///
-/// Values are tuned via `om preview-macro` against a single-Perlin
-/// recipe; see `assets/macros/character-test.json`.
+/// Values are tuned via `bar-cli preview-macro` against a single-Perlin
+/// recipe.
 pub struct CharacterDefaults {
     pub frequency: f32,
     pub octaves: u32,

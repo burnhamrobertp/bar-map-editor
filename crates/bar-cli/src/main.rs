@@ -156,11 +156,11 @@ enum Commands {
     },
 
     /// Render a macro to a heightmap PNG for value-iteration. Takes a
-    /// macro name (e.g. `mountain-range`) or a path to a macro JSON,
+    /// macro name (e.g. `ridge`) or a path to a macro JSON,
     /// optional knob overrides via `--knob name=value`, and writes
     /// `heightmap.png` (grayscale) to the output directory.
     PreviewMacro {
-        /// Macro name (e.g. `plains`) or path to a macro JSON file.
+        /// Macro name (e.g. `river`) or path to a macro JSON file.
         macro_arg: String,
 
         /// Override a macro_param value. Repeat: `--knob ridge_density=3.0

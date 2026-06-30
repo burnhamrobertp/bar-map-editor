@@ -1,0 +1,48 @@
+{
+  "name": "crater",
+  "description": "Absolute crater landform (raised rim, sunken floor) around a mid baseline. Combine with MaskApply: base into background, this into input, mask into mask.",
+  "nodes": [
+    { "key": "base", "type": "Constant", "label": "Baseline", "params": { "value": { "Float": 0.4 } } },
+    {
+      "key": "rim_big", "type": "Layout", "label": "Outer cone",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.2 }, "ry_0": { "Float": 0.2 },
+        "height_0": { "Float": 0.35 }, "falloff_0": { "Float": 0.55 } }
+    },
+    {
+      "key": "rim_small", "type": "Layout", "label": "Inner cone",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.13 }, "ry_0": { "Float": 0.13 },
+        "height_0": { "Float": 0.35 }, "falloff_0": { "Float": 0.55 } }
+    },
+    { "key": "ring", "type": "Subtract", "label": "Rim ring" },
+    {
+      "key": "pit", "type": "Layout", "label": "Pit",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.11 }, "ry_0": { "Float": 0.11 },
+        "height_0": { "Float": 0.28 }, "falloff_0": { "Float": 0.4 } }
+    },
+    { "key": "with_rim", "type": "Add", "label": "Base + rim" },
+    { "key": "terrain", "type": "Subtract", "label": "Carve floor" },
+    {
+      "key": "footprint", "type": "Layout", "label": "Mask",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "mask" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.22 }, "ry_0": { "Float": 0.22 },
+        "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.3 } }
+    }
+  ],
+  "connections": [
+    { "from": "rim_big.output", "to": "ring.a" },
+    { "from": "rim_small.output", "to": "ring.b" },
+    { "from": "base.output", "to": "with_rim.a" },
+    { "from": "ring.output", "to": "with_rim.b" },
+    { "from": "with_rim.output", "to": "terrain.a" },
+    { "from": "pit.output", "to": "terrain.b" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

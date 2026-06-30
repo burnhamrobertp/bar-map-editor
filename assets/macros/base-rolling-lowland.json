@@ -1,0 +1,12 @@
+{
+  "name": "base-rolling-lowland",
+  "description": "Base terrain: gentle rolling lowland. Use as the substrate other features blend onto.",
+  "nodes": [
+    { "key": "terrain", "type": "PerlinNoise", "label": "Rolling lowland", "params": { "character": { "String": "rolling_hills" }, "frequency": { "Float": 3.0 }, "octaves": { "UInt": 5 }, "gain": { "Float": 0.4 }, "elevation": { "Float": 0.35 }, "seed": { "UInt": 3 } } }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" }
+    ]
+  }
+}

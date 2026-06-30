@@ -1,0 +1,18 @@
+{
+  "name": "base-flat-plain",
+  "description": "Base terrain: a near-flat buildable plain with faint relief. Use as the substrate other features blend onto.",
+  "nodes": [
+    { "key": "floor", "type": "Constant", "label": "Floor", "params": { "value": { "Float": 0.3 } } },
+    { "key": "grain", "type": "PerlinNoise", "label": "Faint grain", "params": { "character": { "String": "rolling_hills" }, "frequency": { "Float": 3.0 }, "seed": { "UInt": 1 } } },
+    { "key": "terrain", "type": "Blend", "label": "Plain", "params": { "mode": { "String": "blend" }, "factor": { "Float": 0.06 } } }
+  ],
+  "connections": [
+    { "from": "floor.output", "to": "terrain.a" },
+    { "from": "grain.output", "to": "terrain.b" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" }
+    ]
+  }
+}

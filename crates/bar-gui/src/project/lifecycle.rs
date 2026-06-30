@@ -1404,7 +1404,7 @@ mod session_reset_tests {
     fn start_with_macro_resets_transient_state() {
         let mut app = dirtied_app();
         let prior_depth = app.history.undo_depth();
-        app.start_with_macro("Plains");
+        app.start_with_macro("Flat Plain");
         // History from the previous project is gone. The macro drop
         // pushes exactly one new undo entry (so the user can undo
         // their first action), so depth is 1, not the pre-reset value.

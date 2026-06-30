@@ -1,0 +1,31 @@
+{
+  "name": "island",
+  "description": "A landmass rising from the sea, with an irregular coast. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
+  "nodes": [
+    {
+      "key": "land", "type": "Layout", "label": "Landmass",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.34 }, "ry_0": { "Float": 0.31 }, "angle_0": { "Float": 20.0 }, "height_0": { "Float": 0.65 }, "falloff_0": { "Float": 0.75 } }
+    },
+    {
+      "key": "coast", "type": "RidgedNoise", "label": "Coast irregularity",
+      "params": { "character": { "String": "broad_ridges" }, "frequency": { "Float": 2.5 }, "octaves": { "UInt": 4 }, "seed": { "UInt": 9 } }
+    },
+    { "key": "terrain", "type": "Blend", "label": "Island", "params": { "mode": { "String": "blend" }, "factor": { "Float": 0.22 } } },
+    {
+      "key": "footprint", "type": "Layout", "label": "Mask",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "mask" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.47 }, "ry_0": { "Float": 0.45 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.3 } }
+    }
+  ],
+  "connections": [
+    { "from": "land.output", "to": "terrain.a" },
+    { "from": "coast.output", "to": "terrain.b" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

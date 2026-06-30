@@ -1,0 +1,22 @@
+{
+  "name": "land-bridge",
+  "description": "A narrow isthmus / land bridge connecting two areas across water. Additive: blend onto base with mode add, using the mask (raises a passable strip above sea level).",
+  "nodes": [
+    {
+      "key": "strip", "type": "Layout", "label": "Isthmus",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.45 }, "ry_0": { "Float": 0.08 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 0.6 }, "falloff_0": { "Float": 0.6 } }
+    },
+    {
+      "key": "footprint", "type": "Layout", "label": "Mask",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "mask" }, "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.45 }, "ry_0": { "Float": 0.1 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.6 } }
+    }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "strip:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

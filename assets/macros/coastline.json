@@ -1,0 +1,19 @@
+{
+  "name": "coastline",
+  "description": "A land-to-sea shore with a graded beach. Absolute: combine with MaskApply over a coastal band (base into background, this into input, mask into mask).",
+  "nodes": [
+    { "key": "grad", "type": "Gradient", "label": "Shore gradient", "params": { "direction": { "String": "linear_y" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
+    { "key": "terrain", "type": "CoastErosion", "label": "Beach", "params": { "sea_level": { "Float": 0.3 }, "beach_size": { "Float": 0.1 }, "inland_height_influence": { "Float": 0.3 }, "underwater_smoothing": { "UInt": 4 } } },
+    { "key": "footprint", "type": "HeightSelect", "label": "Coastal band", "params": { "low": { "Float": 0.12 }, "high": { "Float": 0.52 }, "falloff": { "Float": 0.12 }, "falloff_type": { "String": "smooth" }, "invert": { "Bool": false } } }
+  ],
+  "connections": [
+    { "from": "grad.output", "to": "terrain.input" },
+    { "from": "grad.output", "to": "footprint.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

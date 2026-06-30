@@ -1,0 +1,19 @@
+{
+  "name": "cliff",
+  "description": "Escarpment: a sharp single step from low ground to high ground. Additive: blend onto base with mode add, using the mask (mask marks the high side).",
+  "nodes": [
+    { "key": "grad", "type": "Gradient", "label": "Across", "params": { "direction": { "String": "linear_x" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
+    { "key": "terrain", "type": "Terrace", "label": "Step", "params": { "step_count": { "UInt": 2 }, "smoothing": { "Float": 0.06 } } },
+    { "key": "footprint", "type": "MaskThreshold", "label": "High side", "params": { "threshold": { "Float": 0.5 }, "smoothness": { "Float": 0.12 } } }
+  ],
+  "connections": [
+    { "from": "grad.output", "to": "terrain.input" },
+    { "from": "grad.output", "to": "footprint.input" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

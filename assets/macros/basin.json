@@ -1,0 +1,22 @@
+{
+  "name": "basin",
+  "description": "Broad shallow bowl / lowland depression. Carve: blend onto base with mode subtract, using the mask.",
+  "nodes": [
+    {
+      "key": "bowl", "type": "Layout", "label": "Bowl",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.32 }, "ry_0": { "Float": 0.28 }, "height_0": { "Float": 0.4 }, "falloff_0": { "Float": 0.7 } }
+    },
+    {
+      "key": "footprint", "type": "Layout", "label": "Mask",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "mask" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.34 }, "ry_0": { "Float": 0.3 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.7 } }
+    }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "bowl:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

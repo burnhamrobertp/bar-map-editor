@@ -1,0 +1,19 @@
+{
+  "name": "ramp",
+  "description": "An inclined access slope connecting a low level to a high level within a corridor. Additive: blend onto base with mode add, using the mask.",
+  "nodes": [
+    { "key": "slope", "type": "Gradient", "label": "Incline", "params": { "direction": { "String": "linear_y" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
+    {
+      "key": "footprint", "type": "Layout", "label": "Corridor mask",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "mask" }, "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.12 }, "ry_0": { "Float": 0.34 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.35 } }
+    }
+  ],
+  "connections": [],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "slope:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

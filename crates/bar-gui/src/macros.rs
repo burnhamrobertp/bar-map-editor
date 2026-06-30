@@ -5,8 +5,8 @@
 //! external ports + inner-port bindings) prepackaged as a reusable
 //! unit. The hobbyist tier of bar-editor uses these to skip the
 //! "assemble noise + erosion + blur in the right order" learning
-//! curve: drop a `Mountain Range` macro, wire its `terrain` output
-//! to a Bundler, done.
+//! curve: drop a `Ridge` (or any feature) macro and blend its
+//! `terrain` output onto a base, done.
 //!
 //! Macros are JSON files embedded at compile time. Each defines a
 //! list of inner nodes, the connections between them, and a
@@ -382,9 +382,8 @@ fn parse_node_port(
     Ok((id, port.to_string()))
 }
 
-/// One variant within a macro group. `full_name` is the canonical
-/// lookup key; `display_name` is the short label shown in menus
-/// (e.g. "Alpine" instead of "Mountain Range - Alpine").
+/// One feature within a macro group. `full_name` is the canonical
+/// lookup key; `display_name` is the label shown in menus.
 pub struct MacroEntry {
     pub full_name: &'static str,
     pub display_name: &'static str,
@@ -398,114 +397,148 @@ pub struct MacroGroup {
     pub entries: &'static [MacroEntry],
 }
 
+// Feature macros: each is a standalone generator emitting a `terrain` patch
+// (and, for shaped features, a `mask`) that the user composites onto a base.
+// Raises blend with `add`, carves with `subtract`, and absolute/replace
+// features (crater, island, coastline, lake) combine with `MaskApply`.
 pub static BUILTIN_MACRO_GROUPS: &[MacroGroup] = &[
     MacroGroup {
-        name: "Mountain Range",
+        name: "Base Terrain",
         entries: &[
             MacroEntry {
-                full_name: "Mountain Range",
-                display_name: "Standard",
-                json: include_str!("../../../assets/macros/mountain-range.json"),
+                full_name: "Flat Plain",
+                display_name: "Flat Plain",
+                json: include_str!("../../../assets/macros/base-flat-plain.json"),
             },
             MacroEntry {
-                full_name: "Mountain Range - Alpine",
-                display_name: "Alpine",
-                json: include_str!("../../../assets/macros/mountain-range-alpine.json"),
+                full_name: "Rolling Lowland",
+                display_name: "Rolling Lowland",
+                json: include_str!("../../../assets/macros/base-rolling-lowland.json"),
             },
             MacroEntry {
-                full_name: "Mountain Range - Foothills",
-                display_name: "Foothills",
-                json: include_str!("../../../assets/macros/mountain-range-foothills.json"),
-            },
-            MacroEntry {
-                full_name: "Mountain Range - Plateaus",
-                display_name: "Plateaus",
-                json: include_str!("../../../assets/macros/mountain-range-plateaus.json"),
+                full_name: "Coastal Shelf",
+                display_name: "Coastal Shelf",
+                json: include_str!("../../../assets/macros/base-coastal-shelf.json"),
             },
         ],
     },
     MacroGroup {
-        name: "Plains",
+        name: "Relief",
         entries: &[
             MacroEntry {
-                full_name: "Plains",
-                display_name: "Standard",
-                json: include_str!("../../../assets/macros/plains.json"),
+                full_name: "Ridge",
+                display_name: "Ridge",
+                json: include_str!("../../../assets/macros/ridge.json"),
             },
             MacroEntry {
-                full_name: "Plains - Coastal",
-                display_name: "Coastal",
-                json: include_str!("../../../assets/macros/plains-coastal.json"),
+                full_name: "Cliff",
+                display_name: "Cliff",
+                json: include_str!("../../../assets/macros/cliff.json"),
             },
             MacroEntry {
-                full_name: "Plains - With Hills",
-                display_name: "With Hills",
-                json: include_str!("../../../assets/macros/plains-with-hills.json"),
+                full_name: "Mountain",
+                display_name: "Mountain",
+                json: include_str!("../../../assets/macros/mountain.json"),
             },
             MacroEntry {
-                full_name: "Plains - Marsh",
-                display_name: "Marsh",
-                json: include_str!("../../../assets/macros/plains-marsh.json"),
+                full_name: "Plateau",
+                display_name: "Plateau",
+                json: include_str!("../../../assets/macros/plateau.json"),
             },
         ],
     },
     MacroGroup {
-        name: "Archipelago",
+        name: "Tableland",
         entries: &[
             MacroEntry {
-                full_name: "Archipelago",
-                display_name: "Standard",
-                json: include_str!("../../../assets/macros/archipelago.json"),
+                full_name: "Butte",
+                display_name: "Butte",
+                json: include_str!("../../../assets/macros/butte.json"),
             },
             MacroEntry {
-                full_name: "Archipelago - Dense",
-                display_name: "Dense",
-                json: include_str!("../../../assets/macros/archipelago-dense.json"),
-            },
-            MacroEntry {
-                full_name: "Archipelago - Sparse",
-                display_name: "Sparse",
-                json: include_str!("../../../assets/macros/archipelago-sparse.json"),
+                full_name: "Mesa",
+                display_name: "Mesa",
+                json: include_str!("../../../assets/macros/mesa.json"),
             },
         ],
     },
     MacroGroup {
-        name: "Canyon",
+        name: "Carved",
         entries: &[
+            MacroEntry {
+                full_name: "Crater",
+                display_name: "Crater",
+                json: include_str!("../../../assets/macros/crater.json"),
+            },
             MacroEntry {
                 full_name: "Canyon",
-                display_name: "Standard",
+                display_name: "Canyon",
                 json: include_str!("../../../assets/macros/canyon.json"),
             },
             MacroEntry {
-                full_name: "Canyon - Mesa",
-                display_name: "Mesa",
-                json: include_str!("../../../assets/macros/canyon-mesa.json"),
-            },
-            MacroEntry {
-                full_name: "Canyon - Slot",
-                display_name: "Slot",
-                json: include_str!("../../../assets/macros/canyon-slot.json"),
+                full_name: "Basin",
+                display_name: "Basin",
+                json: include_str!("../../../assets/macros/basin.json"),
             },
         ],
     },
     MacroGroup {
-        name: "Dunes",
+        name: "Water & Coast",
         entries: &[
             MacroEntry {
-                full_name: "Dunes",
-                display_name: "Standard",
-                json: include_str!("../../../assets/macros/dunes.json"),
+                full_name: "River",
+                display_name: "River",
+                json: include_str!("../../../assets/macros/river.json"),
             },
             MacroEntry {
-                full_name: "Dunes - Rolling",
-                display_name: "Rolling",
-                json: include_str!("../../../assets/macros/dunes-rolling.json"),
+                full_name: "Stream",
+                display_name: "Stream",
+                json: include_str!("../../../assets/macros/stream.json"),
             },
             MacroEntry {
-                full_name: "Dunes - Sharp",
-                display_name: "Sharp",
-                json: include_str!("../../../assets/macros/dunes-sharp.json"),
+                full_name: "Lake",
+                display_name: "Lake",
+                json: include_str!("../../../assets/macros/lake.json"),
+            },
+            MacroEntry {
+                full_name: "Island",
+                display_name: "Island",
+                json: include_str!("../../../assets/macros/island.json"),
+            },
+            MacroEntry {
+                full_name: "Archipelago",
+                display_name: "Archipelago",
+                json: include_str!("../../../assets/macros/archipelago.json"),
+            },
+            MacroEntry {
+                full_name: "Coastline",
+                display_name: "Coastline",
+                json: include_str!("../../../assets/macros/coastline.json"),
+            },
+        ],
+    },
+    MacroGroup {
+        name: "Gameplay",
+        entries: &[
+            MacroEntry {
+                full_name: "Chokepoint",
+                display_name: "Chokepoint",
+                json: include_str!("../../../assets/macros/chokepoint.json"),
+            },
+            MacroEntry {
+                full_name: "Ramp",
+                display_name: "Ramp",
+                json: include_str!("../../../assets/macros/ramp.json"),
+            },
+            MacroEntry {
+                full_name: "Expansion Plateau",
+                display_name: "Expansion Plateau",
+                json: include_str!("../../../assets/macros/expansion-plateau.json"),
+            },
+            MacroEntry {
+                full_name: "Land Bridge",
+                display_name: "Land Bridge",
+                json: include_str!("../../../assets/macros/land-bridge.json"),
             },
         ],
     },
@@ -546,15 +579,15 @@ mod tests {
     }
 
     #[test]
-    fn mountain_range_parses() {
-        let t = parse("Mountain Range").expect("mountain range macro should parse");
+    fn ridge_parses() {
+        let t = parse("Ridge").expect("ridge macro should parse");
         assert!(!t.nodes.is_empty());
         assert!(!t.subgraph.outputs.is_empty());
     }
 
     #[test]
     fn instantiate_produces_consistent_group() {
-        let t = parse("Mountain Range").unwrap();
+        let t = parse("Ridge").unwrap();
         let mut g = GraphEngine::new();
         let inst = instantiate(&t, &mut g, egui::pos2(0.0, 0.0)).unwrap();
         let io_count = t.subgraph.inputs.len() + t.subgraph.outputs.len();

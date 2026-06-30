@@ -1,0 +1,66 @@
+{
+  "name": "ridge",
+  "nodes": [
+    {
+      "key": "spine",
+      "type": "Layout",
+      "label": "Spine",
+      "params": {
+        "item_count": { "UInt": 1 },
+        "mode": { "String": "ridge" },
+        "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 },
+        "y_0": { "Float": 0.5 },
+        "rx_0": { "Float": 0.4 },
+        "ry_0": { "Float": 0.07 },
+        "angle_0": { "Float": 20.0 },
+        "height_0": { "Float": 1.0 },
+        "falloff_0": { "Float": 0.6 }
+      }
+    },
+    {
+      "key": "crest",
+      "type": "RidgedNoise",
+      "label": "Crest detail",
+      "params": {
+        "character": { "String": "ridges" },
+        "frequency": { "Float": 3.0 },
+        "octaves": { "UInt": 5 },
+        "seed": { "UInt": 7 }
+      }
+    },
+    {
+      "key": "terrain",
+      "type": "Blend",
+      "label": "Textured ridge",
+      "params": { "mode": { "String": "multiply" }, "factor": { "Float": 1.0 } }
+    },
+    {
+      "key": "footprint",
+      "type": "Layout",
+      "label": "Mask",
+      "params": {
+        "item_count": { "UInt": 1 },
+        "mode": { "String": "mask" },
+        "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 },
+        "y_0": { "Float": 0.5 },
+        "rx_0": { "Float": 0.4 },
+        "ry_0": { "Float": 0.07 },
+        "angle_0": { "Float": 20.0 },
+        "height_0": { "Float": 1.0 },
+        "falloff_0": { "Float": 0.6 }
+      }
+    }
+  ],
+  "connections": [
+    { "from": "spine.output", "to": "terrain.a" },
+    { "from": "crest.output", "to": "terrain.b" }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}

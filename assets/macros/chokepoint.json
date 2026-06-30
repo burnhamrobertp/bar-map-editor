@@ -1,0 +1,24 @@
+{
+  "name": "chokepoint",
+  "description": "Two raised masses flanking a narrow passable lane. Additive: blend onto base with mode add, using the mask (raises the flanks; the lane stays open).",
+  "nodes": [
+    {
+      "key": "flanks", "type": "Layout", "label": "Flanks",
+      "params": { "item_count": { "UInt": 2 }, "mode": { "String": "ridge" },
+        "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.16 }, "rx_0": { "Float": 0.38 }, "ry_0": { "Float": 0.2 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.45 },
+        "type_1": { "String": "ellipse" }, "x_1": { "Float": 0.5 }, "y_1": { "Float": 0.84 }, "rx_1": { "Float": 0.38 }, "ry_1": { "Float": 0.2 }, "angle_1": { "Float": 0.0 }, "height_1": { "Float": 1.0 }, "falloff_1": { "Float": 0.45 } }
+    },
+    {
+      "key": "footprint", "type": "Layout", "label": "Mask",
+      "params": { "item_count": { "UInt": 2 }, "mode": { "String": "mask" },
+        "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.16 }, "rx_0": { "Float": 0.4 }, "ry_0": { "Float": 0.22 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.5 },
+        "type_1": { "String": "ellipse" }, "x_1": { "Float": 0.5 }, "y_1": { "Float": 0.84 }, "rx_1": { "Float": 0.4 }, "ry_1": { "Float": 0.22 }, "angle_1": { "Float": 0.0 }, "height_1": { "Float": 1.0 }, "falloff_1": { "Float": 0.5 } }
+    }
+  ],
+  "subgraph": {
+    "outputs": [
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "flanks:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+    ]
+  }
+}
