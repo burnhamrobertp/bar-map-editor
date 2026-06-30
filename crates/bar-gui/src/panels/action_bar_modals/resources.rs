@@ -326,29 +326,72 @@ fn dn_strength(app: &BarEditorApp) -> f32 {
 }
 
 fn dn_apply_preset(app: &mut BarEditorApp, preset: DetailNormalPreset) {
+    if app.dialog.detail_normal_job.is_some() {
+        return; // a generation is already running -- ignore until it lands
+    }
     let Some(dir) = dn_passthrough_dir(app) else {
         app.set_status("Save the project before adding surface detail");
         return;
     };
-    let strength = dn_strength(app);
-    let nm = generate_detail_normal(preset, DN_SIZE, strength);
     if std::fs::create_dir_all(&dir).is_err() {
         app.set_status("Could not write the surface-detail texture");
         return;
     }
-    dn_remove_generated(&dir);
+    let strength = dn_strength(app);
     // Strength in the name so the preview's load cache reloads when it changes.
     let filename = format!(
         "{DN_PREFIX}{}_s{:02}.png",
         preset.label().to_lowercase(),
         (strength * 10.0).round() as i32
     );
-    if nm.save_png(&dir.join(&filename)).is_err() || !dn_write_distr(&dir) {
-        app.set_status("Could not write the surface-detail texture");
-        return;
+    // The 1024px noise + PNG encode is far too heavy for the UI thread
+    // (seconds in a debug build), so generate + write on a worker; the panel
+    // polls `detail_normal_job` and assigns the result when it lands.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let fname = filename.clone();
+    std::thread::spawn(move || {
+        dn_remove_generated(&dir);
+        let nm = generate_detail_normal(preset, DN_SIZE, strength);
+        let ok = nm.save_png(&dir.join(&fname)).is_ok() && dn_write_distr(&dir);
+        let _ = tx.send(ok.then_some(fname));
+    });
+    app.dialog.detail_normal_job = Some(rx);
+    app.set_status("Generating surface detail...");
+}
+
+/// Poll the off-thread generation; assign the result when it finishes. Returns
+/// true while a job is still running so the caller can show progress + keep the
+/// frame loop ticking.
+fn dn_poll_job(app: &mut BarEditorApp, ctx: &egui::Context) -> bool {
+    let recv = app
+        .dialog
+        .detail_normal_job
+        .as_ref()
+        .map(|rx| rx.try_recv());
+    match recv {
+        None => false,
+        Some(Ok(result)) => {
+            app.dialog.detail_normal_job = None;
+            match result {
+                Some(filename) => {
+                    app.push_undo("Set surface detail");
+                    dn_assign(app, filename);
+                    app.set_status("Surface detail updated");
+                }
+                None => app.set_status("Could not write the surface-detail texture"),
+            }
+            ctx.request_repaint();
+            false
+        }
+        Some(Err(std::sync::mpsc::TryRecvError::Empty)) => {
+            ctx.request_repaint(); // keep polling until the worker finishes
+            true
+        }
+        Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
+            app.dialog.detail_normal_job = None;
+            false
+        }
     }
-    app.push_undo("Set surface detail");
-    dn_assign(app, filename);
 }
 
 fn dn_import(app: &mut BarEditorApp) {
@@ -478,6 +521,9 @@ fn detail_normal_section(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         .weak(),
     );
 
+    let ctx = ui.ctx().clone();
+    let busy = dn_poll_job(app, &ctx);
+
     if app.dialog.detail_normal_strength <= 0.0 {
         app.dialog.detail_normal_strength = 1.0;
     }
@@ -541,6 +587,17 @@ fn detail_normal_section(app: &mut BarEditorApp, ui: &mut egui::Ui) {
         app.dialog.detail_normal_strength = s;
     }
     let regen = resp.drag_stopped() || resp.lost_focus();
+
+    // While a generation is in flight, show progress and ignore further
+    // actions -- the worker owns the files until it lands.
+    if busy {
+        ui.label(
+            egui::RichText::new("Generating surface detail...")
+                .small()
+                .weak(),
+        );
+        return;
+    }
 
     match act {
         Some(Act::None) => dn_clear(app),
