@@ -401,7 +401,7 @@ mod tests {
         ));
         let mut body = Some(body);
         let mut out = None;
-        ctx.run(input, |ctx| {
+        let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 if let Some(b) = body.take() {
                     out = Some(b(ui));
