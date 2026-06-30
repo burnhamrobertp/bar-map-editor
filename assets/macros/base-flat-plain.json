@@ -14,5 +14,10 @@
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "level", "label": "Ground level", "kind": "Float", "binding": "floor:value", "min": 0.0, "max": 0.6 },
+    { "name": "grain", "label": "Grain", "kind": "Float", "binding": "terrain:factor", "min": 0.0, "max": 0.3 },
+    { "name": "seed", "label": "Seed", "kind": "UInt", "binding": "grain:seed" }
+  ]
 }

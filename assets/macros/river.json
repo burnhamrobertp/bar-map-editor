@@ -4,21 +4,28 @@
   "nodes": [
     {
       "key": "channel", "type": "Layout", "label": "Channel",
-      "params": { "item_count": { "UInt": 2 }, "mode": { "String": "ridge" },
-        "type_0": { "String": "rectangle" }, "x_0": { "Float": 0.4 }, "y_0": { "Float": 0.43 }, "rx_0": { "Float": 0.28 }, "ry_0": { "Float": 0.045 }, "angle_0": { "Float": 28.0 }, "height_0": { "Float": 0.55 }, "falloff_0": { "Float": 0.5 },
-        "type_1": { "String": "rectangle" }, "x_1": { "Float": 0.58 }, "y_1": { "Float": 0.6 }, "rx_1": { "Float": 0.28 }, "ry_1": { "Float": 0.045 }, "angle_1": { "Float": 335.0 }, "height_1": { "Float": 0.55 }, "falloff_1": { "Float": 0.5 } }
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.45 }, "ry_0": { "Float": 0.05 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 0.55 }, "falloff_0": { "Float": 0.5 } }
     },
-    {
-      "key": "footprint", "type": "Layout", "label": "Mask",
-      "params": { "item_count": { "UInt": 2 }, "mode": { "String": "mask" },
-        "type_0": { "String": "rectangle" }, "x_0": { "Float": 0.4 }, "y_0": { "Float": 0.43 }, "rx_0": { "Float": 0.28 }, "ry_0": { "Float": 0.06 }, "angle_0": { "Float": 28.0 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.6 },
-        "type_1": { "String": "rectangle" }, "x_1": { "Float": 0.58 }, "y_1": { "Float": 0.6 }, "rx_1": { "Float": 0.28 }, "ry_1": { "Float": 0.06 }, "angle_1": { "Float": 335.0 }, "height_1": { "Float": 1.0 }, "falloff_1": { "Float": 0.6 } }
-    }
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 25.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.03 }, "smoothness": { "Float": 0.1 } } }
+  ],
+  "connections": [
+    { "from": "channel.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
   ],
   "subgraph": {
     "outputs": [
-      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "channel:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "length", "label": "Length", "kind": "Float", "binding": "channel:rx_0", "min": 0.2, "max": 0.5 },
+    { "name": "width", "label": "Width", "kind": "Float", "binding": "channel:ry_0", "min": 0.02, "max": 0.14 },
+    { "name": "depth", "label": "Depth", "kind": "Float", "binding": "channel:height_0", "min": 0.15, "max": 0.85 }
+  ]
 }

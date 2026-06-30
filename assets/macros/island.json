@@ -1,31 +1,33 @@
 {
   "name": "island",
-  "description": "A landmass rising from the sea, with an irregular coast. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
+  "description": "A landmass rising from the sea. Absolute: combine with MaskApply (base into background, this into input, mask into mask).",
   "nodes": [
     {
-      "key": "land", "type": "Layout", "label": "Landmass",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
-        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.34 }, "ry_0": { "Float": 0.31 }, "angle_0": { "Float": 20.0 }, "height_0": { "Float": 0.65 }, "falloff_0": { "Float": 0.75 } }
+      "key": "core", "type": "Layout", "label": "Landmass",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" }, "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.4 }, "ry_0": { "Float": 0.37 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.7 } }
     },
-    {
-      "key": "coast", "type": "RidgedNoise", "label": "Coast irregularity",
-      "params": { "character": { "String": "broad_ridges" }, "frequency": { "Float": 2.5 }, "octaves": { "UInt": 4 }, "seed": { "UInt": 9 } }
-    },
-    { "key": "terrain", "type": "Blend", "label": "Island", "params": { "mode": { "String": "blend" }, "factor": { "Float": 0.22 } } },
-    {
-      "key": "footprint", "type": "Layout", "label": "Mask",
-      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "mask" }, "type_0": { "String": "ellipse" },
-        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.47 }, "ry_0": { "Float": 0.45 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.3 } }
-    }
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "hconst", "type": "Constant", "label": "Land height", "params": { "value": { "Float": 0.62 } } },
+    { "key": "terrain", "type": "Multiply", "label": "Island" },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.04 }, "smoothness": { "Float": 0.12 } } }
   ],
   "connections": [
-    { "from": "land.output", "to": "terrain.a" },
-    { "from": "coast.output", "to": "terrain.b" }
+    { "from": "core.output", "to": "place.input" },
+    { "from": "place.output", "to": "terrain.a" },
+    { "from": "hconst.output", "to": "terrain.b" },
+    { "from": "place.output", "to": "mask.input" }
   ],
   "subgraph": {
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.4, "max": 2.0 },
+    { "name": "height", "label": "Height", "kind": "Float", "binding": "hconst:value", "min": 0.3, "max": 0.9 },
+    { "name": "shore", "label": "Shore gradient", "kind": "Float", "binding": "core:falloff_0", "min": 0.4, "max": 0.9 }
+  ]
 }

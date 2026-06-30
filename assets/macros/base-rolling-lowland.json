@@ -8,5 +8,11 @@
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "scale", "label": "Hill scale", "kind": "Float", "binding": "terrain:frequency", "min": 1.0, "max": 8.0 },
+    { "name": "amplitude", "label": "Amplitude", "kind": "Float", "binding": "terrain:gain", "min": 0.1, "max": 0.8 },
+    { "name": "elevation", "label": "Elevation", "kind": "Float", "binding": "terrain:elevation", "min": 0.1, "max": 0.7 },
+    { "name": "seed", "label": "Seed", "kind": "UInt", "binding": "terrain:seed" }
+  ]
 }

@@ -1,66 +1,36 @@
 {
   "name": "ridge",
+  "description": "Raised spine with a textured crest. Additive: blend onto base with mode add, using the mask.",
   "nodes": [
     {
-      "key": "spine",
-      "type": "Layout",
-      "label": "Spine",
-      "params": {
-        "item_count": { "UInt": 1 },
-        "mode": { "String": "ridge" },
-        "type_0": { "String": "rectangle" },
-        "x_0": { "Float": 0.5 },
-        "y_0": { "Float": 0.5 },
-        "rx_0": { "Float": 0.4 },
-        "ry_0": { "Float": 0.07 },
-        "angle_0": { "Float": 20.0 },
-        "height_0": { "Float": 1.0 },
-        "falloff_0": { "Float": 0.6 }
-      }
+      "key": "spine", "type": "Layout", "label": "Spine",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "rectangle" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.4 }, "ry_0": { "Float": 0.07 }, "angle_0": { "Float": 0.0 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.6 } }
     },
-    {
-      "key": "crest",
-      "type": "RidgedNoise",
-      "label": "Crest detail",
-      "params": {
-        "character": { "String": "ridges" },
-        "frequency": { "Float": 3.0 },
-        "octaves": { "UInt": 5 },
-        "seed": { "UInt": 7 }
-      }
-    },
-    {
-      "key": "terrain",
-      "type": "Blend",
-      "label": "Textured ridge",
-      "params": { "mode": { "String": "multiply" }, "factor": { "Float": 1.0 } }
-    },
-    {
-      "key": "footprint",
-      "type": "Layout",
-      "label": "Mask",
-      "params": {
-        "item_count": { "UInt": 1 },
-        "mode": { "String": "mask" },
-        "type_0": { "String": "rectangle" },
-        "x_0": { "Float": 0.5 },
-        "y_0": { "Float": 0.5 },
-        "rx_0": { "Float": 0.4 },
-        "ry_0": { "Float": 0.07 },
-        "angle_0": { "Float": 20.0 },
-        "height_0": { "Float": 1.0 },
-        "falloff_0": { "Float": 0.6 }
-      }
-    }
+    { "key": "crest", "type": "RidgedNoise", "label": "Crest", "params": { "character": { "String": "ridges" }, "frequency": { "Float": 3.0 }, "octaves": { "UInt": 5 }, "seed": { "UInt": 7 } } },
+    { "key": "shaped", "type": "Blend", "label": "Textured ridge", "params": { "mode": { "String": "multiply" }, "factor": { "Float": 1.0 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.04 }, "smoothness": { "Float": 0.12 } } }
   ],
   "connections": [
-    { "from": "spine.output", "to": "terrain.a" },
-    { "from": "crest.output", "to": "terrain.b" }
+    { "from": "spine.output", "to": "shaped.a" },
+    { "from": "crest.output", "to": "shaped.b" },
+    { "from": "shaped.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
   ],
   "subgraph": {
     "outputs": [
-      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "length", "label": "Length", "kind": "Float", "binding": "spine:rx_0", "min": 0.15, "max": 0.48 },
+    { "name": "width", "label": "Width", "kind": "Float", "binding": "spine:ry_0", "min": 0.02, "max": 0.2 },
+    { "name": "roughness", "label": "Crest roughness", "kind": "Float", "binding": "crest:frequency", "min": 1.0, "max": 6.0 },
+    { "name": "seed", "label": "Seed", "kind": "UInt", "binding": "crest:seed" }
+  ]
 }

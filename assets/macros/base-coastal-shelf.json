@@ -3,16 +3,23 @@
   "description": "Base terrain: a shelf sloping from sea (one edge) to high land (opposite edge). Use as the substrate coastal features blend onto.",
   "nodes": [
     { "key": "slope", "type": "Gradient", "label": "Shelf slope", "params": { "direction": { "String": "linear_y" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
+    { "key": "place", "type": "Transform", "label": "Orientation", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
     { "key": "grain", "type": "PerlinNoise", "label": "Faint grain", "params": { "character": { "String": "rolling_hills" }, "frequency": { "Float": 4.0 }, "seed": { "UInt": 2 } } },
     { "key": "terrain", "type": "Blend", "label": "Coastal shelf", "params": { "mode": { "String": "blend" }, "factor": { "Float": 0.12 } } }
   ],
   "connections": [
-    { "from": "slope.output", "to": "terrain.a" },
+    { "from": "slope.output", "to": "place.input" },
+    { "from": "place.output", "to": "terrain.a" },
     { "from": "grain.output", "to": "terrain.b" }
   ],
   "subgraph": {
     "outputs": [
       { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "rotation", "label": "Orientation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "grain", "label": "Grain", "kind": "Float", "binding": "terrain:factor", "min": 0.0, "max": 0.3 },
+    { "name": "seed", "label": "Seed", "kind": "UInt", "binding": "grain:seed" }
+  ]
 }

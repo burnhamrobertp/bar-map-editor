@@ -1,19 +1,27 @@
 {
   "name": "coastline",
-  "description": "A land-to-sea shore with a graded beach. Absolute: combine with MaskApply over a coastal band (base into background, this into input, mask into mask).",
+  "description": "A land-to-sea shore with a graded beach. Absolute: combine with MaskApply over the coastal band (base into background, this into input, mask into mask).",
   "nodes": [
     { "key": "grad", "type": "Gradient", "label": "Shore gradient", "params": { "direction": { "String": "linear_y" }, "center_x": { "Float": 0.5 }, "center_y": { "Float": 0.5 }, "invert": { "Bool": false } } },
-    { "key": "terrain", "type": "CoastErosion", "label": "Beach", "params": { "sea_level": { "Float": 0.3 }, "beach_size": { "Float": 0.1 }, "inland_height_influence": { "Float": 0.3 }, "underwater_smoothing": { "UInt": 4 } } },
-    { "key": "footprint", "type": "HeightSelect", "label": "Coastal band", "params": { "low": { "Float": 0.12 }, "high": { "Float": 0.52 }, "falloff": { "Float": 0.12 }, "falloff_type": { "String": "smooth" }, "invert": { "Bool": false } } }
+    { "key": "coast", "type": "CoastErosion", "label": "Beach", "params": { "sea_level": { "Float": 0.3 }, "beach_size": { "Float": 0.1 }, "inland_height_influence": { "Float": 0.3 }, "underwater_smoothing": { "UInt": 4 } } },
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "HeightSelect", "label": "Coastal band", "params": { "low": { "Float": 0.12 }, "high": { "Float": 0.52 }, "falloff": { "Float": 0.12 }, "falloff_type": { "String": "smooth" }, "invert": { "Bool": false } } }
   ],
   "connections": [
-    { "from": "grad.output", "to": "terrain.input" },
-    { "from": "grad.output", "to": "footprint.input" }
+    { "from": "grad.output", "to": "coast.input" },
+    { "from": "coast.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
   ],
   "subgraph": {
     "outputs": [
-      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "terrain:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "shift", "label": "Shore position", "kind": "Float", "binding": "place:translate_y", "min": -0.4, "max": 0.4 },
+    { "name": "sea_level", "label": "Sea level", "kind": "Float", "binding": "coast:sea_level", "min": 0.1, "max": 0.5 },
+    { "name": "beach", "label": "Beach width", "kind": "Float", "binding": "coast:beach_size", "min": 0.0, "max": 0.3 }
+  ]
 }

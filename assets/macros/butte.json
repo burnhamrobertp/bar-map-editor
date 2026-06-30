@@ -1,43 +1,31 @@
 {
   "name": "butte",
+  "description": "Flat-topped, steep-sided rock tower. Additive: blend onto base with mode add, using the mask.",
   "nodes": [
     {
-      "key": "shape",
-      "type": "Layout",
-      "label": "Butte",
-      "params": {
-        "item_count": { "UInt": 1 },
-        "mode": { "String": "ridge" },
-        "type_0": { "String": "ellipse" },
-        "x_0": { "Float": 0.5 },
-        "y_0": { "Float": 0.5 },
-        "rx_0": { "Float": 0.16 },
-        "ry_0": { "Float": 0.16 },
-        "height_0": { "Float": 1.0 },
-        "falloff_0": { "Float": 0.12 }
-      }
+      "key": "shape", "type": "Layout", "label": "Butte",
+      "params": { "item_count": { "UInt": 1 }, "mode": { "String": "ridge" }, "type_0": { "String": "ellipse" },
+        "x_0": { "Float": 0.5 }, "y_0": { "Float": 0.5 }, "rx_0": { "Float": 0.16 }, "ry_0": { "Float": 0.16 }, "height_0": { "Float": 1.0 }, "falloff_0": { "Float": 0.12 } }
     },
-    {
-      "key": "footprint",
-      "type": "Layout",
-      "label": "Mask",
-      "params": {
-        "item_count": { "UInt": 1 },
-        "mode": { "String": "mask" },
-        "type_0": { "String": "ellipse" },
-        "x_0": { "Float": 0.5 },
-        "y_0": { "Float": 0.5 },
-        "rx_0": { "Float": 0.18 },
-        "ry_0": { "Float": 0.18 },
-        "height_0": { "Float": 1.0 },
-        "falloff_0": { "Float": 0.2 }
-      }
-    }
+    { "key": "place", "type": "Transform", "label": "Placement", "params": { "translate_x": { "Float": 0.0 }, "translate_y": { "Float": 0.0 }, "scale": { "Float": 1.0 }, "angle": { "Float": 0.0 } } },
+    { "key": "mask", "type": "MaskThreshold", "label": "Footprint", "params": { "threshold": { "Float": 0.02 }, "smoothness": { "Float": 0.08 } } }
+  ],
+  "connections": [
+    { "from": "shape.output", "to": "place.input" },
+    { "from": "place.output", "to": "mask.input" }
   ],
   "subgraph": {
     "outputs": [
-      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "shape:output" },
-      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "footprint:output" }
+      { "name": "terrain", "label": "Terrain", "kind": "Heightmap", "binding": "place:output" },
+      { "name": "mask", "label": "Mask", "kind": "Mask", "binding": "mask:output" }
     ]
-  }
+  },
+  "macro_params": [
+    { "name": "pos_x", "label": "Position X", "kind": "Float", "binding": "place:translate_x", "min": -0.5, "max": 0.5 },
+    { "name": "pos_y", "label": "Position Y", "kind": "Float", "binding": "place:translate_y", "min": -0.5, "max": 0.5 },
+    { "name": "size", "label": "Size", "kind": "Float", "binding": "place:scale", "min": 0.3, "max": 3.0 },
+    { "name": "rotation", "label": "Rotation", "kind": "Float", "binding": "place:angle", "min": 0.0, "max": 360.0 },
+    { "name": "height", "label": "Height", "kind": "Float", "binding": "shape:height_0", "min": 0.1, "max": 1.0 },
+    { "name": "edge", "label": "Edge softness", "kind": "Float", "binding": "shape:falloff_0", "min": 0.0, "max": 0.6 }
+  ]
 }

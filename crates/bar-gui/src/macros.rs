@@ -572,8 +572,16 @@ mod tests {
                     "macro '{name}' has no subgraph outputs"
                 );
                 let mut g = GraphEngine::new();
-                instantiate(&t, &mut g, egui::pos2(0.0, 0.0))
+                let inst = instantiate(&t, &mut g, egui::pos2(0.0, 0.0))
                     .unwrap_or_else(|e| panic!("macro '{name}' failed to instantiate: {e}"));
+                // Every declared knob must resolve to a real inner-node
+                // binding; `instantiate` silently drops unresolvable ones,
+                // so a typo'd binding would otherwise vanish a control.
+                assert_eq!(
+                    inst.group.macro_params.len(),
+                    t.macro_params.len(),
+                    "macro '{name}' has a macro_param whose binding does not resolve"
+                );
             }
         }
     }
